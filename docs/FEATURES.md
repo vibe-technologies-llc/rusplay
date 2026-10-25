@@ -1,7 +1,6 @@
 # Capture
-- [M] `capture-pipewire`: consume the portal's PipeWire node into `Frame`s behind the `pipewire` feature
-- [M, blocked by: capture-pipewire] `capture-dmabuf`: negotiate DMA-BUF with modifiers, falling back to shared memory
-- [S, blocked by: capture-pipewire] `capture-cursor-metadata`: extract cursor metadata and forward it to the client
+- [M] `capture-dmabuf`: negotiate DMA-BUF with modifiers, falling back to shared memory
+- [S] `capture-cursor-metadata`: extract cursor metadata and forward it to the client
 - [S] `capture-restore-token`: persist the portal restore token between host runs
 
 # Scaling
@@ -45,7 +44,7 @@
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
-- [L, blocked by: capture-pipewire, encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
+- [L, blocked by: encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 - [S] `hostd-cli`: argument parsing and config path discovery for `rusplay-hostd`
 
