@@ -5,6 +5,8 @@ mod kernel;
 #[cfg(test)]
 mod reference;
 mod scaler;
+mod shaping;
+mod sigmoid;
 mod table;
 mod taps;
 #[cfg(test)]
@@ -15,6 +17,7 @@ pub use crate::{
     gpu::ScalePipelines,
     kernel::{Geometry, Kernel},
     scaler::{Reconfigured, ScaleSettings, Scaler},
+    sigmoid::Sigmoid,
     table::TapTable,
     taps::Taps,
 };

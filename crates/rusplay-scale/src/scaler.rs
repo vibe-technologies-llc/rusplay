@@ -3,10 +3,11 @@ use std::collections::VecDeque;
 use rusplay_core::{Resolution, ScaleFilter};
 
 use crate::{
-    Geometry, Kernel, ScaleError, TapTable,
+    Geometry, Kernel, ScaleError, Sigmoid, TapTable,
     gpu::{
         self, INTERMEDIATE_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer,
     },
+    shaping::Shaping,
 };
 
 const CACHED_VIEW_GROUPS: usize = 4;
@@ -32,6 +33,7 @@ pub struct ScaleSettings {
     pub source: Resolution,
     pub target: Resolution,
     pub antiringing: f32,
+    pub sigmoid: Option<Sigmoid>,
 }
 
 impl ScaleSettings {
@@ -48,8 +50,29 @@ impl ScaleSettings {
         if !(0.0..=1.0).contains(&self.antiringing) {
             return Err(ScaleError::AntiringingOutOfRange(self.antiringing));
         }
+        if let Some(sigmoid) = self.sigmoid {
+            sigmoid.validate()?;
+        }
 
         Ok(())
+    }
+
+    pub(crate) fn horizontal_shaping(&self) -> Shaping {
+        Shaping {
+            antiringing: self.antiringing,
+            sigmoid: self.sigmoid,
+            sigmoidize_input: true,
+            unsigmoidize_output: false,
+        }
+    }
+
+    pub(crate) fn vertical_shaping(&self) -> Shaping {
+        Shaping {
+            antiringing: self.antiringing,
+            sigmoid: self.sigmoid,
+            sigmoidize_input: false,
+            unsigmoidize_output: true,
+        }
     }
 
     fn same_tables(&self, other: &Self) -> bool {
@@ -197,8 +220,8 @@ impl SeparablePlan {
         );
 
         Self {
-            horizontal_group: horizontal.group(pipelines, device, settings),
-            vertical_group: vertical.group(pipelines, device, settings),
+            horizontal_group: horizontal.group(pipelines, device, &settings.horizontal_shaping()),
+            vertical_group: vertical.group(pipelines, device, &settings.vertical_shaping()),
             horizontal,
             vertical,
             intermediate_source: pipelines.source_group(device, &intermediate),
@@ -212,8 +235,12 @@ impl SeparablePlan {
         device: &wgpu::Device,
         settings: &ScaleSettings,
     ) {
-        self.horizontal_group = self.horizontal.group(pipelines, device, settings);
-        self.vertical_group = self.vertical.group(pipelines, device, settings);
+        self.horizontal_group =
+            self.horizontal
+                .group(pipelines, device, &settings.horizontal_shaping());
+        self.vertical_group = self
+            .vertical
+            .group(pipelines, device, &settings.vertical_shaping());
     }
 }
 
@@ -251,12 +278,12 @@ impl PassTables {
         &self,
         pipelines: &ScalePipelines,
         device: &wgpu::Device,
-        settings: &ScaleSettings,
+        shaping: &Shaping,
     ) -> wgpu::BindGroup {
         let params = uniform_buffer(
             device,
             "rusplay-resample-params",
-            &self.params_bytes(settings),
+            &self.params_bytes(shaping),
         );
 
         buffer_group(
@@ -267,20 +294,24 @@ impl PassTables {
         )
     }
 
-    fn params_bytes(&self, settings: &ScaleSettings) -> Vec<u8> {
-        [
+    fn params_bytes(&self, shaping: &Shaping) -> Vec<u8> {
+        let pass = [
             self.source_size.0,
             self.source_size.1,
             self.target_size.0,
             self.target_size.1,
             self.taps_per_pixel,
             self.axis.index(),
-            settings.antiringing.to_bits(),
             0,
-        ]
-        .iter()
-        .flat_map(|word| word.to_ne_bytes())
-        .collect()
+            0,
+        ];
+
+        shaping
+            .words()
+            .iter()
+            .chain(&pass)
+            .flat_map(|word| word.to_ne_bytes())
+            .collect()
     }
 }
 
@@ -334,6 +365,7 @@ mod tests {
         ScaleFilter::Lanczos3,
         ScaleFilter::Lanczos4,
     ];
+    const SIGMOID_TOLERANCE: f32 = 8.0 / 1024.0;
 
     fn settings(filter: ScaleFilter, source: (u32, u32), target: (u32, u32)) -> ScaleSettings {
         ScaleSettings {
@@ -341,6 +373,7 @@ mod tests {
             source: Resolution::new(source.0, source.1),
             target: Resolution::new(target.0, target.1),
             antiringing: 0.0,
+            sigmoid: None,
         }
     }
 
@@ -350,10 +383,15 @@ mod tests {
         let vertical = TapTable::build(kernel, settings.source.height, settings.target.height);
 
         resample_separable(
-            &resample_separable(image, &horizontal, Axis::Horizontal, settings.antiringing),
+            &resample_separable(
+                image,
+                &horizontal,
+                Axis::Horizontal,
+                &settings.horizontal_shaping(),
+            ),
             &vertical,
             Axis::Vertical,
-            settings.antiringing,
+            &settings.vertical_shaping(),
         )
     }
 
@@ -375,6 +413,10 @@ mod tests {
     }
 
     fn assert_matches_reference(settings: ScaleSettings) {
+        assert_matches_reference_within(settings, RGBA16F_TOLERANCE);
+    }
+
+    fn assert_matches_reference_within(settings: ScaleSettings, tolerance: f32) {
         let Some(gpu) = testing::gpu() else {
             return;
         };
@@ -387,9 +429,82 @@ mod tests {
             scale(gpu, &mut scaler, &image).max_difference(&expected(&image, &settings));
 
         assert!(
-            difference <= RGBA16F_TOLERANCE,
+            difference <= tolerance,
             "{settings:?}: max difference {difference}"
         );
+    }
+
+    #[test]
+    fn sigmoidal_upscale_matches_reference() {
+        for filter in [ScaleFilter::Lanczos3, ScaleFilter::Mitchell] {
+            assert_matches_reference_within(
+                ScaleSettings {
+                    sigmoid: Some(Sigmoid::default()),
+                    ..settings(filter, (31, 27), (77, 64))
+                },
+                SIGMOID_TOLERANCE,
+            );
+        }
+        assert_matches_reference_within(
+            ScaleSettings {
+                sigmoid: Some(Sigmoid {
+                    center: 0.5,
+                    slope: 12.0,
+                }),
+                antiringing: 0.8,
+                ..settings(ScaleFilter::Lanczos4, (20, 30), (50, 70))
+            },
+            SIGMOID_TOLERANCE,
+        );
+    }
+
+    #[test]
+    fn sigmoid_parameters_are_validated() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+
+        let result = Scaler::new(
+            &pipelines,
+            &gpu.device,
+            ScaleSettings {
+                sigmoid: Some(Sigmoid {
+                    center: 0.75,
+                    slope: 30.0,
+                }),
+                ..settings(ScaleFilter::Lanczos3, (8, 8), (16, 16))
+            },
+        );
+
+        assert_eq!(
+            result.unwrap_err(),
+            ScaleError::SigmoidSlopeOutOfRange(30.0)
+        );
+    }
+
+    #[test]
+    fn toggling_sigmoid_only_replaces_parameters() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+        let plain = settings(ScaleFilter::Lanczos3, (24, 18), (60, 45));
+        let sigmoidal = ScaleSettings {
+            sigmoid: Some(Sigmoid::default()),
+            ..plain
+        };
+        let mut scaler = Scaler::new(&pipelines, &gpu.device, plain).unwrap();
+
+        let reconfigured = scaler.configure(&gpu.device, sigmoidal).unwrap();
+        let image = Image::pattern(24, 18, 5);
+        let difference =
+            scale(gpu, &mut scaler, &image).max_difference(&expected(&image, &sigmoidal));
+
+        assert_eq!(reconfigured, Reconfigured::Parameters);
+        assert!(difference <= SIGMOID_TOLERANCE);
     }
 
     #[test]

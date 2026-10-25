@@ -30,6 +30,17 @@ paths:
   `floor(centre)`), and the result is `mix(sum, clamp(sum, low, high), strength)`. The strength
   is `ScaleSettings::antiringing` (0..=1), which the client fills from
   `scaling.upscale.antiringing`; the host's downscale passes 0.
+- Sigmoidal upscaling is libplacebo's sigmoid: `ScaleSettings::sigmoid` (`Sigmoid { center,
+  slope }`, defaults 0.75 and 6.5, from `scaling.upscale.sigmoid_center`/`sigmoid_slope` when
+  `scaling.upscale.sigmoid` is on) maps linear light into sigmoid space before filtering and back
+  afterwards. It is fused into the passes rather than run as its own: the horizontal pass
+  sigmoidizes every texel it loads, the vertical pass unsigmoidizes what it stores, so the
+  `rgba16float` intermediate holds sigmoid-space values. Offset and scale are computed on the
+  CPU and sit in the params uniform. The host never sets it, since libplacebo applies it to
+  upscaling only.
+- `shaping.wgsl` is the shared prelude (the `Shaping` uniform block, `shape_input`,
+  `shape_output`, `antiring`) concatenated in front of each resampling shader at pipeline
+  creation; `shaping.rs` writes the matching words and holds the CPU reference versions.
 - `ScalePipelines` holds the compiled pipelines and explicit bind group layouts, built once per
   device and cloned (cheap handles) into every `Scaler`. A `Scaler` is one cached plan for a
   `ScaleSettings`: tap table buffers, params uniforms, the intermediate texture and every bind

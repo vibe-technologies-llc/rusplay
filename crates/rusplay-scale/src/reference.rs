@@ -1,14 +1,10 @@
-use crate::{
-    TapTable,
-    scaler::Axis,
-    testing::{Image, quantize_f16},
-};
+use crate::{TapTable, scaler::Axis, shaping::Shaping, testing::Image};
 
 pub(crate) fn resample_separable(
     source: &Image,
     table: &TapTable,
     axis: Axis,
-    antiringing: f32,
+    shaping: &Shaping,
 ) -> Image {
     let target_len = u32::try_from(table.firsts.len()).expect("table length fits u32");
     let (width, height) = match axis {
@@ -31,10 +27,10 @@ pub(crate) fn resample_separable(
         let mut nearest_high = [f32::MIN; 4];
         for (offset, weight) in (0_i64..).zip(weights) {
             let position = first + offset;
-            let texel = match axis {
+            let texel = shaping.input(match axis {
                 Axis::Horizontal => source.texel(position, i64::from(y)),
                 Axis::Vertical => source.texel(i64::from(x), position),
-            };
+            });
             for (total, value) in sum.iter_mut().zip(texel) {
                 *total += weight * value;
             }
@@ -46,12 +42,6 @@ pub(crate) fn resample_separable(
             }
         }
 
-        if antiringing > 0.0 {
-            for channel in (0..4).filter(|&channel| nearest_low[channel] <= nearest_high[channel]) {
-                let clamped = sum[channel].clamp(nearest_low[channel], nearest_high[channel]);
-                sum[channel] += (clamped - sum[channel]) * antiringing;
-            }
-        }
-        sum.map(quantize_f16)
+        shaping.output(shaping.antiring(sum, nearest_low, nearest_high))
     })
 }

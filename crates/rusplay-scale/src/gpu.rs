@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use wgpu::util::DeviceExt;
 
-const RESAMPLE_SHADER: &str = include_str!("resample.wgsl");
+const RESAMPLE_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("resample.wgsl"));
 
 pub(crate) const WORKGROUP_SIDE: u32 = 8;
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;

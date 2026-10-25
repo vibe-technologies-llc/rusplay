@@ -1,10 +1,10 @@
 struct Params {
+    shaping: Shaping,
     source_size: vec2<u32>,
     target_size: vec2<u32>,
     taps_per_pixel: u32,
     axis: u32,
-    antiringing: f32,
-    padding: u32,
+    padding: vec2<u32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -34,7 +34,7 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
         let position = first + i32(tap);
         let along = clamp(position, 0, source_last);
         let coord = select(vec2<i32>(i32(id.x), along), vec2<i32>(along, i32(id.y)), horizontal);
-        let texel = textureLoad(source, coord, 0);
+        let texel = shape_input(params.shaping, textureLoad(source, coord, 0));
         sum += weight * texel;
 
         let offset = position - anchor;
@@ -44,9 +44,6 @@ fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    if params.antiringing > 0.0 && nearest_low.x <= nearest_high.x {
-        sum = mix(sum, clamp(sum, nearest_low, nearest_high), params.antiringing);
-    }
-
-    textureStore(destination, vec2<i32>(id.xy), sum);
+    let color = antiring(params.shaping, sum, nearest_low, nearest_high);
+    textureStore(destination, vec2<i32>(id.xy), shape_output(params.shaping, color));
 }
