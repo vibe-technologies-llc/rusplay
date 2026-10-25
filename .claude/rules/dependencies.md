@@ -36,6 +36,7 @@ paths:
   links anything C.
 
   Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
-  `ashpd` over zbus (portals), `wgpu` (GPU scaling), `rav1d` for software AV1 decode, `rubato`
-  for audio resampling when it is needed.
+  `ashpd` over zbus (portals), `reis` (the EI protocol for libei input injection,
+  `rusplay-input/libei`, with `rustix` for its socket polling and clock), `wgpu` (GPU scaling),
+  `rav1d` for software AV1 decode, `rubato` for audio resampling when it is needed.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.

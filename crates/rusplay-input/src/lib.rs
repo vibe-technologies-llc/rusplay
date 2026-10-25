@@ -1,5 +1,7 @@
 mod error;
 mod event;
+#[cfg(feature = "libei")]
+pub mod libei;
 
 pub use crate::{
     error::InputError,

@@ -31,7 +31,6 @@
 - [S] `net-discovery`: LAN host discovery
 
 # Input
-- [M] `input-libei`: host injection through the RemoteDesktop portal and libei
 - [M] `input-gamepad`: virtual gamepads on the host
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
