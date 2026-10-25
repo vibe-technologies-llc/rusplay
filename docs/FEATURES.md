@@ -45,7 +45,6 @@
 # Sessions
 - [L, blocked by: capture-pipewire, encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
-- [S] `hostd-cli`: argument parsing and config path discovery for `rusplay-hostd`
 
 # Desktop app
 - [M] `app-ui-shell`: gpui window on Wayland with the gpui git dependency pinned

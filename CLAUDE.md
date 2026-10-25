@@ -85,6 +85,7 @@ The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/networking.md` | Wire protocol and UDP transport |
 | `.claude/rules/input.md` | Input forwarding and injection |
 | `.claude/rules/ui.md` | The gpui desktop app |
+| `.claude/rules/hostd.md` | Headless host binary: arguments and config discovery |
 
 ## Skills
 

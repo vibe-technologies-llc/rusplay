@@ -1,24 +1,78 @@
-use std::{env, path::PathBuf, process::ExitCode};
+mod cli;
+mod discovery;
 
-use rusplay_config::Config;
-use rusplay_host::HostSession;
+use std::{env, error::Error, path::Path, process::ExitCode};
+
+use rusplay_config::{Config, ConfigError};
+use rusplay_host::{HostError, HostSession};
+use thiserror::Error;
+
+use crate::{
+    cli::{CliError, Command, HELP, VERSION},
+    discovery::{ConfigSource, Environment},
+};
+
+const USAGE_EXIT_CODE: u8 = 2;
+
+#[derive(Debug, Error)]
+enum HostdError {
+    #[error(transparent)]
+    Cli(#[from] CliError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Host(#[from] HostError),
+}
 
 fn main() -> ExitCode {
-    let config = match env::args_os().nth(1).map(PathBuf::from) {
-        Some(path) => match Config::load(&path) {
-            Ok(config) => config,
-            Err(error) => return report(&error),
-        },
-        None => Config::default(),
-    };
-
-    match HostSession::new(config).run() {
+    match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => report(&error),
+        Err(error @ HostdError::Cli(_)) => {
+            report(&error);
+            eprintln!("try rusplay-hostd --help");
+            ExitCode::from(USAGE_EXIT_CODE)
+        }
+        Err(error) => {
+            report(&error);
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn report(error: &dyn std::error::Error) -> ExitCode {
+fn run() -> Result<(), HostdError> {
+    match cli::parse(env::args_os().skip(1))? {
+        Command::Help => {
+            print!("{HELP}");
+            Ok(())
+        }
+        Command::Version => {
+            println!("{VERSION}");
+            Ok(())
+        }
+        Command::Run { config } => {
+            let source = discovery::resolve(config, &Environment::from_process(), Path::is_file);
+            let config = load(&source)?;
+
+            HostSession::new(config).run()?;
+            Ok(())
+        }
+    }
+}
+
+fn load(source: &ConfigSource) -> Result<Config, ConfigError> {
+    match source {
+        ConfigSource::Explicit(path) | ConfigSource::Discovered(path) => {
+            eprintln!("rusplay-hostd: reading {}", path.display());
+            Config::load(path)
+        }
+        ConfigSource::Defaults => {
+            eprintln!("rusplay-hostd: no config file found, using the defaults");
+            Ok(Config::default())
+        }
+    }
+}
+
+fn report(error: &dyn Error) {
     eprintln!("rusplay-hostd: {error}");
 
     let mut source = error.source();
@@ -26,6 +80,4 @@ fn report(error: &dyn std::error::Error) -> ExitCode {
         eprintln!("  caused by: {cause}");
         source = cause.source();
     }
-
-    ExitCode::FAILURE
 }
