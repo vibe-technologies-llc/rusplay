@@ -5,9 +5,10 @@ paths:
 
 # Capture
 
-- Capture goes through the xdg-desktop-portal ScreenCast interface (`ashpd`, tokio runtime,
-  `screencast` feature) and then the PipeWire node the portal returns. No compositor-specific
-  protocols (wlr-screencopy, ext-image-copy-capture) until the portal path is complete, and no X11.
+- Capture goes through the xdg-desktop-portal ScreenCast interface (`ashpd` with the `async-io`
+  runtime, because gpui enables it and ashpd refuses two runtimes, and the `screencast` feature)
+  and then the PipeWire node the portal returns. No compositor-specific protocols
+  (wlr-screencopy, ext-image-copy-capture) until the portal path is complete, and no X11.
 - The portal session asks for persistence (`PersistMode::ExplicitlyRevoked`) when
   `capture.persist_session` is on. `PortalSession::open_persistent` reads the restore token from
   a `RestoreTokenStore` (an explicit `capture.restore_token` wins), and writes the token the portal
