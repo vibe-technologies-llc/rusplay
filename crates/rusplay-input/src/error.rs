@@ -14,6 +14,16 @@ pub enum InputError {
     GamepadSlotOutOfRange(u8),
     #[error("a pointer value is not a finite number")]
     NonFiniteValue,
+    #[error("an encoded input event is missing {missing} bytes")]
+    WireTruncated { missing: usize },
+    #[error("an encoded input event has {0} trailing bytes")]
+    WireTrailingBytes(usize),
+    #[error("an encoded input event has the unknown tag {0}")]
+    WireUnknownTag(u8),
+    #[error("an encoded gamepad event has the unknown tag {0}")]
+    WireUnknownGamepadTag(u8),
+    #[error("an encoded boolean is {0}, not 0 or 1")]
+    WireInvalidBool(u8),
     #[cfg(feature = "libei")]
     #[error("the {step:?} portal call failed")]
     Portal {

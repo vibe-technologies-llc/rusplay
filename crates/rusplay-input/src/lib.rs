@@ -5,6 +5,7 @@ pub mod gamepad;
 #[cfg(feature = "libei")]
 pub mod libei;
 mod sink;
+mod wire;
 
 pub use crate::{
     error::InputError,

@@ -16,6 +16,12 @@ paths:
 - The client captures input from its gpui window, with the pointer locked in relative mode
   (`input.pointer_mode`).
 - Input goes out the moment it is captured, never batched with media.
+- `wire` gives `InputEvent` a byte encoding for the protocol to carry: one tag byte, then
+  little-endian fields, floats as raw IEEE bits, booleans as 0 or 1 (`encode_into` appends to a
+  caller-owned buffer, `encoded_len` sizes it, `decode` takes exactly one event). Any other length,
+  tag or boolean value is its own `Wire*` error. Gamepad events nest a second tag. The protocol
+  crate wraps these bytes in a message and owns versioning; the layout changes only together with
+  a protocol version bump.
 
 ## Host injection (`libei` feature)
 
