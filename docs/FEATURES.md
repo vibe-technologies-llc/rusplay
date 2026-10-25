@@ -34,7 +34,6 @@
 
 # Networking
 - [M] `net-pairing`: authenticated pairing and encrypted session keys
-- [S] `net-discovery`: LAN host discovery
 
 # Input
 - [M] `input-libei`: host injection through the RemoteDesktop portal and libei

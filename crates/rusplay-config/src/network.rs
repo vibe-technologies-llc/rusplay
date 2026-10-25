@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::RangeInclusive,
 };
 
@@ -23,6 +23,8 @@ pub struct NetworkConfig {
     pub reassembly_timeout_ms: u16,
     pub control_retransmit_ms: u16,
     pub control_max_retransmits: u8,
+    pub discovery_port: u16,
+    pub discovery_group: Ipv4Addr,
 }
 
 impl Default for NetworkConfig {
@@ -38,6 +40,8 @@ impl Default for NetworkConfig {
             reassembly_timeout_ms: 100,
             control_retransmit_ms: 50,
             control_max_retransmits: 8,
+            discovery_port: 47_801,
+            discovery_group: Ipv4Addr::new(239, 255, 47, 80),
         }
     }
 }
@@ -60,6 +64,16 @@ impl NetworkConfig {
 
         if self.control_retransmit_ms == 0 {
             return Err(ConfigError::ZeroControlRetransmit);
+        }
+
+        if self.discovery_port == 0 {
+            return Err(ConfigError::ZeroDiscoveryPort);
+        }
+
+        if !self.discovery_group.is_multicast() {
+            return Err(ConfigError::DiscoveryGroupNotMulticast(
+                self.discovery_group,
+            ));
         }
 
         Ok(())
@@ -94,5 +108,46 @@ mod tests {
             config.validate(),
             Err(ConfigError::ZeroControlRetransmit)
         ));
+    }
+
+    #[test]
+    fn zero_discovery_port_is_rejected() {
+        let config = NetworkConfig {
+            discovery_port: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroDiscoveryPort)
+        ));
+    }
+
+    #[test]
+    fn unicast_discovery_group_is_rejected() {
+        let config = NetworkConfig {
+            discovery_group: Ipv4Addr::new(192, 168, 1, 1),
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::DiscoveryGroupNotMulticast(_))
+        ));
+    }
+
+    #[test]
+    fn discovery_options_parse_from_toml() {
+        let parsed: NetworkConfig = toml::from_str(
+            r#"
+            discovery_port = 5000
+            discovery_group = "239.1.2.3"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.discovery_port, 5000);
+        assert_eq!(parsed.discovery_group, Ipv4Addr::new(239, 1, 2, 3));
+        assert!(parsed.validate().is_ok());
     }
 }

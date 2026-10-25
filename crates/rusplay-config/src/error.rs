@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, net::Ipv4Addr, path::PathBuf};
 
 use thiserror::Error;
 
@@ -31,6 +31,10 @@ pub enum ConfigError {
     ZeroReassemblyTimeout,
     #[error("control retransmit timeout must be greater than zero")]
     ZeroControlRetransmit,
+    #[error("discovery port must be greater than zero")]
+    ZeroDiscoveryPort,
+    #[error("discovery group {0} is not a multicast address")]
+    DiscoveryGroupNotMulticast(Ipv4Addr),
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
 }

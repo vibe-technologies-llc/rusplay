@@ -1,4 +1,5 @@
 mod control;
+mod discovery;
 mod error;
 mod fec;
 mod pacer;
@@ -8,6 +9,7 @@ mod transport;
 
 pub use crate::{
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},
+    discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
     error::NetError,
     fec::{FecBlock, FecScheme},
     pacer::Pacer,

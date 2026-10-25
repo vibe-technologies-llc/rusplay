@@ -1,4 +1,7 @@
-use std::{io, net::SocketAddr};
+use std::{
+    io,
+    net::{Ipv4Addr, SocketAddr},
+};
 
 use rusplay_protocol::{ProtocolError, StreamKind};
 use thiserror::Error;
@@ -23,6 +26,14 @@ pub enum NetError {
     NonBlocking(#[source] io::Error),
     #[error("control channel already holds {window} unacknowledged messages")]
     ControlWindowFull { window: u32 },
+    #[error("failed to join multicast group {group}")]
+    MulticastJoin { group: Ipv4Addr, source: io::Error },
+    #[error("failed to set the socket read timeout")]
+    ReadTimeout(#[source] io::Error),
+    #[error("failed to enable broadcast on the socket")]
+    Broadcast(#[source] io::Error),
+    #[error("failed to set the multicast ttl")]
+    MulticastTtl(#[source] io::Error),
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]

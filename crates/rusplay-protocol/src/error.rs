@@ -30,6 +30,12 @@ pub enum ProtocolError {
         expected: StreamKind,
         found: StreamKind,
     },
+    #[error("unknown discovery message tag {0}")]
+    UnknownDiscoveryTag(u8),
+    #[error("host name of {len} bytes exceeds the limit of {max}")]
+    DiscoveryNameTooLong { len: usize, max: usize },
+    #[error("host name is not valid utf-8")]
+    InvalidDiscoveryName,
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),
 }
