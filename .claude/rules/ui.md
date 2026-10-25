@@ -52,9 +52,9 @@ paths:
   choices gain a `(none)` entry), chips for multi-choices, `TextField` for numbers and text, and
   an editable list for `params`.
 - A new `rusplay-config` option needs a row in `FIELDS`; tests fail until it has one:
-  `every_serialized_option_has_a_form_field` walks populated configs for every encoder and decoder backend and
-  `every_choice_option_is_accepted_by_the_config` feeds each listed choice through serde. Choice
-  strings are the serde names, never display labels.
+  `every_serialized_option_has_a_form_field` walks populated configs for every encoder and decoder
+  backend and `every_choice_option_is_accepted_by_the_config` feeds each listed choice through
+  serde. Choice strings are the serde names, never display labels.
 - `when` only gates the tagged-enum selectors (`video.encoder.backend`,
   `video.encoder.rate_control.mode` and `video.decoder.backend`), because those decide which keys
   exist at all and the structs are `deny_unknown_fields`. Everything else is always shown and
