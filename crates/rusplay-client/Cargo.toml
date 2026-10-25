@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 software = ["rusplay-decode/software"]
+software-asm = ["rusplay-decode/software-asm"]
 vaapi = ["rusplay-decode/vaapi"]
 
 [dependencies]

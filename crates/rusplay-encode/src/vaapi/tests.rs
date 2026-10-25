@@ -538,6 +538,9 @@ fn sizes_off_the_block_grid_are_cropped() {
         if let Some(pictures) = decode_vaapi(codec, &packets) {
             check_pictures(codec, &pictures, format, ODD_RESOLUTION);
         }
+        if codec == Codec::Av1 {
+            check_pictures(codec, &decode_rav1d(&packets), format, ODD_RESOLUTION);
+        }
     }
 }
 

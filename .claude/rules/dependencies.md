@@ -28,6 +28,7 @@ paths:
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
+  | rav1d SIMD | rav1d's hand-written x86/ARM assembly (`nasm` at build time on x86_64, the C compiler's assembler on aarch64) | `rusplay-decode/software-asm`, `rusplay-client/software-asm` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
   ancient headers, so the software encoders generate their bindings in
@@ -56,8 +57,8 @@ paths:
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads, `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wgpu`
-  (GPU scaling), `rav1d` for software AV1 decode (default features off: its `asm` feature needs
-  `nasm`), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
+  (GPU scaling), `rav1d` for software AV1 decode (default features off; its `asm` feature is only
+  enabled by `software-asm`, which needs `nasm` on x86_64), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
   needed. Pairing and transport encryption use RustCrypto only: `spake2` (pinned to 0.4.0, the
   latest stable release; 0.5 is still a pre-release), `hkdf`, `sha2`, `chacha20poly1305`,
   `subtle` and `zeroize`. `libc` is allowed as bare syscall declarations only for what rustix

@@ -51,8 +51,14 @@ paths:
   call; `SoftwareDecoderConfig::threads` sets the tile/postfilter thread count (`None` lets
   rav1d use every logical CPU, at most 256).
 - rav1d is built with `default-features = false` plus `bitdepth_8` and `bitdepth_16`. Its `asm`
-  feature needs `nasm` at build time and is off; see `decode-rav1d-asm` in
-  `docs/PERFORMANCE.md`.
+  feature (hand-written SIMD, several times faster) is behind `software-asm`, which implies
+  `software` and is forwarded as `rusplay-client/software-asm`. It needs `nasm` at build time on
+  x86_64, so `--all-features` builds need it installed; the default build stays free of it.
+- `DecodedFrame::resolution` is the AV1 render size from the frame header, clamped per dimension
+  to the coded picture, because an encoder that pads the frame (radeonsi codes 402 wide as 408
+  and signals 402) must not decode wider than it was captured. The `CpuPlane`s report that
+  cropped `width`/`height` over the full coded buffer. A render size larger than the coded one
+  (AV1 spatial resize) is not scaled up: the coded picture is returned.
 - H.264/HEVC software decode would need a C-backed crate and is not implemented: the software
   backend decodes AV1 only.
 
