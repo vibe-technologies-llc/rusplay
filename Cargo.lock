@@ -993,6 +993,7 @@ dependencies = [
 name = "rusplay-net"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "reed-solomon-simd",
  "rusplay-config",
  "rusplay-protocol",

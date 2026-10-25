@@ -94,6 +94,14 @@ impl Transport {
         self.socket.local_addr().map_err(NetError::LocalAddr)
     }
 
+    pub const fn mtu(&self) -> u16 {
+        self.mtu
+    }
+
+    pub(crate) fn socket(&self) -> &UdpSocket {
+        &self.socket
+    }
+
     pub fn max_datagram_len(&self, peer: &SocketAddr) -> usize {
         max_datagram_len(self.mtu, peer)
     }

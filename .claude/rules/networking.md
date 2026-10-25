@@ -28,6 +28,12 @@ paths:
   `SO_SNDBUF` and `SO_RCVBUF` with `rustix` before any traffic flows; `0` leaves the kernel
   default. Linux clamps the request to `net.core.wmem_max`/`rmem_max` without an error, so
   `Transport::socket_buffers` reports the sizes actually in force for the caller to log or warn on.
+- Fragments of a frame leave in one `sendmmsg` call (`Transport::send_batch`, through rustix;
+  the whole batch is refused up front if any datagram exceeds the budget, and a short count means
+  the socket buffer filled on a non-blocking socket, so the caller re-queues the tail).
+  Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,
+  `MSG_WAITFORONE`, returns as soon as one datagram is in). rustix has no `recvmmsg`, so that call
+  is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets.
 - The control channel (hello, keyframe requests, loss reports, bitrate hints) has its own small

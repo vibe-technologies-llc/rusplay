@@ -1,3 +1,4 @@
+mod batch;
 mod control;
 mod discovery;
 mod error;
@@ -8,6 +9,7 @@ mod reassembly;
 mod transport;
 
 pub use crate::{
+    batch::RecvBatch,
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},
     discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
     error::NetError,
