@@ -23,9 +23,16 @@ paths:
   | PipeWire stream consumption | `pipewire` | `rusplay-capture/pipewire` |
   | VAAPI encode/decode | `cros-libva` | `rusplay-encode/vaapi`, `rusplay-decode/vaapi` |
   | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
-  | x264 | `x264` bindings | `rusplay-encode/x264` |
+  | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | `x265-sys` bindings | `rusplay-encode/x265` |
   | SVT-AV1 | `svt-av1-enc` or own bindings | `rusplay-encode/svt-av1` |
+
+  The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
+  ancient headers, so the software encoders generate their bindings in
+  `crates/rusplay-encode/build.rs` from the headers `pkg-config` finds on the system. `bindgen`
+  (with its `runtime` libclang loading) and `pkg-config` are optional build dependencies pulled in
+  only by the three software-encoder features, so the default build neither needs libclang nor
+  links anything C.
 
   Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
   `ashpd` over zbus (portals), `wgpu` (GPU scaling), `rav1d` for software AV1 decode, `rubato`
