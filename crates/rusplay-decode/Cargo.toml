@@ -8,6 +8,7 @@ build = "build.rs"
 
 [features]
 software = ["dep:rav1d"]
+software-asm = ["software", "rav1d/asm"]
 vaapi = ["dep:bindgen", "dep:cros-codecs", "dep:pkg-config"]
 
 [dependencies]
