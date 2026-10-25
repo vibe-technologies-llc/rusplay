@@ -2,6 +2,7 @@ mod bessel;
 mod error;
 mod gpu;
 mod kernel;
+mod polar;
 #[cfg(test)]
 mod reference;
 mod scaler;

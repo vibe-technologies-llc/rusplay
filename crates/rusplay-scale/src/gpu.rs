@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 const RESAMPLE_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("resample.wgsl"));
+const POLAR_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("polar.wgsl"));
 
 pub(crate) const WORKGROUP_SIDE: u32 = 8;
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -13,6 +14,8 @@ pub struct ScalePipelines {
     pub(crate) destination_layout: wgpu::BindGroupLayout,
     pub(crate) separable_layout: wgpu::BindGroupLayout,
     pub(crate) separable: wgpu::ComputePipeline,
+    pub(crate) polar_layout: wgpu::BindGroupLayout,
+    pub(crate) polar: wgpu::ComputePipeline,
 }
 
 impl ScalePipelines {
@@ -42,11 +45,26 @@ impl ScalePipelines {
             "resample",
         );
 
+        let polar_layout = layout(
+            device,
+            "rusplay-scale-polar",
+            &[storage_buffer_entry(0), uniform_entry(1)],
+        );
+        let polar = compute_pipeline(
+            device,
+            "rusplay-resample-polar",
+            &[&source_layout, &destination_layout, &polar_layout],
+            POLAR_SHADER,
+            "resample_polar",
+        );
+
         Self {
             source_layout,
             destination_layout,
             separable_layout,
             separable,
+            polar_layout,
+            polar,
         }
     }
 

@@ -1,4 +1,4 @@
-use rusplay_core::{Resolution, ScaleFilter};
+use rusplay_core::Resolution;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -13,6 +13,4 @@ pub enum ScaleError {
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]
     SigmoidSlopeOutOfRange(f32),
-    #[error("the polar pass for {0} is not built yet")]
-    PolarPassUnavailable(ScaleFilter),
 }

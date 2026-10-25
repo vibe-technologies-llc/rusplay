@@ -2,6 +2,8 @@ use std::sync::OnceLock;
 
 use half::f16;
 
+use crate::{Scaler, scaler::resolution_pair};
+
 pub(crate) const RGBA16F_BYTES: u32 = 8;
 pub(crate) const RGBA16F_TOLERANCE: f32 = 4.0 / 1024.0;
 
@@ -231,4 +233,16 @@ fn extent(width: u32, height: u32) -> wgpu::Extent3d {
         height,
         depth_or_array_layers: 1,
     }
+}
+
+pub(crate) fn scale(gpu: &Gpu, scaler: &mut Scaler, image: &Image) -> Image {
+    let target_size = resolution_pair(scaler.settings().target);
+
+    let source = upload(gpu, image);
+    let target = storage_target(gpu, target_size.0, target_size.1);
+
+    submit(gpu, |encoder| {
+        scaler.encode(&gpu.device, encoder, &view(&source), &view(&target));
+    });
+    download(gpu, &target)
 }

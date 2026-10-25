@@ -20,8 +20,15 @@ paths:
   Lanczos Sharp, Ginseng, Hann, Robidoux, Robidoux Sharp. Kernel definitions follow mpv/libplacebo,
   so results can be compared against them.
 - Separable filters run as two passes (horizontal, then vertical) through an `rgba16float`
-  intermediate. Polar filters need a single 2D pass over a circular footprint. That shader is
-  still to come (see `docs/FEATURES.md`).
+  intermediate. Polar filters run as a single 2D pass (`polar.wgsl`): every source texel whose
+  distance from the sample centre, divided per axis by the stretch `max(ratio, 1)`, is below
+  the kernel radius contributes, weighted by the radial kernel and normalised by the weight
+  sum. The footprint is a circle of the kernel radius when upscaling, widened by the downscale
+  ratio when downscaling (an ellipse if the two axes scale differently). Weights come from a
+  1D LUT of the radial kernel (`RADIAL_LUT_SIZE` entries over `[0, radius]`, linearly
+  interpolated) uploaded as a storage buffer once per plan. Anti-ringing for polar uses the 2x2
+  texels around the centre, and the pass both sigmoidizes its input and unsigmoidizes its
+  output. `Scaler` picks the plan from `Kernel::geometry`.
 - Linear light comes from sampling an sRGB view of the source, so `textureLoad` returns
   linearised values. Do not add manual transfer functions where a texture view format does the
   job.

@@ -7,6 +7,7 @@ use crate::{
     gpu::{
         self, INTERMEDIATE_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer,
     },
+    polar::PolarPlan,
     shaping::Shaping,
 };
 
@@ -44,9 +45,6 @@ impl ScaleSettings {
         if self.target.pixel_count() == 0 {
             return Err(ScaleError::EmptyTarget(self.target));
         }
-        if self.filter.is_polar() {
-            return Err(ScaleError::PolarPassUnavailable(self.filter));
-        }
         if !(0.0..=1.0).contains(&self.antiringing) {
             return Err(ScaleError::AntiringingOutOfRange(self.antiringing));
         }
@@ -75,6 +73,15 @@ impl ScaleSettings {
         }
     }
 
+    pub(crate) fn polar_shaping(&self) -> Shaping {
+        Shaping {
+            antiringing: self.antiringing,
+            sigmoid: self.sigmoid,
+            sigmoidize_input: true,
+            unsigmoidize_output: true,
+        }
+    }
+
     fn same_tables(&self, other: &Self) -> bool {
         (self.filter, self.source, self.target) == (other.filter, other.source, other.target)
     }
@@ -91,7 +98,7 @@ pub enum Reconfigured {
 pub struct Scaler {
     pipelines: ScalePipelines,
     settings: ScaleSettings,
-    plan: SeparablePlan,
+    plan: Plan,
     sources: ViewGroups,
     destinations: ViewGroups,
 }
@@ -107,7 +114,7 @@ impl Scaler {
         Ok(Self {
             pipelines: pipelines.clone(),
             settings,
-            plan: SeparablePlan::new(pipelines, device, &settings),
+            plan: Plan::new(pipelines, device, &settings),
             sources: ViewGroups::default(),
             destinations: ViewGroups::default(),
         })
@@ -131,7 +138,7 @@ impl Scaler {
             self.plan.set_parameters(&self.pipelines, device, &settings);
             Reconfigured::Parameters
         } else {
-            self.plan = SeparablePlan::new(&self.pipelines, device, &settings);
+            self.plan = Plan::new(&self.pipelines, device, &settings);
             Reconfigured::Tables
         };
         self.settings = settings;
@@ -152,30 +159,49 @@ impl Scaler {
         let target_group = self
             .destinations
             .get_or_create(target, || pipelines.destination_group(device, target));
-        let plan = &self.plan;
 
-        gpu::dispatch(
-            encoder,
-            "rusplay-resample-horizontal",
-            &pipelines.separable,
-            &[
-                &source_group,
-                &plan.intermediate_destination,
-                &plan.horizontal_group,
-            ],
-            plan.horizontal.target_size,
-        );
-        gpu::dispatch(
-            encoder,
-            "rusplay-resample-vertical",
-            &pipelines.separable,
-            &[
-                &plan.intermediate_source,
-                &target_group,
-                &plan.vertical_group,
-            ],
-            plan.vertical.target_size,
-        );
+        self.plan
+            .encode(pipelines, encoder, &source_group, &target_group);
+    }
+}
+
+#[derive(Debug)]
+enum Plan {
+    Separable(SeparablePlan),
+    Polar(PolarPlan),
+}
+
+impl Plan {
+    fn new(pipelines: &ScalePipelines, device: &wgpu::Device, settings: &ScaleSettings) -> Self {
+        match Kernel::new(settings.filter).geometry() {
+            Geometry::Separable => Self::Separable(SeparablePlan::new(pipelines, device, settings)),
+            Geometry::Polar => Self::Polar(PolarPlan::new(pipelines, device, settings)),
+        }
+    }
+
+    fn set_parameters(
+        &mut self,
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        settings: &ScaleSettings,
+    ) {
+        match self {
+            Self::Separable(plan) => plan.set_parameters(pipelines, device, settings),
+            Self::Polar(plan) => plan.set_parameters(pipelines, device, settings),
+        }
+    }
+
+    fn encode(
+        &self,
+        pipelines: &ScalePipelines,
+        encoder: &mut wgpu::CommandEncoder,
+        source_group: &wgpu::BindGroup,
+        target_group: &wgpu::BindGroup,
+    ) {
+        match self {
+            Self::Separable(plan) => plan.encode(pipelines, encoder, source_group, target_group),
+            Self::Polar(plan) => plan.encode(pipelines, encoder, source_group, target_group),
+        }
     }
 }
 
@@ -192,7 +218,6 @@ struct SeparablePlan {
 impl SeparablePlan {
     fn new(pipelines: &ScalePipelines, device: &wgpu::Device, settings: &ScaleSettings) -> Self {
         let kernel = Kernel::new(settings.filter);
-        debug_assert_eq!(kernel.geometry(), Geometry::Separable);
 
         let source = resolution_pair(settings.source);
         let target = resolution_pair(settings.target);
@@ -241,6 +266,37 @@ impl SeparablePlan {
         self.vertical_group = self
             .vertical
             .group(pipelines, device, &settings.vertical_shaping());
+    }
+
+    fn encode(
+        &self,
+        pipelines: &ScalePipelines,
+        encoder: &mut wgpu::CommandEncoder,
+        source_group: &wgpu::BindGroup,
+        target_group: &wgpu::BindGroup,
+    ) {
+        gpu::dispatch(
+            encoder,
+            "rusplay-resample-horizontal",
+            &pipelines.separable,
+            &[
+                source_group,
+                &self.intermediate_destination,
+                &self.horizontal_group,
+            ],
+            self.horizontal.target_size,
+        );
+        gpu::dispatch(
+            encoder,
+            "rusplay-resample-vertical",
+            &pipelines.separable,
+            &[
+                &self.intermediate_source,
+                target_group,
+                &self.vertical_group,
+            ],
+            self.vertical.target_size,
+        );
     }
 }
 
@@ -353,7 +409,7 @@ mod tests {
     use super::*;
     use crate::{
         reference::resample_separable,
-        testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
+        testing::{self, Image, RGBA16F_TOLERANCE, scale},
     };
 
     const SEPARABLE_FILTERS: [ScaleFilter; 7] = [
@@ -393,23 +449,6 @@ mod tests {
             Axis::Vertical,
             &settings.vertical_shaping(),
         )
-    }
-
-    fn scale(gpu: &Gpu, scaler: &mut Scaler, image: &Image) -> Image {
-        let target_size = resolution_pair(scaler.settings().target);
-
-        let source = testing::upload(gpu, image);
-        let target = testing::storage_target(gpu, target_size.0, target_size.1);
-
-        testing::submit(gpu, |encoder| {
-            scaler.encode(
-                &gpu.device,
-                encoder,
-                &testing::view(&source),
-                &testing::view(&target),
-            );
-        });
-        testing::download(gpu, &target)
     }
 
     fn assert_matches_reference(settings: ScaleSettings) {
