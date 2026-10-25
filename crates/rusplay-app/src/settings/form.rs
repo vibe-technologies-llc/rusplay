@@ -523,7 +523,7 @@ mod tests {
     use rusplay_config::{EncoderParams, NvencPreset, X264Tune, X265Tune};
     use rusplay_core::{
         ColorPrimaries, ContentLightLevel, FrameRate, Luminance, MasteringDisplay,
-        MatrixCoefficients, Resolution,
+        MatrixCoefficients, Resolution, TransferFunction,
     };
 
     use super::*;
@@ -564,6 +564,12 @@ mod tests {
         base.audio.flac.compression_level = 5;
         base.audio.opus.bitrate_kbps = 128;
         base.video.color.matrix = Some(MatrixCoefficients::Bt601);
+        base.color.target.primaries = Some(ColorPrimaries::DisplayP3);
+        base.color.target.transfer = Some(TransferFunction::Pq);
+        base.color.target.reference_white_nits = Some(203);
+        base.color.target.peak_nits = Some(600);
+        base.color.target.black_nits = Some(Luminance::from_units(500).unwrap());
+        base.color.gamut_mapping.knee = 0.75;
         base.video.color.hdr.mastering = Some(MasteringDisplay {
             primaries: ColorPrimaries::Bt2020,
             max_nits: Luminance::from_whole_nits(4000).unwrap(),

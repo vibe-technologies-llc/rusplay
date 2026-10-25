@@ -1,5 +1,6 @@
 mod audio;
 mod capture;
+mod color;
 mod decoder;
 mod error;
 mod input;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::{
     audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
+    color::{ColorConfig, DisplayTargetConfig, GamutMappingConfig},
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
     input::{InputConfig, PointerMode},
@@ -43,6 +45,7 @@ pub struct Config {
     pub input: InputConfig,
     pub capture: CaptureConfig,
     pub scaling: ScalingConfig,
+    pub color: ColorConfig,
 }
 
 impl Config {
@@ -108,7 +111,8 @@ impl Config {
         self.peers.validate()?;
         self.capture.validate()?;
         self.input.validate()?;
-        self.scaling.validate()
+        self.scaling.validate()?;
+        self.color.validate()
     }
 }
 

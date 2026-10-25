@@ -6,16 +6,18 @@ pub enum Section {
     Input,
     Capture,
     Scaling,
+    Color,
 }
 
 impl Section {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Video,
         Self::Audio,
         Self::Network,
         Self::Input,
         Self::Capture,
         Self::Scaling,
+        Self::Color,
     ];
 
     pub const fn title(self) -> &'static str {
@@ -26,6 +28,7 @@ impl Section {
             Self::Input => "Input",
             Self::Capture => "Capture",
             Self::Scaling => "Scaling",
+            Self::Color => "Colour",
         }
     }
 }
@@ -91,6 +94,14 @@ const PRIMARIES: &[&str] = &[
 ];
 const TRANSFERS: &[&str] = &["bt709", "srgb", "gamma22", "pq", "hlg", "linear"];
 const MATRICES: &[&str] = &["bt709", "bt601", "bt2020-ncl"];
+const GAMUT_MODES: &[&str] = &[
+    "perceptual",
+    "relative",
+    "absolute",
+    "saturation",
+    "desaturate",
+    "highlight",
+];
 const RANGES: &[&str] = &["limited", "full"];
 const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
 const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
@@ -891,6 +902,63 @@ pub static FIELDS: &[Field] = &[
         "Upscale",
         "scaling.upscale.antiringing",
         "Anti-ringing",
+        Kind::Decimal,
+    ),
+    field(
+        Section::Color,
+        "Display target",
+        "color.target.primaries",
+        "Primaries",
+        Kind::Choice(PRIMARIES),
+    )
+    .optional(),
+    field(
+        Section::Color,
+        "Display target",
+        "color.target.transfer",
+        "Transfer function",
+        Kind::Choice(TRANSFERS),
+    )
+    .optional(),
+    field(
+        Section::Color,
+        "Display target",
+        "color.target.reference_white_nits",
+        "Reference white",
+        HDR_NITS,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Color,
+        "Display target",
+        "color.target.peak_nits",
+        "Peak luminance",
+        HDR_NITS,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Color,
+        "Display target",
+        "color.target.black_nits",
+        "Black level",
+        Kind::Decimal,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Color,
+        "Gamut mapping",
+        "color.gamut_mapping.mode",
+        "Mode",
+        Kind::Choice(GAMUT_MODES),
+    ),
+    field(
+        Section::Color,
+        "Gamut mapping",
+        "color.gamut_mapping.knee",
+        "Compression knee",
         Kind::Decimal,
     ),
 ];

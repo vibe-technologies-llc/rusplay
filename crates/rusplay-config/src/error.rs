@@ -21,6 +21,14 @@ pub enum ConfigError {
     PeakLuminanceOutOfRange(u32),
     #[error("mastering display minimum {min_nits} cd/m² is not below its maximum {max_nits} cd/m²")]
     MasteringLuminanceInverted { min_nits: f64, max_nits: f64 },
+    #[error("display target reference white {0} nits is outside 1..=10000")]
+    TargetReferenceWhiteOutOfRange(u32),
+    #[error("display target peak {0} nits is outside 1..=10000")]
+    TargetPeakOutOfRange(u32),
+    #[error("display target black {black_nits} cd/m² is not below its peak {peak_nits} nits")]
+    TargetBlackNotBelowPeak { black_nits: f64, peak_nits: u32 },
+    #[error("gamut mapping knee {0} is outside 0.0..1.0")]
+    GamutKneeOutOfRange(f32),
     #[error("svt-av1 preset {0} is outside 0..=13")]
     SvtAv1PresetOutOfRange(u8),
     #[error("constant quality qp {0} is outside 0..=51")]
@@ -87,6 +95,10 @@ impl ConfigError {
             Self::ReferenceWhiteOutOfRange(_) => Some("video.color.hdr.reference_white_nits"),
             Self::PeakLuminanceOutOfRange(_) => Some("video.color.hdr.peak_nits"),
             Self::MasteringLuminanceInverted { .. } => Some("video.color.hdr.mastering.min_nits"),
+            Self::TargetReferenceWhiteOutOfRange(_) => Some("color.target.reference_white_nits"),
+            Self::TargetPeakOutOfRange(_) => Some("color.target.peak_nits"),
+            Self::TargetBlackNotBelowPeak { .. } => Some("color.target.black_nits"),
+            Self::GamutKneeOutOfRange(_) => Some("color.gamut_mapping.knee"),
             Self::SvtAv1PresetOutOfRange(_) => Some("video.encoder.preset"),
             Self::QpOutOfRange(_) => Some("video.encoder.rate_control.qp"),
             Self::ZeroAudioBitrate => Some("audio.opus.bitrate_kbps"),

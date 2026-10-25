@@ -2,6 +2,8 @@ use std::borrow::Cow;
 
 use wgpu::util::DeviceExt;
 
+use crate::color::{BOUNDARY_STEPS, COMPRESSION_POWER};
+
 const RESAMPLE_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
@@ -40,10 +42,18 @@ const CONVERT_FULL_SHADER: &str = concat!(
     include_str!("convert_full.wgsl")
 );
 
+const COLOR_MAP_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_map.wgsl")
+);
+
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
 const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
+const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 
 pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 
@@ -65,6 +75,37 @@ pub struct ScalePipelines {
     pub(crate) polar_layout: wgpu::BindGroupLayout,
     pub(crate) polar: ShaderPass,
     pub(crate) convert: ConvertPipelines,
+    pub(crate) color: ColorPipelines,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ColorPipelines {
+    pub params_layout: wgpu::BindGroupLayout,
+    pub map: ShaderPass,
+}
+
+impl ColorPipelines {
+    fn new(
+        device: &wgpu::Device,
+        source_layout: &wgpu::BindGroupLayout,
+        destination_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let params_layout = layout(device, "rusplay-color-params", &[uniform_entry(0)]);
+        let map = compute_pipeline(
+            device,
+            "rusplay-color-map",
+            &[source_layout, destination_layout, &params_layout],
+            COLOR_MAP_SHADER,
+            "map_color",
+            COLOR_WORKGROUP,
+            &[
+                ("BOUNDARY_STEPS", f64::from(BOUNDARY_STEPS)),
+                ("COMPRESSION_POWER", COMPRESSION_POWER),
+            ],
+        );
+
+        Self { params_layout, map }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +262,7 @@ impl ScalePipelines {
         );
 
         let convert = ConvertPipelines::new(device, &source_layout, &polar_layout);
+        let color = ColorPipelines::new(device, &source_layout, &destination_layout);
 
         Self {
             source_layout,
@@ -230,6 +272,7 @@ impl ScalePipelines {
             polar_layout,
             polar,
             convert,
+            color,
         }
     }
 

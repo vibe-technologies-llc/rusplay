@@ -11,6 +11,7 @@ paths:
   - "crates/rusplay-decode/**"
   - "crates/rusplay-config/src/video.rs"
   - "crates/rusplay-config/src/scaling.rs"
+  - "crates/rusplay-config/src/color.rs"
 ---
 
 # Colour management
@@ -103,6 +104,60 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 6. Inverse EOTF of the target and quantisation to the swapchain depth with dithering (blue noise
    or ordered, configurable). A 10-bit or float swapchain is used whenever the compositor offers
    one.
+
+## Mapping stages (`rusplay-scale::color`)
+
+- `ColorMapper` is one compute pass (`color_map.wgsl` with the `color_common.wgsl` and
+  `color_gamut.wgsl` preludes) from an input texture to an `rgba16float` storage texture of the
+  same size. Its contract: input is linear light in the source primaries with 1.0 at the
+  source's reference white; output is linear light in the target primaries with 1.0 at the
+  target's reference white, inside `[0, ColorPlan::target_peak]` (`peak / white` for an HDR
+  target, 1 for SDR) except on the matrix path. Alpha passes through. It is the stage between
+  linearisation and scaling, so the scaler sees display-referred values.
+- `ColorMapSettings { source, target, gamut }` describes both ends as `ColorVolume`s
+  (primaries, transfer, reference white, peak and black in cd/m²).
+  `ColorVolume::of_content(&ColorSpace)` takes the peak from `HdrLevels::content_peak_nits` and
+  the black from the mastering minimum; `srgb_display()` is the fallback target. The transfer
+  only decides HDR versus SDR: an SDR source's reference white is taken to be the target's.
+- `ColorPlan::new` does all the f64 work once per settings value: Bradford-adapted matrices
+  through D65 XYZ (the working white), the path, the working space and the inverses, written
+  into one params uniform. `ColorMapper::configure` builds a new plan and uniform off the frame
+  path and reports `Reconfigured::Parameters`; nothing is allocated per frame except bind
+  groups for frame views not seen recently.
+- The path (`MappingPath`) is chosen on the CPU. A source whose relative matrix into the target
+  has no negative coefficient fits inside it, and `perceptual`, `relative`, `desaturate` and
+  `highlight` all become `Matrix` (no clamp, no mapping). Otherwise: `perceptual` is
+  `Perceptual`; `relative` is `Clip` (Bradford matrix, clamp per channel in target RGB);
+  `absolute` is `Clip` with the unadapted matrix, so the source white keeps its chromaticity;
+  `saturation` is `Clip` with the identity, reinterpreting source RGB as target RGB;
+  `desaturate` mixes each colour toward its target luminance (clamped to the peak) just enough to
+  fit, keeping luminance where it can; `highlight` shows in-gamut colours relative colorimetric
+  and replaces out-of-gamut ones with `peak - clipped`.
+- Perceptual mapping runs in `WorkingSpace::Ictcp` when either end is HDR and
+  `WorkingSpace::Oklab` otherwise. ICtCp uses the BT.2100 LMS matrix composed with the derived
+  XYZ to BT.2020 matrix, PQ on absolute luminance (the target white times the relative value);
+  Oklab's XYZ to LMS rows are normalised so D65 lands exactly on the neutral axis. Lightness and
+  hue are held; for the colour's (lightness, hue) the shader bisects (`BOUNDARY_STEPS` = 16 over
+  chroma `0..max(1, C)`) for the target gamut's boundary chroma `T`, returns the colour
+  unchanged if `C <= knee * T`, and otherwise bisects for the source gamut's boundary `S` at
+  the same luminance range and compresses with the ACES reference gamut compression curve
+  (power `COMPRESSION_POWER` = 1.2) so `knee * T` keeps slope 1 and `S` lands exactly on `T`.
+  A colour beyond `S` is clipped to `T`, and the result is clamped to absorb bisection error.
+  `knee` is `GamutMapping::knee`, default 0.8, validated into `0..1`.
+- `color/reference.rs` is the f64 mirror of the shader. Tests check that greys and colours
+  below the knee pass through, that BT.2020 primaries and secondaries map onto the P3 boundary
+  with lightness held, hue within 1° and a hue-only ΔE_ITP below 1 (ICtCp), that chroma
+  compression is monotonic and ends on the boundary, the desaturate and highlight semantics,
+  and that the GPU matches the reference for every mode and both spaces within the
+  `rgba16float` tolerance.
+- Cost at 3840x2160 on an RX 9070 (`bench.rs`, a per-pixel noise pattern that keeps every wave
+  on the slow path): perceptual 0.85 ms SDR and 2.0 ms HDR (PQ in every bisection step),
+  relative 0.24 ms. The 3D LUT bake below is the way to make perceptual cheap.
+- Config: `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8), and the display
+  overrides `color.target.primaries`, `transfer`, `reference_white_nits`, `peak_nits` and
+  `black_nits`, all unset by default. Resolving them against the Wayland description belongs to
+  `client-display-color`, and feeding the result into `ColorMapSettings` to
+  `client-color-pipeline`.
 
 ## Implementation
 

@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod bench;
 mod bessel;
+mod color;
 mod convert;
 mod error;
 mod gpu;
@@ -17,6 +18,10 @@ mod taps;
 mod testing;
 
 pub use crate::{
+    color::{
+        ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, GamutMapping, MappingPath,
+        WorkingSpace,
+    },
     convert::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,
         InputLight, Plane, PlaneContent, PlaneLayout, Quantization, SampleAlignment, YuvFrame,
