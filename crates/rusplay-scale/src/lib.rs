@@ -19,8 +19,8 @@ mod testing;
 
 pub use crate::{
     color::{
-        ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, GamutMapping, MappingPath,
-        WorkingSpace,
+        ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, DynamicPeak, GamutMapping,
+        MappingPath, ToneCurve, ToneMapping, ToneStage, WorkingSpace,
     },
     convert::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,

@@ -13,12 +13,19 @@ struct ColorParams {
     lms_to_xyz: Rows,
     lms_to_lab: Rows,
     lab_to_lms: Rows,
+    tone_xyz_to_lms: Rows,
+    tone_lms_to_xyz: Rows,
+    tone_lms_to_itp: Rows,
+    tone_itp_to_lms: Rows,
     target_luma: vec4<f32>,
     levels: vec4<f32>,
+    tone_levels: vec4<f32>,
+    peak_limits: vec4<f32>,
+    dynamic: vec4<f32>,
     path: u32,
     space: u32,
     tone: u32,
-    padding: u32,
+    dynamic_peak: u32,
 }
 
 const SPACE_ICTCP: u32 = 1u;

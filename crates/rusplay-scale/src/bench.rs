@@ -7,8 +7,8 @@ use rusplay_core::{
 
 use crate::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings,
-    DEFAULT_ROW_ALIGNMENT, GamutMapping, InputLight, PlaneLayout, ScalePipelines, ScaleSettings,
-    Scaler,
+    DEFAULT_ROW_ALIGNMENT, DynamicPeak, GamutMapping, InputLight, PlaneLayout, ScalePipelines,
+    ScaleSettings, Scaler, ToneMapping,
     testing::{self, Gpu, Image},
 };
 
@@ -99,9 +99,30 @@ fn color_cases() -> Vec<(&'static str, ColorMapSettings)> {
             mode,
             ..GamutMapping::default()
         },
+        ..ColorMapSettings::default()
+    };
+
+    let tone_mapped = |dynamic_peak| ColorMapSettings {
+        tone: ToneMapping {
+            dynamic_peak,
+            ..ToneMapping::default()
+        },
+        ..with_mode(
+            hdr(ColorPrimaries::Bt2020, 4000.0),
+            sdr(ColorPrimaries::DisplayP3),
+            GamutMapMode::Perceptual,
+        )
     };
 
     vec![
+        (
+            "bt2020 pq 4000 -> p3 sdr bt2390 perceptual",
+            tone_mapped(None),
+        ),
+        (
+            "bt2020 pq 4000 -> p3 sdr bt2390 dynamic perceptual",
+            tone_mapped(Some(DynamicPeak::default())),
+        ),
         (
             "bt2020 sdr -> p3 sdr perceptual",
             with_mode(

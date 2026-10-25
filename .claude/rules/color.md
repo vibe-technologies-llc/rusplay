@@ -144,16 +144,54 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   (power `COMPRESSION_POWER` = 1.2) so `knee * T` keeps slope 1 and `S` lands exactly on `T`.
   A colour beyond `S` is clipped to `T`, and the result is clamped to absorb bisection error.
   `knee` is `GamutMapping::knee`, default 0.8, validated into `0..1`.
+- Tone mapping runs in the same dispatch, before gamut mapping (`color_tone.wgsl`), when the
+  source is HDR and either its peak exceeds the target's display peak (`peak_nits` for an HDR
+  target, the reference white for SDR) or dynamic peak detection is on; `ColorPlan::tone`
+  then holds a `ToneStage` (`ToneCurve` plus the optional `DynamicPeak`). The source peak is
+  `ColorVolume::peak_nits`, which `of_content` fills from MaxCLL, then the mastering maximum,
+  then `video.color.hdr.peak_nits`; the source black is the mastering minimum. The pixel goes
+  to D65 XYZ in absolute cd/m², to ICtCp (the BT.2100 LMS matrix over the derived XYZ to
+  BT.2020 matrix, PQ), the operator maps the intensity `I` as a PQ code, `Ct` and `Cp` are
+  scaled by `min(I'/I, I/I')` to keep saturation, and the result returns to source RGB relative
+  to the target white for the gamut stage. Hue in ICtCp is untouched by construction.
+- Operators (`ToneMapOperator`, all curves cd/m² to cd/m² that clip at the target peak, f64 in
+  `ToneCurve::map_pq`/`map_nits` and f32 in the shader): `bt2390` (default) is the BT.2390
+  EETF in normalised PQ with `KS = 1.5 maxLum - 0.5`, the Hermite roll-off and the
+  `minLum (1 - E2)^4` black lift (the lift raises the peak by under 0.1%); `bt2446a` is
+  BT.2446 method A's luminance curve (ρ from both peaks, the three-piece tone curve, gamma
+  2.4 out); `spline` is identity in normalised PQ below `0.7 maxLum` and a cubic Hermite with
+  zero end slope onto `maxLum` above, its start slope capped at three times the secant so it
+  stays monotonic; `reinhard` is extended Reinhard with the source peak as white; `clip` clips.
+- Dynamic peak detection (`DynamicPeak`, off by default) adds two dispatches before the map:
+  `color_histogram.wgsl` (16x16 workgroups, one workgroup-local atomic bin per invocation)
+  counts `PQ(max(R, G, B))` into `HISTOGRAM_BINS` = 256 bins, and `color_peak.wgsl` (one
+  invocation) takes the bin edge at `percentile` (99.995), smooths it in PQ as
+  `prev + (frame - prev) / smoothing_frames` (20), resets to the frame value when the mean
+  luminance moved by more than `scene_threshold_db` (3 dB, `10 log10` of the mean's nits)
+  since the previous frame, clamps to `[target peak, static source peak]`, rebuilds the curve
+  and clears the bins. The curve and state live in a GPU storage buffer
+  (`ColorMapper::tone_state`), written once from the CPU for a static curve and by the peak
+  pass for a dynamic one, so nothing is read back and the frame path never waits.
+  Reconfiguring resets the state.
 - `color/reference.rs` is the f64 mirror of the shader. Tests check that greys and colours
   below the knee pass through, that BT.2020 primaries and secondaries map onto the P3 boundary
   with lightness held, hue within 1° and a hue-only ΔE_ITP below 1 (ICtCp), that chroma
   compression is monotonic and ends on the boundary, the desaturate and highlight semantics,
   and that the GPU matches the reference for every mode and both spaces within the
-  `rgba16float` tolerance.
+  `rgba16float` tolerance. Tone tests check BT.2390 against its reference points (the
+  4000 to 1000 cd/m² maxLum 0.83298 and KS 0.74947, identity below KS, slope 1 at the knee,
+  source peak onto target peak, the black lift), that every operator is monotonic and lands on
+  the target peak, that hue is held and chroma scales with the intensity ratio, that the
+  motivating BT.2020 PQ to SDR Display P3 case stays in range with hue within 2°, GPU parity
+  for every operator, and the dynamic state machine (first frame, smoothing, scene cut)
+  against `reference::detect_peak`.
 - Cost at 3840x2160 on an RX 9070 (`bench.rs`, a per-pixel noise pattern that keeps every wave
   on the slow path): perceptual 0.85 ms SDR and 2.0 ms HDR (PQ in every bisection step),
-  relative 0.24 ms. The 3D LUT bake below is the way to make perceptual cheap.
-- Config: `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8), and the display
+  relative 0.24 ms. BT.2390 tone mapping adds about 0.1 ms and dynamic peak detection about
+  0.18 ms. The 3D LUT bake below is the way to make perceptual cheap.
+- Config: `color.tone_mapping.operator` (`bt2390`), `dynamic_peak` (false), `peak_percentile`
+  (99.995), `smoothing_frames` (20) and `scene_threshold_db` (3.0);
+  `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8); and the display
   overrides `color.target.primaries`, `transfer`, `reference_white_nits`, `peak_nits` and
   `black_nits`, all unset by default. Resolving them against the Wayland description belongs to
   `client-display-color`, and feeding the result into `ColorMapSettings` to

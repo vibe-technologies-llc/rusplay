@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use wgpu::util::DeviceExt;
 
-use crate::color::{BOUNDARY_STEPS, COMPRESSION_POWER};
+use crate::color::{BOUNDARY_STEPS, COMPRESSION_POWER, HISTOGRAM_BINS};
 
 const RESAMPLE_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
@@ -45,8 +45,22 @@ const CONVERT_FULL_SHADER: &str = concat!(
 const COLOR_MAP_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
     include_str!("color_gamut.wgsl"),
     include_str!("color_map.wgsl")
+);
+
+const COLOR_HISTOGRAM_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_histogram.wgsl")
+);
+const COLOR_PEAK_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_peak.wgsl")
 );
 
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
@@ -54,6 +68,10 @@ const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
+const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
+const PEAK_WORKGROUP: (u32, u32) = (1, 1);
+
+const _: () = assert!(HISTOGRAM_WORKGROUP.0 * HISTOGRAM_WORKGROUP.1 == HISTOGRAM_BINS);
 
 pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 
@@ -81,7 +99,10 @@ pub struct ScalePipelines {
 #[derive(Debug, Clone)]
 pub(crate) struct ColorPipelines {
     pub params_layout: wgpu::BindGroupLayout,
+    pub analysis_layout: wgpu::BindGroupLayout,
     pub map: ShaderPass,
+    pub histogram: ShaderPass,
+    pub peak: ShaderPass,
 }
 
 impl ColorPipelines {
@@ -90,7 +111,20 @@ impl ColorPipelines {
         source_layout: &wgpu::BindGroupLayout,
         destination_layout: &wgpu::BindGroupLayout,
     ) -> Self {
-        let params_layout = layout(device, "rusplay-color-params", &[uniform_entry(0)]);
+        let params_layout = layout(
+            device,
+            "rusplay-color-params",
+            &[uniform_entry(0), storage_buffer_entry(1)],
+        );
+        let analysis_layout = layout(
+            device,
+            "rusplay-color-analysis",
+            &[
+                uniform_entry(0),
+                writable_storage_buffer_entry(1),
+                writable_storage_buffer_entry(2),
+            ],
+        );
         let map = compute_pipeline(
             device,
             "rusplay-color-map",
@@ -103,8 +137,33 @@ impl ColorPipelines {
                 ("COMPRESSION_POWER", COMPRESSION_POWER),
             ],
         );
+        let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
+        let histogram = compute_pipeline(
+            device,
+            "rusplay-color-histogram",
+            &[source_layout, &analysis_layout],
+            COLOR_HISTOGRAM_SHADER,
+            "measure_histogram",
+            HISTOGRAM_WORKGROUP,
+            &bins,
+        );
+        let peak = compute_pipeline(
+            device,
+            "rusplay-color-peak",
+            &[&analysis_layout],
+            COLOR_PEAK_SHADER,
+            "detect_peak",
+            PEAK_WORKGROUP,
+            &bins,
+        );
 
-        Self { params_layout, map }
+        Self {
+            params_layout,
+            analysis_layout,
+            map,
+            histogram,
+            peak,
+        }
     }
 }
 

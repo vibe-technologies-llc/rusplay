@@ -570,6 +570,8 @@ mod tests {
         base.color.target.peak_nits = Some(600);
         base.color.target.black_nits = Some(Luminance::from_units(500).unwrap());
         base.color.gamut_mapping.knee = 0.75;
+        base.color.tone_mapping.dynamic_peak = true;
+        base.color.tone_mapping.peak_percentile = 99.9;
         base.video.color.hdr.mastering = Some(MasteringDisplay {
             primaries: ColorPrimaries::Bt2020,
             max_nits: Luminance::from_whole_nits(4000).unwrap(),

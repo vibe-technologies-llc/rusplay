@@ -27,5 +27,4 @@
 - [M] `color-signalling`: carry the colour description and HDR metadata in the protocol's stream description and in every encoder's VUI / AV1 `color_config` / HDR SEI and metadata OBUs, and report the bitstream's description from the decoders
 - [M] `capture-color-description`: read the captured surface's colour description and HDR metadata from PipeWire/portal metadata instead of assuming sRGB, so an HDR game arrives as BT.2020 PQ 10-bit
 - [M] `client-display-color`: query the client output's image description through `wp_color_management_v1` and resolve it against the `color.target` overrides
-- [L] `color-tone-map`: GPU tone mapping to a lower peak or SDR (BT.2390 EETF default, BT.2446a, spline, Reinhard, clip) with optional dynamic peak detection
-- [M, blocked by: color-tone-map, client-display-color, client-pipeline] `client-color-pipeline`: run decode → linearise → tone map → gamut map → scale → display encode with dithering in the client, fused or baked into a 3D LUT
+- [M, blocked by: client-display-color, client-pipeline] `client-color-pipeline`: run decode → linearise → tone map → gamut map → scale → display encode with dithering in the client, fused or baked into a 3D LUT

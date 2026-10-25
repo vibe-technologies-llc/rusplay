@@ -11,7 +11,7 @@ use thiserror::Error;
 
 pub use crate::color::{
     hdr::{ContentLightLevel, HdrLevels, Luminance, MasteringDisplay},
-    mapping::GamutMapMode,
+    mapping::{GamutMapMode, ToneMapOperator},
     matrix::{Matrix3, bradford_adaptation},
     primaries::{Chromaticities, Chromaticity, ColorPrimaries, WhiteAdaptation},
     transfer::{TransferFunction, pq_from_nits, pq_to_nits},

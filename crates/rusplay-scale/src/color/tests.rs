@@ -11,14 +11,14 @@ const HUE_TOLERANCE_DEGREES: f64 = 1.0;
 const MAX_HUE_DELTA_E_ITP: f64 = 1.0;
 const DELTA_E_ITP_SCALE: f64 = 720.0;
 
-fn sdr(primaries: ColorPrimaries) -> ColorVolume {
+pub(super) fn sdr(primaries: ColorPrimaries) -> ColorVolume {
     ColorVolume {
         primaries,
         ..ColorVolume::srgb_display()
     }
 }
 
-fn hdr(primaries: ColorPrimaries, peak_nits: f64) -> ColorVolume {
+pub(super) fn hdr(primaries: ColorPrimaries, peak_nits: f64) -> ColorVolume {
     ColorVolume {
         primaries,
         transfer: TransferFunction::Pq,
@@ -36,6 +36,7 @@ fn settings(source: ColorVolume, target: ColorVolume, mode: GamutMapMode) -> Col
             mode,
             ..GamutMapping::default()
         },
+        ..ColorMapSettings::default()
     }
 }
 
@@ -57,18 +58,18 @@ fn bt2020_to_p3_hdr() -> ColorPlan {
     .unwrap()
 }
 
-fn max_difference(a: [f64; 3], b: [f64; 3]) -> f64 {
+pub(super) fn max_difference(a: [f64; 3], b: [f64; 3]) -> f64 {
     a.iter()
         .zip(b)
         .map(|(x, y)| (x - y).abs())
         .fold(0.0, f64::max)
 }
 
-fn polar(lab: [f64; 3]) -> (f64, f64) {
+pub(super) fn polar(lab: [f64; 3]) -> (f64, f64) {
     (lab[1].hypot(lab[2]), lab[2].atan2(lab[1]))
 }
 
-fn hue_difference_degrees(a: f64, b: f64) -> f64 {
+pub(super) fn hue_difference_degrees(a: f64, b: f64) -> f64 {
     let turn = std::f64::consts::TAU;
     let difference = (a - b).rem_euclid(turn);
 
@@ -85,7 +86,7 @@ fn hue_delta_e_itp(source: [f64; 3], mapped: [f64; 3]) -> f64 {
     DELTA_E_ITP_SCALE * 2.0 * (source_chroma * mapped_chroma).sqrt() * (angle / 2.0).sin().abs()
 }
 
-fn primaries_and_secondaries(level: f64) -> [[f64; 3]; 6] {
+pub(super) fn primaries_and_secondaries(level: f64) -> [[f64; 3]; 6] {
     [
         [level, 0.0, 0.0],
         [0.0, level, 0.0],
@@ -96,7 +97,7 @@ fn primaries_and_secondaries(level: f64) -> [[f64; 3]; 6] {
     ]
 }
 
-fn unit_hash(index: u32, seed: u32) -> f64 {
+pub(super) fn unit_hash(index: u32, seed: u32) -> f64 {
     let mut state = index.wrapping_mul(0x9E37_79B1) ^ seed.wrapping_mul(0x85EB_CA77);
     state ^= state >> 15;
     state = state.wrapping_mul(0x2C1B_3C6D);
@@ -428,7 +429,7 @@ fn test_image(width: u32, height: u32, scale: f32) -> Image {
     })
 }
 
-fn map_on_gpu(gpu: &testing::Gpu, mapper: &mut ColorMapper, image: &Image) -> Image {
+pub(super) fn map_on_gpu(gpu: &testing::Gpu, mapper: &mut ColorMapper, image: &Image) -> Image {
     let source = testing::upload(gpu, image);
     let target = testing::storage_target(gpu, image.width, image.height);
 

@@ -124,9 +124,10 @@ paths:
   size and shape (the inner loop is ALU-bound and the texture cache already captures the
   reuse), and the separable passes already run at roughly 85% of memory bandwidth even for an
   8K to 720p Hermite downscale, so a tile has nothing left to win.
-- Gamut mapping (`color.rs`, `color_*.wgsl`) shares `ScalePipelines` (`ColorPipelines`: one
-  params layout, one pass at 8x8), the source and destination layouts and the `GroupCache`
-  scheme with the scaler. Its design is in `.claude/rules/color.md`.
+- Tone and gamut mapping (`color.rs`, `color/`, `color_*.wgsl`) share `ScalePipelines`
+  (`ColorPipelines`: the map pass at 8x8 with a params and tone-state layout, and the
+  histogram and peak passes on an analysis layout), the source and destination layouts and
+  the `GroupCache` scheme with the scaler. Their design is in `.claude/rules/color.md`.
 - `bench.rs` is an ignored test that prints per-frame GPU times for the representative
   workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
   --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's

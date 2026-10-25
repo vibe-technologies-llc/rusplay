@@ -1,16 +1,23 @@
 mod spaces;
+mod tone;
 
 #[cfg(test)]
 pub(crate) mod reference;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tone_tests;
 
 use rusplay_core::{
-    Chromaticities, ColorPrimaries, ColorSpace, GamutMapMode, HdrLevels, Matrix3, TransferFunction,
-    WhiteAdaptation, bradford_adaptation,
+    Chromaticities, ColorPrimaries, ColorSpace, GamutMapMode, HdrLevels, Matrix3, ToneMapOperator,
+    TransferFunction, WhiteAdaptation, bradford_adaptation,
 };
+use wgpu::util::DeviceExt;
 
-pub use crate::color::spaces::WorkingSpace;
+pub use crate::color::{
+    spaces::WorkingSpace,
+    tone::{DynamicPeak, ToneCurve, ToneMapping},
+};
 use crate::{
     Reconfigured, ScaleError,
     gpu::{self, ScalePipelines, buffer_group, uniform_buffer},
@@ -20,6 +27,9 @@ use crate::{
 pub(crate) const BOUNDARY_STEPS: u32 = 16;
 pub(crate) const COMPRESSION_POWER: f64 = 1.2;
 pub(crate) const CONTAINMENT_TOLERANCE: f64 = 1e-6;
+pub(crate) const HISTOGRAM_BINS: u32 = 256;
+pub(crate) const PEAK_TOLERANCE: f64 = 1e-6;
+const TONE_STATE_WORDS: usize = 12;
 
 const MAX_NITS: f64 = HdrLevels::MAX_NITS as f64;
 
@@ -66,6 +76,14 @@ impl ColorVolume {
 
     pub const fn is_hdr(&self) -> bool {
         self.transfer.is_hdr()
+    }
+
+    pub const fn display_peak_nits(&self) -> f64 {
+        if self.is_hdr() {
+            self.peak_nits
+        } else {
+            self.reference_white_nits
+        }
     }
 
     pub fn relative_peak(&self) -> f64 {
@@ -135,6 +153,7 @@ impl Default for GamutMapping {
 pub struct ColorMapSettings {
     pub source: ColorVolume,
     pub target: ColorVolume,
+    pub tone: ToneMapping,
     pub gamut: GamutMapping,
 }
 
@@ -159,6 +178,24 @@ impl MappingPath {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToneStage {
+    pub curve: ToneCurve,
+    pub dynamic_peak: Option<DynamicPeak>,
+}
+
+impl ToneStage {
+    const fn operator_code(&self) -> u32 {
+        match self.curve.operator {
+            ToneMapOperator::Bt2390 => 1,
+            ToneMapOperator::Bt2446a => 2,
+            ToneMapOperator::Spline => 3,
+            ToneMapOperator::Reinhard => 4,
+            ToneMapOperator::Clip => 5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorPlan {
     pub(crate) path: MappingPath,
@@ -176,6 +213,13 @@ pub struct ColorPlan {
     pub(crate) lms_to_lab: Matrix3,
     pub(crate) lab_to_lms: Matrix3,
     pub(crate) target_luma: [f64; 3],
+    pub(crate) tone: Option<ToneStage>,
+    pub(crate) source_white_nits: f64,
+    pub(crate) target_white_nits: f64,
+    pub(crate) tone_xyz_to_lms: Matrix3,
+    pub(crate) tone_lms_to_xyz: Matrix3,
+    pub(crate) tone_lms_to_itp: Matrix3,
+    pub(crate) tone_itp_to_lms: Matrix3,
 }
 
 impl ColorPlan {
@@ -183,11 +227,15 @@ impl ColorPlan {
         let ColorMapSettings {
             source,
             target,
+            tone,
             gamut,
         } = settings;
         source.validate()?;
         target.validate()?;
         gamut.validate()?;
+        if let Some(dynamic_peak) = tone.dynamic_peak {
+            dynamic_peak.validate()?;
+        }
 
         let source_gamut = source.primaries.chromaticities();
         let target_gamut = target.primaries.chromaticities();
@@ -235,6 +283,21 @@ impl ColorPlan {
 
         let xyz_to_lms = space.xyz_to_lms();
         let lms_to_lab = space.lms_to_lab();
+        let tone_xyz_to_lms = WorkingSpace::Ictcp.xyz_to_lms();
+        let tone_lms_to_itp = WorkingSpace::Ictcp.lms_to_lab();
+        let target_peak_nits = target.display_peak_nits();
+        let needs_tone_mapping = tone.dynamic_peak.is_some()
+            || source.peak_nits > target_peak_nits * (1.0 + PEAK_TOLERANCE);
+        let tone = (source.is_hdr() && needs_tone_mapping).then_some(ToneStage {
+            curve: ToneCurve {
+                operator: tone.operator,
+                source_peak_nits: source.peak_nits.max(target_peak_nits),
+                source_black_nits: source.black_nits,
+                target_peak_nits,
+                target_black_nits: target.black_nits,
+            },
+            dynamic_peak: tone.dynamic_peak,
+        });
 
         Ok(Self {
             path,
@@ -252,7 +315,18 @@ impl ColorPlan {
             lms_to_lab,
             lab_to_lms: inverse(lms_to_lab)?,
             target_luma: target_gamut.rgb_to_xyz().rows()[1],
+            tone,
+            source_white_nits: source_white,
+            target_white_nits: target_white,
+            tone_xyz_to_lms,
+            tone_lms_to_xyz: inverse(tone_xyz_to_lms)?,
+            tone_lms_to_itp,
+            tone_itp_to_lms: inverse(tone_lms_to_itp)?,
         })
+    }
+
+    pub const fn tone(&self) -> Option<ToneStage> {
+        self.tone
     }
 
     pub const fn path(&self) -> MappingPath {
@@ -282,6 +356,10 @@ impl ColorPlan {
             self.lms_to_xyz,
             self.lms_to_lab,
             self.lab_to_lms,
+            self.tone_xyz_to_lms,
+            self.tone_lms_to_xyz,
+            self.tone_lms_to_itp,
+            self.tone_itp_to_lms,
         ] {
             for row in matrix.rows() {
                 words.extend(row.map(float));
@@ -296,13 +374,46 @@ impl ColorPlan {
             float(self.pq_scale),
             float(self.gain),
         ]);
-        words.extend([self.path.code(), self.space.code(), 0, 0]);
+        let curve = self.tone.map(|stage| stage.curve);
+        let dynamic = self.tone.and_then(|stage| stage.dynamic_peak);
+        words.extend([
+            float(self.source_white_nits),
+            float(self.target_white_nits),
+            0,
+            0,
+        ]);
+        words.extend([
+            float(curve.map_or(1.0, |curve| curve.target_peak_nits)),
+            float(curve.map_or(0.0, |curve| curve.source_black_nits)),
+            float(curve.map_or(0.0, |curve| curve.target_black_nits)),
+            float(curve.map_or(1.0, |curve| curve.source_peak_nits)),
+        ]);
+        words.extend([
+            float(dynamic.map_or(1.0, |dynamic| dynamic.percentile / 100.0)),
+            float(dynamic.map_or(1.0, |dynamic| f64::from(dynamic.smoothing_frames))),
+            float(dynamic.map_or(1.0, |dynamic| dynamic.scene_threshold_db)),
+            0,
+        ]);
+        words.extend([
+            self.path.code(),
+            self.space.code(),
+            self.tone.map_or(0, |stage| stage.operator_code()),
+            u32::from(dynamic.is_some()),
+        ]);
+
+        words.iter().flat_map(|word| word.to_ne_bytes()).collect()
+    }
+
+    fn tone_state_bytes(&self) -> Vec<u8> {
+        let mut words = Vec::with_capacity(TONE_STATE_WORDS);
+        words.extend(self.tone.map_or([0; 8], |stage| stage.curve.words()));
+        words.extend([0, 0, 0, 0]);
 
         words.iter().flat_map(|word| word.to_ne_bytes()).collect()
     }
 }
 
-const PARAMS_WORDS: usize = 8 * 12 + 4 + 4 + 4;
+const PARAMS_WORDS: usize = 12 * 12 + 4 * 4 + 4;
 
 fn inverse(matrix: Matrix3) -> Result<Matrix3, ScaleError> {
     matrix.inverse().ok_or(ScaleError::SingularColorMatrix)
@@ -315,11 +426,51 @@ fn float(value: f64) -> u32 {
 }
 
 #[derive(Debug)]
+struct MapperBuffers {
+    map_group: wgpu::BindGroup,
+    analysis_group: wgpu::BindGroup,
+    tone_state: wgpu::Buffer,
+}
+
+impl MapperBuffers {
+    fn new(pipelines: &ScalePipelines, device: &wgpu::Device, plan: &ColorPlan) -> Self {
+        let params = uniform_buffer(device, "rusplay-color-params", &plan.params_bytes());
+        let tone_state = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("rusplay-color-tone-state"),
+            contents: &plan.tone_state_bytes(),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        let histogram = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rusplay-color-histogram"),
+            size: u64::from(HISTOGRAM_BINS) * 4,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            map_group: buffer_group(
+                device,
+                "rusplay-color-map",
+                &pipelines.color.params_layout,
+                &[&params, &tone_state],
+            ),
+            analysis_group: buffer_group(
+                device,
+                "rusplay-color-analysis",
+                &pipelines.color.analysis_layout,
+                &[&params, &tone_state, &histogram],
+            ),
+            tone_state,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ColorMapper {
     pipelines: ScalePipelines,
     settings: ColorMapSettings,
     plan: ColorPlan,
-    params: wgpu::BindGroup,
+    buffers: MapperBuffers,
     sources: GroupCache<wgpu::TextureView>,
     destinations: GroupCache<wgpu::TextureView>,
 }
@@ -334,7 +485,7 @@ impl ColorMapper {
 
         Ok(Self {
             pipelines: pipelines.clone(),
-            params: params_group(pipelines, device, &plan),
+            buffers: MapperBuffers::new(pipelines, device, &plan),
             settings,
             plan,
             sources: GroupCache::default(),
@@ -350,6 +501,10 @@ impl ColorMapper {
         &self.plan
     }
 
+    pub fn tone_state(&self) -> &wgpu::Buffer {
+        &self.buffers.tone_state
+    }
+
     pub fn configure(
         &mut self,
         device: &wgpu::Device,
@@ -360,7 +515,7 @@ impl ColorMapper {
         }
         let plan = ColorPlan::new(&settings)?;
 
-        self.params = params_group(&self.pipelines, device, &plan);
+        self.buffers = MapperBuffers::new(&self.pipelines, device, &plan);
         self.plan = plan;
         self.settings = settings;
         Ok(Reconfigured::Parameters)
@@ -380,29 +535,35 @@ impl ColorMapper {
         let target_group = self
             .destinations
             .get_or_create(target, || pipelines.destination_group(device, target));
+        let source_size = source.texture().size();
         let size = target.texture().size();
 
+        if self
+            .plan
+            .tone
+            .is_some_and(|stage| stage.dynamic_peak.is_some())
+        {
+            gpu::dispatch(
+                encoder,
+                "rusplay-color-histogram",
+                &pipelines.color.histogram,
+                &[&source_group, &self.buffers.analysis_group],
+                (source_size.width, source_size.height),
+            );
+            gpu::dispatch(
+                encoder,
+                "rusplay-color-peak",
+                &pipelines.color.peak,
+                &[&self.buffers.analysis_group],
+                (1, 1),
+            );
+        }
         gpu::dispatch(
             encoder,
             "rusplay-color-map",
             &pipelines.color.map,
-            &[&source_group, &target_group, &self.params],
+            &[&source_group, &target_group, &self.buffers.map_group],
             (size.width, size.height),
         );
     }
-}
-
-fn params_group(
-    pipelines: &ScalePipelines,
-    device: &wgpu::Device,
-    plan: &ColorPlan,
-) -> wgpu::BindGroup {
-    let params = uniform_buffer(device, "rusplay-color-params", &plan.params_bytes());
-
-    buffer_group(
-        device,
-        "rusplay-color-params",
-        &pipelines.color.params_layout,
-        &[&params],
-    )
 }

@@ -36,6 +36,12 @@ pub enum ScaleError {
     BlackNitsOutOfRange { black_nits: f64, peak_nits: f64 },
     #[error("gamut mapping knee {0} is outside 0.0..1.0")]
     GamutKneeOutOfRange(f64),
+    #[error("peak detection percentile {0} is outside 0..=100")]
+    PeakPercentileOutOfRange(f64),
+    #[error("peak detection must smooth over at least one frame")]
+    ZeroSmoothingFrames,
+    #[error("scene cut threshold {0} dB is not a positive number")]
+    SceneThresholdOutOfRange(f64),
     #[error("a colour conversion matrix is singular")]
     SingularColorMatrix,
     #[error("the yuv frame was created for a different layout than the converter's")]

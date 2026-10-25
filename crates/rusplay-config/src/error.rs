@@ -27,6 +27,12 @@ pub enum ConfigError {
     TargetPeakOutOfRange(u32),
     #[error("display target black {black_nits} cd/m² is not below its peak {peak_nits} nits")]
     TargetBlackNotBelowPeak { black_nits: f64, peak_nits: u32 },
+    #[error("peak detection percentile {0} is outside 0..=100")]
+    PeakPercentileOutOfRange(f32),
+    #[error("peak detection must smooth over at least one frame")]
+    ZeroSmoothingFrames,
+    #[error("scene cut threshold {0} dB is not a positive number")]
+    SceneThresholdOutOfRange(f32),
     #[error("gamut mapping knee {0} is outside 0.0..1.0")]
     GamutKneeOutOfRange(f32),
     #[error("svt-av1 preset {0} is outside 0..=13")]
@@ -99,6 +105,9 @@ impl ConfigError {
             Self::TargetPeakOutOfRange(_) => Some("color.target.peak_nits"),
             Self::TargetBlackNotBelowPeak { .. } => Some("color.target.black_nits"),
             Self::GamutKneeOutOfRange(_) => Some("color.gamut_mapping.knee"),
+            Self::PeakPercentileOutOfRange(_) => Some("color.tone_mapping.peak_percentile"),
+            Self::ZeroSmoothingFrames => Some("color.tone_mapping.smoothing_frames"),
+            Self::SceneThresholdOutOfRange(_) => Some("color.tone_mapping.scene_threshold_db"),
             Self::SvtAv1PresetOutOfRange(_) => Some("video.encoder.preset"),
             Self::QpOutOfRange(_) => Some("video.encoder.rate_control.qp"),
             Self::ZeroAudioBitrate => Some("audio.opus.bitrate_kbps"),

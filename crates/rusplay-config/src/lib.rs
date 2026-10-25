@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::{
     audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
-    color::{ColorConfig, DisplayTargetConfig, GamutMappingConfig},
+    color::{ColorConfig, DisplayTargetConfig, GamutMappingConfig, ToneMappingConfig},
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
     input::{InputConfig, PointerMode},

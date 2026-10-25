@@ -94,6 +94,7 @@ const PRIMARIES: &[&str] = &[
 ];
 const TRANSFERS: &[&str] = &["bt709", "srgb", "gamma22", "pq", "hlg", "linear"];
 const MATRICES: &[&str] = &["bt709", "bt601", "bt2020-ncl"];
+const TONE_OPERATORS: &[&str] = &["bt2390", "bt2446a", "spline", "reinhard", "clip"];
 const GAMUT_MODES: &[&str] = &[
     "perceptual",
     "relative",
@@ -947,6 +948,44 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("nits")
     .optional(),
+    field(
+        Section::Color,
+        "Tone mapping",
+        "color.tone_mapping.operator",
+        "Operator",
+        Kind::Choice(TONE_OPERATORS),
+    ),
+    field(
+        Section::Color,
+        "Tone mapping",
+        "color.tone_mapping.dynamic_peak",
+        "Dynamic peak detection",
+        Kind::Flag,
+    ),
+    field(
+        Section::Color,
+        "Tone mapping",
+        "color.tone_mapping.peak_percentile",
+        "Peak percentile",
+        Kind::Decimal,
+    )
+    .unit("%"),
+    field(
+        Section::Color,
+        "Tone mapping",
+        "color.tone_mapping.smoothing_frames",
+        "Peak smoothing",
+        POSITIVE_U32,
+    )
+    .unit("frames"),
+    field(
+        Section::Color,
+        "Tone mapping",
+        "color.tone_mapping.scene_threshold_db",
+        "Scene cut threshold",
+        Kind::Decimal,
+    )
+    .unit("dB"),
     field(
         Section::Color,
         "Gamut mapping",

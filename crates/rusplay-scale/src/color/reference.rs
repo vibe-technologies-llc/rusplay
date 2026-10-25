@@ -1,12 +1,16 @@
 use rusplay_core::{HdrLevels, Matrix3, pq_from_nits, pq_to_nits};
 
-use crate::color::{BOUNDARY_STEPS, COMPRESSION_POWER, ColorPlan, MappingPath, WorkingSpace};
+use crate::color::{
+    BOUNDARY_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS, MappingPath, ToneCurve,
+    ToneStage, WorkingSpace,
+};
 
 const GAMUT_EPSILON: f64 = 1.0e-5;
 const MIN_SEARCH_CHROMA: f64 = 1.0;
 const ACHROMATIC_CHROMA: f64 = 1.0e-6;
 const MIN_COMPRESSION_LIMIT: f64 = 1.0001;
 const MAX_NITS: f64 = HdrLevels::MAX_NITS as f64;
+const MIN_AVERAGE_NITS: f64 = 1.0e-4;
 
 fn signed(value: f64, curve: impl Fn(f64) -> f64) -> f64 {
     value.signum() * curve(value.abs())
@@ -171,8 +175,130 @@ fn highlight(plan: &ColorPlan, rgb: [f64; 3]) -> [f64; 3] {
     }
 }
 
+pub(crate) fn tone_map(plan: &ColorPlan, curve: &ToneCurve, rgb: [f64; 3]) -> [f64; 3] {
+    let xyz = plan
+        .source_to_work
+        .apply(rgb)
+        .map(|value| value * plan.source_white_nits);
+    let lms = plan.tone_xyz_to_lms.apply(xyz);
+    let itp = plan
+        .tone_lms_to_itp
+        .apply(lms.map(|value| signed(value, pq_from_nits)));
+
+    let intensity = itp[0];
+    let mapped = curve.map_pq(intensity.max(0.0));
+    let ratio = if intensity > 0.0 && mapped > 0.0 {
+        (mapped / intensity).min(intensity / mapped)
+    } else {
+        1.0
+    };
+
+    let toned = [mapped, itp[1] * ratio, itp[2] * ratio];
+    let toned_lms = plan
+        .tone_itp_to_lms
+        .apply(toned)
+        .map(|value| signed(value, |code| pq_to_nits(code.min(1.0))));
+    plan.work_to_source
+        .apply(plan.tone_lms_to_xyz.apply(toned_lms))
+        .map(|value| value / plan.target_white_nits)
+}
+
+pub(crate) fn tone_intensity(plan: &ColorPlan, rgb: [f64; 3], white_nits: f64) -> [f64; 3] {
+    let xyz = plan
+        .source_to_work
+        .apply(rgb)
+        .map(|value| value * white_nits);
+    let lms = plan.tone_xyz_to_lms.apply(xyz);
+
+    plan.tone_lms_to_itp
+        .apply(lms.map(|value| signed(value, pq_from_nits)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct PeakState {
+    pub smoothed_peak_pq: f64,
+    pub previous_average_pq: f64,
+    pub frames: u32,
+}
+
+pub(crate) fn histogram(plan: &ColorPlan, pixels: &[[f32; 4]]) -> Vec<u32> {
+    let mut bins = vec![0_u32; HISTOGRAM_BINS as usize];
+    for pixel in pixels {
+        let brightest = pixel[..3].iter().copied().fold(0.0_f32, f32::max);
+        let code = pq_from_nits(f64::from(brightest) * plan.source_white_nits);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bin = ((code * f64::from(HISTOGRAM_BINS)) as u32).min(HISTOGRAM_BINS - 1);
+        bins[bin as usize] += 1;
+    }
+    bins
+}
+
+pub(crate) fn detect_peak(
+    stage: &ToneStage,
+    previous: PeakState,
+    bins: &[u32],
+) -> (PeakState, ToneCurve) {
+    let dynamic = stage.dynamic_peak.unwrap_or_default();
+    let total: u32 = bins.iter().sum();
+    let wanted = dynamic.percentile / 100.0 * f64::from(total);
+    let bin_count = f64::from(HISTOGRAM_BINS);
+
+    let mut cumulative = 0;
+    let peak_bin = bins
+        .iter()
+        .position(|count| {
+            cumulative += count;
+            f64::from(cumulative) >= wanted
+        })
+        .unwrap_or(bins.len() - 1);
+    let weighted: f64 = (0_u32..)
+        .zip(bins)
+        .map(|(bin, count)| f64::from(*count) * (f64::from(bin) + 0.5))
+        .sum();
+
+    #[allow(clippy::cast_precision_loss)]
+    let frame_peak = (peak_bin + 1) as f64 / bin_count;
+    let average = weighted / f64::from(total) / bin_count;
+    let level = |code: f64| pq_to_nits(code).max(MIN_AVERAGE_NITS);
+    let change = (10.0 * (level(average) / level(previous.previous_average_pq)).log10()).abs();
+    let smoothed = if previous.frames > 0 && change <= dynamic.scene_threshold_db {
+        previous.smoothed_peak_pq
+            + (frame_peak - previous.smoothed_peak_pq) / f64::from(dynamic.smoothing_frames)
+    } else {
+        frame_peak
+    };
+
+    let static_peak = stage.curve.source_peak_nits;
+    let target_peak = stage.curve.target_peak_nits;
+    let curve = ToneCurve {
+        source_peak_nits: pq_to_nits(smoothed).min(static_peak).max(target_peak),
+        ..stage.curve
+    };
+
+    (
+        PeakState {
+            smoothed_peak_pq: smoothed,
+            previous_average_pq: average,
+            frames: previous.frames + 1,
+        },
+        curve,
+    )
+}
+
 pub(crate) fn map(plan: &ColorPlan, rgb: [f64; 3]) -> [f64; 3] {
-    let source = rgb.map(|value| value * plan.gain);
+    map_with_curve(plan, plan.tone.map(|stage| stage.curve), rgb)
+}
+
+pub(crate) fn map_with_curve(
+    plan: &ColorPlan,
+    curve: Option<ToneCurve>,
+    rgb: [f64; 3],
+) -> [f64; 3] {
+    let source = match curve {
+        Some(curve) => tone_map(plan, &curve, rgb),
+        None => rgb.map(|value| value * plan.gain),
+    };
     let direct = plan.source_to_target.apply(source);
 
     match plan.path {
