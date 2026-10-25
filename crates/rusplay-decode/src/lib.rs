@@ -1,5 +1,7 @@
 mod error;
 mod frame;
+#[cfg(any(feature = "software", feature = "vaapi"))]
+mod metadata;
 #[cfg(feature = "software")]
 mod software;
 #[cfg(feature = "vaapi")]

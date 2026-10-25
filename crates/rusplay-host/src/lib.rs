@@ -5,6 +5,7 @@ mod encode;
 mod error;
 mod gpu;
 mod mailbox;
+mod outbox;
 mod pipeline;
 mod send;
 mod session;

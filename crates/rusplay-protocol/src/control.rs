@@ -1,4 +1,7 @@
-use crate::{PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamKind};
+use crate::{
+    PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription, StreamKind,
+    stream::Reader,
+};
 
 const TAG_HELLO: u8 = 0;
 const TAG_REQUEST_KEYFRAME: u8 = 1;
@@ -7,6 +10,7 @@ const TAG_BITRATE_HINT: u8 = 3;
 const TAG_GOODBYE: u8 = 4;
 const TAG_KEEPALIVE: u8 = 5;
 const TAG_RUMBLE: u8 = 6;
+const TAG_STREAM_FORMAT: u8 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -32,10 +36,11 @@ pub enum ControlMessage {
         delay_ms: u16,
         duration_ms: u16,
     },
+    StreamFormat(StreamDescription),
 }
 
 impl ControlMessage {
-    pub const MAX_ENCODED_LEN: usize = 10;
+    pub const MAX_ENCODED_LEN: usize = 1 + StreamDescription::MAX_ENCODED_LEN;
 
     pub const fn encoded_len(&self) -> usize {
         match self {
@@ -44,6 +49,7 @@ impl ControlMessage {
             Self::ReportLoss { .. } => 7,
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
+            Self::StreamFormat(description) => 1 + description.encoded_len(),
         }
     }
 
@@ -94,6 +100,12 @@ impl ControlMessage {
                 out[6..8].copy_from_slice(&delay_ms.to_be_bytes());
                 out[8..10].copy_from_slice(&duration_ms.to_be_bytes());
             }
+            Self::StreamFormat(description) => {
+                let mut body = Vec::with_capacity(len);
+                body.push(TAG_STREAM_FORMAT);
+                description.write(&mut body);
+                out.copy_from_slice(&body);
+            }
         }
 
         Ok(len)
@@ -106,6 +118,15 @@ impl ControlMessage {
                 available: 0,
             });
         };
+
+        if tag == TAG_STREAM_FORMAT {
+            let mut reader = Reader::new(body, 1);
+            let description = StreamDescription::read(&mut reader)?;
+            return match reader.remaining() {
+                0 => Ok(Self::StreamFormat(description)),
+                extra => Err(ProtocolError::TrailingBytes { extra }),
+            };
+        }
 
         let body_len = match tag {
             TAG_HELLO => 2,
@@ -236,7 +257,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 7] {
+    fn every_message() -> [ControlMessage; 8] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -256,6 +277,7 @@ mod tests {
                 delay_ms: 20,
                 duration_ms: 0,
             },
+            ControlMessage::StreamFormat(crate::stream::tests::hdr_description()),
         ]
     }
 

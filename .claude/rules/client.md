@@ -16,7 +16,9 @@ paths:
   the app calls until `app-stream-view` replaces it with `connect`.
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
-  sending video. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
+  sending video. Before the first video frame, and again whenever any of it changes, the host
+  sends `ControlMessage::StreamFormat` with a newer generation; the client decodes and labels
+  video only from it, never from its own `video.codec` or `video.color`. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
   The host's periodic `Keepalive` only needs the channel's acknowledgement, which every received
   message gets; `rusplay-host` (`.claude/rules/host.md`) is the host side of this contract.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
@@ -29,7 +31,14 @@ paths:
   `Transport::recv_batch_timeout` until the nearest control deadline, reassembly timeout, keyframe
   retry or peer deadline, at most 10 ms, so decode feedback is picked up without a wake-up socket.
   Datagrams from any address but the host are ignored; FEC packets are routed by
-  `FecHeader::protects`.
+  `FecHeader::protects`. Control events of a batch are handled before its video events, so a
+  `StreamFormat` that arrived together with the keyframe it describes is applied first.
+- The receive stage keeps the newest `StreamDescription` (an older or equal generation is
+  ignored), publishes it for `ClientStream::stream_format` and counts it in
+  `stream_formats_received`. Every forwarded `EncodedVideo` carries the description in force, and
+  its `EncodedFrame::codec` is the description's. A video frame that arrives before any
+  description is skipped (`frames_skipped`) and enters resync with a `RequestKeyframe` naming it,
+  so nothing waits on the control channel.
 - Feedback, all over the control channel, never blocking the frame path: `PacketsMissing` becomes
   `ReportLoss` (dropped and counted when the control window is full, since reports are advisory);
   a `FrameLost` newer than the last keyframe, a gap in completed frame numbers, a frame dropped
@@ -43,7 +52,9 @@ paths:
   them, so overflow drops the frame and resyncs. Decode → present is a latest-wins `Slot`: a
   decoded frame that is superseded before the GPU took it is dropped (`frames_superseded`), which
   also releases a DMA-BUF lease at once. The decoder is opened on the decode thread (decoders are
-  not `Send`), whose readiness `connect` waits for.
+  not `Send`) for the codec of the first frame's description and reopened when a description
+  names another codec; an open failure ends the stream with `Decode`. `connect` does not wait for
+  it (`client-decoder-preopen` in `docs/PERFORMANCE.md`).
 - Encoded frames carry the receive time since stream start as their `Timestamp`, since video
   packets have no timestamp field. `PresentedFrame` has `received_at`, `decoded_at` and
   `submitted_at` instants for latency accounting.
@@ -63,8 +74,9 @@ paths:
   implemented for `FnMut(PresentedFrame)` closures) and `LatestFrame`, a cloneable latest-wins
   sink with `take` and `wait`. Sinks must not block.
 - Every `PresentedFrame` carries `FrameColor`: the `ColorSpace` (primaries, transfer, range,
-  matrix and the `HdrLevels` with optional mastering and content light metadata, taken from the
-  client's own `video.color` until `session-stream-format` carries the host's), the resolved
+  matrix and the `HdrLevels` with optional mastering and content light metadata: the host's
+  description with whatever the decoder read from the bitstream laid over it,
+  `DecodedFrame::color.over(description.color)`, so the bitstream wins), the resolved
   `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. SDR
   transfers (sRGB, BT.709, gamma 2.2, linear) are linearised (`OutputLight::Linear`), PQ and
   HLG are left encoded (`OutputLight::Encoded`, no sigmoid) in the stream's own primaries, so
@@ -137,13 +149,16 @@ paths:
   source size and upscaled, and requires identical output.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
-  `Transport` and checks audio and cursor routing, FEC, fragmentation and queue overflow;
+  `Transport` and checks audio and cursor routing, FEC, fragmentation, queue overflow and video
+  waiting for (and then carrying the newest) stream description;
   `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
 - The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
   record decoding a real host uses; the test client config turns `input.gamepads` off so the
   tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
-  (`tests/common`): PIN pairing, the `Hello` exchange, the 8-frame AV1 fixture from
+  (`tests/common`): PIN pairing, the `Hello` exchange followed by a `StreamFormat`
+  (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names
+  H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
   datagram, keyframe restarts on `RequestKeyframe`, Opus audio packets every 5 ms with a drop
   rule, cursor messages and a closing `Goodbye`. They connect with `connect_with_audio` and a

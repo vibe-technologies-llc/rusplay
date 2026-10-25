@@ -13,7 +13,7 @@ mod slot;
 mod stats;
 
 pub use rusplay_net::{PeerRecord, PeerSecret, Pin};
-pub use rusplay_protocol::CursorImage;
+pub use rusplay_protocol::{CursorImage, StreamDescription};
 pub use rusplay_scale::OutputLight;
 
 pub use crate::{

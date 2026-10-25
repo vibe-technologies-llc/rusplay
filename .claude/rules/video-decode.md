@@ -16,7 +16,8 @@ paths:
 - The decoder backend and its options are `video.decoder` in `rusplay-config`
   (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
 - `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the
-  stream was coded in, the input `timestamp` and a `DecodedBuffer`:
+  stream was coded in, the `color` the bitstream signals (`SignalledColor`, see below), the input
+  `timestamp` and a `DecodedBuffer`:
   - `DecodedBuffer::DmaBuf(DmaBufFrame)` from hardware decoders, for import into wgpu where
     `rusplay-scale` upscales and converts to the display format. `DmaBufFrame::image()` is a
     `DmaBufImage`: DRM `fourcc`, `modifier`, allocated `width`/`height`, the `objects` (an
@@ -30,6 +31,14 @@ paths:
     whose samples are little-endian `u16`s holding the value in the low bits).
 - Monochrome streams are rejected with `DecodeError::Monochrome`; there is no 4:0:0
   `ChromaSubsampling`.
+- `DecodedFrame::color` reports only what the bitstream says: the VUI (`video_signal_type` for
+  the range, `colour_description` for the codes) or the AV1 `color_config` (range always, codes
+  when `color_description_present_flag`), and the mastering display and content light level.
+  Unsigned fields stay `None` so the client falls back to the stream description. Mastering
+  display primaries are mapped back to a named set when they match one exactly; a degenerate or
+  out-of-range one is dropped. AV1 metadata fixed point (0.16 chromaticities, 24.8 maximum and
+  18.14 minimum luminance) is converted to ST 2086 units in `src/metadata.rs`, shared by both
+  backends.
 - No decoder-side frame buffering beyond what the codec requires: a decoded frame is presented
   as soon as it exists. When one packet yields several pictures, the newest one wins. Frames
   come out in display order. A stream that signals reordering (B-frames) is held for exactly
@@ -47,6 +56,8 @@ paths:
   (`dav1d_open`, `dav1d_send_data`, `dav1d_get_picture`), which is the only public interface it
   has. The unsafe calls are confined to `src/software.rs` and wrapped in owning types
   (`InputData`, `OwnedPicture`) that unref on drop.
+- Colour comes from the picture's sequence header (`pri`, `trc`, `mtrx`, `color_range`) and its
+  `mastering_display`/`content_light` pointers, which rav1d keeps attached across pictures.
 - `max_frame_delay = 1` turns frame threading off so every packet yields its picture on the same
   call; `SoftwareDecoderConfig::threads` sets the tile/postfilter thread count (`None` lets
   rav1d use every logical CPU, at most 256).
@@ -116,6 +127,14 @@ paths:
   - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
     and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
     `StreamFormat`), since held frames keep their surfaces busy.
+- Colour (`src/vaapi/signal.rs`): the codes and range come from the active SPS VUI or sequence
+  header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
+  light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
+  (emulation prevention removed) and AV1 metadata OBUs. `HdrTracker` keeps them per coded video
+  sequence: an IDR (H.264), an IRAP (HEVC) or a key frame (AV1) replaces them with what its access
+  unit carried, other pictures only update what they carry, so metadata sent on keyframes holds
+  for the inter frames between them. The resolved `SignalledColor` lives on the `Stream` and is
+  copied into every frame it outputs. A malformed SEI or metadata payload is ignored.
 - The stream format (VA profile, chroma, bit depth, coded size) is read from the SPS / sequence
   header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or

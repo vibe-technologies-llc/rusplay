@@ -6,7 +6,9 @@ use std::{
 
 use parking_lot::RwLock;
 use rusplay_config::Config;
-use rusplay_net::{FecScheme, PeerStore, Pin, Transport, TransportOptions};
+use rusplay_net::{
+    ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
+};
 
 use crate::{
     CaptureFeed, Client, Gpu, HostError, HostStats, Stage,
@@ -14,6 +16,7 @@ use crate::{
     capture,
     control::{ControlLinks, ControlStage},
     encode::{self, EncodeLinks, PipelineFactory},
+    outbox::ControlOutbox,
     pipeline::{GpuPipeline, VideoPipeline},
     send::{self, SendLinks, SendOptions},
     shared::Shared,
@@ -88,6 +91,11 @@ impl HostSession {
             client: client.address(),
         };
 
+        let outbox = Arc::new(ControlOutbox::new(
+            ControlChannel::new(ControlConfig::from(network)),
+            Arc::clone(&self.transport),
+            client.address(),
+        ));
         let control = ControlStage::new(
             network,
             ControlLinks {
@@ -95,6 +103,7 @@ impl HostSession {
                 transport: Arc::clone(&self.transport),
                 client: client.address(),
                 replay: client.replay().clone(),
+                outbox: Arc::clone(&outbox),
             },
         );
         stream.spawn(Stage::Control, move || control.run())?;
@@ -113,6 +122,7 @@ impl HostSession {
             shared: Arc::clone(&shared),
             feed: Arc::clone(feed),
             output,
+            outbox,
         };
         stream.spawn(Stage::Encode, move || encode::run(factory, &encode_links))?;
 

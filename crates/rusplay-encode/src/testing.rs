@@ -8,6 +8,7 @@ use rusplay_core::{
 
 use crate::{
     EncodeError, VideoEncoder,
+    hdr::fixtures::{hdr10_color, signalled},
     input::{fixtures::yuv_frame, fourcc_for},
     open,
 };
@@ -183,4 +184,26 @@ pub fn check_unspecified_resolution_follows_the_first_frame(config: &VideoConfig
         .unwrap();
 
     assert!(first.keyframe);
+}
+
+pub fn check_colour_reaches_the_decoder(
+    config: &VideoConfig,
+    decoder: &mut dyn rusplay_decode::VideoDecoder,
+) {
+    let config = VideoConfig {
+        color: hdr10_color(),
+        ..config.clone()
+    };
+    let expected = signalled(&config.color);
+    let mut encoder = open(&config).unwrap();
+
+    for index in 0..3 {
+        let packet = encoder
+            .encode(&frame(config.pixel_format, index))
+            .unwrap()
+            .unwrap();
+        let picture = decoder.decode(&packet).unwrap().unwrap();
+
+        assert_eq!(picture.color, expected, "frame {index}");
+    }
 }

@@ -54,8 +54,20 @@ paths:
   acknowledgement is the host's evidence that the client is alive, and its arrival keeps the
   client's peer timeout quiet while a static screen produces no video. Receivers ignore it apart
   from the acknowledgement.
+- `ControlMessage::StreamFormat(StreamDescription)` (tag 7) is how the host describes the
+  stream: a `generation` (u32, serial arithmetic, `is_newer_than`), codec, resolution, pixel
+  format (chroma tag, bit depth in bits) and the full `ColorSpace`. Colour codes are H.273:
+  primaries code (0 means custom, followed by red, green, blue and white as big-endian u16
+  0.00002 steps), transfer code, matrix code (2 means unset, so the receiver derives it from the
+  primaries), range byte, reference white and peak as u32 nits, then a flags byte (bit 0
+  mastering display, bit 1 content light; other bits are `UnknownHdrFlags`) and, when flagged,
+  the mastering primaries in the same form plus max and min luminance as u32 0.0001 cd/m²
+  units, and MaxCLL/MaxFALL as u16. Variable length, at most 74 bytes with its tag
+  (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
+  through `Chromaticities::new`, luminance through `Luminance::from_units`), each failure its own
+  `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
 - The control channel (hello, keyframe requests, loss reports, bitrate hints, keepalives,
-  goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+  stream format, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.
 
 ## Control channel

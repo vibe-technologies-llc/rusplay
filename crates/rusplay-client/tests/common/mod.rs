@@ -19,7 +19,10 @@ use rusplay_client::{
     FrameSink, Gpu, Pin,
 };
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
-use rusplay_core::Codec;
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, PixelFormat,
+    Resolution, TransferFunction,
+};
 use rusplay_input::InputEvent;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
@@ -27,7 +30,7 @@ use rusplay_net::{
 };
 use rusplay_protocol::{
     ControlMessage, CursorMessage, InputAdmission, InputPacket, InputSequence, PacketHeader,
-    ProtocolVersion, StreamKind,
+    ProtocolVersion, StreamDescription, StreamKind,
 };
 
 pub const PIN: &str = "482916";
@@ -69,9 +72,27 @@ async fn request_gpu() -> Option<Gpu> {
     Some(Gpu { device, queue })
 }
 
+pub fn stream_description() -> StreamDescription {
+    StreamDescription {
+        generation: 1,
+        codec: Codec::Av1,
+        resolution: Resolution::new(FIXTURE_WIDTH, FIXTURE_HEIGHT),
+        format: PixelFormat {
+            chroma: ChromaSubsampling::Yuv420,
+            depth: BitDepth::Eight,
+        },
+        color: ColorSpace {
+            primaries: ColorPrimaries::DisplayP3,
+            transfer: TransferFunction::Srgb,
+            range: ColorRange::Full,
+            ..ColorSpace::default()
+        },
+    }
+}
+
 pub fn client_config() -> Config {
     let mut config = Config::default();
-    config.video.codec = Codec::Av1;
+    config.video.codec = Codec::H264;
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = TEST_DECODE_QUEUE_FRAMES;
     config.network.bind_address = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -298,6 +319,28 @@ fn record_input(datagram: &[u8], sequence: &mut InputSequence, input: &Mutex<Vec
     }
 }
 
+fn answer_hello(
+    control: &mut ControlChannel,
+    transport: &Transport,
+    client: SocketAddr,
+    describe: bool,
+) {
+    let hello = ControlMessage::Hello {
+        version: ProtocolVersion::CURRENT,
+    };
+
+    control.send(hello, Instant::now()).ok();
+    if describe {
+        control
+            .send(
+                ControlMessage::StreamFormat(stream_description()),
+                Instant::now(),
+            )
+            .ok();
+    }
+    control.flush(transport, client).ok();
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
@@ -353,14 +396,7 @@ fn serve(
             received.lock().push(message);
             match message {
                 ControlMessage::Hello { .. } => {
-                    control
-                        .send(
-                            ControlMessage::Hello {
-                                version: ProtocolVersion::CURRENT,
-                            },
-                            Instant::now(),
-                        )
-                        .ok();
+                    answer_hello(&mut control, transport, client, !streaming);
                     streaming = true;
                 }
                 ControlMessage::RequestKeyframe { .. } => fixture_index = 0,

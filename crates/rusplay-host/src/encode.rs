@@ -11,7 +11,8 @@ use rusplay_core::{EncodedFrame, Timestamp};
 use crate::{
     CaptureFeed, HostError,
     mailbox::{Delivery, Waited},
-    pipeline::VideoPipeline,
+    outbox::ControlOutbox,
+    pipeline::{StreamFormat, VideoPipeline},
     shared::Shared,
 };
 
@@ -30,6 +31,7 @@ pub(crate) struct EncodeLinks {
     pub shared: Arc<Shared>,
     pub feed: Arc<CaptureFeed>,
     pub output: SyncSender<Outgoing>,
+    pub outbox: Arc<ControlOutbox>,
 }
 
 pub(crate) fn run(factory: PipelineFactory, links: &EncodeLinks) -> Result<(), HostError> {
@@ -46,6 +48,8 @@ struct EncodeStage {
     last_keyframe: Option<u32>,
     force_keyframe: bool,
     last_input: Option<(Timestamp, Instant)>,
+    announced: Option<StreamFormat>,
+    generation: u32,
 }
 
 impl EncodeStage {
@@ -96,12 +100,28 @@ impl EncodeStage {
             };
             self.force_keyframe = false;
 
-            if let Some(encoded) = encoded
-                && !self.forward(encoded, links)
-            {
+            let Some(encoded) = encoded else {
+                continue;
+            };
+            self.announce(pipeline.stream_format(), links)?;
+            if !self.forward(encoded, links) {
                 return Ok(());
             }
         }
+    }
+
+    fn announce(
+        &mut self,
+        format: Option<StreamFormat>,
+        links: &EncodeLinks,
+    ) -> Result<(), HostError> {
+        let Some(format) = format.filter(|format| self.announced != Some(*format)) else {
+            return Ok(());
+        };
+
+        self.generation = self.generation.wrapping_add(1);
+        self.announced = Some(format);
+        links.outbox.announce(format.describe(self.generation))
     }
 
     fn keyframe_follows(&self, frame: u32) -> bool {

@@ -35,6 +35,14 @@ paths:
   `svt_av1_enc_parse_parameter`). Errors from parameter parsing name the key
   (`UnknownParameter`, `InvalidParameterValue`).
 - Default stream chroma is 4:2:2, to avoid the soft look of 4:2:0 on text and UI edges.
+- Every backend signals `video.color` in the bitstream: the H.273 codes and range in the VUI or
+  AV1 `color_config`, and, when `video.color.hdr` has them, the ST 2086 mastering display colour
+  volume and CTA-861.3 content light level as SEI (H.264/HEVC, payload types 137 and 144) or
+  metadata OBUs (AV1, types 2 and 1) on every keyframe. `src/hdr.rs` turns a `MasteringDisplay`
+  into `St2086` units (G, B, R, white in 0.00002 steps; luminance in 0.0001 cd/m²). Each backend
+  has a parameter-mapping test and a test that encodes BT.2020 PQ with Display P3 mastering
+  metadata (`hdr::fixtures::hdr10_color`) and decodes it with `rusplay-decode` (VAAPI for
+  H.264/HEVC, rav1d and VAAPI for AV1), expecting `DecodedFrame::color` to report all of it.
 
 ## Software encoders
 
@@ -45,6 +53,12 @@ paths:
   open and not on the first frame.
 - With `video.resolution` unset, the library encoder is opened on the first frame at that frame's
   resolution. A later frame of another size is `FrameResolutionMismatch`.
+- HDR metadata is a typed field: x264 fills `mastering_display` and `content_light_level` in
+  `x264_param_t` directly; x265 gets `master-display` (`G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` in
+  ST 2086 integers) and `max-cll` (`cll,fall`) through `x265_param_parse`; SVT-AV1 gets
+  `mastering-display` (the same shape with chromaticities and nits as decimals) and
+  `content-light` through `svt_av1_enc_parse_parameter`, which stores the values big-endian in
+  `mastering_display`/`content_light_level` (the test reads them with `from_be`).
 - Rate control is CBR-like: the typed bitrate is also the VBV max rate, with a buffer of
   `VBV_BUFFER_FRAMES` frames. `set_bitrate` rescales the VBV values the encoder currently runs
   with, so a user override of the buffer keeps its ratio.
@@ -106,7 +120,13 @@ paths:
 - Rusplay writes the headers and hands them to the driver as packed headers wherever
   `VAConfigAttribEncPackedHeaders` allows: VPS+SPS and PPS for HEVC, SPS and PPS for H.264, the
   slice header of every picture for both, the AV1 sequence header on keyframes and the frame header
-  OBU on every frame. radeonsi depends on it: it emits parameter sets only when a packed slice
+  OBU on every frame. HDR metadata goes as `VAEncPackedHeaderRawData` (`RAW_DATA` is requested
+  with the others) on keyframes, in bitstream order (`packed_buffers` takes `(PackedKind, header)`
+  pairs and submits them in the order given): one SEI NAL holding both messages after the PPS and
+  before the slice header for H.264/HEVC (`src/vaapi/hdr.rs`), and the metadata OBUs between the
+  sequence header and the frame header for AV1, converted to AV1 fixed point (0.16 chromaticities
+  in R, G, B order, 24.8 and 18.14 luminance). radeonsi writes raw headers into the output
+  verbatim. radeonsi depends on it: it emits parameter sets only when a packed slice
   header is present, takes `nal_unit_type`/`nal_ref_idc` from that slice header, and reads VUI
   (colour description, range, timing) and cropping from the packed SPS. The AV1 frame header has a
   two-byte `obu_size` and fills the `bit_offset_*`/`size_in_bits_*` fields for drivers that patch it

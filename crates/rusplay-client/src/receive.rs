@@ -8,15 +8,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use parking_lot::Mutex;
 use rusplay_config::NetworkConfig;
-use rusplay_core::{Codec, EncodedFrame, Timestamp};
+use rusplay_core::{EncodedFrame, Timestamp};
 use rusplay_input::RumbleCommand;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
     ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
 };
 use rusplay_protocol::{
-    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamKind,
+    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
+    StreamKind,
 };
 
 use crate::{ClientError, LatestCursor, audio::EncodedAudio, stats::Counters};
@@ -28,8 +30,11 @@ const IDLE_WAKE: Duration = Duration::from_millis(10);
 pub(crate) struct EncodedVideo {
     pub frame: EncodedFrame,
     pub number: u32,
+    pub stream: StreamDescription,
     pub received_at: Instant,
 }
+
+pub(crate) type SharedFormat = Arc<Mutex<Option<StreamDescription>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Feedback {
@@ -98,6 +103,7 @@ pub(crate) struct Links {
     pub audio_queue: Option<SyncSender<EncodedAudio>>,
     pub rumble: Option<Sender<RumbleCommand>>,
     pub cursor: LatestCursor,
+    pub format: SharedFormat,
     pub feedback: Receiver<Feedback>,
     pub handshake: Sender<()>,
     pub stop: Arc<AtomicBool>,
@@ -108,7 +114,7 @@ pub(crate) struct Links {
 pub(crate) struct ReceiveStage {
     transport: Arc<Transport>,
     host: SocketAddr,
-    codec: Codec,
+    stream: Option<StreamDescription>,
     timing: Timing,
     control: ControlChannel,
     video: Reassembler,
@@ -125,7 +131,6 @@ impl ReceiveStage {
     pub(crate) fn new(
         transport: Arc<Transport>,
         host: SocketAddr,
-        codec: Codec,
         network: &NetworkConfig,
         mut links: Links,
     ) -> Self {
@@ -139,7 +144,7 @@ impl ReceiveStage {
         Self {
             transport,
             host,
-            codec,
+            stream: None,
             timing: Timing {
                 peer_timeout: Duration::from_millis(u64::from(network.peer_timeout_ms)),
                 keyframe_interval: Duration::from_millis(u64::from(
@@ -200,8 +205,8 @@ impl ReceiveStage {
 
             self.handle_audio(&mut pending.audio);
             self.handle_cursor(&mut pending.cursor);
-            let reassembly = self.handle_reassembly(&mut pending.video, now)?;
             let control = self.handle_control(&mut pending.control)?;
+            let reassembly = self.handle_reassembly(&mut pending.video, now)?;
             if reassembly == Flow::Ended || control == Flow::Ended {
                 return Ok(());
             }
@@ -372,6 +377,12 @@ impl ReceiveStage {
             }
         }
 
+        let Some(stream) = self.stream else {
+            self.links.counters.frames_skipped.increment();
+            self.request_keyframe(frame.frame, now)?;
+            return Ok(Flow::Continue);
+        };
+
         if frame.keyframe {
             self.resync.awaiting_keyframe = false;
             self.resync.last_keyframe = Some(frame.frame);
@@ -383,12 +394,13 @@ impl ReceiveStage {
         let number = frame.frame;
         let video = EncodedVideo {
             frame: EncodedFrame {
-                codec: self.codec,
+                codec: stream.codec,
                 timestamp: timestamp_since(self.started, now),
                 keyframe: frame.keyframe,
                 data: frame.data,
             },
             number,
+            stream,
             received_at: now,
         };
 
@@ -419,6 +431,9 @@ impl ReceiveStage {
                         self.handshake_done = true;
                         self.links.handshake.send(()).ok();
                     }
+                }
+                ControlEvent::Received(ControlMessage::StreamFormat(description)) => {
+                    self.describe(description);
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
                 ControlEvent::Received(ControlMessage::Rumble {
@@ -452,6 +467,19 @@ impl ReceiveStage {
         }
 
         Ok(flow)
+    }
+
+    fn describe(&mut self, description: StreamDescription) {
+        if self
+            .stream
+            .is_some_and(|current| !description.is_newer_than(&current))
+        {
+            return;
+        }
+
+        self.stream = Some(description);
+        *self.links.format.lock() = Some(description);
+        self.links.counters.stream_formats_received.increment();
     }
 
     fn drain_feedback(&mut self, now: Instant) -> Result<(), ClientError> {
@@ -541,6 +569,7 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
+    use rusplay_core::{Codec, ColorSpace, PixelFormat, Resolution};
     use rusplay_net::{FecScheme, Packetizer, TransportOptions};
     use rusplay_protocol::{ControlPacket, CursorImage};
 
@@ -558,7 +587,8 @@ mod tests {
         counters: Arc<Counters>,
         stop: Arc<AtomicBool>,
         stage: Option<JoinHandle<Result<(), ClientError>>>,
-        _decode: Receiver<EncodedVideo>,
+        format: SharedFormat,
+        decode: Receiver<EncodedVideo>,
         _feedback: Sender<Feedback>,
     }
 
@@ -571,7 +601,7 @@ mod tests {
             let client = transport.local_addr().unwrap();
             let host_address = host.local_addr().unwrap();
 
-            let (decode_queue, decode) = mpsc::sync_channel(1);
+            let (decode_queue, decode) = mpsc::sync_channel(4);
             let (feedback_sender, feedback) = mpsc::channel();
             let (handshake, _handshake_done) = mpsc::channel();
             let (audio_queue, audio) = match audio_capacity {
@@ -585,24 +615,20 @@ mod tests {
             let (rumble_sender, rumble) = mpsc::channel();
             let counters = Arc::new(Counters::default());
             let stop = Arc::new(AtomicBool::new(false));
+            let format = Arc::new(Mutex::new(None));
 
             let links = Links {
                 decode_queue,
                 audio_queue,
                 rumble: Some(rumble_sender),
                 cursor: cursor.clone(),
+                format: Arc::clone(&format),
                 feedback,
                 handshake,
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };
-            let stage = ReceiveStage::new(
-                Arc::new(transport),
-                host_address,
-                Codec::Av1,
-                &network,
-                links,
-            );
+            let stage = ReceiveStage::new(Arc::new(transport), host_address, &network, links);
             let stage = thread::spawn(move || stage.run());
 
             Self {
@@ -614,7 +640,8 @@ mod tests {
                 counters,
                 stop,
                 stage: Some(stage),
-                _decode: decode,
+                format,
+                decode,
                 _feedback: feedback_sender,
             }
         }
@@ -627,6 +654,20 @@ mod tests {
             for datagram in datagrams {
                 self.host.send_to(datagram, self.client).unwrap();
             }
+        }
+
+        fn describe(&self, id: u32, description: StreamDescription) {
+            let packet = ControlPacket::Message {
+                id,
+                message: ControlMessage::StreamFormat(description),
+            };
+            self.send(&[packet.to_datagram().unwrap()]);
+        }
+
+        fn next_video(&self) -> EncodedVideo {
+            self.decode
+                .recv_timeout(WAIT)
+                .expect("a video frame reaches the decode queue")
         }
 
         fn next_audio(&self) -> EncodedAudio {
@@ -683,6 +724,42 @@ mod tests {
             hotspot_y: 2,
             rgba: vec![marker; CursorImage::pixel_bytes(side, side)],
         }
+    }
+
+    fn description(generation: u32, width: u32) -> StreamDescription {
+        StreamDescription {
+            generation,
+            codec: Codec::Hevc,
+            resolution: Resolution::new(width, 720),
+            format: PixelFormat::default(),
+            color: ColorSpace::default(),
+        }
+    }
+
+    #[test]
+    fn video_waits_for_the_stream_description_and_carries_the_newest() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.send(&packetizer.packetize(0, true, &payload(64, 0)).unwrap());
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().frames_skipped == 1));
+        rig.describe(0, description(7, 1280));
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 1));
+        rig.send(&packetizer.packetize(1, true, &payload(64, 1)).unwrap());
+        let first = rig.next_video();
+        rig.describe(1, description(6, 640));
+        rig.describe(2, description(8, 1920));
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 2));
+        rig.send(&packetizer.packetize(2, false, &payload(64, 2)).unwrap());
+        let second = rig.next_video();
+
+        assert_eq!(first.number, 1);
+        assert_eq!(first.stream, description(7, 1280));
+        assert_eq!(first.frame.codec, Codec::Hevc);
+        assert_eq!(second.stream, description(8, 1920));
+        assert_eq!(*rig.format.lock(), Some(description(8, 1920)));
+        assert!(rig.decode.try_recv().is_err());
+        assert!(rig.finish().is_ok());
     }
 
     #[test]

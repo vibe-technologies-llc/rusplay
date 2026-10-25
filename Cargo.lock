@@ -4857,6 +4857,7 @@ dependencies = [
 name = "rusplay-protocol"
 version = "0.1.0"
 dependencies = [
+ "rusplay-core",
  "thiserror 2.0.21",
 ]
 

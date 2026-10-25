@@ -7,6 +7,7 @@ mod header;
 mod input;
 mod pairing;
 mod reconnect;
+mod stream;
 
 pub use crate::{
     control::{ControlMessage, ControlPacket},
@@ -18,4 +19,5 @@ pub use crate::{
     input::{InputAdmission, InputPacket, InputRecords, InputSequence, push_input_record},
     pairing::{PairingMessage, PairingRejection},
     reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
+    stream::StreamDescription,
 };

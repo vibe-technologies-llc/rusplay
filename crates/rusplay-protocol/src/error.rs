@@ -54,4 +54,26 @@ pub enum ProtocolError {
     InputRecordTooLong { len: usize, max: usize },
     #[error("input section of {len} bytes exceeds the 65535 byte limit")]
     InputSectionTooLong { len: usize },
+    #[error("unknown codec tag {0}")]
+    UnknownCodec(u8),
+    #[error("unknown chroma subsampling tag {0}")]
+    UnknownChroma(u8),
+    #[error("unknown bit depth {0}")]
+    UnknownBitDepth(u8),
+    #[error("unknown colour primaries code {0}")]
+    UnknownColorPrimaries(u8),
+    #[error("chromaticity ({x}, {y}) in 0.00002 steps is out of range")]
+    ChromaticityOutOfRange { x: u16, y: u16 },
+    #[error("the custom primaries do not span a gamut containing their white point")]
+    DegenerateGamut,
+    #[error("unknown transfer characteristics code {0}")]
+    UnknownTransferFunction(u8),
+    #[error("unknown matrix coefficients code {0}")]
+    UnknownMatrixCoefficients(u8),
+    #[error("unknown colour range tag {0}")]
+    UnknownColorRange(u8),
+    #[error("hdr flags {0:#04x} carry unknown bits")]
+    UnknownHdrFlags(u8),
+    #[error("luminance of {0} units of 0.0001 cd/m² exceeds 10000 cd/m²")]
+    LuminanceOutOfRange(u32),
 }

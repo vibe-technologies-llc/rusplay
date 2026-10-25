@@ -10,22 +10,26 @@ use std::{
 
 use rusplay_capture::{CaptureError, DrmFourcc, Frame, FrameBuffer};
 use rusplay_config::{Config, NetworkConfig};
-use rusplay_core::{Codec, ColorSpace, EncodedFrame, Resolution, Timestamp};
+use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
     Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport, TransportOptions,
     pair_as_client, reconnect_as_client,
 };
-use rusplay_protocol::{ControlMessage, FecHeader, PacketHeader, ProtocolVersion, StreamKind};
+use rusplay_protocol::{
+    ControlMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription, StreamKind,
+};
 use tempfile::TempDir;
 
 use crate::{
     Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream,
-    encode::PipelineFactory, pipeline::VideoPipeline,
+    encode::PipelineFactory,
+    pipeline::{StreamFormat, VideoPipeline},
 };
 
 const PIN: &str = "583014";
 const FRAME_SIZE: Resolution = Resolution::new(64, 32);
+const RESIZED: Resolution = Resolution::new(96, 48);
 const FRAME_BYTES: usize = 5_000;
 const SOURCE_INTERVAL: Duration = Duration::from_millis(10);
 const WAIT: Duration = Duration::from_secs(5);
@@ -58,6 +62,7 @@ fn pin() -> Pin {
 struct CountingSource {
     remaining: u32,
     produced: u32,
+    resize_after: Option<u32>,
 }
 
 impl FrameSource for CountingSource {
@@ -70,16 +75,20 @@ impl FrameSource for CountingSource {
         thread::sleep(SOURCE_INTERVAL.min(timeout));
         self.remaining -= 1;
         self.produced += 1;
-        let stride = FRAME_SIZE.width * 4;
+        let resolution = match self.resize_after {
+            Some(after) if self.produced > after => RESIZED,
+            _ => FRAME_SIZE,
+        };
+        let stride = resolution.width * 4;
         let fill = u8::try_from(self.produced % 256).unwrap();
 
         Ok(Some(Frame {
-            resolution: FRAME_SIZE,
+            resolution,
             format: DrmFourcc::from_code(*b"XR24"),
             color: ColorSpace::default(),
             timestamp: Timestamp::from_micros(u64::from(self.produced) * 10_000),
             buffer: FrameBuffer::Shm {
-                data: vec![fill; (stride * FRAME_SIZE.height) as usize],
+                data: vec![fill; (stride * resolution.height) as usize],
                 stride,
             },
         }))
@@ -90,6 +99,15 @@ fn feed(frames: u32) -> Arc<CaptureFeed> {
     CaptureFeed::new(CountingSource {
         remaining: frames,
         produced: 0,
+        resize_after: None,
+    })
+}
+
+fn resizing_feed(frames: u32, after: u32) -> Arc<CaptureFeed> {
+    CaptureFeed::new(CountingSource {
+        remaining: frames,
+        produced: 0,
+        resize_after: Some(after),
     })
 }
 
@@ -97,6 +115,7 @@ fn feed(frames: u32) -> Arc<CaptureFeed> {
 struct FakePipeline {
     last: Option<u8>,
     encoded: u32,
+    resolution: Option<Resolution>,
     bitrate: Arc<AtomicU32>,
 }
 
@@ -120,8 +139,14 @@ impl VideoPipeline for FakePipeline {
             return Ok(None);
         };
         self.last = Some(data[0]);
+        let resized = self.resolution.is_some_and(|size| size != frame.resolution);
+        self.resolution = Some(frame.resolution);
 
-        Ok(Some(self.emit(data[0], keyframe, frame.timestamp)))
+        Ok(Some(self.emit(
+            data[0],
+            keyframe || resized,
+            frame.timestamp,
+        )))
     }
 
     fn repeat(
@@ -135,6 +160,15 @@ impl VideoPipeline for FakePipeline {
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError> {
         self.bitrate.store(kbps, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn stream_format(&self) -> Option<StreamFormat> {
+        self.resolution.map(|resolution| StreamFormat {
+            codec: Codec::Av1,
+            resolution,
+            format: PixelFormat::default(),
+            color: ColorSpace::default(),
+        })
     }
 }
 
@@ -162,6 +196,7 @@ struct TestClient {
     video: Reassembler,
     frames: Vec<ReceivedFrame>,
     messages: Vec<ControlMessage>,
+    formats: Vec<(usize, StreamDescription)>,
 }
 
 impl TestClient {
@@ -180,6 +215,7 @@ impl TestClient {
             video: Reassembler::new(StreamKind::Video, ReassemblyLimits::from(&network)),
             frames: Vec::new(),
             messages: Vec::new(),
+            formats: Vec::new(),
         }
     }
 
@@ -258,6 +294,9 @@ impl TestClient {
             }
             for event in control_events.drain(..) {
                 if let ControlEvent::Received(message) = event {
+                    if let ControlMessage::StreamFormat(description) = message {
+                        self.formats.push((self.frames.len(), description));
+                    }
                     self.messages.push(message);
                 }
             }
@@ -376,6 +415,31 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     );
     assert!(stats.frames_sent >= 4);
     assert_eq!(stats.keyframes_sent, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn the_stream_format_is_announced_before_the_first_frame_and_again_on_a_resize() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), resizing_feed(6, 3), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let complete =
+        client.pump_until(|client| client.frames.len() >= 6 && client.formats.len() >= 2);
+
+    assert!(complete);
+    let [(before_first, first), (_, second)] = client.formats[..] else {
+        panic!("expected two announcements, got {:?}", client.formats);
+    };
+    assert_eq!(before_first, 0);
+    assert_eq!(first.codec, Codec::Av1);
+    assert_eq!(first.resolution, FRAME_SIZE);
+    assert_eq!(second.resolution, RESIZED);
+    assert!(second.is_newer_than(&first));
+    assert!(client.frames[3].keyframe);
     stream.stop().unwrap();
 }
 

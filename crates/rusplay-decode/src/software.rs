@@ -15,12 +15,14 @@ use rav1d::{
 };
 use rusplay_config::SoftwareDecoderConfig;
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
+    Timestamp,
 };
 
 use crate::{
     Backend, CpuFrame, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
     frame::{CpuPlane, PlaneStorage},
+    metadata::{av1_mastering_display, content_light},
 };
 
 const AUTOMATIC_THREAD_COUNT: c_int = 0;
@@ -243,6 +245,36 @@ impl OwnedPicture {
         display_resolution(coded, render)
     }
 
+    fn color(&self) -> SignalledColor {
+        let mut color = SignalledColor::default();
+
+        if let Some(sequence) = self.0.seq_hdr {
+            let sequence = unsafe { sequence.as_ref() };
+            let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
+            color = color
+                .with_h273_codes(code(sequence.pri), code(sequence.trc), code(sequence.mtrx))
+                .with_full_range(sequence.color_range != 0);
+        }
+        if let Some(display) = self.0.mastering_display {
+            let display = unsafe { display.as_ref() };
+            color.mastering = av1_mastering_display(
+                display.primaries,
+                display.white_point,
+                display.max_luminance,
+                display.min_luminance,
+            );
+        }
+        if let Some(light) = self.0.content_light {
+            let light = unsafe { light.as_ref() };
+            color.content_light = Some(content_light(
+                light.max_content_light_level,
+                light.max_frame_average_light_level,
+            ));
+        }
+
+        color
+    }
+
     fn into_frame(self) -> Result<DecodedFrame, DecodeError> {
         let format = PixelFormat {
             chroma: self.chroma()?,
@@ -254,6 +286,7 @@ impl OwnedPicture {
         Ok(DecodedFrame {
             resolution,
             format,
+            color: self.color(),
             timestamp,
             buffer: DecodedBuffer::Cpu(CpuFrame::new(PictureStorage {
                 picture: self,

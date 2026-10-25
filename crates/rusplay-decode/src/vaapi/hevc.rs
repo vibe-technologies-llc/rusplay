@@ -5,7 +5,8 @@ use cros_codecs::codec::h265::parser::{
     SliceType, Sps,
 };
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
+    Timestamp,
 };
 
 use crate::{
@@ -13,11 +14,13 @@ use crate::{
     vaapi::{
         Stream, StreamFormat, annexb, ffi,
         reorder::{Depth, Reorder},
+        signal::{HdrTracker, vui_color},
         va::{Display, INVALID_SURFACE, PoolSurface, Profile},
     },
 };
 
 const CODEC: Codec = Codec::Hevc;
+const NAL_HEADER_LEN: usize = 2;
 const MAX_REFERENCE_FRAMES: usize = 15;
 const NO_REFERENCE: u8 = 0xff;
 
@@ -87,6 +90,7 @@ pub(super) struct HevcDecoder {
     skip_leading_pictures: bool,
     last_independent_header: Option<SliceHeader>,
     reorder: Reorder<DecodedFrame>,
+    hdr: HdrTracker,
 }
 
 impl HevcDecoder {
@@ -100,6 +104,7 @@ impl HevcDecoder {
             skip_leading_pictures: false,
             last_independent_header: None,
             reorder: Reorder::new(),
+            hdr: HdrTracker::default(),
         }
     }
 
@@ -131,6 +136,11 @@ impl HevcDecoder {
                     self.parser
                         .parse_pps(&nalu)
                         .map_err(malformed(BitstreamUnit::PictureParameterSet))?;
+                }
+                NaluType::PrefixSeiNut => {
+                    if let Some(payload) = nalu.as_ref().get(NAL_HEADER_LEN..) {
+                        self.hdr.read_sei(payload);
+                    }
                 }
                 NaluType::EosNut | NaluType::EobNut => {
                     self.awaiting_random_access = true;
@@ -219,6 +229,7 @@ impl HevcDecoder {
         self.reorder.configure(reorder_depth(&sps));
 
         let irap = nalu_type.is_irap();
+        stream.color = self.hdr.resolve(signalled_color(&sps), irap);
         let no_rasl_output =
             irap && (nalu_type.is_idr() || nalu_type.is_bla() || self.awaiting_random_access);
         if irap {
@@ -571,6 +582,21 @@ fn is_range_extension(profile: Profile) -> bool {
             | ffi::VAProfile_VAProfileHEVCMain444
             | ffi::VAProfile_VAProfileHEVCMain444_10
             | ffi::VAProfile_VAProfileHEVCMain444_12
+    )
+}
+
+fn signalled_color(sps: &Sps) -> SignalledColor {
+    let vui = &sps.vui_parameters;
+
+    vui_color(
+        sps.vui_parameters_present_flag && vui.video_signal_type_present_flag,
+        vui.video_full_range_flag,
+        vui.colour_description_present_flag,
+        [
+            vui.colour_primaries,
+            vui.transfer_characteristics,
+            vui.matrix_coeffs,
+        ],
     )
 }
 

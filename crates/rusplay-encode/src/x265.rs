@@ -14,6 +14,7 @@ use rusplay_core::{
 
 use crate::{
     Backend, EncodeError, VideoEncoder,
+    hdr::St2086,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
     software::CParam,
@@ -346,7 +347,20 @@ impl Settings {
             colour_matrix_name(self.color.matrix_coefficients()),
         )?;
         param.parse("transfer", transfer_name(self.color.transfer))?;
-        param.parse("range", range_name(self.color.range))
+        param.parse("range", range_name(self.color.range))?;
+
+        let hdr = &self.color.hdr;
+        if let Some(display) = &hdr.mastering {
+            param.parse("master-display", &St2086::of(display).x265_string())?;
+        }
+        if let Some(light) = &hdr.content_light {
+            param.parse(
+                "max-cll",
+                &format!("{},{}", light.max_cll_nits, light.max_fall_nits),
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -573,10 +587,15 @@ impl VideoEncoder for X265Encoder {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::VideoEncoderConfig;
+    use std::ffi::CStr;
+
+    use rusplay_config::{VaapiDecoderConfig, VideoEncoderConfig};
 
     use super::*;
-    use crate::testing::{self, pixel, start_code_offsets, video};
+    use crate::{
+        hdr::fixtures::hdr10_color,
+        testing::{self, pixel, start_code_offsets, video},
+    };
 
     const IDR_W_RADL: u8 = 19;
     const IDR_N_LP: u8 = 20;
@@ -641,6 +660,48 @@ mod tests {
             "bframes",
             "plenty",
         );
+    }
+
+    #[test]
+    fn hdr_metadata_maps_onto_the_sei_parameters() {
+        let config = VideoConfig {
+            color: hdr10_color(),
+            ..config(PixelFormat::default(), X265Config::default())
+        };
+        let VideoEncoderConfig::X265(x265) = &config.encoder else {
+            return;
+        };
+        let settings = Settings::new(&config, x265).unwrap();
+        let api = Api::load(config.pixel_format.depth).unwrap();
+
+        let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
+        let raw = unsafe { param.raw.as_ref() };
+        let display = unsafe { CStr::from_ptr(raw.masteringDisplayColorVolume.as_ptr()) };
+
+        assert_eq!(
+            display.to_str().unwrap(),
+            "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50)"
+        );
+        assert_eq!((raw.maxCLL, raw.maxFALL), (1000, 400));
+    }
+
+    #[test]
+    fn colour_description_reaches_the_decoder() {
+        for depth in [BitDepth::Eight, BitDepth::Ten] {
+            let Ok(mut decoder) =
+                rusplay_decode::VaapiDecoder::new(Codec::Hevc, &VaapiDecoderConfig::default())
+            else {
+                return;
+            };
+
+            testing::check_colour_reaches_the_decoder(
+                &config(
+                    pixel(ChromaSubsampling::Yuv420, depth),
+                    X265Config::default(),
+                ),
+                &mut decoder,
+            );
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod ffi;
 mod h264;
 mod hevc;
 mod reorder;
+mod signal;
 #[cfg(test)]
 mod tests;
 mod va;
@@ -12,7 +13,8 @@ use std::{fmt, rc::Rc, sync::Arc};
 
 use rusplay_config::VaapiDecoderConfig;
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
+    Timestamp,
 };
 
 use crate::{
@@ -163,6 +165,7 @@ impl StreamFormat {
 
 struct Stream {
     format: StreamFormat,
+    color: SignalledColor,
     pool: SurfacePool,
     session: Session,
 }
@@ -215,6 +218,7 @@ impl Stream {
 
         Ok(Self {
             format,
+            color: SignalledColor::default(),
             pool,
             session,
         })
@@ -239,6 +243,7 @@ impl Stream {
         Ok(DecodedFrame {
             resolution,
             format: self.format.pixel_format,
+            color: self.color,
             timestamp,
             buffer: DecodedBuffer::DmaBuf(DmaBufFrame::new(Arc::clone(&surface.image), ())),
         })

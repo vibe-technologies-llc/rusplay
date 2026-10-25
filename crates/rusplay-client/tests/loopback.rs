@@ -10,7 +10,7 @@ use rusplay_client::{
     ClientError, ClientSession, Credentials, FrameColor, LatestFrame, OutputLight, Pin,
     PresentedFrame,
 };
-use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution};
+use rusplay_core::{ColorRange, ColorSpace, Resolution};
 use rusplay_input::InputEvent;
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
@@ -77,14 +77,15 @@ fn frames_arrive_decoded_at_the_source_resolution() {
     assert!(seen.first().is_some_and(|first| first.keyframe));
     assert!(seen.iter().all(|frame| frame.resolution == source));
     assert!(seen.windows(2).all(|pair| pair[0].frame < pair[1].frame));
+    let described = common::stream_description();
     assert_eq!(
         seen[0].color,
         FrameColor::of_stream(
-            ColorSpace::default(),
-            PixelFormat {
-                chroma: ChromaSubsampling::Yuv420,
-                depth: BitDepth::Eight,
-            }
+            ColorSpace {
+                range: ColorRange::Limited,
+                ..described.color
+            },
+            described.format,
         )
     );
     assert_eq!(seen[0].color.light, OutputLight::Linear);

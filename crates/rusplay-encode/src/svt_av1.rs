@@ -15,6 +15,7 @@ use rusplay_core::{
 
 use crate::{
     Backend, EncodeError, VideoEncoder,
+    hdr::St2086,
     input::{YuvFrame, bytes_per_sample},
     rate::VBV_BUFFER_FRAMES,
     software::CParam,
@@ -319,6 +320,22 @@ impl Settings {
         config.transfer_characteristics = transfer_id(self.color.transfer);
         config.color_range = range_id(self.color.range);
 
+        let hdr = &self.color.hdr;
+        if let Some(display) = &hdr.mastering {
+            parse(
+                config,
+                "mastering-display",
+                &St2086::of(display).svt_av1_string(),
+            )?;
+        }
+        if let Some(light) = &hdr.content_light {
+            parse(
+                config,
+                "content-light",
+                &format!("{},{}", light.max_cll_nits, light.max_fall_nits),
+            )?;
+        }
+
         if let Some(threads) = self.config.threads {
             config.level_of_parallelism = threads.get();
         }
@@ -531,10 +548,13 @@ impl VideoEncoder for SvtAv1Encoder {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::{SvtAv1LogLevel, VideoEncoderConfig};
+    use rusplay_config::{SoftwareDecoderConfig, SvtAv1LogLevel, VideoEncoderConfig};
 
     use super::*;
-    use crate::testing::{self, pixel, video};
+    use crate::{
+        hdr::fixtures::hdr10_color,
+        testing::{self, pixel, video},
+    };
 
     const SEQUENCE_HEADER_OBU: u8 = 1;
     const OBU_HAS_SIZE_FLAG: u8 = 0b10;
@@ -655,6 +675,58 @@ mod tests {
             &with_params(&[("lookahead", "plenty")]),
             "lookahead",
             "plenty",
+        );
+    }
+
+    #[test]
+    fn hdr_metadata_maps_onto_the_metadata_obus() {
+        let config = VideoConfig {
+            color: hdr10_color(),
+            ..config(
+                pixel(ChromaSubsampling::Yuv420, BitDepth::Ten),
+                SvtAv1Config::default(),
+            )
+        };
+        let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
+            return;
+        };
+        let settings = Settings::new(&config, svt).unwrap();
+        let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
+
+        settings
+            .apply(&mut library, testing::TEST_RESOLUTION)
+            .unwrap();
+        let display = &library.mastering_display;
+        let light = &library.content_light_level;
+
+        let point =
+            |point: &sys::EbSvtAv1ChromaPoints| (u16::from_be(point.x), u16::from_be(point.y));
+
+        assert_eq!(point(&display.r), (44_564, 20_972));
+        assert_eq!(point(&display.g), (17_367, 45_220));
+        assert_eq!(point(&display.b), (9_830, 3_932));
+        assert_eq!(point(&display.white_point), (20_493, 21_561));
+        assert_eq!(u32::from_be(display.max_luma), 1000 << 8);
+        assert_eq!(u32::from_be(display.min_luma), 82);
+        assert_eq!(
+            (u16::from_be(light.max_cll), u16::from_be(light.max_fall)),
+            (1000, 400)
+        );
+    }
+
+    #[test]
+    fn colour_description_reaches_the_decoder() {
+        let mut decoder = rusplay_decode::Rav1dDecoder::new(&SoftwareDecoderConfig {
+            threads: std::num::NonZeroU32::new(1),
+        })
+        .unwrap();
+
+        testing::check_colour_reaches_the_decoder(
+            &config(
+                pixel(ChromaSubsampling::Yuv420, BitDepth::Ten),
+                SvtAv1Config::default(),
+            ),
+            &mut decoder,
         );
     }
 

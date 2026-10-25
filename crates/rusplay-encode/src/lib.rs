@@ -1,6 +1,13 @@
 mod backend;
 mod capabilities;
 mod error;
+#[cfg(any(
+    feature = "x264",
+    feature = "x265",
+    feature = "svt-av1",
+    feature = "vaapi"
+))]
+mod hdr;
 pub mod input;
 #[cfg(any(
     feature = "x264",

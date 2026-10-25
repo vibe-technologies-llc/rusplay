@@ -77,7 +77,7 @@ fn host_config(encoder: VideoEncoderConfig) -> Config {
 fn client_config() -> Config {
     let mut config = Config::default();
     config.network.bind_address = LOCALHOST;
-    config.video.codec = Codec::Av1;
+    config.video.codec = Codec::H264;
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = 16;
     config

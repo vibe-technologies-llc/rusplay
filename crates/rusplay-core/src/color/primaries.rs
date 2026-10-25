@@ -320,6 +320,13 @@ impl ColorPrimaries {
             .find(|primaries| primaries.h273_code() == Some(code))
     }
 
+    pub fn from_chromaticities(chromaticities: Chromaticities) -> Self {
+        Self::NAMED
+            .into_iter()
+            .find(|named| named.chromaticities() == chromaticities)
+            .unwrap_or(Self::Custom(chromaticities))
+    }
+
     pub fn rgb_to_xyz(self) -> Matrix3 {
         self.chromaticities().rgb_to_xyz()
     }
@@ -439,6 +446,28 @@ mod tests {
 
             assert_eq!(ColorPrimaries::from_h273_code(code), Some(primaries));
         }
+    }
+
+    #[test]
+    fn chromaticities_resolve_to_the_named_primaries_first() {
+        let custom = Chromaticities::new(
+            Chromaticity::from_xy(0.68, 0.32).unwrap(),
+            Chromaticity::from_xy(0.265, 0.69).unwrap(),
+            Chromaticity::from_xy(0.15, 0.06).unwrap(),
+            Chromaticity::from_xy(0.3, 0.33).unwrap(),
+        )
+        .unwrap();
+
+        for primaries in ColorPrimaries::NAMED {
+            assert_eq!(
+                ColorPrimaries::from_chromaticities(primaries.chromaticities()),
+                primaries
+            );
+        }
+        assert_eq!(
+            ColorPrimaries::from_chromaticities(custom),
+            ColorPrimaries::Custom(custom)
+        );
     }
 
     #[test]
