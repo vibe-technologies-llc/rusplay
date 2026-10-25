@@ -6,7 +6,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ash = { workspace = true, features = ["std"] }
 rusplay-core.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["std", "parking_lot", "vulkan", "wgsl"] }
 

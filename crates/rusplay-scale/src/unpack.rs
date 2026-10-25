@@ -4,10 +4,13 @@ use rusplay_core::{
 };
 
 use crate::{
-    ChromaSiting, FrameLayout, Geometry, Kernel, PlaneContent, PlaneLayout, Quantization,
-    Reconfigured, ScaleError, TapTable, YuvFrame,
+    ChromaSiting, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent, PlaneLayout,
+    Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
-    gpu::{self, CHROMA_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer},
+    gpu::{
+        self, CHROMA_FORMAT, ScalePipelines, ShaderPass, buffer_group, storage_buffer,
+        uniform_buffer,
+    },
     scaler::{GroupCache, resolution_pair},
 };
 
@@ -123,6 +126,7 @@ pub struct RgbConverter {
     layout: FrameLayout,
     plan: UnpackPlan,
     inputs: GroupCache<wgpu::Buffer>,
+    planes: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
     targets: GroupCache<wgpu::TextureView>,
 }
 
@@ -141,6 +145,7 @@ impl RgbConverter {
             settings,
             layout,
             inputs: GroupCache::default(),
+            planes: GroupCache::default(),
             targets: GroupCache::default(),
         })
     }
@@ -205,10 +210,85 @@ impl RgbConverter {
             .targets
             .get_or_create(target, || pipelines.destination_group(device, target));
 
-        self.plan
-            .encode(pipelines, encoder, &input_group, &target_group);
+        self.plan.encode(
+            [&pipelines.unpack.chroma, &pipelines.unpack.rgb],
+            encoder,
+            &input_group,
+            &target_group,
+        );
         Ok(())
     }
+
+    pub fn encode_planes(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &DmaBufTexture,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        let mismatch = ScaleError::DmaBufFormatMismatch {
+            fourcc: source.format().fourcc(),
+            format: self.settings.format,
+            layout: self.settings.layout,
+        };
+        if source.format().pixel_format() != Some(self.settings.format)
+            || self.settings.layout != PlaneLayout::SemiPlanar
+        {
+            return Err(mismatch);
+        }
+        let (Some(luma), Some(chroma)) = (source.view(0), source.view(1)) else {
+            return Err(mismatch);
+        };
+
+        let found = source.resolution();
+        let needed = self.settings.resolution;
+        if found.width < needed.width || found.height < needed.height {
+            return Err(ScaleError::DmaBufTooSmall { found, needed });
+        }
+
+        let pipelines = &self.pipelines;
+        let input_group = self
+            .planes
+            .get_or_create(&(luma.clone(), chroma.clone()), || {
+                planes_group(device, &pipelines.unpack.planes_layout, luma, chroma)
+            });
+        let target_group = self
+            .targets
+            .get_or_create(target, || pipelines.destination_group(device, target));
+
+        self.plan.encode(
+            [
+                &pipelines.unpack.planes_chroma,
+                &pipelines.unpack.planes_rgb,
+            ],
+            encoder,
+            &input_group,
+            &target_group,
+        );
+        Ok(())
+    }
+}
+
+fn planes_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    luma: &wgpu::TextureView,
+    chroma: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("rusplay-unpack-planes"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(luma),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(chroma),
+            },
+        ],
+    })
 }
 
 #[derive(Debug)]
@@ -275,22 +355,24 @@ impl UnpackPlan {
 
     fn encode(
         &self,
-        pipelines: &ScalePipelines,
+        passes: [&ShaderPass; 2],
         encoder: &mut wgpu::CommandEncoder,
         input_group: &wgpu::BindGroup,
         target_group: &wgpu::BindGroup,
     ) {
+        let [chroma_pass, rgb_pass] = passes;
+
         gpu::dispatch(
             encoder,
             "rusplay-unpack-chroma",
-            &pipelines.unpack.chroma,
+            chroma_pass,
             &[input_group, &self.chroma_target, &self.chroma_group],
             self.chroma_pass_size,
         );
         gpu::dispatch(
             encoder,
             "rusplay-unpack-rgb",
-            &pipelines.unpack.rgb,
+            rgb_pass,
             &[
                 input_group,
                 &self.chroma_source,

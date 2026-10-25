@@ -56,8 +56,9 @@ paths:
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads, `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wgpu`
-  (GPU scaling), `rav1d` for software AV1 decode (default features off: its `asm` feature needs
-  `nasm`), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
+  (GPU scaling), `ash` (raw Vulkan for DMA-BUF import in `rusplay-scale`, default features off so
+  it loads nothing itself; kept at the version wgpu-hal uses, since handles cross between them),
+  `rav1d` for software AV1 decode (default features off: its `asm` feature needs `nasm`), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
   needed. Pairing and transport encryption use RustCrypto only: `spake2` (pinned to 0.4.0, the
   latest stable release; 0.5 is still a pre-release), `hkdf`, `sha2`, `chacha20poly1305`,
   `subtle` and `zeroize`. `libc` is allowed as bare syscall declarations only for what rustix

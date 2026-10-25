@@ -4849,9 +4849,11 @@ dependencies = [
 name = "rusplay-scale"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "half",
  "pollster 1.0.1",
  "rusplay-core",
+ "rustix",
  "thiserror 2.0.21",
  "wgpu 30.0.1",
 ]

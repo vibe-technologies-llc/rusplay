@@ -127,7 +127,59 @@ paths:
   and, for `OutputLight::Linear`, the inverse OETF (sRGB, BT.709, gamma 2.2 or linear; PQ and HLG
   must use `OutputLight::Encoded`), into an `rgba16float` storage texture. Chroma is upsampled with
   `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
-  and must be separable. `reference::unpack_rgb` is its CPU reference.
+  and must be separable. `reference::unpack_rgb` is its CPU reference. The input is a WGSL module
+  providing `luma_code`/`chroma_codes` (integer codes after the `sample_shift` and `max_code`
+  clamp): `unpack_buffer.wgsl` reads the upload buffer, `unpack_planes.wgsl` reads two unsigned
+  integer plane textures, and `unpack_common.wgsl` dequantises either. `RgbConverter::encode`
+  takes a `YuvFrame`, `RgbConverter::encode_planes` an imported `NV12`/`P010` `DmaBufTexture`
+  (settings must be 4:2:0 `SemiPlanar` at the matching depth, else `DmaBufFormatMismatch`; the
+  planes may be larger than the frame, as decoder surfaces are, and are read only up to it). Both
+  paths produce identical output, which a test checks bit for bit.
+- DMA-BUF import is `DmaBufImporter` (`dmabuf.rs`, with every Vulkan call in `dmabuf/vulkan.rs`).
+  wgpu-hal's own `texture_from_dmabuf_fd` takes one plane only, so the importer creates the
+  `VkImage` itself through `ash` (the same 0.38 wgpu-hal uses, so the raw handles it hands out
+  are the same types): `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` with an explicit plane layout per
+  memory plane, `VkExternalMemoryImageCreateInfo` for `DMA_BUF_BIT_EXT`, a dedicated allocation
+  importing a `dup` of the fd (Vulkan owns it on success), then `texture_from_raw` with
+  `TextureMemory::Dedicated`, so wgpu destroys image and memory once its last use completes, and
+  `create_texture_from_hal` with `TextureUses::UNINITIALIZED`, because the image is created in
+  `UNDEFINED` and wgpu's first barrier must start from the real layout. A transition out of
+  `UNDEFINED` may reinitialise compression metadata, so `modifiers` only advertises modifiers with
+  a single memory plane (no DCC metadata planes); `import` still accepts a multi-plane RGB
+  modifier it is handed, unverified.
+- The device needs `wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`DMABUF_FEATURES`), which wgpu
+  grants only when `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
+  `VK_EXT_image_drm_format_modifier` are present and then enables them. Every device that may
+  import is created with `rusplay_scale::device_descriptor(&adapter)`, which requests the feature
+  when the adapter has it. Without it `DmaBufImporter::new` fails with `DmaBufImportUnavailable`,
+  and on another backend with `DmaBufNeedsVulkan`.
+- Formats (`DmaBufFormat`): `XR24`/`AR24` as `Bgra8Unorm`, `XB24`/`AB24` as `Rgba8Unorm`, both with
+  an sRGB view (`DmaBufTexture::linear_view`, created with `MUTABLE_FORMAT` and a format list,
+  dropped when the modifier refuses it), so the scaler gets linear light from them as from any
+  other source; `XB30`/`AB30` as `Rgb10a2Unorm` (no sRGB view exists). `NV12` and `P010` are
+  imported as two textures, one per plane, each with the buffer's modifier and its own offset and
+  pitch: `R8Uint` + `Rg8Uint`, or `R16Uint` + `Rg16Uint` with the 10 bits in the high bits, as
+  VAAPI and ffmpeg's Vulkan import do. Integer formats keep the codes exact and need no
+  `TEXTURE_FORMAT_16BIT_NORM` or multi-planar feature. An RGB buffer's planes (AMD DCC metadata
+  among them) must all live in one buffer (`DmaBufPlanesSplit`) and match the modifier's plane
+  count (`DmaBufPlaneCount`).
+- `DmaBufImporter::modifiers(format)` lists the single-memory-plane modifiers the device can
+  sample for a format (for `NV12`/`P010`, those both plane formats take). Measured on an RX 9070
+  (RADV GFX12): VAAPI exports `NV12`/`P010` with the tiled `0x0200000000082305` and the
+  per-plane import of it is bit-exact. It never contains
+  `DRM_FORMAT_MOD_INVALID`: Vulkan cannot import an implicit modifier, so a capture that should
+  stay importable passes this list to `StreamOptions::modifiers` rather than
+  `DEFAULT_MODIFIERS`.
+- Imports are cached per importer (`IMPORT_CACHE_ENTRIES`), keyed by format, modifier, size and
+  each plane's buffer identity (`fstat` device and inode), offset and pitch, so a capture or
+  decode swapchain cycling a few buffers imports each once and the converter's and scaler's
+  `GroupCache`s keep hitting. A cached import keeps its buffer alive until evicted.
+- Lifetime: the import holds a reference on the buffer's memory, but the producer may reuse the
+  buffer once its lease ends. The caller keeps the lease (a decoder's `DmaBufFrame`, a capture
+  `Frame`) until the GPU work reading it completes: `release_after_submission(&queue, lease)`
+  after `Queue::submit` drops it from `on_submitted_work_done`. A PipeWire capture frame is only
+  valid until the next `next_frame` call, so the host must not ask for the next frame before the
+  previous one's work is done. Implicit fences are not waited on (`scale-dmabuf-sync`).
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1
@@ -151,7 +203,9 @@ paths:
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a
-  `OnceLock`) and return early when no adapter exists, so GPU-less machines pass. Each pass is
+  `OnceLock`, created with `device_descriptor`) and return early when no adapter exists, so
+  GPU-less machines pass. DMA-BUF tests build `LINEAR` buffers from a sealed memfd through
+  `/dev/udmabuf` and also return early when it or the import feature is missing. Each pass is
   compared with a CPU reference in `reference.rs` built from the same `TapTable`s and kernels,
   with clamp-to-edge addressing and `f16` rounding of every stored texel, to within a few
   `rgba16float` ulps (`4/1024`). Test images are quantised to `f16` before upload so the

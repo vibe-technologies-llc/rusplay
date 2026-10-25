@@ -1,5 +1,6 @@
 # Scaling
-- [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
+- [S] `scale-dmabuf-swizzled-rgb`: import the RGB DMA-BUF formats wgpu has no texture format for (`XR30`/`AR30`, which compositors offer first for 10-bit, and `BX24`/`RX24`/`RX30`/`BX30`) by passing a channel order to the scaler and colour converter source reads; `DmaBufImporter` returns `DmaBufFormatUnsupported` for them today
+- [S] `scale-dmabuf-sync`: wait for a capture DMA-BUF's implicit fence (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` imported as a Vulkan semaphore) or PipeWire's explicit sync timeline before reading it; only VAAPI frames are synchronised today (`vaSyncSurface`)
 
 # Video encode
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
@@ -17,7 +18,6 @@
 - [M] `session-stream-format`: carry codec, resolution, pixel format, `ColorSpace` and HDR metadata in the handshake; the client decodes with its own `video.codec` and labels frames with its own `video.color` today
 - [M] `client-audio`: receive `StreamKind::Audio`, decode on a codec thread with PLC/FEC concealment and play through `AudioPlayback` in `ClientStream`
 - [S] `client-cursor`: consume `StreamKind::Cursor` in the receive stage and hand cursor position and image to the app beside `PresentedFrame`
-- [M, blocked by: scale-dmabuf-import] `client-dmabuf-present`: present VAAPI DMA-BUF frames (`NV12`/`P010`); the present stage returns `DmaBufPresentUnsupported` today, so only the software decoder streams
 
 # Desktop app
 - [M] `app-stream-view`: present the stream through the shared wgpu device

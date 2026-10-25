@@ -41,30 +41,15 @@ fn decode_transfer(encoded: vec3<f32>) -> vec3<f32> {
     }
 }
 
-fn sample_at(plane_offset: u32, stride: u32, index: u32, row: u32) -> u32 {
-    let byte = index * params.sample_bytes;
-    let word = input[plane_offset + row * stride + byte / 4u];
-    let mask = select(0xffu, 0xffffu, params.sample_bytes == 2u);
-    let bits = (word >> ((byte % 4u) * 8u)) & mask;
-    return min(bits >> params.sample_shift, params.max_code);
-}
-
 fn dequantize(code: u32, quant: vec2<f32>) -> f32 {
     return (f32(code) - quant.y) / quant.x;
 }
 
 fn luma_at(x: u32, y: u32) -> f32 {
-    return dequantize(sample_at(params.luma_offset, params.luma_stride, x, y), params.luma_quant);
+    return dequantize(luma_code(x, y), params.luma_quant);
 }
 
 fn chroma_at(x: u32, y: u32) -> vec2<f32> {
-    if params.interleaved != 0u {
-        let cb = sample_at(params.chroma_offsets.x, params.chroma_stride, 2u * x, y);
-        let cr = sample_at(params.chroma_offsets.x, params.chroma_stride, 2u * x + 1u, y);
-        return vec2<f32>(dequantize(cb, params.chroma_quant), dequantize(cr, params.chroma_quant));
-    }
-
-    let cb = sample_at(params.chroma_offsets.x, params.chroma_stride, x, y);
-    let cr = sample_at(params.chroma_offsets.y, params.chroma_stride, x, y);
-    return vec2<f32>(dequantize(cb, params.chroma_quant), dequantize(cr, params.chroma_quant));
+    let codes = chroma_codes(x, y);
+    return vec2<f32>(dequantize(codes.x, params.chroma_quant), dequantize(codes.y, params.chroma_quant));
 }

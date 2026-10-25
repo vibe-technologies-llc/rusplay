@@ -67,7 +67,14 @@ paths:
   gamut or tone-mapping pass goes in `present.rs` between the unpack and the scaler, on the
   source-resolution linear texture, and updates `FrameColor` accordingly, without changing the
   public types.
-- DMA-BUF frames from VAAPI fail with `DmaBufPresentUnsupported` until `client-dmabuf-present`.
+- DMA-BUF frames from VAAPI (`NV12`/`P010`) are imported by a `DmaBufImporter` created on the
+  first one, which needs a `Gpu` whose device came from `rusplay_scale::device_descriptor`
+  (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
+  `RgbConverter::encode_planes` (`SemiPlanar` settings) with no copy, and the decoded frame, the
+  surface's lease, goes to `release_after_submission` after the submit, so the decoder reuses the
+  surface only once the GPU has read it. CPU frames keep their upload buffer, created on the first
+  one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
+  source size and upscaled, and requires identical output.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange, the 8-frame AV1 fixture from

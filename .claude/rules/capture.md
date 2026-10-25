@@ -47,8 +47,9 @@ paths:
   buffers, no modifier requests `MemPtr | MemFd`. `decide` in `format.rs` is the pure decision.
 - The acceptable modifiers are injected per format through `StreamOptions::modifiers`
   (`FormatModifiers`, also usable without the `pipewire` feature), so the GPU side can supply the
-  modifiers it can import. The default is `DEFAULT_MODIFIERS`: `DRM_FORMAT_MOD_INVALID` (implicit,
-  preferred) then `DRM_FORMAT_MOD_LINEAR`.
+  modifiers it can import (`rusplay_scale::DmaBufImporter::modifiers`). The default is
+  `DEFAULT_MODIFIERS`: `DRM_FORMAT_MOD_INVALID` (implicit, preferred) then
+  `DRM_FORMAT_MOD_LINEAR`; Vulkan cannot import the implicit modifier.
 - A DMA-BUF `Frame` owns a duplicate of the plane fd (`FrameBuffer::DmaBuf { fd, modifier,
   planes }`, one `Plane { offset, stride }` per `spa_data`, e.g. AMD DCC metadata planes). Every
   plane must live in the same buffer (compared by device and inode), otherwise

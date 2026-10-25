@@ -1,7 +1,7 @@
 use std::{fmt, io, time::Duration};
 
 use rusplay_audio::AudioError;
-use rusplay_decode::{DecodeError, DrmFourcc};
+use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
 use rusplay_net::NetError;
 use rusplay_scale::ScaleError;
@@ -62,8 +62,8 @@ pub enum ClientError {
     HelloUndeliverable,
     #[error("nothing arrived from the host for {0:?}")]
     HostSilent(Duration),
-    #[error("decoded {fourcc} dma-buf frames cannot be presented without dma-buf import into wgpu")]
-    DmaBufPresentUnsupported { fourcc: DrmFourcc },
+    #[error("decoded dma-buf plane {plane} names object {object}, which the frame does not have")]
+    DmaBufObjectMissing { plane: usize, object: usize },
     #[error("decoded frame has {found} planes, presentation needs {expected}")]
     PlaneCountMismatch { found: usize, expected: usize },
     #[error(

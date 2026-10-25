@@ -3,6 +3,7 @@ mod bench;
 mod bessel;
 mod color;
 mod convert;
+mod dmabuf;
 mod error;
 mod gpu;
 mod kernel;
@@ -26,6 +27,10 @@ pub use crate::{
     convert::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,
         InputLight, Plane, PlaneContent, PlaneLayout, Quantization, SampleAlignment, YuvFrame,
+    },
+    dmabuf::{
+        DMABUF_FEATURES, DmaBuf, DmaBufFormat, DmaBufImporter, DmaBufPlane, DmaBufTexture,
+        device_descriptor, release_after_submission,
     },
     error::ScaleError,
     gpu::ScalePipelines,
