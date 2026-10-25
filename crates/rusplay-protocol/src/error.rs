@@ -11,6 +11,16 @@ pub enum ProtocolError {
         expected: ProtocolVersion,
         found: ProtocolVersion,
     },
+    #[error("fragment index {index} is outside the fragment count {count}")]
+    FragmentOutOfRange { index: u16, count: u16 },
+    #[error(
+        "fec geometry of {data_shards} data and {parity_shards} parity shards is invalid for parity index {parity_index}"
+    )]
+    InvalidFecGeometry {
+        data_shards: u8,
+        parity_shards: u8,
+        parity_index: u8,
+    },
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),
 }

@@ -4,7 +4,7 @@ use crate::ProtocolError;
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(1);
+    pub const CURRENT: Self = Self(2);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,7 +110,7 @@ impl PacketHeader {
             });
         }
 
-        Ok(Self {
+        let header = Self {
             version,
             stream: StreamKind::try_from(bytes[2])?,
             flags: PacketFlags::from_bits(bytes[3]),
@@ -118,7 +118,22 @@ impl PacketHeader {
             frame: u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]),
             fragment_index: u16::from_be_bytes([bytes[12], bytes[13]]),
             fragment_count: u16::from_be_bytes([bytes[14], bytes[15]]),
-        })
+        };
+
+        if header.fragment_index >= header.fragment_count {
+            return Err(ProtocolError::FragmentOutOfRange {
+                index: header.fragment_index,
+                count: header.fragment_count,
+            });
+        }
+
+        Ok(header)
+    }
+
+    pub fn parse(datagram: &[u8]) -> Result<(Self, &[u8]), ProtocolError> {
+        let header = Self::read(datagram)?;
+
+        Ok((header, &datagram[Self::SIZE..]))
     }
 }
 
@@ -146,6 +161,45 @@ mod tests {
         header.write(&mut buf).unwrap();
 
         assert_eq!(PacketHeader::read(&buf), Ok(header));
+    }
+
+    #[test]
+    fn parse_splits_header_from_payload() {
+        let mut datagram = vec![0; PacketHeader::SIZE];
+        sample().write(&mut datagram).unwrap();
+        datagram.extend_from_slice(b"payload");
+
+        let (header, payload) = PacketHeader::parse(&datagram).unwrap();
+
+        assert_eq!(header, sample());
+        assert_eq!(payload, b"payload");
+    }
+
+    #[test]
+    fn fragment_index_beyond_count_is_rejected() {
+        let mut header = sample();
+        header.fragment_index = header.fragment_count;
+        let mut buf = [0; PacketHeader::SIZE];
+        header.write(&mut buf).unwrap();
+
+        assert_eq!(
+            PacketHeader::read(&buf),
+            Err(ProtocolError::FragmentOutOfRange { index: 8, count: 8 })
+        );
+    }
+
+    #[test]
+    fn zero_fragment_count_is_rejected() {
+        let mut header = sample();
+        header.fragment_index = 0;
+        header.fragment_count = 0;
+        let mut buf = [0; PacketHeader::SIZE];
+        header.write(&mut buf).unwrap();
+
+        assert!(matches!(
+            PacketHeader::read(&buf),
+            Err(ProtocolError::FragmentOutOfRange { .. })
+        ));
     }
 
     #[test]

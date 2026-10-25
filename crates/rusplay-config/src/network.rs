@@ -20,6 +20,7 @@ pub struct NetworkConfig {
     pub pacing: bool,
     pub jitter_buffer_ms: u16,
     pub socket_buffer_bytes: u32,
+    pub reassembly_timeout_ms: u16,
 }
 
 impl Default for NetworkConfig {
@@ -32,6 +33,7 @@ impl Default for NetworkConfig {
             pacing: true,
             jitter_buffer_ms: 0,
             socket_buffer_bytes: 8 * 1024 * 1024,
+            reassembly_timeout_ms: 100,
         }
     }
 }
@@ -48,6 +50,28 @@ impl NetworkConfig {
             ));
         }
 
+        if self.reassembly_timeout_ms == 0 {
+            return Err(ConfigError::ZeroReassemblyTimeout);
+        }
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_reassembly_timeout_is_rejected() {
+        let config = NetworkConfig {
+            reassembly_timeout_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroReassemblyTimeout)
+        ));
     }
 }

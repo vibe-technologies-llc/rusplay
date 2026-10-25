@@ -26,10 +26,11 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-hostd` | Headless host binary |
 | `rusplay-app` | The gpui desktop app, binary `rusplay` |
 
-Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale` build on it, `net`
-builds on `protocol`, and the media crates (`capture`, `encode`, `decode`, `audio`, `input`) build
-on `core`/`config`. `host` and `client` compose them, and the two binaries depend only on
-`host`/`client`/`config`. No crate depends upward, and no media crate depends on `net`.
+Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale` build on it,
+`net` builds on `protocol` and `config`, and the media crates (`capture`, `encode`, `decode`,
+`audio`, `input`) build on `core`/`config`. `host` and `client` compose them, and the two binaries
+depend only on `host`/`client`/`config`. No crate depends upward, and no media crate depends on
+`net`.
 
 ## Invariants
 

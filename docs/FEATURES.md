@@ -33,7 +33,6 @@
 - [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
 # Networking
-- [M] `net-reassembly`: fragment reassembly into frames with loss detection
 - [M] `net-control`: acknowledged control channel carrying `ControlMessage`
 - [M, blocked by: net-control] `net-pairing`: authenticated pairing and encrypted session keys
 - [S] `net-discovery`: LAN host discovery
@@ -44,8 +43,8 @@
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
-- [L, blocked by: capture-pipewire, encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
-- [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
+- [L, blocked by: capture-pipewire, encode-vaapi] `host-pipeline`: run capture → scale → encode → send in `HostSession`
+- [L, blocked by: decode-vaapi] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 - [S] `hostd-cli`: argument parsing and config path discovery for `rusplay-hostd`
 
 # Desktop app

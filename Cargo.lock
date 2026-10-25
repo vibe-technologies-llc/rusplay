@@ -994,6 +994,7 @@ name = "rusplay-net"
 version = "0.1.0"
 dependencies = [
  "reed-solomon-simd",
+ "rusplay-config",
  "rusplay-protocol",
  "thiserror",
 ]

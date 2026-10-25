@@ -27,6 +27,8 @@ pub enum ConfigError {
     MtuOutOfRange(u16),
     #[error("antiringing strength {0} is outside 0.0..=1.0")]
     AntiringingOutOfRange(f32),
+    #[error("reassembly timeout must be greater than zero")]
+    ZeroReassemblyTimeout,
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
 }
