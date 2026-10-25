@@ -34,6 +34,8 @@ pub enum EncodeError {
         backend: Backend,
         resolution: Resolution,
     },
+    #[error("the installed {backend} library does not match the headers rusplay was built against")]
+    LibraryIncompatible { backend: Backend },
     #[error("the {backend} encoder failed with code {code}")]
     EncodeFailed { backend: Backend, code: i32 },
     #[error("the {backend} encoder takes CPU frames, not DMA-BUFs")]

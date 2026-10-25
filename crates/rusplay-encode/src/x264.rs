@@ -8,14 +8,17 @@ use std::{
 use rusplay_capture::Frame;
 use rusplay_config::{VideoConfig, X264Config, X264Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, EncodedFrame,
-    FrameRate, PixelFormat, Resolution, Timestamp, TransferFunction,
+    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, FrameRate,
+    PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::YuvFrame,
-    software::{CParam, preset_name, vbv_buffer_kbit},
+    software::{
+        CParam, colour_matrix_name, colour_primaries_name, preset_name, transfer_name,
+        vbv_buffer_kbit,
+    },
 };
 
 #[allow(
@@ -56,29 +59,6 @@ const fn tune_name(tune: X264Tune) -> &'static str {
         X264Tune::Psnr => "psnr",
         X264Tune::Ssim => "ssim",
         X264Tune::Fastdecode => "fastdecode",
-    }
-}
-
-const fn colour_primaries_name(primaries: ColorPrimaries) -> &'static str {
-    match primaries {
-        ColorPrimaries::Bt709 => "bt709",
-        ColorPrimaries::Bt2020 => "bt2020",
-    }
-}
-
-const fn colour_matrix_name(primaries: ColorPrimaries) -> &'static str {
-    match primaries {
-        ColorPrimaries::Bt709 => "bt709",
-        ColorPrimaries::Bt2020 => "bt2020nc",
-    }
-}
-
-const fn transfer_name(transfer: TransferFunction) -> &'static str {
-    match transfer {
-        TransferFunction::Bt709 => "bt709",
-        TransferFunction::Srgb => "iec61966-2-1",
-        TransferFunction::Pq => "smpte2084",
-        TransferFunction::Hlg => "arib-std-b67",
     }
 }
 
@@ -492,38 +472,12 @@ impl VideoEncoder for X264Encoder {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::{EncoderParams, VideoEncoderConfig};
-    use rusplay_core::Timestamp;
+    use rusplay_config::VideoEncoderConfig;
 
     use super::*;
-    use crate::{
-        input::{fixtures::yuv_frame, fourcc_for},
-        open,
-        software::testing::{dmabuf_frame, start_code_offsets},
-    };
+    use crate::testing::{self, pixel, start_code_offsets, video};
 
     const IDR_NAL_TYPE: u8 = 5;
-    const FRAME_INTERVAL_MICROS: u64 = 16_666;
-
-    fn video(format: PixelFormat, config: X264Config) -> VideoConfig {
-        VideoConfig {
-            resolution: Some(Resolution::new(128, 64)),
-            codec: Codec::H264,
-            pixel_format: format,
-            bitrate_kbps: 8_000,
-            encoder: VideoEncoderConfig::X264(config),
-            ..VideoConfig::default()
-        }
-    }
-
-    fn frame(format: PixelFormat, index: u64) -> Frame {
-        yuv_frame(
-            format,
-            Resolution::new(128, 64),
-            index,
-            Timestamp::from_micros(index * FRAME_INTERVAL_MICROS),
-        )
-    }
 
     fn contains_idr(data: &[u8]) -> bool {
         start_code_offsets(data).into_iter().any(|offset| {
@@ -532,119 +486,70 @@ mod tests {
         })
     }
 
-    fn encoder(format: PixelFormat, config: X264Config) -> Box<dyn VideoEncoder> {
-        open(&video(format, config)).unwrap()
+    fn config(format: PixelFormat, x264: X264Config) -> VideoConfig {
+        video(Codec::H264, format, VideoEncoderConfig::X264(x264))
     }
 
-    fn pixel(chroma: ChromaSubsampling, depth: BitDepth) -> PixelFormat {
-        PixelFormat { chroma, depth }
+    fn with_params(pairs: &[(&str, &str)]) -> VideoConfig {
+        config(
+            PixelFormat::default(),
+            X264Config {
+                params: testing::params(pairs),
+                ..X264Config::default()
+            },
+        )
     }
 
     #[test]
-    fn first_frame_is_an_idr_and_later_frames_are_not() {
+    fn stream_starts_on_an_idr_for_every_chroma_and_depth() {
         for format in [
             pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
             pixel(ChromaSubsampling::Yuv422, BitDepth::Ten),
             pixel(ChromaSubsampling::Yuv444, BitDepth::Eight),
+            pixel(ChromaSubsampling::Yuv444, BitDepth::Ten),
         ] {
-            let mut encoder = encoder(format, X264Config::default());
-
-            let first = encoder.encode(&frame(format, 0)).unwrap().unwrap();
-            assert!(first.keyframe);
-            assert!(contains_idr(&first.data));
-            assert_eq!(first.codec, Codec::H264);
-
-            for index in 1..5 {
-                let next = encoder.encode(&frame(format, index)).unwrap().unwrap();
-                assert!(!next.keyframe);
-                assert!(!contains_idr(&next.data));
-                assert_eq!(next.timestamp.as_micros(), index * FRAME_INTERVAL_MICROS);
-            }
+            testing::check_stream_starts_on_a_keyframe(
+                &config(format, X264Config::default()),
+                contains_idr,
+            );
         }
     }
 
     #[test]
     fn requested_keyframe_is_an_idr() {
         let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
-        let mut encoder = encoder(format, X264Config::default());
 
-        for index in 0..3 {
-            encoder.encode(&frame(format, index)).unwrap();
-        }
-        encoder.request_keyframe();
-
-        let forced = encoder.encode(&frame(format, 3)).unwrap().unwrap();
-        let after = encoder.encode(&frame(format, 4)).unwrap().unwrap();
-
-        assert!(forced.keyframe);
-        assert!(contains_idr(&forced.data));
-        assert!(!after.keyframe);
+        testing::check_keyframe_on_request(&config(format, X264Config::default()), contains_idr);
     }
 
     #[test]
     fn set_bitrate_reconfigures_in_place() {
-        let format = pixel(ChromaSubsampling::Yuv422, BitDepth::Eight);
-        let mut encoder = encoder(format, X264Config::default());
-        encoder.encode(&frame(format, 0)).unwrap();
-
-        encoder.set_bitrate(2_000).unwrap();
-        let next = encoder.encode(&frame(format, 1)).unwrap();
-
-        assert!(next.is_some());
-        assert!(matches!(
-            encoder.set_bitrate(0),
-            Err(EncodeError::BitrateRejected { kbps: 0, .. })
-        ));
+        testing::check_set_bitrate_in_place(&config(PixelFormat::default(), X264Config::default()));
     }
 
     #[test]
     fn unknown_parameter_names_the_key() {
-        let mut params = EncoderParams::new();
-        params.insert("no-such-knob".to_owned(), "1".to_owned());
-        let config = X264Config {
-            params,
-            ..X264Config::default()
-        };
-
-        let error = open(&video(PixelFormat::default(), config)).err().unwrap();
-
-        assert!(matches!(
-            error,
-            EncodeError::UnknownParameter { ref key, .. } if key == "no-such-knob"
-        ));
+        testing::check_unknown_parameter_names_the_key(&with_params(&[("no-such-knob", "1")]));
     }
 
     #[test]
     fn invalid_parameter_value_names_the_key() {
-        let mut params = EncoderParams::new();
-        params.insert("bframes".to_owned(), "plenty".to_owned());
-        let config = X264Config {
-            params,
-            ..X264Config::default()
-        };
-
-        let error = open(&video(PixelFormat::default(), config)).err().unwrap();
-
-        assert!(matches!(
-            error,
-            EncodeError::InvalidParameterValue { ref key, ref value, .. }
-                if key == "bframes" && value == "plenty"
-        ));
+        testing::check_invalid_value_names_the_key(
+            &with_params(&[("bframes", "plenty")]),
+            "bframes",
+            "plenty",
+        );
     }
 
     #[test]
     fn passthrough_parameters_reach_the_library() {
-        let mut params = EncoderParams::new();
-        params.insert("aq-mode".to_owned(), "3".to_owned());
-        params.insert("bframes".to_owned(), "2".to_owned());
-        let config = X264Config {
-            params,
-            ..X264Config::default()
+        let config = with_params(&[("aq-mode", "3"), ("bframes", "2")]);
+        let VideoEncoderConfig::X264(x264) = &config.encoder else {
+            return;
         };
-        let settings =
-            Settings::new(&video(PixelFormat::default(), config.clone()), &config).unwrap();
+        let settings = Settings::new(&config, x264).unwrap();
 
-        let param = settings.param(Resolution::new(128, 64)).unwrap();
+        let param = settings.param(testing::TEST_RESOLUTION).unwrap();
 
         assert_eq!(param.rc.i_aq_mode, 3);
         assert_eq!(param.i_bframe, 2);
@@ -652,17 +557,13 @@ mod tests {
 
     #[test]
     fn typed_fields_win_over_params() {
-        let mut params = EncoderParams::new();
-        params.insert("bitrate".to_owned(), "1".to_owned());
-        params.insert("fps".to_owned(), "1/1".to_owned());
-        let config = X264Config {
-            params,
-            ..X264Config::default()
+        let config = with_params(&[("bitrate", "1"), ("fps", "1/1")]);
+        let VideoEncoderConfig::X264(x264) = &config.encoder else {
+            return;
         };
-        let settings =
-            Settings::new(&video(PixelFormat::default(), config.clone()), &config).unwrap();
+        let settings = Settings::new(&config, x264).unwrap();
 
-        let param = settings.param(Resolution::new(128, 64)).unwrap();
+        let param = settings.param(testing::TEST_RESOLUTION).unwrap();
 
         assert_eq!(param.rc.i_bitrate, 8_000);
         assert_eq!(param.i_fps_num, 60);
@@ -672,44 +573,37 @@ mod tests {
     fn twelve_bit_is_unsupported() {
         let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Twelve);
 
-        let error = open(&video(format, X264Config::default())).err().unwrap();
+        let error = crate::open(&config(format, X264Config::default()))
+            .err()
+            .unwrap();
 
         assert!(matches!(error, EncodeError::BitDepthUnsupported { .. }));
     }
 
     #[test]
     fn wrong_frame_inputs_are_rejected() {
-        let wanted = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
-        let other = pixel(ChromaSubsampling::Yuv444, BitDepth::Eight);
-        let mut encoder = encoder(wanted, X264Config::default());
-
-        let wrong_format = encoder.encode(&frame(other, 0)).unwrap_err();
-        let dmabuf = encoder.encode(&dmabuf_frame()).unwrap_err();
-        let small = yuv_frame(wanted, Resolution::new(64, 64), 0, Timestamp::ZERO);
-        let wrong_size = encoder.encode(&small).unwrap_err();
-
-        assert!(matches!(
-            wrong_format,
-            EncodeError::FrameFormatMismatch { expected, .. } if expected == fourcc_for(wanted)
-        ));
-        assert!(matches!(dmabuf, EncodeError::CpuFrameRequired { .. }));
-        assert!(matches!(
-            wrong_size,
-            EncodeError::FrameResolutionMismatch { .. }
+        testing::check_wrong_inputs_are_rejected(&config(
+            pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+            X264Config::default(),
         ));
     }
 
     #[test]
     fn unspecified_resolution_follows_the_first_frame() {
-        let format = PixelFormat::default();
-        let config = VideoConfig {
-            resolution: None,
-            ..video(format, X264Config::default())
-        };
-        let mut encoder = open(&config).unwrap();
+        testing::check_unspecified_resolution_follows_the_first_frame(&config(
+            PixelFormat::default(),
+            X264Config::default(),
+        ));
+    }
 
-        let first = encoder.encode(&frame(format, 0)).unwrap().unwrap();
+    #[test]
+    fn ledger_resolves_issued_timestamps_in_order() {
+        let mut ledger = TimestampLedger::default();
+        let first = ledger.issue(Timestamp::from_micros(10));
+        let second = ledger.issue(Timestamp::from_micros(20));
 
-        assert!(first.keyframe);
+        assert_eq!(ledger.resolve(first), Some(Timestamp::from_micros(10)));
+        assert_eq!(ledger.resolve(second), Some(Timestamp::from_micros(20)));
+        assert_eq!(ledger.resolve(second), None);
     }
 }

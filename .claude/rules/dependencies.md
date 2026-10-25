@@ -24,7 +24,7 @@ paths:
   | VAAPI encode/decode | `cros-libva` | `rusplay-encode/vaapi`, `rusplay-decode/vaapi` |
   | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
-  | x265 | `x265-sys` bindings | `rusplay-encode/x265` |
+  | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | `svt-av1-enc` or own bindings | `rusplay-encode/svt-av1` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or

@@ -44,6 +44,11 @@ paths:
 - x264 runs CFR with a frame-counter pts. Variable-frame-rate input makes x264 hold one frame
   back to compute its duration, which breaks the one-in-one-out rule. A ledger maps the counter
   back to the capture `Timestamp`.
+- x265 reaches the library through `x265_api_query(bit_depth, X265_BUILD)`, which selects the
+  8, 10 or 12-bit build at run time; a library without that depth reports `BitDepthUnsupported`
+  and a struct-size mismatch with the headers reports `LibraryIncompatible`. The capture
+  timestamp in microseconds is the picture pts. Frame threads are pinned to one so each picture
+  comes out of the call that submitted it. Only IDR slices count as `keyframe`.
 - Bindings are generated at build time from the system headers (see
   `.claude/rules/dependencies.md`). Each library handle lives in a safe wrapper with a `Drop`
   that closes it, and the only `unsafe` blocks are the FFI calls inside those wrappers.

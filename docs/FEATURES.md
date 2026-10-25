@@ -15,7 +15,6 @@
 # Video encode
 - [L, blocked by: scale-color-convert] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
-- [M] `encode-x265`: x265 backend with typed settings and `params` passthrough
 - [M] `encode-svt-av1`: SVT-AV1 backend with typed settings and `params` passthrough
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device
 
