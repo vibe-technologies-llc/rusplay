@@ -55,6 +55,7 @@ impl Config {
         self.video.validate()?;
         self.audio.validate()?;
         self.network.validate()?;
+        self.input.validate()?;
         self.scaling.validate()
     }
 }

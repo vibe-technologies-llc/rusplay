@@ -25,6 +25,7 @@ rusplay-scale.path = "crates/rusplay-scale"
 ashpd = { version = "0.13.13", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 claxon = "0.4.3"
+evdev = { version = "0.13.2", default-features = false }
 flacenc = { version = "0.5.1", default-features = false }
 lexopt = "0.3.2"
 opus-rs = { version = "0.1.40", default-features = false }

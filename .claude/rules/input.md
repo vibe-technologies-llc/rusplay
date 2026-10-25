@@ -68,3 +68,37 @@ pipeline.
 
 Live tests need a Wayland session with the portal and a person to confirm its dialog, so they are
 `#[ignore]`d.
+
+## Virtual gamepads (`gamepad` feature)
+
+- Gamepads are virtual devices on the host so games see a native controller. They go through
+  uinput with the pure-Rust `evdev` crate (`VirtualDevice`), not a portal: no portal exposes
+  gamepad injection.
+- Each connected slot is one uinput device imitating a wired Xbox 360 pad as the kernel `xpad`
+  driver presents it: name `Microsoft X-Box 360 pad`, USB bus, vendor `045e`, product `028e`,
+  version `0110`, so SDL, Steam and Proton apply their stock Xbox 360 mappings. Buttons are
+  `BTN_SOUTH`, `BTN_EAST`, `BTN_NORTH` (the Xbox X), `BTN_WEST` (the Xbox Y), `BTN_TL`, `BTN_TR`,
+  `BTN_SELECT`, `BTN_START`, `BTN_MODE`, `BTN_THUMBL`, `BTN_THUMBR`; axes are `ABS_X/Y/RX/RY`
+  (-32768..32767, fuzz 16, flat 128), `ABS_Z/RZ` triggers (0..255) and `ABS_HAT0X/Y` (-1..1).
+- `GamepadButton` and `GamepadAxis` carry fixed neutral ids, SDL's gamepad order, as associated
+  constants (`GamepadButton::SOUTH`, `GamepadAxis::LEFT_X`, ...). The client maps its source
+  (SDL, gilrs) onto them; unknown ids are `GamepadButtonUnknown` / `GamepadAxisUnknown`. Sticks
+  are -1.0..1.0 with positive Y down, triggers 0.0..1.0, and values are clamped. The d-pad is four
+  buttons that the mapper folds into the two hat axes, remembering which are held.
+- `xbox360::Xbox360Mapper` (event to evdev `Report`) and `GamepadPool` (slot bookkeeping over a
+  `GamepadFactory`) are pure and tested with fakes; only `uinput` touches the kernel.
+  `GamepadPool::handle` enforces the slot limit (`GamepadSlotOutOfRange`, limit
+  `input.max_gamepads`, default 4, valid 1..=16), creates the device on `Connected`, drops it on
+  `Disconnected` (the kernel removes the pad) and rejects button and axis events for a slot that
+  is not connected (`GamepadNotConnected`).
+- `SplitSink` routes `InputEvent::Gamepad` to the gamepad sink and everything else to the
+  desktop sink, so the host holds one `InputSink` made of `LibeiInjector` and `UinputGamepads`.
+- Permissions: creating devices needs write access to `/dev/uinput`, and the `uinput` kernel
+  module must be loaded (`modules-load.d` entry `uinput`). Do not run the host as root; grant the
+  desktop user access with a udev rule such as
+  `KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"`
+  (logged-in seat users), or a group (`GROUP="input", MODE="0660"`) the user belongs to. Without
+  it `Connected` fails with `UinputCreate` carrying the `PermissionDenied` source. The live tests
+  are `#[ignore]`d and need that access.
+- Rumble and force feedback are not implemented; see `input-gamepad-rumble` in
+  `docs/FEATURES.md`.

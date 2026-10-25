@@ -31,6 +31,8 @@ pub enum ConfigError {
     MtuOutOfRange(u16),
     #[error("antiringing strength {0} is outside 0.0..=1.0")]
     AntiringingOutOfRange(f32),
+    #[error("gamepad slot count {0} is outside 1..=16")]
+    GamepadSlotsOutOfRange(u8),
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
 }

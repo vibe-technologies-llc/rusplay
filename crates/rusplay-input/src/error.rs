@@ -1,4 +1,4 @@
-#[cfg(feature = "libei")]
+#[cfg(any(feature = "libei", feature = "gamepad"))]
 use std::io;
 
 use thiserror::Error;
@@ -39,4 +39,30 @@ pub enum InputError {
     #[cfg(feature = "libei")]
     #[error("gamepad events are not handled by the libei sink")]
     GamepadUnsupported,
+    #[cfg(feature = "gamepad")]
+    #[error("gamepad slot {0} has no connected device")]
+    GamepadNotConnected(u8),
+    #[cfg(feature = "gamepad")]
+    #[error("gamepad button {0} is not part of the virtual layout")]
+    GamepadButtonUnknown(u16),
+    #[cfg(feature = "gamepad")]
+    #[error("gamepad axis {0} is not part of the virtual layout")]
+    GamepadAxisUnknown(u8),
+    #[cfg(feature = "gamepad")]
+    #[error("the gamepad sink only handles gamepad events")]
+    NonGamepadEvent,
+    #[cfg(feature = "gamepad")]
+    #[error("creating the uinput device for gamepad slot {slot} failed")]
+    UinputCreate {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("writing to the uinput device of gamepad slot {slot} failed")]
+    UinputEmit {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
 }

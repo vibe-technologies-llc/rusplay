@@ -31,7 +31,7 @@
 - [S] `net-discovery`: LAN host discovery
 
 # Input
-- [M] `input-gamepad`: virtual gamepads on the host
+- [M, blocked by: net-control] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
