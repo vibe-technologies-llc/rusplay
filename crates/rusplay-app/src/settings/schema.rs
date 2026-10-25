@@ -613,6 +613,22 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Audio,
+        "Stream",
+        "audio.decode_queue_packets",
+        "Decode queue",
+        U16,
+    )
+    .unit("packets"),
+    field(
+        Section::Audio,
+        "Stream",
+        "audio.max_conceal_ms",
+        "Concealment limit",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Audio,
         "Opus",
         "audio.opus.bitrate_kbps",
         "Bitrate",
