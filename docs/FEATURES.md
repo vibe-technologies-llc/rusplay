@@ -18,8 +18,7 @@
 - [M] `net-remembered-peers`: persist a pairing secret so a paired client reconnects without a new PIN
 
 # Input
-- [M] `input-libei`: host injection through the RemoteDesktop portal and libei
-- [M] `input-gamepad`: virtual gamepads on the host
+- [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions

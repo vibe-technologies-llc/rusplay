@@ -5,8 +5,20 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+gamepad = ["dep:evdev"]
+libei = ["dep:ashpd", "dep:reis", "dep:rustix"]
+
 [dependencies]
+evdev = { workspace = true, optional = true }
+ashpd = { workspace = true, features = ["remote_desktop", "screencast", "tokio"], optional = true }
+reis = { workspace = true, optional = true }
+rusplay-config.workspace = true
+rustix = { workspace = true, features = ["event", "time"], optional = true }
 thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

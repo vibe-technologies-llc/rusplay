@@ -56,6 +56,7 @@ impl Config {
         self.audio.validate()?;
         self.network.validate()?;
         self.capture.validate()?;
+        self.input.validate()?;
         self.scaling.validate()
     }
 }
