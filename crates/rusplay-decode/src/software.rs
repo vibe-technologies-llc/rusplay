@@ -121,6 +121,16 @@ impl VideoDecoder for Rav1dDecoder {
     }
 }
 
+fn display_resolution(coded: Resolution, render: Option<Resolution>) -> Resolution {
+    match render {
+        Some(render) if render.width > 0 && render.height > 0 => Resolution::new(
+            render.width.min(coded.width),
+            render.height.min(coded.height),
+        ),
+        _ => coded,
+    }
+}
+
 enum SendOutcome {
     Accepted,
     NeedsDrain,
@@ -218,10 +228,19 @@ impl OwnedPicture {
     }
 
     fn resolution(&self) -> Resolution {
-        Resolution::new(
+        let coded = Resolution::new(
             u32::try_from(self.0.p.w).unwrap_or_default(),
             u32::try_from(self.0.p.h).unwrap_or_default(),
-        )
+        );
+        let render = self.0.frame_hdr.map(|header| {
+            let header = unsafe { header.as_ref() };
+            Resolution::new(
+                u32::try_from(header.render_width).unwrap_or_default(),
+                u32::try_from(header.render_height).unwrap_or_default(),
+            )
+        });
+
+        display_resolution(coded, render)
     }
 
     fn into_frame(self) -> Result<DecodedFrame, DecodeError> {
@@ -296,3 +315,6 @@ impl PlaneStorage for PictureStorage {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
