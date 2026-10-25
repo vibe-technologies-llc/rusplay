@@ -130,9 +130,45 @@ pub(crate) fn resample_polar(source: &Image, settings: &ScaleSettings) -> Image 
 
 pub(crate) type SamplePlanes = Vec<Vec<Vec<u32>>>;
 
+const PQ_M1: f64 = 2610.0 / 16384.0;
+const PQ_M2: f64 = 2523.0 / 4096.0 * 128.0;
+const PQ_C1: f64 = 3424.0 / 4096.0;
+const PQ_C2: f64 = 2413.0 / 4096.0 * 32.0;
+const PQ_C3: f64 = 2392.0 / 4096.0 * 32.0;
+const HLG_A: f64 = 0.178_832_77;
+const HLG_B: f64 = 1.0 - 4.0 * HLG_A;
+
+fn pq_oetf(display: f64) -> f64 {
+    let power = display.powf(PQ_M1);
+
+    ((PQ_C1 + PQ_C2 * power) / (1.0 + PQ_C3 * power)).powf(PQ_M2)
+}
+
+fn hlg_oetf(scene: f64) -> f64 {
+    if scene <= 1.0 / 12.0 {
+        (3.0 * scene).sqrt()
+    } else {
+        HLG_A * (12.0 * scene - HLG_B).ln() + (0.5 - HLG_A * (4.0 * HLG_A).ln())
+    }
+}
+
+fn hlg_scene_light(settings: &ConvertSettings, display: [f64; 3]) -> [f64; 3] {
+    let luminance = dot(settings.matrix.rows()[0], display);
+    if luminance <= 0.0 {
+        return [0.0; 3];
+    }
+
+    let gain = luminance.powf(settings.hlg_exponent());
+    display.map(|component| (component * gain).clamp(0.0, 1.0))
+}
+
 fn encode_texel(settings: &ConvertSettings, texel: [f32; 4]) -> [f64; 3] {
+    let linear = [0, 1, 2].map(|channel| f64::from(texel[channel]));
+    let display = linear.map(|value| (value * settings.hdr_scale()).clamp(0.0, 1.0));
+    let hlg_scene = hlg_scene_light(settings, display);
+
     std::array::from_fn(|channel| {
-        let linear = f64::from(texel[channel]).clamp(0.0, 1.0);
+        let linear = linear[channel].clamp(0.0, 1.0);
         match (settings.input, settings.transfer) {
             (InputLight::Linear, TransferFunction::Srgb) if linear > 0.003_130_8 => {
                 1.055 * linear.powf(1.0 / 2.4) - 0.055
@@ -142,7 +178,9 @@ fn encode_texel(settings: &ConvertSettings, texel: [f32; 4]) -> [f64; 3] {
                 1.099 * linear.powf(0.45) - 0.099
             }
             (InputLight::Linear, TransferFunction::Bt709) => 4.5 * linear,
-            _ => linear,
+            (InputLight::Linear, TransferFunction::Pq) => pq_oetf(display[channel]),
+            (InputLight::Linear, TransferFunction::Hlg) => hlg_oetf(hlg_scene[channel]),
+            (InputLight::Encoded, _) => linear,
         }
     })
 }

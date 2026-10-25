@@ -1,6 +1,6 @@
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, PixelFormat, Resolution, ScaleFilter,
-    TransferFunction,
+    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, HdrLevels, PixelFormat, Resolution,
+    ScaleFilter, TransferFunction,
 };
 
 use crate::{
@@ -22,6 +22,11 @@ const SUBSAMPLING_RATIO: f32 = 2.0;
 const TRANSFER_NONE: u32 = 0;
 const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
+const TRANSFER_PQ: u32 = 3;
+const TRANSFER_HLG: u32 = 4;
+const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
+const HLG_REFERENCE_GAMMA: f64 = 1.2;
+const HLG_GAMMA_PER_DECADE: f64 = 0.42;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum YuvMatrix {
@@ -108,6 +113,7 @@ pub struct ConvertSettings {
     pub matrix: YuvMatrix,
     pub range: ColorRange,
     pub transfer: TransferFunction,
+    pub hdr: HdrLevels,
     pub input: InputLight,
     pub chroma_filter: ScaleFilter,
     pub chroma_siting: ChromaSiting,
@@ -126,19 +132,42 @@ impl ConvertSettings {
             });
         }
 
-        self.transfer_code()?;
+        if !self.hdr.reference_white_in_range() {
+            return Err(ScaleError::ReferenceWhiteOutOfRange(
+                self.hdr.reference_white_nits,
+            ));
+        }
+        if !self.hdr.peak_in_range() {
+            return Err(ScaleError::PeakLuminanceOutOfRange(self.hdr.peak_nits));
+        }
+
         Ok(())
     }
 
-    fn transfer_code(&self) -> Result<u32, ScaleError> {
+    fn transfer_code(&self) -> u32 {
         match (self.input, self.transfer) {
-            (InputLight::Encoded, _) => Ok(TRANSFER_NONE),
-            (InputLight::Linear, TransferFunction::Srgb) => Ok(TRANSFER_SRGB),
-            (InputLight::Linear, TransferFunction::Bt709) => Ok(TRANSFER_BT709),
-            (InputLight::Linear, transfer @ (TransferFunction::Pq | TransferFunction::Hlg)) => {
-                Err(ScaleError::TransferUnsupported(transfer))
-            }
+            (InputLight::Encoded, _) => TRANSFER_NONE,
+            (InputLight::Linear, TransferFunction::Srgb) => TRANSFER_SRGB,
+            (InputLight::Linear, TransferFunction::Bt709) => TRANSFER_BT709,
+            (InputLight::Linear, TransferFunction::Pq) => TRANSFER_PQ,
+            (InputLight::Linear, TransferFunction::Hlg) => TRANSFER_HLG,
         }
+    }
+
+    pub(crate) fn hdr_scale(&self) -> f64 {
+        let white = f64::from(self.hdr.reference_white_nits);
+        match self.transfer {
+            TransferFunction::Hlg => white / f64::from(self.hdr.peak_nits),
+            _ => white / f64::from(HdrLevels::MAX_NITS),
+        }
+    }
+
+    pub(crate) fn hlg_exponent(&self) -> f64 {
+        let peak = f64::from(self.hdr.peak_nits);
+        let gamma =
+            HLG_REFERENCE_GAMMA + HLG_GAMMA_PER_DECADE * (peak / HLG_REFERENCE_PEAK_NITS).log10();
+
+        (1.0 - gamma) / gamma
     }
 
     pub(crate) fn polar_chroma(&self) -> bool {
@@ -735,7 +764,7 @@ fn params_bytes(
         height,
         chroma_width,
         chroma_height,
-        settings.transfer_code()?,
+        settings.transfer_code(),
         layout.bytes_per_sample,
         layout.sample_shift(),
         quantization.max_code,
@@ -747,6 +776,10 @@ fn params_bytes(
         u32::from(chroma.content == PlaneContent::CbCr),
         horizontal.taps_per_pixel,
         vertical.taps_per_pixel,
+        float(settings.hdr_scale()),
+        float(settings.hlg_exponent()),
+        0,
+        0,
     ];
 
     Ok(words.iter().flat_map(|word| word.to_ne_bytes()).collect())
@@ -775,6 +808,7 @@ mod tests {
             matrix: YuvMatrix::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
+            hdr: HdrLevels::default(),
             input: InputLight::Linear,
             chroma_filter: ScaleFilter::Hermite,
             chroma_siting: ChromaSiting::Left,
@@ -822,10 +856,14 @@ mod tests {
     fn assert_matches_reference(settings: ConvertSettings) {
         let image = Image::pattern(settings.resolution.width, settings.resolution.height, 21);
 
-        let Some(actual) = convert_on_gpu(&image, settings) else {
+        assert_image_matches_reference(&image, settings);
+    }
+
+    fn assert_image_matches_reference(image: &Image, settings: ConvertSettings) {
+        let Some(actual) = convert_on_gpu(image, settings) else {
             return;
         };
-        let difference = max_code_difference(&actual, &reference::convert(&image, &settings));
+        let difference = max_code_difference(&actual, &reference::convert(image, &settings));
 
         assert!(
             difference <= CODE_TOLERANCE,
@@ -1085,6 +1123,110 @@ mod tests {
     }
 
     #[test]
+    fn pq_and_hlg_match_reference() {
+        let bright = |width, height| {
+            Image::from_fn(width, height, |x, y| {
+                let base = Image::pattern(width, height, 5).texel(i64::from(x), i64::from(y));
+                [base[0] * 6.0, base[1] * 3.0, base[2] * 0.2, 1.0]
+            })
+        };
+
+        for (index, transfer) in [TransferFunction::Pq, TransferFunction::Hlg]
+            .into_iter()
+            .enumerate()
+        {
+            for (hdr, depth) in [
+                (HdrLevels::default(), BitDepth::Ten),
+                (
+                    HdrLevels {
+                        reference_white_nits: 100,
+                        peak_nits: 600,
+                    },
+                    BitDepth::Twelve,
+                ),
+                (
+                    HdrLevels {
+                        reference_white_nits: 400,
+                        peak_nits: 4000,
+                    },
+                    BitDepth::Ten,
+                ),
+            ] {
+                assert_image_matches_reference(
+                    &bright(45, 21),
+                    ConvertSettings {
+                        transfer,
+                        hdr,
+                        matrix: YuvMatrix::Bt2020,
+                        range: if index == 0 {
+                            ColorRange::Limited
+                        } else {
+                            ColorRange::Full
+                        },
+                        ..settings(
+                            (45, 21),
+                            ChromaSubsampling::Yuv420,
+                            depth,
+                            PlaneLayout::SemiPlanar,
+                        )
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hdr_curves_hit_textbook_codes() {
+        let grays = Image::from_fn(8, 2, |x, _| match x / 2 {
+            0 => [1.0; 4],
+            1 => [0.0, 0.0, 0.0, 1.0],
+            2 => [0.050_68, 0.050_68, 0.050_68, 1.0],
+            _ => [0.5; 4],
+        });
+        let base = ConvertSettings {
+            matrix: YuvMatrix::Bt2020,
+            ..settings(
+                (8, 2),
+                ChromaSubsampling::Yuv444,
+                BitDepth::Ten,
+                PlaneLayout::Planar,
+            )
+        };
+        let pq = |reference_white_nits| ConvertSettings {
+            transfer: TransferFunction::Pq,
+            hdr: HdrLevels {
+                reference_white_nits,
+                ..HdrLevels::default()
+            },
+            ..base
+        };
+        let hlg = ConvertSettings {
+            transfer: TransferFunction::Hlg,
+            hdr: HdrLevels {
+                reference_white_nits: 1000,
+                peak_nits: 1000,
+            },
+            ..base
+        };
+
+        let Some(pq_hundred) = convert_on_gpu(&grays, pq(100)) else {
+            return;
+        };
+        let pq_reference = convert_on_gpu(&grays, pq(203)).unwrap();
+        let pq_peak = convert_on_gpu(&grays, pq(10_000)).unwrap();
+        let hlg_planes = convert_on_gpu(&grays, hlg).unwrap();
+
+        assert_eq!(pq_hundred[0][0][0], 509);
+        assert_eq!(pq_reference[0][0][0], 573);
+        assert_eq!(pq_peak[0][0][0], 940);
+        assert_eq!(pq_peak[0][0][2], 64);
+        assert_eq!(pq_peak[1][0][0], 512);
+        assert_eq!(hlg_planes[0][0][0], 940);
+        assert_eq!(hlg_planes[0][0][2], 64);
+        assert_eq!(hlg_planes[0][0][4], 502);
+    }
+
+    #[test]
     fn primaries_convert_to_textbook_codes() {
         let image = Image::from_fn(8, 2, |x, _| match x / 2 {
             0 => [1.0, 1.0, 1.0, 1.0],
@@ -1224,11 +1366,25 @@ mod tests {
         );
         assert_eq!(
             ConvertSettings {
-                transfer: TransferFunction::Pq,
+                hdr: HdrLevels {
+                    reference_white_nits: 0,
+                    ..HdrLevels::default()
+                },
                 ..base
             }
             .validate(),
-            Err(ScaleError::TransferUnsupported(TransferFunction::Pq))
+            Err(ScaleError::ReferenceWhiteOutOfRange(0))
+        );
+        assert_eq!(
+            ConvertSettings {
+                hdr: HdrLevels {
+                    peak_nits: 10_001,
+                    ..HdrLevels::default()
+                },
+                ..base
+            }
+            .validate(),
+            Err(ScaleError::PeakLuminanceOutOfRange(10_001))
         );
         assert_eq!(
             ConvertSettings {

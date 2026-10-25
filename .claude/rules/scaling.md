@@ -64,8 +64,17 @@ paths:
   float format can be the input; destinations are `rgba16float`.
 - RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
   before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's
-  linear-light output) the `TransferFunction` OETF is applied first (sRGB or BT.709; PQ and HLG
-  return `TransferUnsupported`), with `InputLight::Encoded` the values are used as they are.
+  linear-light output) the `TransferFunction` OETF is applied first, with `InputLight::Encoded`
+  the values are used as they are. sRGB and BT.709 treat linear 1.0 as full scale. PQ
+  (SMPTE ST 2084) and HLG (ARIB STD-B67 / BT.2100) treat the input as display light in which
+  1.0 is `HdrLevels::reference_white_nits` (default 203, BT.2408), from
+  `video.color.hdr.reference_white_nits`, and values above full scale are meaningful. PQ
+  scales by white / 10000 nits and clamps to 0..=1. HLG scales by white / `peak_nits`
+  (`video.color.hdr.peak_nits`, default 1000), applies the BT.2100 inverse OOTF with
+  `gamma = 1.2 + 0.42 * log10(peak / 1000)` using the matrix's luma row as the luminance, and
+  then the HLG OETF. Both levels are validated into `1..=10000` (`ReferenceWhiteOutOfRange`,
+  `PeakLuminanceOutOfRange`) and sit in the params uniform's `hdr` vector. The other
+  transfers ignore them.
   The matrix is `YuvMatrix` (BT.709 or BT.2020 non-constant luminance, `for_primaries` maps
   `ColorPrimaries`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
   `2^(n-1) + (2^n - 1) * C`, limited are `219/224 * 2^(n-8)` around `16/128 * 2^(n-8)`.

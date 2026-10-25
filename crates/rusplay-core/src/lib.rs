@@ -10,5 +10,5 @@ pub use scale::ScaleFilter;
 pub use time::Timestamp;
 pub use video::{
     BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, FrameRate,
-    PixelFormat, Resolution, TransferFunction,
+    HdrLevels, PixelFormat, Resolution, TransferFunction,
 };

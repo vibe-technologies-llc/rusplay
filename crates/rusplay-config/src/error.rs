@@ -15,6 +15,10 @@ pub enum ConfigError {
     InvalidFrameRate { numerator: u32, denominator: u32 },
     #[error("video bitrate must be greater than zero")]
     ZeroVideoBitrate,
+    #[error("hdr reference white {0} nits is outside 1..=10000")]
+    ReferenceWhiteOutOfRange(u32),
+    #[error("hdr peak luminance {0} nits is outside 1..=10000")]
+    PeakLuminanceOutOfRange(u32),
     #[error("svt-av1 preset {0} is outside 0..=13")]
     SvtAv1PresetOutOfRange(u8),
     #[error("constant quality qp {0} is outside 0..=51")]
@@ -78,6 +82,8 @@ impl ConfigError {
         match self {
             Self::InvalidFrameRate { .. } => Some("video.frame_rate"),
             Self::ZeroVideoBitrate => Some("video.bitrate_kbps"),
+            Self::ReferenceWhiteOutOfRange(_) => Some("video.color.hdr.reference_white_nits"),
+            Self::PeakLuminanceOutOfRange(_) => Some("video.color.hdr.peak_nits"),
             Self::SvtAv1PresetOutOfRange(_) => Some("video.encoder.preset"),
             Self::QpOutOfRange(_) => Some("video.encoder.rate_control.qp"),
             Self::ZeroAudioBitrate => Some("audio.opus.bitrate_kbps"),

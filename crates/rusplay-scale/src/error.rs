@@ -1,4 +1,4 @@
-use rusplay_core::{ChromaSubsampling, Resolution, ScaleFilter, TransferFunction};
+use rusplay_core::{ChromaSubsampling, Resolution, ScaleFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -20,8 +20,10 @@ pub enum ScaleError {
         filter: ScaleFilter,
         chroma: ChromaSubsampling,
     },
-    #[error("encoding linear light with the {0:?} transfer function is not supported")]
-    TransferUnsupported(TransferFunction),
+    #[error("hdr reference white {0} nits is outside 1..=10000")]
+    ReferenceWhiteOutOfRange(u32),
+    #[error("hdr peak luminance {0} nits is outside 1..=10000")]
+    PeakLuminanceOutOfRange(u32),
     #[error("row alignment {0} is not a power of two of at least 4 bytes")]
     RowAlignmentInvalid(u32),
     #[error("a frame of {bytes} bytes exceeds the addressable 16 GiB")]

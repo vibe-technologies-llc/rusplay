@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorRange, PixelFormat, Resolution, ScaleFilter, TransferFunction,
+    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, PixelFormat, Resolution, ScaleFilter,
+    TransferFunction,
 };
 
 use crate::{
@@ -131,6 +132,7 @@ fn scaling_frame_times() {
             matrix: YuvMatrix::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
+            hdr: HdrLevels::default(),
             input: InputLight::Linear,
             chroma_filter,
             chroma_siting: ChromaSiting::Left,

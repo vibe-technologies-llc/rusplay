@@ -51,6 +51,16 @@ impl VideoConfig {
             return Err(ConfigError::ZeroVideoBitrate);
         }
 
+        let hdr = self.color.hdr;
+        if !hdr.reference_white_in_range() {
+            return Err(ConfigError::ReferenceWhiteOutOfRange(
+                hdr.reference_white_nits,
+            ));
+        }
+        if !hdr.peak_in_range() {
+            return Err(ConfigError::PeakLuminanceOutOfRange(hdr.peak_nits));
+        }
+
         self.encoder.validate()?;
         self.decoder.validate()
     }

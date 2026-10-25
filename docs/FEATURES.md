@@ -1,7 +1,6 @@
 # Scaling
 - [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
 - [S] `scale-polar-chroma-422`: polar (EWA) chroma filters for 4:2:2 in `ColorConverter`, which rejects them because a 2D kernel would blur the unsubsampled vertical axis
-- [M] `scale-hdr-transfer`: PQ and HLG encoding in `ColorConverter` for linear-light HDR input
 
 # Video encode
 - [L] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
