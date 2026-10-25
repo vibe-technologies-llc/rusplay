@@ -15,7 +15,6 @@
 # Sessions
 - [M] `session-stream-format`: carry codec, resolution, pixel format, `ColorSpace` and HDR metadata in the handshake; the client decodes with its own `video.codec` and labels frames with its own `video.color` today
 - [M, blocked by: scale-dmabuf-import] `client-dmabuf-present`: present VAAPI DMA-BUF frames (`NV12`/`P010`); the present stage returns `DmaBufPresentUnsupported` today, so only the software decoder streams
-
 - [M] `host-audio`: capture with `AudioCapture`, encode on a codec thread and send `StreamKind::Audio` from the host session
 - [M] `host-input`: receive input events on the control path and inject them through one combined RemoteDesktop + ScreenCast portal session (`LibeiInjector`, `UinputGamepads`)
 - [S] `host-cursor`: send the capture's `cursor_feed` as latest-wins `CursorMessage`s on `StreamKind::Cursor`
