@@ -3,11 +3,15 @@ mod capture;
 mod error;
 mod input;
 mod network;
+mod paths;
 mod peers;
 mod scaling;
 mod video;
 
-use std::{fs, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +21,7 @@ pub use crate::{
     error::ConfigError,
     input::{InputConfig, PointerMode},
     network::NetworkConfig,
+    paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
@@ -54,6 +59,46 @@ impl Config {
         Ok(config)
     }
 
+    pub fn load_or_default(path: &Path) -> Result<Self, ConfigError> {
+        match Self::load(path) {
+            Err(ConfigError::Read { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                Ok(Self::default())
+            }
+            other => other,
+        }
+    }
+
+    pub fn to_toml_string(&self) -> Result<String, ConfigError> {
+        toml::to_string_pretty(self).map_err(|source| ConfigError::Serialize { source })
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
+        self.validate()?;
+        let text = self.to_toml_string()?;
+
+        if let Some(directory) = path
+            .parent()
+            .filter(|directory| !directory.as_os_str().is_empty())
+        {
+            fs::create_dir_all(directory).map_err(|source| ConfigError::CreateDirectory {
+                path: directory.to_owned(),
+                source,
+            })?;
+        }
+
+        let staging = staging_path(path);
+        let write_error = |source| ConfigError::Write {
+            path: path.to_owned(),
+            source,
+        };
+
+        fs::write(&staging, text).map_err(write_error)?;
+        fs::rename(&staging, path).map_err(|source| {
+            let _ = fs::remove_file(&staging);
+            write_error(source)
+        })
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.video.validate()?;
         self.audio.validate()?;
@@ -65,9 +110,93 @@ impl Config {
     }
 }
 
+fn staging_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(".tmp");
+
+    path.with_file_name(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("rusplay-config-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+
+        directory
+    }
+
+    #[test]
+    fn saved_config_loads_back_identical() {
+        let directory = scratch("round-trip");
+        let path = directory.join("nested").join("client.toml");
+
+        let mut config = Config::default();
+        config.video.bitrate_kbps = 42_000;
+        config.scaling.upscale.antiringing = 0.35;
+        config.video.encoder = VideoEncoderConfig::X264(X264Config {
+            tune: vec![X264Tune::Film, X264Tune::Grain],
+            threads: std::num::NonZeroU32::new(4),
+            params: EncoderParams::from([("aq-mode".to_owned(), "3".to_owned())]),
+            ..X264Config::default()
+        });
+
+        config.save(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        fs::remove_dir_all(&directory).unwrap();
+
+        assert_eq!(loaded, config);
+    }
+
+    #[test]
+    fn invalid_config_is_not_written() {
+        let directory = scratch("invalid");
+        let path = directory.join("client.toml");
+
+        let mut config = Config::default();
+        config.network.mtu = 100;
+
+        let result = config.save(&path);
+
+        assert!(matches!(result, Err(ConfigError::MtuOutOfRange(100))));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn missing_file_loads_defaults() {
+        let path = scratch("missing").join("client.toml");
+
+        assert_eq!(Config::load_or_default(&path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn malformed_file_is_still_an_error() {
+        let directory = scratch("malformed");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("client.toml");
+        fs::write(&path, "video = [").unwrap();
+
+        let result = Config::load_or_default(&path);
+        fs::remove_dir_all(&directory).unwrap();
+
+        assert!(matches!(result, Err(ConfigError::Parse { .. })));
+    }
+
+    #[test]
+    fn every_validation_error_names_a_field() {
+        let errors = [
+            ConfigError::ZeroVideoBitrate,
+            ConfigError::MtuOutOfRange(1),
+            ConfigError::EmptyRestoreTokenFile,
+        ];
+
+        for error in errors {
+            assert!(error.field().is_some());
+        }
+    }
 
     #[test]
     fn default_config_is_valid() {

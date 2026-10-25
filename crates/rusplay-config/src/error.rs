@@ -61,4 +61,50 @@ pub enum ConfigError {
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]
     EmptyRestoreTokenFile,
+    #[error("neither XDG_CONFIG_HOME nor HOME names an absolute directory for the config file")]
+    NoConfigHome,
+    #[error("failed to serialize the configuration")]
+    Serialize { source: toml::ser::Error },
+    #[error("failed to create config directory {path}")]
+    CreateDirectory { path: PathBuf, source: io::Error },
+    #[error("failed to write config file {path}")]
+    Write { path: PathBuf, source: io::Error },
+}
+
+impl ConfigError {
+    pub const fn field(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidFrameRate { .. } => Some("video.frame_rate"),
+            Self::ZeroVideoBitrate => Some("video.bitrate_kbps"),
+            Self::SvtAv1PresetOutOfRange(_) => Some("video.encoder.preset"),
+            Self::QpOutOfRange(_) => Some("video.encoder.rate_control.qp"),
+            Self::ZeroAudioBitrate => Some("audio.opus.bitrate_kbps"),
+            Self::FlacCompressionOutOfRange(_) => Some("audio.flac.compression_level"),
+            Self::JitterBufferOutOfRange(_) => Some("audio.jitter_buffer_ms"),
+            Self::FlacBlockSizeOutOfRange(_) => Some("audio.flac.block_size"),
+            Self::MtuOutOfRange(_) => Some("network.mtu"),
+            Self::AntiringingOutOfRange(_) => Some("scaling.upscale.antiringing"),
+            Self::FecOverheadOutOfRange(_) => Some("network.fec_overhead_percent"),
+            Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
+            Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
+            Self::ZeroControlRetransmit => Some("network.control_retransmit_ms"),
+            Self::ZeroDiscoveryPort => Some("network.discovery_port"),
+            Self::DiscoveryGroupNotMulticast(_) => Some("network.discovery_group"),
+            Self::PinDigitsOutOfRange(_) => Some("network.pairing_pin_digits"),
+            Self::ZeroPairingAttempts => Some("network.pairing_max_attempts"),
+            Self::ZeroPairingTimeout => Some("network.pairing_timeout_ms"),
+            Self::ZeroReconnectTimeout => Some("network.reconnect_timeout_ms"),
+            Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
+            Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),
+            Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),
+            Self::EmptyHostPeersFile => Some("peers.host_file"),
+            Self::EmptyClientPeersFile => Some("peers.client_file"),
+            Self::Read { .. }
+            | Self::Parse { .. }
+            | Self::NoConfigHome
+            | Self::Serialize { .. }
+            | Self::CreateDirectory { .. }
+            | Self::Write { .. } => None,
+        }
+    }
 }

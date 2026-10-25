@@ -11,7 +11,11 @@ libei = ["dep:ashpd", "dep:reis", "dep:rustix"]
 
 [dependencies]
 evdev = { workspace = true, optional = true }
-ashpd = { workspace = true, features = ["remote_desktop", "screencast", "tokio"], optional = true }
+ashpd = {
+    workspace = true,
+    features = ["async-io", "remote_desktop", "screencast"],
+    optional = true
+}
 reis = { workspace = true, optional = true }
 rusplay-config.workspace = true
 rustix = { workspace = true, features = ["event", "time"], optional = true }

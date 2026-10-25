@@ -96,6 +96,11 @@ pub enum RateControl {
 }
 
 impl RateControl {
+    pub const DEFAULT_VBR: Self = Self::Vbr {
+        max_bitrate_kbps: 120_000,
+    };
+    pub const DEFAULT_CONSTANT_QUALITY: Self = Self::ConstantQuality { qp: 23 };
+
     fn validate(self) -> Result<(), ConfigError> {
         match self {
             Self::ConstantQuality { qp } if qp > MAX_QP => Err(ConfigError::QpOutOfRange(qp)),

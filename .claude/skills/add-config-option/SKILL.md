@@ -11,8 +11,10 @@ description: Add a user-facing tunable to rusplay-config with its default, valid
 3. If serde cannot express its valid range, add a `ConfigError` variant carrying the bad value
    and check it in the section's `validate`.
 4. Re-export any new public type from `crates/rusplay-config/src/lib.rs`.
-5. Add a test when parsing or validation is non-trivial. `empty_document_yields_defaults` must
+5. Add a row for it to `FIELDS` in `crates/rusplay-app/src/settings/schema.rs`, and a
+   `ConfigError::field` arm for any new error variant. The app's tests fail until both exist.
+6. Add a test when parsing or validation is non-trivial. `empty_document_yields_defaults` must
    keep passing.
-6. Wire the option to the code that reads it, and mention it in the subsystem's rules file if
+7. Wire the option to the code that reads it, and mention it in the subsystem's rules file if
    it changes the design.
-7. Run the `check` skill.
+8. Run the `check` skill.
