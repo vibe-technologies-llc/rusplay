@@ -35,6 +35,10 @@ pub enum CaptureError {
     FormatPropertyMissing { key: u32 },
     #[error("spa video format {spa_format} has no drm fourcc mapping")]
     UnsupportedVideoFormat { spa_format: u32 },
+    #[error("spa transfer function {spa_transfer} has no matching transfer function")]
+    TransferUnsupported { spa_transfer: u32 },
+    #[error("spa colour primaries {spa_primaries} have no matching primaries")]
+    PrimariesUnsupported { spa_primaries: u32 },
     #[error("a frame arrived before the format was negotiated")]
     FormatNotNegotiated,
     #[error("buffer data of type {data_type} is not supported")]

@@ -1,3 +1,4 @@
+mod color;
 mod convert;
 mod cursor_meta;
 mod format;
@@ -29,10 +30,11 @@ use pipewire::{
     stream::{Stream, StreamFlags, StreamRc, StreamState},
 };
 use rusplay_config::{CaptureConfig, CursorMode, VideoConfig};
-use rusplay_core::{BitDepth, FrameRate, Resolution, Timestamp};
+use rusplay_core::{BitDepth, FrameRate, HdrLevels, Resolution, Timestamp};
 
 pub use self::format::default_formats;
 use self::{
+    color::describe_color,
     convert::{DmaBufPlane, ShmPlane, dmabuf_frame, shm_frame},
     cursor_meta::{cursor_meta_param, parse_cursor_meta},
     format::{
@@ -57,6 +59,7 @@ pub struct StreamOptions {
     pub prefer_dmabuf: bool,
     pub modifiers: Vec<FormatModifiers>,
     pub cursor_metadata: bool,
+    pub hdr: HdrLevels,
     pub size_hint: Option<Resolution>,
     pub frame_rate: FrameRate,
 }
@@ -75,6 +78,7 @@ impl StreamOptions {
             prefer_dmabuf: capture.prefer_dmabuf,
             modifiers,
             cursor_metadata: capture.cursor == CursorMode::Metadata,
+            hdr: video.color.hdr,
             size_hint: video.resolution,
             frame_rate: video.frame_rate,
         }
@@ -326,7 +330,9 @@ impl Worker {
         let parsed = parse_format(param.as_bytes())?;
         let table = self.options.dmabuf_table().unwrap_or_default();
 
-        let params = match decide(&parsed, table) {
+        let color = describe_color(&parsed.colorimetry, self.options.hdr)?;
+
+        let params = match decide(&parsed, table, color) {
             FormatDecision::Accept(format) => {
                 self.format = Some(format);
                 let mut params = vec![buffers_param(format.memory())?, header_meta_param()?];

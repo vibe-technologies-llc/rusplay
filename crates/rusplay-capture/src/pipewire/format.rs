@@ -13,11 +13,12 @@ use pipewire::spa::{
     sys,
     utils::{Choice, ChoiceEnum, ChoiceFlags, Fraction, Id, Rectangle, SpaTypes},
 };
-use rusplay_core::{FrameRate, Resolution};
+use rusplay_core::{ColorSpace, FrameRate, Resolution};
 
 use crate::{
     CaptureError, DrmFourcc,
     modifier::{FormatModifiers, choose_modifier, modifiers_for},
+    pipewire::color::SpaColorimetry,
 };
 
 const FORMAT_TABLE: [(VideoFormat, DrmFourcc); 16] = [
@@ -107,6 +108,7 @@ pub(crate) struct NegotiatedFormat {
     pub fourcc: DrmFourcc,
     pub size: Resolution,
     pub modifier: Option<u64>,
+    pub color: ColorSpace,
 }
 
 impl NegotiatedFormat {
@@ -130,6 +132,7 @@ pub(crate) struct ParsedFormat {
     pub fourcc: DrmFourcc,
     pub size: Resolution,
     pub modifiers: ModifierOffer,
+    pub colorimetry: SpaColorimetry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,12 +142,17 @@ pub(crate) enum FormatDecision {
     FallBackToShm,
 }
 
-pub(crate) fn decide(parsed: &ParsedFormat, table: &[FormatModifiers]) -> FormatDecision {
+pub(crate) fn decide(
+    parsed: &ParsedFormat,
+    table: &[FormatModifiers],
+    color: ColorSpace,
+) -> FormatDecision {
     let accept = |modifier| {
         FormatDecision::Accept(NegotiatedFormat {
             fourcc: parsed.fourcc,
             size: parsed.size,
             modifier,
+            color,
         })
     };
 
@@ -435,6 +443,21 @@ pub(crate) fn parse_format(bytes: &[u8]) -> Result<ParsedFormat, CaptureError> {
         fourcc,
         size: Resolution::new(size.width, size.height),
         modifiers,
+        colorimetry: parse_colorimetry(&object)?,
+    })
+}
+
+fn parse_colorimetry(object: &Object) -> Result<SpaColorimetry, CaptureError> {
+    let id = |key: FormatProperties| match property(object, key.as_raw()) {
+        Ok(property) => fixed_id(property).ok_or(CaptureError::FormatPodMalformed),
+        Err(_) => Ok(0),
+    };
+
+    Ok(SpaColorimetry {
+        range: id(FormatProperties::VideoColorRange)?,
+        matrix: id(FormatProperties::VideoColorMatrix)?,
+        transfer: id(FormatProperties::VideoTransferFunction)?,
+        primaries: id(FormatProperties::VideoColorPrimaries)?,
     })
 }
 
@@ -493,8 +516,13 @@ fn fixed_rectangle(property: &Property) -> Option<Rectangle> {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_core::{ColorPrimaries, ColorRange, HdrLevels, TransferFunction};
+
     use super::*;
-    use crate::modifier::{DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR};
+    use crate::{
+        modifier::{DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR},
+        pipewire::color::describe_color,
+    };
 
     const XR24: DrmFourcc = DrmFourcc::from_code(*b"XR24");
     const AMD_TILED: u64 = 0x0200_0000_0000_0001;
@@ -522,6 +550,24 @@ mod tests {
             properties,
         })
         .unwrap()
+    }
+
+    fn with_colorimetry(bytes: &[u8], colorimetry: SpaColorimetry) -> Vec<u8> {
+        let mut object = parse_object(bytes).unwrap();
+        for (key, id) in [
+            (FormatProperties::VideoColorRange, colorimetry.range),
+            (FormatProperties::VideoColorMatrix, colorimetry.matrix),
+            (
+                FormatProperties::VideoTransferFunction,
+                colorimetry.transfer,
+            ),
+            (FormatProperties::VideoColorPrimaries, colorimetry.primaries),
+        ] {
+            object
+                .properties
+                .push(Property::new(key.as_raw(), Value::Id(Id(id))));
+        }
+        serialize(object).unwrap()
     }
 
     fn with_modifier(bytes: &[u8], modifier: Property) -> Vec<u8> {
@@ -608,6 +654,52 @@ mod tests {
         assert_eq!(format.fourcc, DrmFourcc::from_code(*b"XR24"));
         assert_eq!(format.size, Resolution::new(1920, 1080));
         assert_eq!(format.modifiers, ModifierOffer::Absent);
+    }
+
+    #[test]
+    fn a_format_without_colour_properties_has_unknown_colorimetry() {
+        let bytes = fixed_format(VideoFormat::BGRx, 64, 64);
+
+        let format = parse_format(&bytes).unwrap();
+
+        assert_eq!(format.colorimetry, SpaColorimetry::default());
+    }
+
+    #[test]
+    fn a_ten_bit_hdr_format_reports_its_colorimetry() {
+        let bytes = with_colorimetry(
+            &fixed_format(VideoFormat::xBGR_210LE, 3840, 2160),
+            SpaColorimetry {
+                range: sys::SPA_VIDEO_COLOR_RANGE_0_255,
+                matrix: sys::SPA_VIDEO_COLOR_MATRIX_RGB,
+                transfer: sys::SPA_VIDEO_TRANSFER_SMPTE2084,
+                primaries: sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020,
+            },
+        );
+
+        let format = parse_format(&bytes).unwrap();
+        let color = describe_color(&format.colorimetry, HdrLevels::default()).unwrap();
+
+        assert_eq!(format.fourcc, DrmFourcc::from_code(*b"XB30"));
+        assert_eq!(color.primaries, ColorPrimaries::Bt2020);
+        assert_eq!(color.transfer, TransferFunction::Pq);
+        assert_eq!(color.range, ColorRange::Full);
+    }
+
+    #[test]
+    fn a_malformed_colour_property_is_rejected() {
+        let bytes = with_modifier(
+            &fixed_format(VideoFormat::BGRx, 64, 64),
+            Property::new(
+                FormatProperties::VideoTransferFunction.as_raw(),
+                Value::Int(1),
+            ),
+        );
+
+        assert!(matches!(
+            parse_format(&bytes),
+            Err(CaptureError::FormatPodMalformed)
+        ));
     }
 
     #[test]
@@ -735,7 +827,7 @@ mod tests {
             ModifierOffer::Choice(vec![DRM_FORMAT_MOD_LINEAR, AMD_TILED])
         );
         assert_eq!(
-            decide(&parsed, &table()),
+            decide(&parsed, &table(), ColorSpace::default()),
             FormatDecision::Fixate {
                 fourcc: XR24,
                 modifier: AMD_TILED
@@ -749,9 +841,13 @@ mod tests {
             fourcc: XR24,
             size: Resolution::new(1920, 1080),
             modifiers: ModifierOffer::Choice(vec![DRM_FORMAT_MOD_INVALID]),
+            colorimetry: SpaColorimetry::default(),
         };
 
-        assert_eq!(decide(&parsed, &table()), FormatDecision::FallBackToShm);
+        assert_eq!(
+            decide(&parsed, &table(), ColorSpace::default()),
+            FormatDecision::FallBackToShm
+        );
     }
 
     #[test]
@@ -765,7 +861,7 @@ mod tests {
         );
 
         let parsed = parse_format(&bytes).unwrap();
-        let decision = decide(&parsed, &table());
+        let decision = decide(&parsed, &table(), ColorSpace::default());
 
         let FormatDecision::Accept(format) = decision else {
             panic!("expected the format to be accepted, got {decision:?}");
@@ -778,7 +874,7 @@ mod tests {
     fn missing_modifier_is_accepted_as_shared_memory() {
         let parsed = parse_format(&fixed_format(VideoFormat::BGRx, 64, 64)).unwrap();
 
-        let decision = decide(&parsed, &table());
+        let decision = decide(&parsed, &table(), ColorSpace::default());
 
         let FormatDecision::Accept(format) = decision else {
             panic!("expected the format to be accepted, got {decision:?}");

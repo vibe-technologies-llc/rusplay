@@ -68,6 +68,10 @@ paths:
   source-resolution linear texture, and updates `FrameColor` accordingly, without changing the
   public types.
 - DMA-BUF frames from VAAPI fail with `DmaBufPresentUnsupported` until `client-dmabuf-present`.
+- The display's colour target comes from the `display` module (`query_target`,
+  `resolve_target`), documented in `color.md`; nothing in the session calls it yet
+  (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
+  compositor.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange, the 8-frame AV1 fixture from

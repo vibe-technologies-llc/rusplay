@@ -25,8 +25,9 @@ clips per channel.
 ## Ownership
 
 - **The source is described, never assumed.** Capture reports the surface's colour description
-  (primaries, transfer, and HDR metadata when present) from PipeWire/portal metadata. sRGB is
-  only the fallback for a surface that carries no description.
+  (range, matrix, primaries and transfer from the negotiated PipeWire format, with the
+  configured `HdrLevels`) on every `Frame::color`. sRGB is only the fallback for a surface that
+  carries no description; see `capture.md` for the mapping.
 - **The host preserves the source gamut and transfer.** It does not gamut map or tone map toward
   any particular display, because it doesn't know the display. BT.2020 PQ 10-bit stays BT.2020
   PQ 10-bit on the wire. The one exception is a stream configured to a smaller space than the
@@ -41,6 +42,7 @@ clips per channel.
   from Wayland `wp_color_management_v1`: primaries, transfer, min/max/reference luminance, and
   the target colour volume. Config can override every field for displays that report nothing or
   report wrongly. With neither, the target is sRGB/BT.709 SDR at 203 cd/m² reference white.
+  `rusplay_client::display` does the query and the resolution, below.
 
 ## Model (`rusplay-core`)
 
@@ -48,7 +50,8 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
 
 - `ColorPrimaries` is a closed enum: `Bt709` (sRGB), `DisplayP3` (D65), `DciP3` (DCI white),
   `Bt2020` (BT.2100), `Bt601_525` (SMPTE 170M), `Bt601_625` (BT.470 B/G), and
-  `Custom(Chromaticities)` for displays that report their own. Serde names are kebab-case
+  `Custom(Chromaticities)` for displays that report their own and for the sets with no name
+  here (`Chromaticities::ADOBE_RGB`, `BT470M`, `GENERIC_FILM`, `EBU3213`). Serde names are kebab-case
   (`display-p3`, `bt601-525`); custom primaries are a table
   `primaries.custom = { red = [x, y], green, blue, white }`.
 - A `Chromaticity` stores CIE x and y as `u16` fixed point in the H.273 / ST 2086 step of
@@ -193,9 +196,38 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   (99.995), `smoothing_frames` (20) and `scene_threshold_db` (3.0);
   `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8); and the display
   overrides `color.target.primaries`, `transfer`, `reference_white_nits`, `peak_nits` and
-  `black_nits`, all unset by default. Resolving them against the Wayland description belongs to
-  `client-display-color`, and feeding the result into `ColorMapSettings` to
-  `client-color-pipeline`.
+  `black_nits`, all unset by default. Resolving them is `rusplay_client::display` (next
+  section); feeding the result into `ColorMapSettings` belongs to `client-color-pipeline`.
+
+## Display target (`rusplay-client::display`)
+
+- `query_outputs` opens its own pure-Rust `wayland-client` connection (`wayland-protocols` with
+  `client` and `staging`), binds `wp_color_manager_v1` (versions 1 to 3) and every `wl_output`
+  (name from version 4), asks each output for its image description and its information, and
+  returns one `OutputDisplay { name, image }` per output, where `image` is a per-output
+  `Result<DisplayImage, ClientError>` (`ImageDescriptionFailed`, `ImageInformationIncomplete`).
+  Two roundtrips are enough because the compositor answers `get_image_description` and
+  `get_information` immediately. A compositor without the protocol gives
+  `ColorManagementUnsupported`; the caller then resolves `DisplayImage::default()` against the
+  overrides to get the sRGB fallback. `query_display(name)` picks an output by `wl_output` name
+  (the first when `None`) and `query_target(name, overrides)` also resolves. Which output the
+  window is on is the caller's to say; the module has no window.
+- `DisplayImage` is the pure, protocol-free answer: `primaries` (primary colour volume),
+  `target_primaries` (the displayable gamut), `transfer`, `luminances` (min, max, reference
+  white) and `target_luminance` (min, max). Wire values are converted by pure functions
+  (`primaries_from_chromaticity`, 1e-6 units, matching a named set exactly or becoming
+  `Custom`; `primaries_from_named`; `transfer_from_named`, with `compound_power_2_4`, `srgb` and
+  `ext_srgb` all `Srgb`; `transfer_from_power`, only exponents 2.1 to 2.3 as gamma 2.2;
+  luminance conversions). Anything the model cannot hold (gamma 2.8, log, ST 240/428, XYZ
+  primaries, luminances outside 1 to 10000 cd/m², degenerate chromaticities) is left unreported
+  rather than approximated.
+- `resolve_target(&DisplayImage, &DisplayTargetConfig) -> Result<ColorVolume, ClientError>`
+  is pure. Per field the override wins, then the report, then the default. Gamut: override,
+  `target_primaries`, `primaries`, BT.709. Transfer: override, reported, sRGB. Reference white:
+  override, reported, 203. Peak: override, `target_luminance` max, `luminances` max, then 1000
+  for an HDR transfer or the reference white for an SDR one. Black: override, `target_luminance`
+  min, `luminances` min, 0. A black level at or above the peak is
+  `TargetBlackNotBelowPeak`, since the overrides are validated only against each other.
 
 ## Implementation
 

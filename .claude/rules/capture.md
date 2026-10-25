@@ -30,6 +30,23 @@ paths:
   byte order and DRM in little-endian word order, so SPA `BGRx` is DRM `XR24`. Formats are
   offered in `StreamOptions::formats` order; 10-bit (`XR30` family) goes first when
   `video.pixel_format.depth` is above 8.
+- The surface's colour description is read from the negotiated `Format` pod's
+  `SPA_FORMAT_VIDEO_colorRange`, `colorMatrix`, `transferFunction` and `colorPrimaries` ids
+  (`parse_format` into `SpaColorimetry`, 0 meaning unknown). `describe_color` in
+  `pipewire/color.rs` is the pure function from `SpaColorimetry` and the configured `HdrLevels`
+  (`StreamOptions::hdr`, from `video.color.hdr`) to the `ColorSpace` every `Frame` carries
+  (`Frame::color`, set from the negotiated format, so a renegotiation changes it from the next
+  frame). Per field: unknown transfer is sRGB, unknown primaries are BT.709, or BT.2020 when the
+  transfer is PQ or HLG; SPA BT.709/BT.601/SMPTE 240M/BT.2020 transfers are the BT.709 curve,
+  gamma 1.0 is linear, gamma 2.2 and Adobe RGB are gamma 2.2; range 16..235 is limited, anything
+  else full; the matrix is set only for BT.709, BT.601 and BT.2020 (RGB, FCC and SMPTE 240M leave
+  it unset, since the captured formats are all RGB). BT.470M, generic film, Adobe RGB and EBU 3213
+  primaries become `ColorPrimaries::Custom` from the `Chromaticities` constants in core. A value
+  with no model (other gamma curves, log, SMPTE ST 428) fails negotiation with
+  `TransferUnsupported` or `PrimariesUnsupported` rather than being guessed. PipeWire has no
+  mastering display or content light level metadata, so those stay unset (`capture-hdr-negotiation`
+  in `docs/FEATURES.md`). The enum formats do not constrain the colour properties, so a producer's
+  choice passes through; a 10-bit `xBGR_210LE` surface is HDR only when the producer says so.
 - Shared-memory frames are copied out of the mapped buffer (`MAP_BUFFERS`) as `stride × height`
   bytes from the chunk offset, and the buffer is requeued at once. Buffers whose chunk is empty or
   flagged corrupted (cursor-only updates) produce no frame. Frame timestamps are microseconds

@@ -52,7 +52,9 @@ paths:
   edge between two media crates and never a normal dependency, but it means the encode crate's
   tests need libva and libclang even when only a software encoder feature is enabled.
 
-  Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
+  Pure-Rust choices already made: `wayland-client` and `wayland-protocols` (`client`, `staging`)
+  for the compositor's output colour description in `rusplay-client`, on wayland-rs's pure-Rust
+  backend, `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
   `ashpd` over zbus (portals), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual

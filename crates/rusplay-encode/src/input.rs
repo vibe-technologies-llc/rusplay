@@ -159,7 +159,9 @@ impl<'a> YuvFrame<'a> {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use rusplay_capture::{Frame, FrameBuffer};
-    use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution, Timestamp};
+    use rusplay_core::{
+        BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution, Timestamp,
+    };
 
     use super::{bytes_per_sample, chroma_shifts, fourcc_for};
 
@@ -202,6 +204,7 @@ pub(crate) mod fixtures {
             resolution,
             format: fourcc_for(format),
             timestamp,
+            color: ColorSpace::default(),
             buffer: FrameBuffer::Shm {
                 data,
                 stride: u32::try_from(width * sample).unwrap(),

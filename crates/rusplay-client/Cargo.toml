@@ -21,6 +21,8 @@ rusplay-net.workspace = true
 rusplay-protocol.workspace = true
 rusplay-scale.workspace = true
 thiserror.workspace = true
+wayland-client.workspace = true
+wayland-protocols = { workspace = true, features = ["client", "staging"] }
 wgpu.workspace = true
 
 [dev-dependencies]

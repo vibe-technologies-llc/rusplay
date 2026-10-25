@@ -2,7 +2,9 @@ use std::{fs::File, os::fd::OwnedFd};
 
 use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
 use rusplay_config::{EncoderParams, VideoConfig, VideoEncoderConfig};
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, PixelFormat, Resolution, Timestamp};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
+};
 
 use crate::{
     EncodeError, VideoEncoder,
@@ -59,6 +61,7 @@ pub fn dmabuf_frame() -> Frame {
         resolution: TEST_RESOLUTION,
         format: DrmFourcc::from_code(*b"XR24"),
         timestamp: Timestamp::ZERO,
+        color: ColorSpace::default(),
         buffer: FrameBuffer::DmaBuf {
             fd,
             modifier: 0,
