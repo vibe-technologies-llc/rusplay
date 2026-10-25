@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 use rusplay_core::{Codec, ColorSpace, FrameRate, PixelFormat, Resolution};
 use serde::{Deserialize, Serialize};
 
-use crate::ConfigError;
+use crate::{ConfigError, VideoDecoderConfig};
 
 pub type EncoderParams = BTreeMap<String, String>;
 
@@ -20,6 +20,7 @@ pub struct VideoConfig {
     pub color: ColorSpace,
     pub bitrate_kbps: u32,
     pub encoder: VideoEncoderConfig,
+    pub decoder: VideoDecoderConfig,
 }
 
 impl Default for VideoConfig {
@@ -32,6 +33,7 @@ impl Default for VideoConfig {
             color: ColorSpace::default(),
             bitrate_kbps: 80_000,
             encoder: VideoEncoderConfig::default(),
+            decoder: VideoDecoderConfig::default(),
         }
     }
 }
@@ -49,7 +51,8 @@ impl VideoConfig {
             return Err(ConfigError::ZeroVideoBitrate);
         }
 
-        self.encoder.validate()
+        self.encoder.validate()?;
+        self.decoder.validate()
     }
 }
 

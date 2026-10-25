@@ -1,10 +1,21 @@
 mod error;
+mod frame;
+#[cfg(feature = "software")]
+mod software;
 
-use std::{fmt, os::fd::OwnedFd};
+use std::fmt;
 
-use rusplay_core::{EncodedFrame, PixelFormat, Resolution, Timestamp};
+use rusplay_core::EncodedFrame;
 
-pub use crate::error::DecodeError;
+#[cfg(feature = "software")]
+pub use crate::software::Rav1dDecoder;
+pub use crate::{
+    error::DecodeError,
+    frame::{
+        CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
+        DmaBufPlane, DrmFourcc,
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
@@ -21,20 +32,6 @@ impl fmt::Display for Backend {
             Self::Software => "software",
         })
     }
-}
-
-#[derive(Debug)]
-pub enum DecodedBuffer {
-    DmaBuf { fd: OwnedFd, modifier: u64 },
-    Cpu { planes: Vec<Vec<u8>> },
-}
-
-#[derive(Debug)]
-pub struct DecodedFrame {
-    pub resolution: Resolution,
-    pub format: PixelFormat,
-    pub timestamp: Timestamp,
-    pub buffer: DecodedBuffer,
 }
 
 pub trait VideoDecoder {

@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+software = ["dep:rav1d"]
+
 [dependencies]
+rav1d = { workspace = true, optional = true, features = ["bitdepth_8", "bitdepth_16"] }
+rusplay-config.workspace = true
 rusplay-core.workspace = true
 thiserror.workspace = true
 
