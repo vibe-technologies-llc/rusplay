@@ -1,4 +1,9 @@
-#[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
+#[cfg(any(
+    feature = "x264",
+    feature = "x265",
+    feature = "svt-av1",
+    feature = "vaapi"
+))]
 mod bindings {
     use std::{env, io, path::PathBuf};
 
@@ -27,8 +32,9 @@ mod bindings {
     }
 
     pub struct Library {
-        pub package: &'static str,
-        pub header: &'static str,
+        pub packages: &'static [&'static str],
+        pub headers: &'static [&'static str],
+        pub macro_type: MacroTypeVariation,
         pub output: &'static str,
         pub symbols: &'static str,
         pub build_suffixed_prefix: Option<&'static str>,
@@ -55,26 +61,26 @@ mod bindings {
     }
 
     pub fn generate(library: &Library) -> Result<(), BuildError> {
-        let probe = pkg_config::Config::new()
-            .probe(library.package)
-            .map_err(|source| BuildError::PackageNotFound {
-                package: library.package,
-                source,
-            })?;
+        let includes = library
+            .headers
+            .iter()
+            .fold(String::new(), |mut includes, header| {
+                includes.push_str("#include <");
+                includes.push_str(header);
+                includes.push_str(">\n");
+                includes
+            });
 
         let mut builder = Builder::default()
             .header_contents(
                 "wrapper.h",
-                &format!(
-                    "#include <stdint.h>\n#include <stdio.h>\n#include <{}>\n",
-                    library.header
-                ),
+                &format!("#include <stdint.h>\n#include <stdio.h>\n{includes}"),
             )
             .allowlist_function(library.symbols)
             .allowlist_type(library.symbols)
             .allowlist_var(library.symbols)
             .default_enum_style(EnumVariation::Consts)
-            .default_macro_constant_type(MacroTypeVariation::Signed)
+            .default_macro_constant_type(library.macro_type)
             .derive_default(true)
             .generate_comments(false)
             .layout_tests(false)
@@ -85,12 +91,18 @@ mod bindings {
                 prefix: library.build_suffixed_prefix,
             }));
 
-        for path in &probe.include_paths {
-            builder = builder.clang_arg(format!("-I{}", path.display()));
+        for &package in library.packages {
+            let probe = pkg_config::Config::new()
+                .probe(package)
+                .map_err(|source| BuildError::PackageNotFound { package, source })?;
+
+            for path in &probe.include_paths {
+                builder = builder.clang_arg(format!("-I{}", path.display()));
+            }
         }
 
         let bindings = builder.generate().map_err(|source| BuildError::Bindgen {
-            header: library.header,
+            header: library.headers[0],
             source,
         })?;
 
@@ -105,14 +117,22 @@ mod bindings {
     }
 }
 
-#[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
+#[cfg(any(
+    feature = "x264",
+    feature = "x265",
+    feature = "svt-av1",
+    feature = "vaapi"
+))]
 fn main() -> Result<(), bindings::BuildError> {
+    use bindgen::MacroTypeVariation;
+
     println!("cargo:rerun-if-changed=build.rs");
 
     #[cfg(feature = "x264")]
     bindings::generate(&bindings::Library {
-        package: "x264",
-        header: "x264.h",
+        packages: &["x264"],
+        headers: &["x264.h"],
+        macro_type: MacroTypeVariation::Signed,
         output: "x264.rs",
         symbols: "(x264|X264)_.*",
         build_suffixed_prefix: Some("x264_encoder_open_"),
@@ -120,8 +140,9 @@ fn main() -> Result<(), bindings::BuildError> {
 
     #[cfg(feature = "x265")]
     bindings::generate(&bindings::Library {
-        package: "x265",
-        header: "x265.h",
+        packages: &["x265"],
+        headers: &["x265.h"],
+        macro_type: MacroTypeVariation::Signed,
         output: "x265.rs",
         symbols: "(x265|X265)_.*",
         build_suffixed_prefix: None,
@@ -129,15 +150,31 @@ fn main() -> Result<(), bindings::BuildError> {
 
     #[cfg(feature = "svt-av1")]
     bindings::generate(&bindings::Library {
-        package: "SvtAv1Enc",
-        header: "EbSvtAv1Enc.h",
+        packages: &["SvtAv1Enc"],
+        headers: &["EbSvtAv1Enc.h"],
+        macro_type: MacroTypeVariation::Signed,
         output: "svt_av1.rs",
         symbols: "(svt_av1|Svt|Eb|EB|SVT)_?.*",
+        build_suffixed_prefix: None,
+    })?;
+
+    #[cfg(feature = "vaapi")]
+    bindings::generate(&bindings::Library {
+        packages: &["libva", "libva-drm"],
+        headers: &["va/va.h", "va/va_drm.h", "va/va_drmcommon.h"],
+        macro_type: MacroTypeVariation::Unsigned,
+        output: "va.rs",
+        symbols: "(va|VA|_VA)[A-Z_].*",
         build_suffixed_prefix: None,
     })?;
 
     Ok(())
 }
 
-#[cfg(not(any(feature = "x264", feature = "x265", feature = "svt-av1")))]
+#[cfg(not(any(
+    feature = "x264",
+    feature = "x265",
+    feature = "svt-av1",
+    feature = "vaapi"
+)))]
 fn main() {}

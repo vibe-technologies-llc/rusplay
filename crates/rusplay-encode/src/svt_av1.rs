@@ -16,7 +16,8 @@ use rusplay_core::{
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::{YuvFrame, bytes_per_sample},
-    software::{CParam, VBV_BUFFER_FRAMES},
+    rate::VBV_BUFFER_FRAMES,
+    software::CParam,
 };
 
 #[allow(
@@ -228,6 +229,10 @@ struct Settings {
     bitrate_kbps: u32,
 }
 
+pub(crate) fn supports(format: PixelFormat) -> bool {
+    format.chroma == ChromaSubsampling::Yuv420 && format.depth != BitDepth::Twelve
+}
+
 impl Settings {
     fn new(video: &VideoConfig, config: &SvtAv1Config) -> Result<Self, EncodeError> {
         let format = video.pixel_format;
@@ -238,7 +243,7 @@ impl Settings {
                 chroma: format.chroma,
             });
         }
-        if format.depth == BitDepth::Twelve {
+        if !supports(format) {
             return Err(EncodeError::BitDepthUnsupported {
                 backend: BACKEND,
                 depth: format.depth,

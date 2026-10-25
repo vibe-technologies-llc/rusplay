@@ -15,10 +15,9 @@ use rusplay_core::{
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::YuvFrame,
+    rate::vbv_buffer_kbit,
     software::CParam,
-    x26x::{
-        colour_matrix_name, colour_primaries_name, preset_name, transfer_name, vbv_buffer_kbit,
-    },
+    x26x::{colour_matrix_name, colour_primaries_name, preset_name, transfer_name},
 };
 
 #[allow(
@@ -48,6 +47,10 @@ const LOW_LATENCY_DEFAULTS: [(&str, &str); 9] = [
     ("repeat-headers", "1"),
     ("aud", "0"),
 ];
+
+pub(crate) fn supports(format: PixelFormat) -> bool {
+    format.depth != BitDepth::Twelve
+}
 
 const fn tune_name(tune: X264Tune) -> &'static str {
     match tune {
@@ -120,7 +123,7 @@ struct Settings {
 
 impl Settings {
     fn new(video: &VideoConfig, config: &X264Config) -> Result<Self, EncodeError> {
-        if video.pixel_format.depth == BitDepth::Twelve {
+        if !supports(video.pixel_format) {
             return Err(EncodeError::BitDepthUnsupported {
                 backend: BACKEND,
                 depth: video.pixel_format.depth,

@@ -22,7 +22,7 @@ paths:
   |---|---|---|
   | PipeWire stream consumption | `pipewire` | `rusplay-capture/pipewire` |
   | PipeWire audio capture and playback | `pipewire` | `rusplay-audio/pipewire` |
-  | VAAPI encode | `cros-libva` | `rusplay-encode/vaapi` |
+  | VAAPI encode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-encode/vaapi` |
   | VAAPI decode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-decode/vaapi` |
   | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
@@ -36,12 +36,20 @@ paths:
   only by the three software-encoder features, so the default build neither needs libclang nor
   links anything C.
 
-  VAAPI decode follows the same pattern (`crates/rusplay-decode/build.rs`, `vaapi` feature):
-  `cros-libva` 0.0.12 and 0.0.13 generate their bindings from the system headers too but do not
-  compile against libva 2.24 (new `VAEncPictureParameterBufferVP9` fields), and `cros-codecs`
-  0.0.6 pins 0.0.12. Bitstream parsing comes from `cros-codecs` with its default features off,
-  which is only its pure-Rust `codec` parsers (H.264, HEVC, AV1) and pulls in no libva, GBM or
-  DRM crates.
+  VAAPI decode and encode follow the same pattern (`crates/rusplay-decode/build.rs` and
+  `crates/rusplay-encode/build.rs`, each behind its crate's `vaapi` feature, each with its own copy
+  of the bindings since neither crate may depend on the other): `cros-libva` 0.0.12 and 0.0.13
+  generate their bindings from the system headers too but do not compile against libva 2.24 (new
+  `VAEncPictureParameterBufferVP9` fields), and `cros-codecs` 0.0.6 pins 0.0.12. The encode
+  `build.rs` drives one `Library` description per system library (pkg-config packages, headers,
+  symbol pattern, macro constant signedness), so libva and the software encoders share it.
+  Bitstream parsing comes from `cros-codecs` with its default features off, which is only its
+  pure-Rust `codec` parsers (H.264, HEVC, AV1) and pulls in no libva, GBM or DRM crates.
+  `rusplay-encode` writes its own parameter sets and headers and uses `cros-codecs` only as a
+  dev-dependency, to parse them back in tests. Its other dev-dependency is `rusplay-decode` with
+  `vaapi` and `software`, which decodes the hardware encoder's output in tests; that is a test-only
+  edge between two media crates and never a normal dependency, but it means the encode crate's
+  tests need libva and libclang even when only a software encoder feature is enabled.
 
   Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
   `ashpd` over zbus (portals), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;

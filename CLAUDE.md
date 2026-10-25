@@ -58,7 +58,7 @@ depend only on `host`/`client`/`config`. No crate depends upward, and no media c
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
-| Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features software-encoders,pipewire,flac` |
+| Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,flac` |
 
 Profiles: dev builds at `opt-level = 1`. Release uses thin LTO, one codegen unit, stripped
 symbols and `panic = "abort"`. `profiling` is release with debug info, no stripping and unwinding

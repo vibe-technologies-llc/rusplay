@@ -15,10 +15,9 @@ use rusplay_core::{
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::YuvFrame,
+    rate::vbv_buffer_kbit,
     software::CParam,
-    x26x::{
-        colour_matrix_name, colour_primaries_name, preset_name, transfer_name, vbv_buffer_kbit,
-    },
+    x26x::{colour_matrix_name, colour_primaries_name, preset_name, transfer_name},
 };
 
 #[allow(
@@ -114,6 +113,10 @@ struct Api {
         *mut sys::x265_picture,
     ) -> c_int,
     encoder_close: unsafe extern "C" fn(*mut sys::x265_encoder),
+}
+
+pub(crate) fn supports(format: PixelFormat) -> bool {
+    Api::load(format.depth).is_ok()
 }
 
 impl Api {

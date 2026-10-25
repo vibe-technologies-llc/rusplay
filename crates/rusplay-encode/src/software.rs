@@ -2,8 +2,6 @@ use std::ffi::CString;
 
 use crate::{Backend, EncodeError};
 
-pub const VBV_BUFFER_FRAMES: u64 = 2;
-
 pub struct CParam {
     pub key: CString,
     pub value: CString,
