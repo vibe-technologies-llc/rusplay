@@ -6,8 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+lexopt.workspace = true
 rusplay-config.workspace = true
 rusplay-host.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

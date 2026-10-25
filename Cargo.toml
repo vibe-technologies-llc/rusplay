@@ -23,11 +23,14 @@ rusplay-protocol.path = "crates/rusplay-protocol"
 rusplay-scale.path = "crates/rusplay-scale"
 
 ashpd = { version = "0.13.13", default-features = false }
+bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 claxon = "0.4.3"
 flacenc = { version = "0.5.1", default-features = false }
+lexopt = "0.3.2"
 opus-rs = { version = "0.1.40", default-features = false }
 parking_lot = "0.13.0"
 pipewire = { version = "0.10.1", default-features = false }
+pkg-config = "0.3.34"
 rtrb = "0.4.1"
 rubato = { version = "5.0.1", default-features = false }
 serde = { version = "1.0.229", default-features = false }

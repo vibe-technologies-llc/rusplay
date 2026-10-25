@@ -15,9 +15,7 @@
 # Video encode
 - [L, blocked by: scale-color-convert] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
-- [M] `encode-x264`: x264 backend with typed settings and `params` passthrough
-- [M] `encode-x265`: x265 backend with typed settings and `params` passthrough
-- [M] `encode-svt-av1`: SVT-AV1 backend with typed settings and `params` passthrough
+- [S] `encode-svt-av1-log`: route SVT-AV1 log output through svt_av1_set_log_callback instead of stderr
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device
 
 # Video decode
@@ -40,7 +38,6 @@
 # Sessions
 - [L, blocked by: capture-pipewire, encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
-- [S] `hostd-cli`: argument parsing and config path discovery for `rusplay-hostd`
 
 # Desktop app
 - [M] `app-ui-shell`: gpui window on Wayland with the gpui git dependency pinned

@@ -4,11 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+build = "build.rs"
+
+[features]
+x264 = ["dep:bindgen", "dep:pkg-config"]
+x265 = ["dep:bindgen", "dep:pkg-config"]
+svt-av1 = ["dep:bindgen", "dep:pkg-config"]
 
 [dependencies]
 rusplay-capture.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+bindgen = { workspace = true, optional = true }
+pkg-config = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [lints]
