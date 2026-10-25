@@ -1,6 +1,7 @@
 use std::{fmt, io, time::Duration};
 
 use rusplay_audio::AudioError;
+use rusplay_core::AudioCodec;
 use rusplay_decode::{DecodeError, DrmFourcc};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
@@ -12,6 +13,7 @@ pub enum Stage {
     Receive,
     Decode,
     Present,
+    Audio,
 }
 
 impl Stage {
@@ -20,6 +22,7 @@ impl Stage {
             Self::Receive => "receive",
             Self::Decode => "decode",
             Self::Present => "present",
+            Self::Audio => "audio",
         }
     }
 }
@@ -62,6 +65,8 @@ pub enum ClientError {
     HelloUndeliverable,
     #[error("nothing arrived from the host for {0:?}")]
     HostSilent(Duration),
+    #[error("audio codec {codec} is not compiled into this client")]
+    AudioCodecNotCompiled { codec: AudioCodec },
     #[error("decoded {fourcc} dma-buf frames cannot be presented without dma-buf import into wgpu")]
     DmaBufPresentUnsupported { fourcc: DrmFourcc },
     #[error("decoded frame has {found} planes, presentation needs {expected}")]

@@ -19,6 +19,17 @@ pub struct ClientStats {
     pub control_undeliverable: u64,
     pub malformed_datagrams: u64,
     pub rejected_datagrams: u64,
+    pub audio_packets_received: u64,
+    pub audio_packets_dropped: u64,
+    pub audio_packets_late: u64,
+    pub audio_packets_lost: u64,
+    pub audio_frames_concealed: u64,
+    pub audio_frames_recovered: u64,
+    pub audio_decode_errors: u64,
+    pub audio_underruns: u64,
+    pub audio_trims: u64,
+    pub audio_overflows: u64,
+    pub cursor_updates: u64,
 }
 
 #[derive(Debug, Default)]
@@ -61,6 +72,17 @@ pub(crate) struct Counters {
     pub control_undeliverable: Counter,
     pub malformed_datagrams: Counter,
     pub rejected_datagrams: Counter,
+    pub audio_packets_received: Counter,
+    pub audio_packets_dropped: Counter,
+    pub audio_packets_late: Counter,
+    pub audio_packets_lost: Counter,
+    pub audio_frames_concealed: Counter,
+    pub audio_frames_recovered: Counter,
+    pub audio_decode_errors: Counter,
+    pub audio_underruns: Counter,
+    pub audio_trims: Counter,
+    pub audio_overflows: Counter,
+    pub cursor_updates: Counter,
 }
 
 impl Counters {
@@ -83,6 +105,17 @@ impl Counters {
             control_undeliverable: self.control_undeliverable.get(),
             malformed_datagrams: self.malformed_datagrams.get(),
             rejected_datagrams: self.rejected_datagrams.get(),
+            audio_packets_received: self.audio_packets_received.get(),
+            audio_packets_dropped: self.audio_packets_dropped.get(),
+            audio_packets_late: self.audio_packets_late.get(),
+            audio_packets_lost: self.audio_packets_lost.get(),
+            audio_frames_concealed: self.audio_frames_concealed.get(),
+            audio_frames_recovered: self.audio_frames_recovered.get(),
+            audio_decode_errors: self.audio_decode_errors.get(),
+            audio_underruns: self.audio_underruns.get(),
+            audio_trims: self.audio_trims.get(),
+            audio_overflows: self.audio_overflows.get(),
+            cursor_updates: self.cursor_updates.get(),
         }
     }
 }

@@ -12,10 +12,13 @@ use rusplay_client::{
 };
 use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution};
 use rusplay_net::NetError;
-use rusplay_protocol::ControlMessage;
+use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
 
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const LOST_FRAME: u32 = 5;
+const AUDIO_PACKETS: u32 = 40;
+const LOST_AUDIO_PACKET: u32 = 12;
+const SAMPLES_PER_PACKET: usize = 240 * 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Seen {
@@ -54,9 +57,14 @@ fn frames_arrive_decoded_at_the_source_resolution() {
     let session = ClientSession::new(common::client_config());
     let (seen, sink) = recorder();
 
-    let stream = session
-        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
-        .unwrap();
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
     let paired = stream.paired_secret().is_some();
     let stats = wait_for_end(stream);
 
@@ -99,14 +107,14 @@ fn presented_texture_holds_the_picture() {
     let session = ClientSession::new(common::client_config());
     let latest = LatestFrame::new();
 
-    let stream = session
-        .connect(
-            host.address,
-            &Credentials::Pin(common::pin()),
-            gpu.clone(),
-            latest.clone(),
-        )
-        .unwrap();
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu.clone(),
+        latest.clone(),
+    )
+    .unwrap();
     let frame = latest.wait(STREAM_TIMEOUT).unwrap();
     let texels = common::download(&gpu, &frame.texture);
     stream.stop().unwrap();
@@ -132,9 +140,14 @@ fn frames_are_scaled_to_the_requested_target() {
     let (seen, sink) = recorder();
     let upscaled = Resolution::new(2 * FIXTURE_WIDTH, 2 * FIXTURE_HEIGHT);
 
-    let stream = session
-        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
-        .unwrap();
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
     stream.set_target(Some(upscaled));
     stream.wait().unwrap();
 
@@ -158,9 +171,14 @@ fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
     let session = ClientSession::new(common::client_config());
     let (seen, sink) = recorder();
 
-    let stream = session
-        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
-        .unwrap();
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
     let stats_before_end = wait_for_end(stream);
 
     let seen = seen.lock().clone();
@@ -189,9 +207,14 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
     let session = ClientSession::new(common::client_config());
     let (seen, sink) = recorder();
 
-    let stream = session
-        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
-        .unwrap();
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
     let stats = wait_for_end(stream);
 
     let seen = seen.lock().clone();
@@ -218,7 +241,8 @@ fn a_wrong_pin_is_refused_before_streaming() {
     let host = TestHost::start(HostOptions::default());
     let session = ClientSession::new(common::client_config());
 
-    let result = session.connect(
+    let result = common::connect_silent(
+        &session,
         host.address,
         &Credentials::Pin(Pin::parse("000000").unwrap()),
         gpu,
@@ -229,6 +253,99 @@ fn a_wrong_pin_is_refused_before_streaming() {
         result,
         Err(ClientError::Net(NetError::PairingAuthentication))
     ));
+}
+
+#[test]
+fn audio_is_decoded_and_a_lost_packet_is_concealed() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        audio: common::opus_packets(AUDIO_PACKETS),
+        audio_drop: Box::new(|number| number == LOST_AUDIO_PACKET),
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let captured = common::CapturedAudio::default();
+
+    let stream = session
+        .connect_with_audio(
+            host.address,
+            &Credentials::Pin(common::pin()),
+            gpu,
+            LatestFrame::new(),
+            Some(Box::new(captured.clone())),
+        )
+        .unwrap();
+    let expected = AUDIO_PACKETS as usize * SAMPLES_PER_PACKET;
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while captured.samples.lock().len() < expected && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    let samples = captured.samples.lock();
+    assert_eq!(stats.audio_packets_received, u64::from(AUDIO_PACKETS - 1));
+    assert_eq!(stats.audio_packets_lost, 1);
+    assert_eq!(stats.audio_frames_recovered, 1);
+    assert_eq!(stats.audio_decode_errors, 0);
+    assert_eq!(samples.len(), expected);
+    assert!(samples.iter().any(|sample| *sample != 0.0));
+}
+
+#[test]
+fn cursor_position_and_image_reach_the_app() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let image = CursorImage {
+        width: 32,
+        height: 32,
+        hotspot_x: 3,
+        hotspot_y: 4,
+        rgba: vec![200; 32 * 32 * 4],
+    };
+    let mut cursor: Vec<CursorMessage> = (0..10)
+        .map(|step| CursorMessage {
+            x: step * 10,
+            y: step * 5,
+            visible: true,
+            image: None,
+        })
+        .collect();
+    cursor[0].image = Some(image.clone());
+    let host = TestHost::start(HostOptions {
+        cursor,
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    let latest = stream.cursor();
+    let mut seen = 0;
+    while seen < 10 {
+        let Some(_) = latest.wait_after(seen, STREAM_TIMEOUT) else {
+            break;
+        };
+        seen = latest.updates();
+    }
+    let cursor_now = latest.latest().unwrap();
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert_eq!((cursor_now.x, cursor_now.y), (90, 45));
+    assert_eq!(*cursor_now.image.unwrap(), image);
+    assert_eq!(stats.cursor_updates, 10);
 }
 
 fn wait_for_end(stream: rusplay_client::ClientStream) -> rusplay_client::ClientStats {

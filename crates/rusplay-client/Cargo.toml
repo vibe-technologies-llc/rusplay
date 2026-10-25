@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+flac = ["rusplay-audio/flac"]
+pipewire = ["rusplay-audio/pipewire"]
 software = ["rusplay-decode/software"]
 vaapi = ["rusplay-decode/vaapi"]
 
