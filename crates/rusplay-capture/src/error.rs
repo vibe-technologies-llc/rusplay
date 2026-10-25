@@ -39,6 +39,14 @@ pub enum CaptureError {
         size: u32,
         mapped: usize,
     },
+    #[error("the buffer carries no planes")]
+    NoPlanes,
+    #[error("failed to duplicate a dma-buf fd")]
+    DmaBufDup(#[source] io::Error),
+    #[error("failed to stat a dma-buf fd")]
+    DmaBufStat(#[source] io::Error),
+    #[error("dma-buf plane {plane} lives in a different buffer than plane 0")]
+    DmaBufPlanesSplit { plane: usize },
     #[error("buffer stride {stride} is invalid for width {width} of format {format:?}")]
     InvalidStride {
         stride: i32,

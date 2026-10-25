@@ -7,7 +7,7 @@ use pipewire::spa::{
         video::VideoFormat,
     },
     pod::{
-        ChoiceValue, Object, Property, Value, deserialize::PodDeserializer,
+        ChoiceValue, Object, Property, PropertyFlags, Value, deserialize::PodDeserializer,
         serialize::PodSerializer,
     },
     sys,
@@ -15,7 +15,10 @@ use pipewire::spa::{
 };
 use rusplay_core::{FrameRate, Resolution};
 
-use crate::{CaptureError, DrmFourcc};
+use crate::{
+    CaptureError, DrmFourcc,
+    modifier::{FormatModifiers, choose_modifier, modifiers_for},
+};
 
 const FORMAT_TABLE: [(VideoFormat, DrmFourcc); 16] = [
     (VideoFormat::BGRx, DrmFourcc::from_code(*b"XR24")),
@@ -103,11 +106,143 @@ pub(crate) struct FormatRequest {
 pub(crate) struct NegotiatedFormat {
     pub fourcc: DrmFourcc,
     pub size: Resolution,
+    pub modifier: Option<u64>,
+}
+
+impl NegotiatedFormat {
+    pub fn memory(self) -> BufferMemory {
+        match self.modifier {
+            Some(_) => BufferMemory::DmaBuf,
+            None => BufferMemory::Shared,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModifierOffer {
+    Absent,
+    Fixed(u64),
+    Choice(Vec<u64>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedFormat {
+    pub fourcc: DrmFourcc,
+    pub size: Resolution,
+    pub modifiers: ModifierOffer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FormatDecision {
+    Accept(NegotiatedFormat),
+    Fixate { fourcc: DrmFourcc, modifier: u64 },
+    FallBackToShm,
+}
+
+pub(crate) fn decide(parsed: &ParsedFormat, table: &[FormatModifiers]) -> FormatDecision {
+    let accept = |modifier| {
+        FormatDecision::Accept(NegotiatedFormat {
+            fourcc: parsed.fourcc,
+            size: parsed.size,
+            modifier,
+        })
+    };
+
+    match &parsed.modifiers {
+        ModifierOffer::Absent => accept(None),
+        ModifierOffer::Fixed(modifier) => accept(Some(*modifier)),
+        ModifierOffer::Choice(offered) => {
+            match choose_modifier(modifiers_for(table, parsed.fourcc), offered) {
+                Some(modifier) => FormatDecision::Fixate {
+                    fourcc: parsed.fourcc,
+                    modifier,
+                },
+                None => FormatDecision::FallBackToShm,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BufferMemory {
     Shared,
+    DmaBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModifierRequest<'a> {
+    Negotiate(&'a [u64]),
+    Fixed(u64),
+}
+
+pub(crate) fn dmabuf_enum_format(
+    fourcc: DrmFourcc,
+    modifiers: ModifierRequest<'_>,
+    request: FormatRequest,
+) -> Result<Option<Vec<u8>>, CaptureError> {
+    let Some(spa) = spa_format_for(fourcc) else {
+        return Ok(None);
+    };
+    let modifier = match modifiers {
+        ModifierRequest::Negotiate(modifiers) => {
+            let values: Vec<i64> = modifiers
+                .iter()
+                .map(|modifier| modifier.cast_signed())
+                .collect();
+            let Some(&default) = values.first() else {
+                return Ok(None);
+            };
+            Property {
+                key: FormatProperties::VideoModifier.as_raw(),
+                flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
+                value: Value::Choice(ChoiceValue::Long(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Enum {
+                        default,
+                        alternatives: values,
+                    },
+                ))),
+            }
+        }
+        ModifierRequest::Fixed(modifier) => Property {
+            key: FormatProperties::VideoModifier.as_raw(),
+            flags: PropertyFlags::MANDATORY,
+            value: Value::Long(modifier.cast_signed()),
+        },
+    };
+
+    let mut properties = media_properties();
+    properties.push(Property::new(
+        FormatProperties::VideoFormat.as_raw(),
+        Value::Id(Id(spa.as_raw())),
+    ));
+    properties.push(modifier);
+    properties.extend(geometry_properties(request));
+
+    serialize(Object {
+        type_: SpaTypes::ObjectParamFormat.as_raw(),
+        id: ParamType::EnumFormat.as_raw(),
+        properties,
+    })
+    .map(Some)
+}
+
+pub(crate) fn enum_formats(
+    formats: &[DrmFourcc],
+    dmabuf: Option<&[FormatModifiers]>,
+    request: FormatRequest,
+) -> Result<Vec<Vec<u8>>, CaptureError> {
+    let mut pods = Vec::new();
+
+    if let Some(table) = dmabuf {
+        for fourcc in formats {
+            let modifiers = ModifierRequest::Negotiate(modifiers_for(table, *fourcc));
+            pods.extend(dmabuf_enum_format(*fourcc, modifiers, request)?);
+        }
+    }
+    pods.extend(shm_enum_format(formats, request)?);
+
+    Ok(pods)
 }
 
 pub(crate) fn shm_enum_format(
@@ -199,6 +334,7 @@ fn geometry_properties(request: FormatRequest) -> [Property; 2] {
 pub(crate) fn buffers_param(memory: BufferMemory) -> Result<Vec<u8>, CaptureError> {
     let data_types = match memory {
         BufferMemory::Shared => (1 << sys::SPA_DATA_MemPtr) | (1 << sys::SPA_DATA_MemFd),
+        BufferMemory::DmaBuf => 1 << sys::SPA_DATA_DmaBuf,
     };
 
     serialize(Object {
@@ -275,7 +411,7 @@ pub(crate) fn parse_object(bytes: &[u8]) -> Result<Object, CaptureError> {
     }
 }
 
-pub(crate) fn parse_format(bytes: &[u8]) -> Result<NegotiatedFormat, CaptureError> {
+pub(crate) fn parse_format(bytes: &[u8]) -> Result<ParsedFormat, CaptureError> {
     let object = parse_object(bytes)?;
 
     let spa_format = fixed_id(property(&object, FormatProperties::VideoFormat.as_raw())?)
@@ -285,10 +421,42 @@ pub(crate) fn parse_format(bytes: &[u8]) -> Result<NegotiatedFormat, CaptureErro
     let fourcc = fourcc_for(VideoFormat(spa_format))
         .ok_or(CaptureError::UnsupportedVideoFormat { spa_format })?;
 
-    Ok(NegotiatedFormat {
+    let modifiers = match property(&object, FormatProperties::VideoModifier.as_raw()) {
+        Ok(modifier) => modifier_offer(modifier).ok_or(CaptureError::FormatPodMalformed)?,
+        Err(_) => ModifierOffer::Absent,
+    };
+
+    Ok(ParsedFormat {
         fourcc,
         size: Resolution::new(size.width, size.height),
+        modifiers,
     })
+}
+
+fn modifier_offer(property: &Property) -> Option<ModifierOffer> {
+    match &property.value {
+        Value::Long(value)
+        | Value::Choice(ChoiceValue::Long(Choice(_, ChoiceEnum::None(value)))) => {
+            Some(ModifierOffer::Fixed(value.cast_unsigned()))
+        }
+        Value::Choice(ChoiceValue::Long(Choice(
+            _,
+            ChoiceEnum::Enum {
+                default,
+                alternatives,
+            },
+        ))) => {
+            let mut offered = vec![default.cast_unsigned()];
+            for alternative in alternatives {
+                let alternative = alternative.cast_unsigned();
+                if !offered.contains(&alternative) {
+                    offered.push(alternative);
+                }
+            }
+            Some(ModifierOffer::Choice(offered))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn property(object: &Object, key: u32) -> Result<&Property, CaptureError> {
@@ -321,6 +489,10 @@ fn fixed_rectangle(property: &Property) -> Option<Rectangle> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modifier::{DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR};
+
+    const XR24: DrmFourcc = DrmFourcc::from_code(*b"XR24");
+    const AMD_TILED: u64 = 0x0200_0000_0000_0001;
 
     fn request() -> FormatRequest {
         FormatRequest {
@@ -345,6 +517,19 @@ mod tests {
             properties,
         })
         .unwrap()
+    }
+
+    fn with_modifier(bytes: &[u8], modifier: Property) -> Vec<u8> {
+        let mut object = parse_object(bytes).unwrap();
+        object.properties.push(modifier);
+        serialize(object).unwrap()
+    }
+
+    fn table() -> Vec<FormatModifiers> {
+        vec![FormatModifiers::new(
+            XR24,
+            [AMD_TILED, DRM_FORMAT_MOD_LINEAR],
+        )]
     }
 
     #[test]
@@ -417,6 +602,7 @@ mod tests {
 
         assert_eq!(format.fourcc, DrmFourcc::from_code(*b"XR24"));
         assert_eq!(format.size, Resolution::new(1920, 1080));
+        assert_eq!(format.modifiers, ModifierOffer::Absent);
     }
 
     #[test]
@@ -457,5 +643,154 @@ mod tests {
             size.value,
             Value::Int(size_as_i32(mem::size_of::<sys::spa_meta_header>()))
         );
+    }
+
+    #[test]
+    fn dmabuf_enum_format_offers_modifiers_without_fixation() {
+        let modifiers = [AMD_TILED, DRM_FORMAT_MOD_INVALID];
+
+        let bytes = dmabuf_enum_format(XR24, ModifierRequest::Negotiate(&modifiers), request())
+            .unwrap()
+            .unwrap();
+        let object = parse_object(&bytes).unwrap();
+        let modifier = property(&object, FormatProperties::VideoModifier.as_raw()).unwrap();
+
+        assert!(modifier.flags.contains(PropertyFlags::MANDATORY));
+        assert!(modifier.flags.contains(PropertyFlags::DONT_FIXATE));
+        assert_eq!(
+            modifier_offer(modifier),
+            Some(ModifierOffer::Choice(modifiers.to_vec()))
+        );
+    }
+
+    #[test]
+    fn fixated_dmabuf_enum_format_carries_one_modifier() {
+        let bytes = dmabuf_enum_format(XR24, ModifierRequest::Fixed(AMD_TILED), request())
+            .unwrap()
+            .unwrap();
+        let object = parse_object(&bytes).unwrap();
+        let modifier = property(&object, FormatProperties::VideoModifier.as_raw()).unwrap();
+
+        assert!(!modifier.flags.contains(PropertyFlags::DONT_FIXATE));
+        assert_eq!(
+            modifier_offer(modifier),
+            Some(ModifierOffer::Fixed(AMD_TILED))
+        );
+    }
+
+    #[test]
+    fn formats_without_modifiers_get_no_dmabuf_pod() {
+        let negotiate = ModifierRequest::Negotiate(&[]);
+
+        assert_eq!(
+            dmabuf_enum_format(XR24, negotiate, request()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn enum_formats_put_dmabuf_before_shared_memory() {
+        let formats = [XR24, DrmFourcc::from_code(*b"AR24")];
+
+        let with_dmabuf = enum_formats(&formats, Some(&table()), request()).unwrap();
+        let without = enum_formats(&formats, None, request()).unwrap();
+
+        assert_eq!(with_dmabuf.len(), 2);
+        assert_eq!(without.len(), 1);
+        let first = parse_object(&with_dmabuf[0]).unwrap();
+        assert!(property(&first, FormatProperties::VideoModifier.as_raw()).is_ok());
+        let last = parse_object(&with_dmabuf[1]).unwrap();
+        assert!(property(&last, FormatProperties::VideoModifier.as_raw()).is_err());
+    }
+
+    #[test]
+    fn modifier_choice_is_fixated_with_our_preference() {
+        let bytes = with_modifier(
+            &fixed_format(VideoFormat::BGRx, 1920, 1080),
+            Property {
+                key: FormatProperties::VideoModifier.as_raw(),
+                flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
+                value: Value::Choice(ChoiceValue::Long(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Enum {
+                        default: DRM_FORMAT_MOD_LINEAR.cast_signed(),
+                        alternatives: vec![
+                            DRM_FORMAT_MOD_LINEAR.cast_signed(),
+                            AMD_TILED.cast_signed(),
+                        ],
+                    },
+                ))),
+            },
+        );
+
+        let parsed = parse_format(&bytes).unwrap();
+
+        assert_eq!(
+            parsed.modifiers,
+            ModifierOffer::Choice(vec![DRM_FORMAT_MOD_LINEAR, AMD_TILED])
+        );
+        assert_eq!(
+            decide(&parsed, &table()),
+            FormatDecision::Fixate {
+                fourcc: XR24,
+                modifier: AMD_TILED
+            }
+        );
+    }
+
+    #[test]
+    fn unacceptable_modifier_choice_falls_back_to_shared_memory() {
+        let parsed = ParsedFormat {
+            fourcc: XR24,
+            size: Resolution::new(1920, 1080),
+            modifiers: ModifierOffer::Choice(vec![DRM_FORMAT_MOD_INVALID]),
+        };
+
+        assert_eq!(decide(&parsed, &table()), FormatDecision::FallBackToShm);
+    }
+
+    #[test]
+    fn fixed_modifier_is_accepted_as_dmabuf() {
+        let bytes = with_modifier(
+            &fixed_format(VideoFormat::BGRx, 1920, 1080),
+            Property::new(
+                FormatProperties::VideoModifier.as_raw(),
+                Value::Long(AMD_TILED.cast_signed()),
+            ),
+        );
+
+        let parsed = parse_format(&bytes).unwrap();
+        let decision = decide(&parsed, &table());
+
+        let FormatDecision::Accept(format) = decision else {
+            panic!("expected the format to be accepted, got {decision:?}");
+        };
+        assert_eq!(format.modifier, Some(AMD_TILED));
+        assert_eq!(format.memory(), BufferMemory::DmaBuf);
+    }
+
+    #[test]
+    fn missing_modifier_is_accepted_as_shared_memory() {
+        let parsed = parse_format(&fixed_format(VideoFormat::BGRx, 64, 64)).unwrap();
+
+        let decision = decide(&parsed, &table());
+
+        let FormatDecision::Accept(format) = decision else {
+            panic!("expected the format to be accepted, got {decision:?}");
+        };
+        assert_eq!(format.memory(), BufferMemory::Shared);
+    }
+
+    #[test]
+    fn buffers_param_requests_dmabuf() {
+        let bytes = buffers_param(BufferMemory::DmaBuf).unwrap();
+        let object = parse_object(&bytes).unwrap();
+        let data_type = property(&object, sys::SPA_PARAM_BUFFERS_dataType).unwrap();
+
+        assert!(matches!(
+            &data_type.value,
+            Value::Choice(ChoiceValue::Int(Choice(_, ChoiceEnum::Flags { default, .. })))
+                if *default == 1 << sys::SPA_DATA_DmaBuf
+        ));
     }
 }

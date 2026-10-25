@@ -1,6 +1,7 @@
 mod error;
 mod frame;
 mod handoff;
+mod modifier;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 mod portal;
@@ -11,6 +12,10 @@ pub use crate::{
     error::CaptureError,
     frame::{DrmFourcc, Frame, FrameBuffer, Plane},
     handoff::{Received, Subscriber},
+    modifier::{
+        DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
+        choose_modifier, modifiers_for,
+    },
     portal::{PortalSession, PortalStream},
 };
 

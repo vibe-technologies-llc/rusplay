@@ -1,5 +1,4 @@
 # Capture
-- [M] `capture-dmabuf`: negotiate DMA-BUF with modifiers, falling back to shared memory
 - [S] `capture-cursor-metadata`: extract cursor metadata and forward it to the client
 - [S] `capture-restore-token`: persist the portal restore token between host runs
 
@@ -8,7 +7,7 @@
 - [M] `scale-polar-pass`: single-pass 2D EWA shader for the polar filters
 - [S] `scale-antiringing`: clamp upscaled output to the local min/max by `antiringing` strength
 - [S] `scale-sigmoid`: sigmoidal light transform around the upscale pass
-- [M, blocked by: capture-dmabuf] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
+- [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
 - [M] `scale-color-convert`: RGB to YUV 4:2:0/4:2:2/4:4:4 conversion on the GPU with the chroma downscale filter
 
 # Video encode
