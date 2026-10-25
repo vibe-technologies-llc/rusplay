@@ -21,6 +21,7 @@ paths:
   | Need | Crate | Feature |
   |---|---|---|
   | PipeWire stream consumption | `pipewire` | `rusplay-capture/pipewire` |
+  | PipeWire audio capture and playback | `pipewire` | `rusplay-audio/pipewire` |
   | VAAPI encode/decode | `cros-libva` | `rusplay-encode/vaapi`, `rusplay-decode/vaapi` |
   | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
   | x264 | `x264` bindings | `rusplay-encode/x264` |

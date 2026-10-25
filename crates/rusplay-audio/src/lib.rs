@@ -1,10 +1,16 @@
+#[cfg(feature = "pipewire")]
+mod capture;
 mod error;
 #[cfg(feature = "flac")]
 mod flac;
 mod multistream;
 mod opus;
+#[cfg(feature = "pipewire")]
+mod pw_common;
 mod resample;
 
+#[cfg(feature = "pipewire")]
+pub use crate::capture::AudioCapture;
 #[cfg(feature = "flac")]
 pub use crate::flac::{FlacAudioDecoder, FlacAudioEncoder};
 pub use crate::{

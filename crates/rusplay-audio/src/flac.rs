@@ -6,7 +6,7 @@ use flacenc::{
     component::{BitRepr, StreamInfo},
     config::{self, OrderSel},
     encode_fixed_size_frame,
-    error::{Verified, Verify},
+    error::{EncodeError, Verified, Verify},
     source::{Fill, FrameBuf},
 };
 use rusplay_config::AudioConfig;
@@ -31,6 +31,13 @@ fn quantise(sample: f32) -> i32 {
 #[allow(clippy::cast_precision_loss)]
 fn dequantise(sample: i32) -> f32 {
     sample as f32 / FULL_SCALE
+}
+
+fn encode_error(error: EncodeError) -> AudioError {
+    match error {
+        EncodeError::Config(source) => AudioError::FlacSettings(source),
+        _ => AudioError::FlacSampleIntake,
+    }
 }
 
 fn encoder_settings(
@@ -114,7 +121,7 @@ impl AudioEncoder for FlacAudioEncoder {
         }
         self.framebuf
             .fill_interleaved(&self.quantised)
-            .map_err(AudioError::FlacSource)?;
+            .map_err(|_| AudioError::FlacSampleIntake)?;
 
         let frame = encode_fixed_size_frame(
             &self.settings,
@@ -122,7 +129,7 @@ impl AudioEncoder for FlacAudioEncoder {
             self.frame_number,
             &self.stream_info,
         )
-        .map_err(AudioError::FlacEncode)?;
+        .map_err(encode_error)?;
         self.frame_number = (self.frame_number + 1) & FRAME_NUMBER_MASK;
 
         self.sink.clear();

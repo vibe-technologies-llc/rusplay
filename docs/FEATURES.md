@@ -26,7 +26,6 @@
 - [M] `decode-rav1d`: software AV1 decode via rav1d
 
 # Audio
-- [M] `audio-capture`: PipeWire audio capture of the default sink monitor at 48 kHz float
 - [M] `audio-playback`: PipeWire playback on the client with a minimal jitter buffer
 
 # Networking

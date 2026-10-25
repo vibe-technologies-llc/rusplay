@@ -29,15 +29,36 @@ pub enum AudioError {
     ResampleBuffer(#[source] rubato::audioadapter_buffers::SizeError),
     #[error("{samples} samples do not divide into {channels} channels")]
     UnalignedSamples { channels: usize, samples: usize },
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire call failed")]
+    PipeWire(#[from] pipewire::Error),
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire audio format could not be encoded")]
+    PipeWireFormatEncode,
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire did not negotiate a format within {waited:?}")]
+    PipeWireStartupTimeout { waited: std::time::Duration },
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire stream entered the error state: {reason}")]
+    PipeWireStream { reason: String },
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire negotiated {found} channels, expected {expected}")]
+    PipeWireChannelMismatch { expected: usize, found: usize },
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire thread has stopped")]
+    PipeWireStopped,
+    #[cfg(feature = "pipewire")]
+    #[error("pipewire thread could not be spawned")]
+    ThreadSpawn(#[source] std::io::Error),
+    #[cfg(feature = "pipewire")]
+    #[error("sample ring lost data between a length check and the read")]
+    RingUnderflow,
     #[cfg(feature = "flac")]
     #[error("flac encoder settings rejected")]
     FlacSettings(#[source] flacenc::error::VerifyError),
     #[cfg(feature = "flac")]
-    #[error("flac encoder could not read the samples")]
-    FlacSource(#[source] flacenc::error::SourceError),
-    #[cfg(feature = "flac")]
-    #[error("flac encode failed")]
-    FlacEncode(#[source] flacenc::error::EncodeError),
+    #[error("flac encoder rejected the sample buffer")]
+    FlacSampleIntake,
     #[cfg(feature = "flac")]
     #[error("flac frame could not be serialised")]
     FlacWrite(#[source] flacenc::error::OutputError<flacenc::bitsink::ByteSink>),
@@ -53,4 +74,16 @@ pub enum AudioError {
     #[cfg(feature = "flac")]
     #[error("flac frame has {found} channels, expected {expected}")]
     FlacChannelMismatch { expected: usize, found: usize },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errors_cross_threads() {
+        fn assert_send_and_sync<T: Send + Sync>() {}
+
+        assert_send_and_sync::<AudioError>();
+    }
 }
