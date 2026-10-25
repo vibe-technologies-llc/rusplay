@@ -21,6 +21,7 @@ pub struct VideoConfig {
     pub bitrate_kbps: u32,
     pub encoder: VideoEncoderConfig,
     pub decoder: VideoDecoderConfig,
+    pub decode_queue_frames: u8,
 }
 
 impl Default for VideoConfig {
@@ -34,6 +35,7 @@ impl Default for VideoConfig {
             bitrate_kbps: 80_000,
             encoder: VideoEncoderConfig::default(),
             decoder: VideoDecoderConfig::default(),
+            decode_queue_frames: 3,
         }
     }
 }
@@ -59,6 +61,10 @@ impl VideoConfig {
         }
         if !hdr.peak_in_range() {
             return Err(ConfigError::PeakLuminanceOutOfRange(hdr.peak_nits));
+        }
+
+        if self.decode_queue_frames == 0 {
+            return Err(ConfigError::ZeroDecodeQueue);
         }
 
         self.encoder.validate()?;

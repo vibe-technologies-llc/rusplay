@@ -61,6 +61,19 @@ impl YuvMatrix {
             [0.5, -green / red_scale, -blue / red_scale],
         ]
     }
+
+    pub fn inverse_rows(self) -> [[f64; 3]; 3] {
+        let (red, blue) = self.red_blue_coefficients();
+        let green = 1.0 - red - blue;
+        let blue_scale = 2.0 * (1.0 - blue);
+        let red_scale = 2.0 * (1.0 - red);
+
+        [
+            [1.0, 0.0, red_scale],
+            [1.0, -blue * blue_scale / green, -red * red_scale / green],
+            [1.0, blue_scale, 0.0],
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -196,33 +209,11 @@ impl ConvertSettings {
     }
 
     pub fn chroma_size(&self) -> (u32, u32) {
-        let (width, height) = resolution_pair(self.resolution);
-
-        match self.format.chroma {
-            ChromaSubsampling::Yuv420 => (width.div_ceil(2), height.div_ceil(2)),
-            ChromaSubsampling::Yuv422 => (width.div_ceil(2), height),
-            ChromaSubsampling::Yuv444 => (width, height),
-        }
+        chroma_size(self.resolution, self.format.chroma)
     }
 
     pub fn quantization(&self) -> Quantization {
-        let bits = self.format.depth.bits();
-        let max_code = (1_u32 << bits) - 1;
-        let step = f64::from(1_u32 << (bits - 8));
-
-        let (luma, chroma) = match self.range {
-            ColorRange::Full => (
-                (f64::from(max_code), 0.0),
-                (f64::from(max_code), f64::from(1_u32 << (bits - 1))),
-            ),
-            ColorRange::Limited => ((219.0 * step, 16.0 * step), (224.0 * step, 128.0 * step)),
-        };
-
-        Quantization {
-            luma,
-            chroma,
-            max_code,
-        }
+        Quantization::new(self.format.depth, self.range)
     }
 
     pub(crate) fn chroma_tables(&self) -> (TapTable, TapTable) {
@@ -260,6 +251,38 @@ pub struct Quantization {
     pub max_code: u32,
 }
 
+impl Quantization {
+    pub fn new(depth: BitDepth, range: ColorRange) -> Self {
+        let bits = depth.bits();
+        let max_code = (1_u32 << bits) - 1;
+        let step = f64::from(1_u32 << (bits - 8));
+
+        let (luma, chroma) = match range {
+            ColorRange::Full => (
+                (f64::from(max_code), 0.0),
+                (f64::from(max_code), f64::from(1_u32 << (bits - 1))),
+            ),
+            ColorRange::Limited => ((219.0 * step, 16.0 * step), (224.0 * step, 128.0 * step)),
+        };
+
+        Self {
+            luma,
+            chroma,
+            max_code,
+        }
+    }
+}
+
+pub(crate) fn chroma_size(resolution: Resolution, chroma: ChromaSubsampling) -> (u32, u32) {
+    let (width, height) = resolution_pair(resolution);
+
+    match chroma {
+        ChromaSubsampling::Yuv420 => (width.div_ceil(2), height.div_ceil(2)),
+        ChromaSubsampling::Yuv422 => (width.div_ceil(2), height),
+        ChromaSubsampling::Yuv444 => (width, height),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Plane {
     pub content: PlaneContent,
@@ -286,17 +309,30 @@ pub struct FrameLayout {
 
 impl FrameLayout {
     pub fn new(settings: &ConvertSettings) -> Result<Self, ScaleError> {
-        let alignment = settings.row_alignment;
+        Self::packed(
+            settings.resolution,
+            settings.format,
+            settings.layout,
+            settings.row_alignment,
+        )
+    }
+
+    pub fn packed(
+        resolution: Resolution,
+        format: PixelFormat,
+        layout: PlaneLayout,
+        alignment: u32,
+    ) -> Result<Self, ScaleError> {
         if alignment < MIN_ROW_ALIGNMENT || !alignment.is_power_of_two() {
             return Err(ScaleError::RowAlignmentInvalid(alignment));
         }
 
-        let depth = settings.format.depth;
+        let depth = format.depth;
         let bytes_per_sample = if depth.bits() <= 8 { 1 } else { 2 };
-        let (width, height) = resolution_pair(settings.resolution);
-        let (chroma_width, chroma_height) = settings.chroma_size();
+        let (width, height) = resolution_pair(resolution);
+        let (chroma_width, chroma_height) = chroma_size(resolution, format.chroma);
 
-        let shapes: &[(PlaneContent, u32, u32)] = match settings.layout {
+        let shapes: &[(PlaneContent, u32, u32)] = match layout {
             PlaneLayout::Planar => &[
                 (PlaneContent::Luma, width, height),
                 (PlaneContent::Cb, chroma_width, chroma_height),
@@ -336,7 +372,7 @@ impl FrameLayout {
             size,
             depth,
             bytes_per_sample,
-            alignment: match (settings.layout, bytes_per_sample) {
+            alignment: match (layout, bytes_per_sample) {
                 (PlaneLayout::SemiPlanar, 2) => SampleAlignment::High,
                 _ => SampleAlignment::Low,
             },
@@ -362,6 +398,10 @@ pub struct YuvFrame {
 }
 
 impl YuvFrame {
+    pub(crate) fn from_parts(buffer: wgpu::Buffer, layout: FrameLayout) -> Self {
+        Self { buffer, layout }
+    }
+
     pub fn buffer(&self) -> &wgpu::Buffer {
         &self.buffer
     }

@@ -15,6 +15,7 @@ mod table;
 mod taps;
 #[cfg(test)]
 mod testing;
+mod unpack;
 
 pub use crate::{
     convert::{
@@ -29,4 +30,5 @@ pub use crate::{
     sigmoid::Sigmoid,
     table::TapTable,
     taps::Taps,
+    unpack::{OutputLight, RgbConvertSettings, RgbConverter},
 };

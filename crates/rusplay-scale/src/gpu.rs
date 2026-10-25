@@ -22,6 +22,16 @@ const PACK_CHROMA_SHADER: &str = concat!(
     include_str!("convert_common.wgsl"),
     include_str!("convert_pack.wgsl")
 );
+const UNPACK_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_chroma.wgsl")
+);
+const UNPACK_RGB_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
@@ -65,6 +75,14 @@ pub struct ScalePipelines {
     pub(crate) polar_layout: wgpu::BindGroupLayout,
     pub(crate) polar: ShaderPass,
     pub(crate) convert: ConvertPipelines,
+    pub(crate) unpack: UnpackPasses,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnpackPasses {
+    pub input_layout: wgpu::BindGroupLayout,
+    pub chroma: ShaderPass,
+    pub rgb: ShaderPass,
 }
 
 #[derive(Debug, Clone)]
@@ -222,6 +240,16 @@ impl ScalePipelines {
 
         let convert = ConvertPipelines::new(device, &source_layout, &polar_layout);
 
+        let unpack = unpack_passes(
+            device,
+            [
+                &source_layout,
+                &destination_layout,
+                &convert.chroma_target_layout,
+                &convert.table_layout,
+            ],
+        );
+
         Self {
             source_layout,
             destination_layout,
@@ -230,6 +258,7 @@ impl ScalePipelines {
             polar_layout,
             polar,
             convert,
+            unpack,
         }
     }
 
@@ -247,6 +276,45 @@ impl ScalePipelines {
         view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         view_group(device, &self.destination_layout, view)
+    }
+}
+
+fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) -> UnpackPasses {
+    let [
+        source_layout,
+        destination_layout,
+        chroma_target_layout,
+        convert_table_layout,
+    ] = layouts;
+    let input_layout = layout(device, "rusplay-unpack-input", &[storage_buffer_entry(0)]);
+    let unpack_chroma = compute_pipeline(
+        device,
+        "rusplay-unpack-chroma",
+        &[&input_layout, chroma_target_layout, convert_table_layout],
+        UNPACK_CHROMA_SHADER,
+        "unpack_chroma",
+        CONVERT_WORKGROUP,
+        &[],
+    );
+    let unpack_rgb = compute_pipeline(
+        device,
+        "rusplay-unpack-rgb",
+        &[
+            &input_layout,
+            source_layout,
+            destination_layout,
+            convert_table_layout,
+        ],
+        UNPACK_RGB_SHADER,
+        "unpack_rgb",
+        CONVERT_WORKGROUP,
+        &[],
+    );
+
+    UnpackPasses {
+        input_layout,
+        chroma: unpack_chroma,
+        rgb: unpack_rgb,
     }
 }
 

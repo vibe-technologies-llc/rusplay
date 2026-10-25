@@ -14,7 +14,8 @@ paths:
   `rev` means re-reading Zed's `[patch.crates-io]` and `gpui_linux` features.
 - The app is a thin shell over `rusplay-client` and `rusplay-host`. Session logic stays in those
   crates so `rusplay-hostd` and the app behave the same. The app only builds the config, constructs
-  `ClientSession` and runs it on gpui's background executor, then shows the resulting error as text.
+  `ClientSession` and calls `probe` on gpui's background executor (until `app-stream-view` calls
+  `connect` with the shared device and a `FrameSink`), then shows the resulting error as text.
 - Every setting in `rusplay-config` is reachable from the UI, and the UI writes the same TOML the
   headless host reads.
 - The stream is presented through the same wgpu device that `rusplay-scale` uses, to avoid a copy

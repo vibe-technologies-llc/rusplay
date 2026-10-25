@@ -5,13 +5,25 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+software = ["rusplay-decode/software"]
+vaapi = ["rusplay-decode/vaapi"]
+
 [dependencies]
+parking_lot.workspace = true
 rusplay-audio.workspace = true
 rusplay-config.workspace = true
+rusplay-core.workspace = true
 rusplay-decode.workspace = true
 rusplay-input.workspace = true
 rusplay-net.workspace = true
+rusplay-protocol.workspace = true
+rusplay-scale.workspace = true
 thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
 
 [lints]
 workspace = true

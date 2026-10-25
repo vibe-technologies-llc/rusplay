@@ -201,6 +201,17 @@ mod tests {
     }
 
     #[test]
+    fn empty_decode_queue_is_rejected() {
+        let mut config = Config::default();
+        config.video.decode_queue_frames = 0;
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroDecodeQueue)
+        ));
+    }
+
+    #[test]
     fn default_config_is_valid() {
         assert!(Config::default().validate().is_ok());
     }

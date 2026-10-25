@@ -30,6 +30,9 @@ pub struct NetworkConfig {
     pub pairing_max_attempts: u8,
     pub pairing_timeout_ms: u32,
     pub reconnect_timeout_ms: u32,
+    pub handshake_timeout_ms: u32,
+    pub peer_timeout_ms: u32,
+    pub keyframe_request_interval_ms: u16,
 }
 
 impl Default for NetworkConfig {
@@ -51,6 +54,9 @@ impl Default for NetworkConfig {
             pairing_max_attempts: 3,
             pairing_timeout_ms: 120_000,
             reconnect_timeout_ms: 5_000,
+            handshake_timeout_ms: 5_000,
+            peer_timeout_ms: 5_000,
+            keyframe_request_interval_ms: 100,
         }
     }
 }
@@ -101,6 +107,18 @@ impl NetworkConfig {
             return Err(ConfigError::ZeroReconnectTimeout);
         }
 
+        if self.handshake_timeout_ms == 0 {
+            return Err(ConfigError::ZeroHandshakeTimeout);
+        }
+
+        if self.peer_timeout_ms == 0 {
+            return Err(ConfigError::ZeroPeerTimeout);
+        }
+
+        if self.keyframe_request_interval_ms == 0 {
+            return Err(ConfigError::ZeroKeyframeRequestInterval);
+        }
+
         Ok(())
     }
 }
@@ -108,6 +126,32 @@ impl NetworkConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_session_timings_are_rejected() {
+        let handshake = NetworkConfig {
+            handshake_timeout_ms: 0,
+            ..NetworkConfig::default()
+        };
+        let peer = NetworkConfig {
+            peer_timeout_ms: 0,
+            ..NetworkConfig::default()
+        };
+        let keyframe = NetworkConfig {
+            keyframe_request_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            handshake.validate(),
+            Err(ConfigError::ZeroHandshakeTimeout)
+        ));
+        assert!(matches!(peer.validate(), Err(ConfigError::ZeroPeerTimeout)));
+        assert!(matches!(
+            keyframe.validate(),
+            Err(ConfigError::ZeroKeyframeRequestInterval)
+        ));
+    }
 
     #[test]
     fn zero_reassembly_timeout_is_rejected() {
