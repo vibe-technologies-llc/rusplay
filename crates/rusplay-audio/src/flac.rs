@@ -151,6 +151,7 @@ impl AudioEncoder for FlacAudioEncoder {
 
 pub struct FlacAudioDecoder {
     channels: usize,
+    block_size: usize,
     buffer: Vec<i32>,
 }
 
@@ -158,6 +159,7 @@ impl FlacAudioDecoder {
     pub fn new(config: &AudioConfig) -> Result<Self, AudioError> {
         Ok(Self {
             channels: usize::from(config.channels.channel_count()),
+            block_size: usize::from(config.flac.block_size),
             buffer: Vec::new(),
         })
     }
@@ -199,6 +201,20 @@ impl AudioDecoder for FlacAudioDecoder {
         self.buffer = block.into_buffer();
 
         Ok(frames)
+    }
+
+    fn conceal(&mut self, pcm: &mut [f32]) -> Result<usize, AudioError> {
+        let expected = self.block_size * self.channels;
+        let capacity = pcm.len();
+        let silence = pcm
+            .get_mut(..expected)
+            .ok_or(AudioError::FrameLengthMismatch {
+                expected,
+                found: capacity,
+            })?;
+        silence.fill(0.0);
+
+        Ok(self.block_size)
     }
 }
 
@@ -292,6 +308,20 @@ mod tests {
                     .all(|found| *found == expected.to_bits())
             );
         }
+    }
+
+    #[test]
+    fn a_lost_block_is_silent() {
+        let config = AudioConfig::default();
+        let mut decoder = FlacAudioDecoder::new(&config).unwrap();
+
+        let block = usize::from(config.flac.block_size);
+        let mut output = vec![1.0; block * 2];
+
+        let produced = decoder.conceal(&mut output).unwrap();
+
+        assert_eq!(produced, block);
+        assert!(output.iter().all(|sample| sample.to_bits() == 0));
     }
 
     #[test]

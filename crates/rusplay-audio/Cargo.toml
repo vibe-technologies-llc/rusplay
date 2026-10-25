@@ -14,7 +14,7 @@ claxon = { workspace = true, optional = true }
 flacenc = { workspace = true, optional = true }
 opus-rs = { workspace = true, features = ["std"] }
 parking_lot = { workspace = true, optional = true }
-pipewire = { workspace = true, optional = true }
+pipewire = { workspace = true, optional = true, features = ["v0_3_49"] }
 rtrb = { workspace = true, optional = true }
 rubato.workspace = true
 rusplay-config.workspace = true

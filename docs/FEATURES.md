@@ -25,9 +25,6 @@
 - [L] `decode-nvdec`: NVDEC decoder
 - [M] `decode-rav1d`: software AV1 decode via rav1d
 
-# Audio
-- [M] `audio-playback`: PipeWire playback on the client with a minimal jitter buffer
-
 # Networking
 - [M] `net-fec`: Reed-Solomon shard encode/decode for `FecScheme`
 - [M] `net-reassembly`: fragment reassembly into frames with loss detection

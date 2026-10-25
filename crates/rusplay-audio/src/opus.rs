@@ -97,6 +97,7 @@ enum DecoderEngine {
 pub struct OpusAudioDecoder {
     engine: DecoderEngine,
     frame_samples: usize,
+    channels: usize,
 }
 
 impl OpusAudioDecoder {
@@ -120,6 +121,7 @@ impl OpusAudioDecoder {
         Ok(Self {
             engine,
             frame_samples: config.opus.frame_duration.samples_at(config.sample_rate),
+            channels: usize::from(config.channels.channel_count()),
         })
     }
 }
@@ -131,6 +133,35 @@ impl AudioDecoder for OpusAudioDecoder {
             DecoderEngine::Multistream(decoder) => decoder.decode(packet, self.frame_samples, pcm),
         }
         .map_err(AudioError::OpusDecode)
+    }
+
+    fn conceal(&mut self, pcm: &mut [f32]) -> Result<usize, AudioError> {
+        match &mut self.engine {
+            DecoderEngine::Single(decoder) => decoder
+                .decode(&[], self.frame_samples, pcm)
+                .map_err(AudioError::OpusDecode),
+            DecoderEngine::Multistream(_) => {
+                let expected = self.frame_samples * self.channels;
+                let capacity = pcm.len();
+                let silence = pcm
+                    .get_mut(..expected)
+                    .ok_or(AudioError::FrameLengthMismatch {
+                        expected,
+                        found: capacity,
+                    })?;
+                silence.fill(0.0);
+                Ok(self.frame_samples)
+            }
+        }
+    }
+
+    fn recover(&mut self, next_packet: &[u8], pcm: &mut [f32]) -> Result<usize, AudioError> {
+        match &mut self.engine {
+            DecoderEngine::Single(decoder) => decoder
+                .decode_fec(next_packet, self.frame_samples, pcm)
+                .map_err(AudioError::OpusDecode),
+            DecoderEngine::Multistream(_) => self.conceal(pcm),
+        }
     }
 }
 
@@ -251,6 +282,70 @@ mod tests {
     #[test]
     fn surround_71_keeps_every_channel_separate() {
         assert_channel_identity_survives(ChannelLayout::Surround71);
+    }
+
+    #[test]
+    fn a_lost_stereo_frame_is_concealed_with_audio() {
+        on_codec_thread(|| {
+            let config = config_for(ChannelLayout::Stereo);
+            let mut encoder = OpusAudioEncoder::new(&config).unwrap();
+            let mut decoder = OpusAudioDecoder::new(&config).unwrap();
+
+            let frame_samples = encoder.frame_samples();
+            let mut packet = vec![0; 4000];
+            let mut output = vec![0.0; frame_samples * 2];
+
+            for frame_index in 0..FRAMES_PER_RUN {
+                let input = tone_frame(frame_index, frame_samples, 2, 0);
+                let written = encoder.encode(&input, &mut packet).unwrap();
+                decoder.decode(&packet[..written], &mut output).unwrap();
+            }
+
+            let produced = decoder.conceal(&mut output).unwrap();
+            let energy: f32 = output.iter().map(|sample| sample * sample).sum();
+
+            assert_eq!(produced, frame_samples);
+            assert!(energy > 0.0);
+        });
+    }
+
+    #[test]
+    fn a_lost_frame_is_recovered_from_the_next_packet() {
+        on_codec_thread(|| {
+            let config = config_for(ChannelLayout::Stereo);
+            let mut encoder = OpusAudioEncoder::new(&config).unwrap();
+            let mut decoder = OpusAudioDecoder::new(&config).unwrap();
+
+            let frame_samples = encoder.frame_samples();
+            let mut packet = vec![0; 4000];
+            let mut output = vec![0.0; frame_samples * 2];
+
+            for frame_index in 0..FRAMES_PER_RUN {
+                let input = tone_frame(frame_index, frame_samples, 2, 0);
+                let written = encoder.encode(&input, &mut packet).unwrap();
+                decoder.decode(&packet[..written], &mut output).unwrap();
+            }
+
+            let input = tone_frame(FRAMES_PER_RUN, frame_samples, 2, 0);
+            let written = encoder.encode(&input, &mut packet).unwrap();
+            let produced = decoder.recover(&packet[..written], &mut output).unwrap();
+
+            assert_eq!(produced, frame_samples);
+        });
+    }
+
+    #[test]
+    fn a_lost_surround_frame_is_silent() {
+        on_codec_thread(|| {
+            let config = config_for(ChannelLayout::Surround51);
+            let mut decoder = OpusAudioDecoder::new(&config).unwrap();
+
+            let mut output = vec![1.0; decoder.frame_samples * 6];
+            let produced = decoder.conceal(&mut output).unwrap();
+
+            assert_eq!(produced, decoder.frame_samples);
+            assert!(output.iter().all(|sample| sample.to_bits() == 0));
+        });
     }
 
     #[test]

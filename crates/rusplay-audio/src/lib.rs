@@ -6,13 +6,17 @@ mod flac;
 mod multistream;
 mod opus;
 #[cfg(feature = "pipewire")]
+mod playback;
+#[cfg(feature = "pipewire")]
 mod pw_common;
 mod resample;
-
 #[cfg(feature = "pipewire")]
-pub use crate::capture::AudioCapture;
+mod ring;
+
 #[cfg(feature = "flac")]
 pub use crate::flac::{FlacAudioDecoder, FlacAudioEncoder};
+#[cfg(feature = "pipewire")]
+pub use crate::{capture::AudioCapture, playback::AudioPlayback};
 pub use crate::{
     error::AudioError,
     opus::{OpusAudioDecoder, OpusAudioEncoder},
@@ -29,4 +33,11 @@ pub trait AudioEncoder {
 
 pub trait AudioDecoder {
     fn decode(&mut self, packet: &[u8], pcm: &mut [f32]) -> Result<usize, AudioError>;
+
+    fn conceal(&mut self, pcm: &mut [f32]) -> Result<usize, AudioError>;
+
+    fn recover(&mut self, next_packet: &[u8], pcm: &mut [f32]) -> Result<usize, AudioError> {
+        let _ = next_packet;
+        self.conceal(pcm)
+    }
 }

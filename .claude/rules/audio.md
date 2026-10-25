@@ -42,3 +42,16 @@ paths:
 - Live PipeWire tests are `#[ignore]`d and run by hand with
   `cargo test -p rusplay-audio --all-features -- --ignored`. `PIPEWIRE_NODE=<sink name>` points
   the capture at another sink, which allows a loopback check against a null sink without sound.
+- Playback (`AudioPlayback`, feature `pipewire`) mirrors capture: a PipeWire output stream on its
+  own thread whose `process` callback (`Playout::render`) reads an `rtrb` ring and never blocks or
+  allocates. `submit` writes decoded frames into the ring, through `PcmResampler` if the stream
+  negotiated another rate, and counts frames dropped when the ring is full as `overflows`.
+- The jitter buffer is `audio.jitter_buffer_ms` (default 10, at most 500). The callback outputs
+  silence until at least `max(target, one quantum)` frames are queued, then plays. If it runs dry
+  it pads the rest of that quantum with silence, counts an `underrun` and re-buffers up to the
+  target. If the queue grows past twice that floor (clock drift, a burst) it drops the surplus
+  down to the floor and counts a `trim`, so latency cannot creep up.
+- Lost packets are the caller's to conceal before `submit`: `AudioDecoder::conceal` runs Opus
+  PLC (`decode` with an empty packet) for mono and stereo, `recover` rebuilds the lost frame from
+  the in-band FEC of the packet that followed. opus-rs's multistream decoder has no loss path, so
+  surround and FLAC conceal with silence.

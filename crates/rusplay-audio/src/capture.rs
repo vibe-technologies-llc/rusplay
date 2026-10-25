@@ -17,45 +17,26 @@ use pipewire::{
     spa::{pod::Pod, utils::Direction},
     stream::{StreamBox, StreamFlags, StreamState},
 };
-use rtrb::{Consumer, Producer, RingBuffer};
+use rtrb::Consumer;
 use rusplay_config::AudioConfig;
 use rusplay_core::{AudioCodec, ChannelLayout};
 
 use crate::{
     AudioError, PcmResampler,
     pw_common::{PipewireThread, StartupSender, format_pod_bytes, negotiated_format, node_latency},
+    ring::{RingWriter, sample_ring},
 };
 
-const RING_MILLISECONDS: usize = 250;
 const SCRATCH_SAMPLES: usize = 16 * 1024;
 const BYTES_PER_SAMPLE: usize = size_of::<f32>();
 
 type SharedWaiter = Arc<Mutex<Option<Thread>>>;
-
-fn frames_per_ring(rate: u32) -> usize {
-    rate as usize * RING_MILLISECONDS / 1000
-}
 
 fn wake(waiter: &SharedWaiter) {
     if let Some(guard) = waiter.try_lock()
         && let Some(thread) = guard.as_ref()
     {
         thread.unpark();
-    }
-}
-
-struct RingWriter {
-    producer: Producer<f32>,
-    channels: usize,
-}
-
-impl RingWriter {
-    fn write(&mut self, samples: &[f32]) -> usize {
-        let writable = self.producer.slots().min(samples.len()) / self.channels * self.channels;
-        match self.producer.push_entire_slice(&samples[..writable]) {
-            Ok(()) => samples.len() - writable,
-            Err(_) => samples.len(),
-        }
     }
 }
 
@@ -103,11 +84,6 @@ impl SampleSource {
         }
         Ok(true)
     }
-}
-
-fn sample_ring(rate: u32, channels: usize) -> (RingWriter, Consumer<f32>) {
-    let (producer, consumer) = RingBuffer::new(frames_per_ring(rate) * channels);
-    (RingWriter { producer, channels }, consumer)
 }
 
 struct CaptureCallbacks {
@@ -323,6 +299,7 @@ impl AudioCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ring::frames_per_ring;
 
     fn source_for(
         native_rate: u32,

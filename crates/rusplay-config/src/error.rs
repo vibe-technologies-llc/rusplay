@@ -23,6 +23,8 @@ pub enum ConfigError {
     ZeroAudioBitrate,
     #[error("flac compression level {0} is outside 0..=8")]
     FlacCompressionOutOfRange(u8),
+    #[error("jitter buffer {0} ms is above 500 ms")]
+    JitterBufferOutOfRange(u32),
     #[error("flac block size {0} is outside 32..=32767")]
     FlacBlockSizeOutOfRange(u16),
     #[error("mtu {0} is outside 576..=9000")]
