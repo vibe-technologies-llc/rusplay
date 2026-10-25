@@ -14,6 +14,8 @@ pub struct AudioConfig {
     pub sample_rate: SampleRate,
     pub channels: ChannelLayout,
     pub jitter_buffer_ms: u32,
+    pub decode_queue_packets: u16,
+    pub max_conceal_ms: u16,
     pub opus: OpusConfig,
     pub flac: FlacConfig,
 }
@@ -25,6 +27,8 @@ impl Default for AudioConfig {
             sample_rate: SampleRate::default(),
             channels: ChannelLayout::default(),
             jitter_buffer_ms: 10,
+            decode_queue_packets: 32,
+            max_conceal_ms: 50,
             opus: OpusConfig::default(),
             flac: FlacConfig::default(),
         }
@@ -41,6 +45,10 @@ impl AudioConfig {
             return Err(ConfigError::FlacCompressionOutOfRange(
                 self.flac.compression_level,
             ));
+        }
+
+        if self.decode_queue_packets == 0 {
+            return Err(ConfigError::ZeroAudioDecodeQueue);
         }
 
         if self.jitter_buffer_ms > MAX_JITTER_BUFFER_MS {
@@ -121,6 +129,36 @@ mod tests {
     #[test]
     fn jitter_buffer_defaults_to_ten_milliseconds() {
         assert_eq!(AudioConfig::default().jitter_buffer_ms, 10);
+    }
+
+    #[test]
+    fn client_queue_and_concealment_defaults() {
+        let config = AudioConfig::default();
+
+        assert_eq!(config.decode_queue_packets, 32);
+        assert_eq!(config.max_conceal_ms, 50);
+    }
+
+    #[test]
+    fn empty_decode_queue_is_rejected() {
+        let config = AudioConfig {
+            decode_queue_packets: 0,
+            ..AudioConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroAudioDecodeQueue)
+        ));
+    }
+
+    #[test]
+    fn queue_and_concealment_parse_from_toml() {
+        let parsed: AudioConfig =
+            toml::from_str("decode_queue_packets = 8\nmax_conceal_ms = 0").unwrap();
+
+        assert_eq!(parsed.decode_queue_packets, 8);
+        assert_eq!(parsed.max_conceal_ms, 0);
     }
 
     #[test]

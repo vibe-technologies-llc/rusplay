@@ -17,10 +17,12 @@ paths:
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
-- Three named threads (`rusplay-client-receive`, `-decode`, `-present`), each returning
-  `Result<(), ClientError>`. Any stage that ends sets the shared stop flag; `ClientStream::wait`
-  and `stop` join all three and return the first error. Dropping the stream stops it.
-- Receive owns the transport, the `ControlChannel` and the video `Reassembler`. It waits in
+- Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
+  audio output exists, each returning `Result<(), ClientError>`. Any stage that ends sets the
+  shared stop flag; `ClientStream::wait` and `stop` join them all and return the first error.
+  Dropping the stream stops it.
+- Receive owns the transport, the `ControlChannel` and one `Reassembler` per media stream (video,
+  cursor, and audio when there is an output). It waits in
   `Transport::recv_batch_timeout` until the nearest control deadline, reassembly timeout, keyframe
   retry or peer deadline, at most 10 ms, so decode feedback is picked up without a wake-up socket.
   Datagrams from any address but the host are ignored; FEC packets are routed by
@@ -67,11 +69,49 @@ paths:
   gamut or tone-mapping pass goes in `present.rs` between the unpack and the scaler, on the
   source-resolution linear texture, and updates `FrameColor` accordingly, without changing the
   public types.
+- Audio (`audio.rs`): `connect` opens an `AudioOutput` before it spawns the stages. The default
+  (`default_audio_output`) is `AudioPlayback` when the `pipewire` feature is on and none
+  otherwise; `connect_with_audio` takes any `Option<Box<dyn AudioOutput>>` (tests pass a capturing
+  output, `None` skips audio). With no output, `StreamKind::Audio` datagrams are ignored and never
+  reassembled. A failure to start the output fails `connect`; a later `submit` failure ends the
+  audio stage and with it the stream.
+- Host contract for audio: one codec packet per audio frame number, counting up by one, sent
+  through a `Packetizer` on `StreamKind::Audio` (so a packet bigger than a datagram, like FLAC,
+  fragments and may carry FEC). The receive stage reassembles it and hands `EncodedAudio` to the
+  audio thread with `try_send` on a bounded `sync_channel` of `audio.decode_queue_packets`; a full
+  queue drops the new packet (`audio_packets_dropped`) and never blocks the receive thread. Audio
+  loss is not reported over the control channel and never asks for a keyframe.
+- The audio thread opens the decoder itself (Opus, or FLAC with the `flac` feature; FLAC without
+  it is `AudioCodecNotCompiled`) on a `CODEC_THREAD_STACK_BYTES` stack, and `connect` waits for
+  it. `AudioPipeline` is the testable core: it tracks the next expected frame number, and a gap of
+  `n` frames is bridged before the arriving packet is decoded. The first `n - 1` lost frames use
+  `conceal` (Opus PLC), the last uses `recover` from the arriving packet (in-band FEC); surround
+  and FLAC conceal with silence. At most `audio.max_conceal_ms` worth of frames are produced, so a
+  long outage is skipped rather than played back as a stretch of invented audio (`0` turns
+  concealment off). A late or duplicate frame number is discarded (`audio_packets_late`), a
+  decode error is counted and replaced by one concealed frame, and serial-number arithmetic makes
+  wrap transparent. Smoothing against network jitter is the output's own buffer
+  (`audio.jitter_buffer_ms` in `AudioPlayback`); the pipeline submits each frame as soon as it is
+  decoded.
+- `ClientStats` copies the output's `underruns`, `trims` and `overflows` after every packet.
+- Cursor (`cursor.rs`): `StreamKind::Cursor` has its own `Reassembler` (a shape image is larger
+  than a datagram) and each completed frame is decoded as a `CursorMessage` on the receive
+  thread. `LatestCursor`, from `ClientStream::cursor`, holds the latest `CursorState`
+  (position, visibility, `Arc<CursorImage>`); a position-only message keeps the previous image's
+  `Arc`, so the app re-uploads the shape only when `Arc::ptr_eq` says it changed. `updates` counts
+  messages and `wait_after(seen, timeout)` blocks for a newer one. A malformed message counts in
+  `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is not
+  repaired (see `docs/BUGS.md`).
 - DMA-BUF frames from VAAPI fail with `DmaBufPresentUnsupported` until `client-dmabuf-present`.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
+- Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
+  `Transport` and checks audio and cursor routing, FEC, fragmentation and queue overflow;
+  `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange, the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
-  datagram, keyframe restarts on `RequestKeyframe` and a closing `Goodbye`. They return early
+  datagram, keyframe restarts on `RequestKeyframe`, Opus audio packets every 5 ms with a drop
+  rule, cursor messages and a closing `Goodbye`. They connect with `connect_with_audio` and a
+  capturing output, so they need no PipeWire. They return early
   without a GPU adapter. The client config in the tests raises `video.decode_queue_frames`
   because the unoptimised rav1d build is slow.

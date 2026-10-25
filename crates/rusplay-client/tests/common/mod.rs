@@ -13,14 +13,18 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusplay_client::{Gpu, Pin};
+use rusplay_audio::{AudioEncoder, CODEC_THREAD_STACK_BYTES, OpusAudioEncoder};
+use rusplay_client::{
+    AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream, Credentials,
+    FrameSink, Gpu, Pin,
+};
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::Codec;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
     PairingTiming, Transport, TransportOptions, pair_as_host,
 };
-use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
+use rusplay_protocol::{ControlMessage, CursorMessage, PacketHeader, ProtocolVersion, StreamKind};
 
 pub const PIN: &str = "482916";
 pub const FIXTURE_WIDTH: u32 = 256;
@@ -30,6 +34,8 @@ const IVF_HEADER_LEN: usize = 32;
 const IVF_FRAME_HEADER_LEN: usize = 12;
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const TEST_DECODE_QUEUE_FRAMES: u8 = 16;
+const AUDIO_INTERVAL: Duration = Duration::from_millis(5);
+const AUDIO_PACKET_BUFFER: usize = 4000;
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 const FEC_DATA_SHARDS: u8 = 32;
 const HOST_PAIRING_TIMEOUT_MS: u32 = 3_000;
@@ -106,6 +112,9 @@ pub struct HostOptions {
     pub frames: u32,
     pub drop: DropRule,
     pub goodbye: bool,
+    pub audio: Vec<Vec<u8>>,
+    pub audio_drop: Box<dyn Fn(u32) -> bool + Send>,
+    pub cursor: Vec<CursorMessage>,
 }
 
 impl Default for HostOptions {
@@ -114,6 +123,9 @@ impl Default for HostOptions {
             frames: 24,
             drop: Box::new(|_| false),
             goodbye: true,
+            audio: Vec::new(),
+            audio_drop: Box::new(|_| false),
+            cursor: Vec::new(),
         }
     }
 }
@@ -179,6 +191,68 @@ impl Drop for TestHost {
     }
 }
 
+struct Extras {
+    audio: Packetizer,
+    cursor: Packetizer,
+    audio_index: usize,
+    audio_next_send: Instant,
+    cursor_index: usize,
+    cursor_next_send: Instant,
+}
+
+impl Extras {
+    fn new(transport: &Transport, client: &SocketAddr) -> Self {
+        let packetizer = |stream| {
+            Packetizer::new(stream, transport.max_datagram_len(client), FecScheme::None).unwrap()
+        };
+
+        Self {
+            audio: packetizer(StreamKind::Audio),
+            cursor: packetizer(StreamKind::Cursor),
+            audio_index: 0,
+            audio_next_send: Instant::now(),
+            cursor_index: 0,
+            cursor_next_send: Instant::now(),
+        }
+    }
+
+    fn done(&self, options: &HostOptions) -> bool {
+        self.audio_index == options.audio.len() && self.cursor_index == options.cursor.len()
+    }
+
+    fn send_due(&mut self, transport: &Transport, client: SocketAddr, options: &HostOptions) {
+        let now = Instant::now();
+
+        if self.audio_index < options.audio.len() && now >= self.audio_next_send {
+            let number = u32::try_from(self.audio_index).unwrap();
+            if !(options.audio_drop)(number) {
+                let datagrams = self
+                    .audio
+                    .packetize(number, false, &options.audio[self.audio_index])
+                    .unwrap();
+                for datagram in datagrams {
+                    transport.send_to(&datagram, client).unwrap();
+                }
+            }
+            self.audio_index += 1;
+            self.audio_next_send += AUDIO_INTERVAL;
+        }
+
+        if self.cursor_index < options.cursor.len() && now >= self.cursor_next_send {
+            let mut encoded = Vec::new();
+            options.cursor[self.cursor_index]
+                .encode(&mut encoded)
+                .unwrap();
+            let number = u32::try_from(self.cursor_index).unwrap();
+            for datagram in self.cursor.packetize(number, false, &encoded).unwrap() {
+                transport.send_to(&datagram, client).unwrap();
+            }
+            self.cursor_index += 1;
+            self.cursor_next_send += FRAME_INTERVAL;
+        }
+    }
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
@@ -202,6 +276,7 @@ fn serve(
         FecScheme::for_overhead(FEC_DATA_SHARDS, network.fec_overhead_percent),
     )
     .unwrap();
+    let mut extras = Extras::new(transport, &client);
     let mut events = Vec::new();
     let mut buf = vec![0; usize::from(network.mtu)];
     let mut streaming = false;
@@ -272,7 +347,12 @@ fn serve(
             next_send += FRAME_INTERVAL;
         }
 
-        if next_frame == options.frames && options.goodbye && finished_at.is_none() {
+        if streaming {
+            extras.send_due(transport, client, options);
+        }
+
+        let media_done = next_frame == options.frames && extras.done(options);
+        if media_done && options.goodbye && finished_at.is_none() {
             control.send(ControlMessage::Goodbye, Instant::now()).ok();
             finished_at = Some(Instant::now());
         }
@@ -342,4 +422,59 @@ pub fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[u16; 4]> {
             })
         })
         .collect()
+}
+
+pub fn opus_packets(count: u32) -> Vec<Vec<u8>> {
+    thread::Builder::new()
+        .stack_size(CODEC_THREAD_STACK_BYTES)
+        .spawn(move || {
+            let config = rusplay_config::AudioConfig::default();
+            let mut encoder = OpusAudioEncoder::new(&config).unwrap();
+            let samples = encoder.frame_samples() * usize::from(config.channels.channel_count());
+
+            (0..count)
+                .map(|number| {
+                    let tone: Vec<f32> = (0..samples)
+                        .map(|index| {
+                            let phase = f32::from(u16::try_from(index).unwrap())
+                                + f32::from(u16::try_from(number).unwrap()) * 7.0;
+                            (phase * 0.05).sin() * 0.5
+                        })
+                        .collect();
+                    let mut packet = vec![0; AUDIO_PACKET_BUFFER];
+                    let written = encoder.encode(&tone, &mut packet).unwrap();
+                    packet.truncate(written);
+                    packet
+                })
+                .collect()
+        })
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[derive(Clone, Default)]
+pub struct CapturedAudio {
+    pub samples: Arc<Mutex<Vec<f32>>>,
+}
+
+impl AudioOutput for CapturedAudio {
+    fn submit(&mut self, pcm: &[f32]) -> Result<usize, rusplay_audio::AudioError> {
+        self.samples.lock().extend_from_slice(pcm);
+        Ok(0)
+    }
+
+    fn stats(&self) -> AudioOutputStats {
+        AudioOutputStats::default()
+    }
+}
+
+pub fn connect_silent(
+    session: &ClientSession,
+    host: SocketAddr,
+    credentials: &Credentials,
+    gpu: Gpu,
+    sink: impl FrameSink,
+) -> Result<ClientStream, ClientError> {
+    session.connect_with_audio(host, credentials, gpu, sink, None)
 }

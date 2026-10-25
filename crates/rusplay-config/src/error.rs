@@ -43,6 +43,8 @@ pub enum ConfigError {
     ZeroAudioBitrate,
     #[error("flac compression level {0} is outside 0..=8")]
     FlacCompressionOutOfRange(u8),
+    #[error("audio decode queue must hold at least one packet")]
+    ZeroAudioDecodeQueue,
     #[error("jitter buffer {0} ms is above 500 ms")]
     JitterBufferOutOfRange(u32),
     #[error("flac block size {0} is outside 32..=32767")]
@@ -120,6 +122,7 @@ impl ConfigError {
             Self::QpOutOfRange(_) => Some("video.encoder.rate_control.qp"),
             Self::ZeroAudioBitrate => Some("audio.opus.bitrate_kbps"),
             Self::FlacCompressionOutOfRange(_) => Some("audio.flac.compression_level"),
+            Self::ZeroAudioDecodeQueue => Some("audio.decode_queue_packets"),
             Self::JitterBufferOutOfRange(_) => Some("audio.jitter_buffer_ms"),
             Self::FlacBlockSizeOutOfRange(_) => Some("audio.flac.block_size"),
             Self::MtuOutOfRange(_) => Some("network.mtu"),

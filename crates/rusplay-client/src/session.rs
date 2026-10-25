@@ -10,7 +10,8 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusplay_config::{Config, NetworkConfig};
+use rusplay_audio::CODEC_THREAD_STACK_BYTES;
+use rusplay_config::{AudioConfig, Config, NetworkConfig};
 use rusplay_core::Resolution;
 use rusplay_net::{
     PairingTiming, PeerRecord, PeerSecret, Pin, ReconnectTiming, Transport, TransportOptions,
@@ -18,7 +19,8 @@ use rusplay_net::{
 };
 
 use crate::{
-    ClientError, ClientStats, FrameSink, Stage,
+    AudioOutput, ClientError, ClientStats, FrameSink, LatestCursor, Stage,
+    audio::{self, AudioLinks, EncodedAudio},
     decode::{self, DecodeLinks},
     present::{self, PresentLinks, PresentOptions, SharedTarget},
     receive::{Links, ReceiveStage},
@@ -56,7 +58,7 @@ impl ClientSession {
 
     pub fn probe(&self) -> Result<(), ClientError> {
         let _decoder = rusplay_decode::open(self.config.video.codec, &self.config.video.decoder)?;
-        let _audio = rusplay_audio::OpusAudioDecoder::new(&self.config.audio)?;
+        let _audio = audio::open_decoder(&self.config.audio)?;
 
         Ok(())
     }
@@ -67,6 +69,34 @@ impl ClientSession {
         credentials: &Credentials,
         gpu: Gpu,
         sink: impl FrameSink,
+    ) -> Result<ClientStream, ClientError> {
+        self.connect_stream(
+            host,
+            credentials,
+            gpu,
+            Box::new(sink),
+            audio::default_audio_output,
+        )
+    }
+
+    pub fn connect_with_audio(
+        &self,
+        host: SocketAddr,
+        credentials: &Credentials,
+        gpu: Gpu,
+        sink: impl FrameSink,
+        output: Option<Box<dyn AudioOutput>>,
+    ) -> Result<ClientStream, ClientError> {
+        self.connect_stream(host, credentials, gpu, Box::new(sink), |_| Ok(output))
+    }
+
+    fn connect_stream(
+        &self,
+        host: SocketAddr,
+        credentials: &Credentials,
+        gpu: Gpu,
+        sink: Box<dyn FrameSink>,
+        open_audio: impl FnOnce(&AudioConfig) -> Result<Option<Box<dyn AudioOutput>>, ClientError>,
     ) -> Result<ClientStream, ClientError> {
         let network = &self.config.network;
         let transport = Transport::bind(
@@ -80,16 +110,24 @@ impl ClientSession {
             stop: Arc::new(AtomicBool::new(false)),
             counters: Arc::new(Counters::default()),
             target: Arc::new(Mutex::new(None)),
+            cursor: LatestCursor::new(),
             paired,
         };
         let decoded = Arc::new(Slot::new());
+        let output = open_audio(&self.config.audio)?;
 
-        stream.spawn_present(&self.config, gpu, Box::new(sink), &decoded)?;
+        stream.spawn_present(&self.config, gpu, sink, &decoded)?;
         let (queue, feedback) = stream.spawn_decode(&self.config, &decoded)?;
+        let audio_queue = match output {
+            Some(output) => Some(stream.spawn_audio(&self.config.audio, output)?),
+            None => None,
+        };
 
         let (handshake, handshake_done) = mpsc::channel();
         let links = Links {
             decode_queue: queue,
+            audio_queue,
+            cursor: stream.cursor.clone(),
             feedback,
             handshake,
             stop: Arc::clone(&stream.stop),
@@ -147,6 +185,7 @@ pub struct ClientStream {
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     target: SharedTarget,
+    cursor: LatestCursor,
     paired: Option<PeerSecret>,
 }
 
@@ -161,6 +200,10 @@ impl ClientStream {
 
     pub fn target(&self) -> Option<Resolution> {
         *self.target.lock()
+    }
+
+    pub fn cursor(&self) -> LatestCursor {
+        self.cursor.clone()
     }
 
     pub fn paired_secret(&self) -> Option<&PeerSecret> {
@@ -280,6 +323,41 @@ impl ClientStream {
                 self.stop.store(true, Ordering::Relaxed);
                 Err(self.join().err().unwrap_or(ClientError::StageNotReady {
                     stage: Stage::Decode,
+                }))
+            }
+        }
+    }
+
+    fn spawn_audio(
+        &mut self,
+        config: &AudioConfig,
+        output: Box<dyn AudioOutput>,
+    ) -> Result<mpsc::SyncSender<EncodedAudio>, ClientError> {
+        let (queue, queued) = mpsc::sync_channel(usize::from(config.decode_queue_packets));
+        let (ready, ready_received) = mpsc::channel();
+        let config = *config;
+        let links = AudioLinks {
+            queue: queued,
+            ready,
+            stop: Arc::clone(&self.stop),
+            counters: Arc::clone(&self.counters),
+        };
+
+        self.spawn(Stage::Audio, Some(CODEC_THREAD_STACK_BYTES), move || {
+            audio::run(&config, output, &links)
+        })?;
+
+        match ready_received.recv() {
+            Ok(Ok(())) => Ok(queue),
+            Ok(Err(error)) => {
+                self.stop.store(true, Ordering::Relaxed);
+                self.join().ok();
+                Err(error)
+            }
+            Err(_) => {
+                self.stop.store(true, Ordering::Relaxed);
+                Err(self.join().err().unwrap_or(ClientError::StageNotReady {
+                    stage: Stage::Audio,
                 }))
             }
         }

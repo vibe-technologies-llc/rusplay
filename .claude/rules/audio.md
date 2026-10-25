@@ -55,3 +55,6 @@ paths:
   PLC (`decode` with an empty packet) for mono and stereo, `recover` rebuilds the lost frame from
   the in-band FEC of the packet that followed. opus-rs's multistream decoder has no loss path, so
   surround and FLAC conceal with silence.
+- The client consumes these through `AudioDecoder` and `AudioPlayback` and owns the loss policy
+  (see `client.md`): it calls `conceal`/`recover` for the frames missing between two received
+  packet numbers and submits the results in order, so the playback buffer sees a gapless stream.
