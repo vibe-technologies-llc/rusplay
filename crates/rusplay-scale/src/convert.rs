@@ -395,7 +395,7 @@ impl ColorConverter {
             buffer_group(
                 device,
                 "rusplay-convert-output",
-                &pipelines.output_layout,
+                &pipelines.convert.output_layout,
                 &[&frame.buffer],
             )
         });
@@ -408,15 +408,23 @@ impl ColorConverter {
 
 #[derive(Debug)]
 struct ConvertPlan {
-    luma_group: wgpu::BindGroup,
-    chroma_group: wgpu::BindGroup,
-    pack_group: wgpu::BindGroup,
-    chroma_target: wgpu::BindGroup,
-    chroma_source: wgpu::BindGroup,
     luma_words: (u32, u32),
-    chroma_pass_size: (u32, u32),
-    chroma_words: (u32, u32),
-    chroma_layers: u32,
+    path: ChromaPath,
+}
+
+#[derive(Debug)]
+enum ChromaPath {
+    Direct {
+        group: wgpu::BindGroup,
+    },
+    Rows {
+        rows_group: wgpu::BindGroup,
+        pack_group: wgpu::BindGroup,
+        chroma_target: wgpu::BindGroup,
+        chroma_source: wgpu::BindGroup,
+        chroma_words: (u32, u32),
+        chroma_layers: u32,
+    },
 }
 
 impl ConvertPlan {
@@ -427,17 +435,52 @@ impl ConvertPlan {
         layout: &FrameLayout,
     ) -> Result<Self, ScaleError> {
         let (horizontal, vertical) = settings.chroma_tables();
-        let height = settings.resolution.height;
-        let chroma_size = settings.chroma_size();
         let luma = layout.planes[0];
-        let chroma = layout.planes[1];
-        let last = layout.planes[layout.planes.len() - 1];
-
         let params = uniform_buffer(
             device,
             "rusplay-convert-params",
             &params_bytes(settings, layout, &horizontal, &vertical)?,
         );
+
+        let path = if settings.format.chroma == ChromaSubsampling::Yuv444 {
+            ChromaPath::Direct {
+                group: buffer_group(
+                    device,
+                    "rusplay-convert-direct",
+                    &pipelines.convert.params_layout,
+                    &[&params],
+                ),
+            }
+        } else {
+            Self::rows_path(
+                pipelines,
+                device,
+                settings,
+                layout,
+                &params,
+                (&horizontal, &vertical),
+            )
+        };
+
+        Ok(Self {
+            luma_words: (luma.stride / 4, luma.height),
+            path,
+        })
+    }
+
+    fn rows_path(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        settings: &ConvertSettings,
+        layout: &FrameLayout,
+        params: &wgpu::Buffer,
+        (horizontal, vertical): (&TapTable, &TapTable),
+    ) -> ChromaPath {
+        let height = settings.resolution.height;
+        let chroma_width = settings.chroma_size().0;
+        let chroma = layout.planes[1];
+        let last = layout.planes[layout.planes.len() - 1];
+
         let horizontal_firsts =
             storage_buffer(device, "rusplay-convert-firsts", &horizontal.firsts);
         let horizontal_weights =
@@ -447,40 +490,36 @@ impl ConvertPlan {
         let intermediate = gpu::storage_texture(
             device,
             "rusplay-convert-chroma",
-            (chroma_size.0, height),
+            (chroma_width, height),
             CHROMA_FORMAT,
         );
 
-        Ok(Self {
-            luma_group: buffer_group(
+        ChromaPath::Rows {
+            rows_group: buffer_group(
                 device,
-                "rusplay-convert-luma",
-                &pipelines.convert_params_layout,
-                &[&params],
-            ),
-            chroma_group: buffer_group(
-                device,
-                "rusplay-convert-chroma",
-                &pipelines.convert_table_layout,
-                &[&params, &horizontal_firsts, &horizontal_weights],
+                "rusplay-convert-rows",
+                &pipelines.convert.table_layout,
+                &[params, &horizontal_firsts, &horizontal_weights],
             ),
             pack_group: buffer_group(
                 device,
                 "rusplay-pack-chroma",
-                &pipelines.convert_table_layout,
-                &[&params, &vertical_firsts, &vertical_weights],
+                &pipelines.convert.table_layout,
+                &[params, &vertical_firsts, &vertical_weights],
             ),
-            chroma_target: view_group(device, &pipelines.chroma_target_layout, &intermediate),
+            chroma_target: view_group(
+                device,
+                &pipelines.convert.chroma_target_layout,
+                &intermediate,
+            ),
             chroma_source: pipelines.source_group(device, &intermediate),
-            luma_words: (luma.stride / 4, luma.height),
-            chroma_pass_size: (chroma_size.0, height),
             chroma_words: (chroma.stride / 4, chroma.height),
             chroma_layers: if last.content == PlaneContent::Cr {
                 2
             } else {
                 1
             },
-        })
+        }
     }
 
     fn encode(
@@ -490,28 +529,39 @@ impl ConvertPlan {
         source_group: &wgpu::BindGroup,
         output_group: &wgpu::BindGroup,
     ) {
-        gpu::dispatch(
-            encoder,
-            "rusplay-convert-luma",
-            &pipelines.convert_luma,
-            &[source_group, output_group, &self.luma_group],
-            self.luma_words,
-        );
-        gpu::dispatch(
-            encoder,
-            "rusplay-convert-chroma",
-            &pipelines.convert_chroma,
-            &[source_group, &self.chroma_target, &self.chroma_group],
-            self.chroma_pass_size,
-        );
-        gpu::dispatch_layers(
-            encoder,
-            "rusplay-pack-chroma",
-            &pipelines.pack_chroma,
-            &[&self.chroma_source, output_group, &self.pack_group],
-            self.chroma_words,
-            self.chroma_layers,
-        );
+        match &self.path {
+            ChromaPath::Direct { group } => gpu::dispatch(
+                encoder,
+                "rusplay-convert-direct",
+                &pipelines.convert.direct,
+                &[source_group, output_group, group],
+                self.luma_words,
+            ),
+            ChromaPath::Rows {
+                rows_group,
+                pack_group,
+                chroma_target,
+                chroma_source,
+                chroma_words,
+                chroma_layers,
+            } => {
+                gpu::dispatch(
+                    encoder,
+                    "rusplay-convert-rows",
+                    &pipelines.convert.rows,
+                    &[source_group, output_group, rows_group, chroma_target],
+                    self.luma_words,
+                );
+                gpu::dispatch_layers(
+                    encoder,
+                    "rusplay-pack-chroma",
+                    &pipelines.convert.pack_chroma,
+                    &[chroma_source, output_group, pack_group],
+                    *chroma_words,
+                    *chroma_layers,
+                );
+            }
+        }
     }
 }
 
@@ -578,6 +628,7 @@ fn params_bytes(
 mod tests {
     use super::*;
     use crate::{
+        gpu::MAX_CHROMA_TAPS,
         reference::{self, SamplePlanes},
         testing::{self, Image},
     };
@@ -720,6 +771,74 @@ mod tests {
             row_alignment: 4,
             ..base
         });
+    }
+
+    #[test]
+    fn wide_and_unaligned_frames_match_reference() {
+        let wide = |chroma, depth, layout| ConvertSettings {
+            chroma_filter: ScaleFilter::Lanczos3,
+            ..settings((700, 5), chroma, depth, layout)
+        };
+
+        assert_matches_reference(wide(
+            ChromaSubsampling::Yuv420,
+            BitDepth::Eight,
+            PlaneLayout::SemiPlanar,
+        ));
+        assert_matches_reference(wide(
+            ChromaSubsampling::Yuv422,
+            BitDepth::Ten,
+            PlaneLayout::Planar,
+        ));
+        assert_matches_reference(ConvertSettings {
+            row_alignment: 64,
+            ..settings(
+                (70, 3),
+                ChromaSubsampling::Yuv444,
+                BitDepth::Eight,
+                PlaneLayout::SemiPlanar,
+            )
+        });
+        assert_matches_reference(ConvertSettings {
+            row_alignment: 4,
+            ..settings(
+                (301, 3),
+                ChromaSubsampling::Yuv444,
+                BitDepth::Ten,
+                PlaneLayout::SemiPlanar,
+            )
+        });
+    }
+
+    #[test]
+    fn every_separable_chroma_filter_fits_the_row_tile() {
+        let filters = [
+            ScaleFilter::Bilinear,
+            ScaleFilter::Hermite,
+            ScaleFilter::CatmullRom,
+            ScaleFilter::Mitchell,
+            ScaleFilter::Lanczos2,
+            ScaleFilter::Lanczos3,
+            ScaleFilter::Lanczos4,
+        ];
+
+        for chroma_filter in filters {
+            let (horizontal, _) = ConvertSettings {
+                chroma_filter,
+                ..settings(
+                    (1920, 1080),
+                    ChromaSubsampling::Yuv420,
+                    BitDepth::Eight,
+                    PlaneLayout::SemiPlanar,
+                )
+            }
+            .chroma_tables();
+
+            assert!(
+                horizontal.taps_per_pixel <= MAX_CHROMA_TAPS,
+                "{chroma_filter}"
+            );
+        }
     }
 
     #[test]

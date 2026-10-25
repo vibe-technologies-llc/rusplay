@@ -37,16 +37,13 @@ fn encode_transfer(linear: vec3<f32>) -> vec3<f32> {
     }
 }
 
-fn encoded_rgb(texel: vec4<f32>) -> vec3<f32> {
-    return encode_transfer(texel.rgb);
-}
-
-fn luma_of(rgb: vec3<f32>) -> f32 {
-    return dot(params.row_y.xyz, rgb);
-}
-
-fn chroma_of(rgb: vec3<f32>) -> vec2<f32> {
-    return vec2<f32>(dot(params.row_cb.xyz, rgb), dot(params.row_cr.xyz, rgb));
+fn encoded_ycc(texel: vec4<f32>) -> vec3<f32> {
+    let rgb = encode_transfer(texel.rgb);
+    return vec3<f32>(
+        dot(params.row_y.xyz, rgb),
+        dot(params.row_cb.xyz, rgb),
+        dot(params.row_cr.xyz, rgb),
+    );
 }
 
 fn quantize(value: f32, quant: vec2<f32>) -> u32 {

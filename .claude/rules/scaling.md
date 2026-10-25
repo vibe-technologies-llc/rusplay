@@ -69,16 +69,21 @@ paths:
   The matrix is `YuvMatrix` (BT.709 or BT.2020 non-constant luminance, `for_primaries` maps
   `ColorPrimaries`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
   `2^(n-1) + (2^n - 1) * C`, limited are `219/224 * 2^(n-8)` around `16/128 * 2^(n-8)`.
-- Chroma is computed per pixel from the encoded RGB, then downscaled in gamma space (as every
-  encoder expects) with `scaling.downscale.chroma_filter` through `TapTable`s at an exact 2:1
-  ratio, so odd sizes round the chroma plane up and the edge clamps. Horizontal siting is
-  `ChromaSiting::Left` by default (MPEG-2/H.264/HEVC type 0, co-sited with even luma columns,
-  a phase of -0.5 source pixels) or `Center`; vertical 4:2:0 siting is always centred. Polar
-  chroma filters are rejected with `ChromaFilterNotSeparable`. Three dispatches: `convert_luma`
-  packs Y straight from the source, `convert_chroma` writes horizontally filtered CbCr into an
-  `rg32float` intermediate, `pack_chroma` applies the vertical taps and packs. 4:4:4 and the
-  4:2:2 vertical direction use `TapTable::identity`, never a kernel at 1:1 (Mitchell would
-  blur).
+- Every source pixel is loaded and run through the OETF exactly once, in the first pass, which
+  computes Y'CbCr there and packs luma straight into the output buffer. Chroma is then
+  downscaled in gamma space (as every encoder expects) with `scaling.downscale.chroma_filter`
+  through `TapTable`s at an exact 2:1 ratio, so odd sizes round the chroma plane up and the
+  edge clamps. Horizontal siting is `ChromaSiting::Left` by default (MPEG-2/H.264/HEVC type 0,
+  co-sited with even luma columns, a phase of -0.5 source pixels) or `Center`; vertical 4:2:0
+  siting is always centred. Polar chroma filters are rejected with `ChromaFilterNotSeparable`.
+  4:4:4 is one dispatch (`convert_direct`): each invocation owns one output word of luma and
+  writes the matching words of both chroma planes, with no intermediate. 4:2:0 and 4:2:2 are two
+  (`convert_rows`, `pack_chroma`): `convert_rows` has each workgroup encode its row segment
+  plus the filter's halo into workgroup memory (`TILE_STRIDE` entries per row, so a filter may
+  have at most `MAX_CHROMA_TAPS` horizontal taps, checked by a test), packs luma and writes the
+  horizontally filtered CbCr into an `rg32float` intermediate, and `pack_chroma` applies the
+  vertical taps and packs. 4:4:4 and the 4:2:2 vertical direction use `TapTable::identity`,
+  never a kernel at 1:1 (Mitchell would blur).
 - The output is one storage buffer per `YuvFrame`, described by `FrameLayout`: planes
   `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms) or
   `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte
@@ -92,7 +97,9 @@ paths:
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1
   (17% faster than 8x8 for EWA Lanczos 1080p to 4K, 14% for EWA Robidoux 4K to 1080p); the
-  separable and conversion passes stay at 8x8, where every other shape was equal or slower.
+  separable passes and the conversion's `convert_direct` and `pack_chroma` stay at 8x8, where
+  every other shape was equal or slower; `convert_rows` is 64x1 because its workgroup memory
+  tile is one row (32, 128 and 32x2 measured within noise of it).
   Shared-memory tiles were tried and rejected: a tiled polar pass was 35% slower at any tile
   size and shape (the inner loop is ALU-bound and the texture cache already captures the
   reuse), and the separable passes already run at roughly 85% of memory bandwidth even for an
