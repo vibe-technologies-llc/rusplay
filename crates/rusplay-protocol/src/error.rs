@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::ProtocolVersion;
+use crate::{ProtocolVersion, StreamKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProtocolError {
@@ -20,6 +20,15 @@ pub enum ProtocolError {
         data_shards: u8,
         parity_shards: u8,
         parity_index: u8,
+    },
+    #[error("unknown control message tag {0}")]
+    UnknownControlTag(u8),
+    #[error("{extra} unexpected bytes follow the message")]
+    TrailingBytes { extra: usize },
+    #[error("datagram belongs to stream {found:?}, expected {expected:?}")]
+    UnexpectedStream {
+        expected: StreamKind,
+        found: StreamKind,
     },
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),

@@ -1,4 +1,7 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::{
+    io,
+    net::{SocketAddr, UdpSocket},
+};
 
 use rusplay_config::NetworkConfig;
 use rustix::net::sockopt;
@@ -107,6 +110,29 @@ impl Transport {
             .send_to(datagram, peer)
             .map(drop)
             .map_err(|source| NetError::Send { peer, source })
+    }
+
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), NetError> {
+        self.socket
+            .set_nonblocking(nonblocking)
+            .map_err(NetError::NonBlocking)
+    }
+
+    pub fn try_send_to(&self, datagram: &[u8], peer: SocketAddr) -> Result<bool, NetError> {
+        match self.send_to(datagram, peer) {
+            Err(NetError::Send { source, .. }) if source.kind() == io::ErrorKind::WouldBlock => {
+                Ok(false)
+            }
+            other => other.map(|()| true),
+        }
+    }
+
+    pub fn try_recv_from(&self, buf: &mut [u8]) -> Result<Option<(usize, SocketAddr)>, NetError> {
+        match self.socket.recv_from(buf) {
+            Ok(received) => Ok(Some(received)),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(NetError::Receive(error)),
+        }
     }
 
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), NetError> {

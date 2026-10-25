@@ -33,6 +33,26 @@ paths:
 - The control channel (hello, keyframe requests, loss reports, bitrate hints) has its own small
   acknowledgement and retransmit scheme on the same socket, kept off the media path.
 
+## Control channel
+
+- `ControlMessage` has a fixed big-endian encoding (tag byte, then fields; `decode` rejects short
+  input, unknown tags and trailing bytes). A `ControlPacket` is a `StreamKind::Control` datagram:
+  `sequence` is the message id, the `ACK` flag marks an acknowledgement (header only, same id),
+  and a message datagram's payload is the encoded message. Ids are per direction.
+- `ControlChannel` is sans-IO and owns no socket, thread or lock, so the media path never waits on
+  it. The caller feeds it control datagrams (`handle_datagram`), drives timers (`poll`,
+  `next_deadline`) and sends what it produced (`flush` on a non-blocking `Transport`, which keeps
+  a datagram queued on `WouldBlock`, or `take_transmits`). Media code only ever sees the datagrams
+  the caller routes to it by `StreamKind`.
+- Delivery is at-most-once and unordered: every message datagram is acknowledged, retransmitted
+  every `network.control_retransmit_ms` with exponential backoff (capped at 16x) up to
+  `network.control_max_retransmits` times, then reported `ControlEvent::Undeliverable`. Receivers
+  deduplicate with a 64-id window; the sender allows at most `CONTROL_WINDOW` (64) ids between its
+  oldest unacknowledged message and the next id (`ControlWindowFull`), so a retransmit can never
+  fall outside the receiver's window and be mistaken for a duplicate.
+- Both ends start at id 0. A peer that restarts its session must `reset` its channel and the other
+  end must `reset` too, otherwise the new ids look like old duplicates.
+
 ## Fragmentation and reassembly
 
 - `Packetizer` (one per stream, owns the sequence counter) splits a frame into data fragments of

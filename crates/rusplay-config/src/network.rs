@@ -21,6 +21,8 @@ pub struct NetworkConfig {
     pub jitter_buffer_ms: u16,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
+    pub control_retransmit_ms: u16,
+    pub control_max_retransmits: u8,
 }
 
 impl Default for NetworkConfig {
@@ -34,6 +36,8 @@ impl Default for NetworkConfig {
             jitter_buffer_ms: 0,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
+            control_retransmit_ms: 50,
+            control_max_retransmits: 8,
         }
     }
 }
@@ -54,6 +58,10 @@ impl NetworkConfig {
             return Err(ConfigError::ZeroReassemblyTimeout);
         }
 
+        if self.control_retransmit_ms == 0 {
+            return Err(ConfigError::ZeroControlRetransmit);
+        }
+
         Ok(())
     }
 }
@@ -72,6 +80,19 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::ZeroReassemblyTimeout)
+        ));
+    }
+
+    #[test]
+    fn zero_control_retransmit_is_rejected() {
+        let config = NetworkConfig {
+            control_retransmit_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroControlRetransmit)
         ));
     }
 }

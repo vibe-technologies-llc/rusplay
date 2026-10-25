@@ -19,6 +19,10 @@ pub enum NetError {
     ReceiveBufferSize { requested: usize, source: io::Error },
     #[error("failed to query the socket buffer sizes")]
     BufferSizeQuery(#[source] io::Error),
+    #[error("failed to switch the socket blocking mode")]
+    NonBlocking(#[source] io::Error),
+    #[error("control channel already holds {window} unacknowledged messages")]
+    ControlWindowFull { window: u32 },
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]

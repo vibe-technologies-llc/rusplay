@@ -29,6 +29,8 @@ pub enum ConfigError {
     AntiringingOutOfRange(f32),
     #[error("reassembly timeout must be greater than zero")]
     ZeroReassemblyTimeout,
+    #[error("control retransmit timeout must be greater than zero")]
+    ZeroControlRetransmit,
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
 }

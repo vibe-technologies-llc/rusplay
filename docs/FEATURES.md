@@ -33,8 +33,7 @@
 - [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
 # Networking
-- [M] `net-control`: acknowledged control channel carrying `ControlMessage`
-- [M, blocked by: net-control] `net-pairing`: authenticated pairing and encrypted session keys
+- [M] `net-pairing`: authenticated pairing and encrypted session keys
 - [S] `net-discovery`: LAN host discovery
 
 # Input

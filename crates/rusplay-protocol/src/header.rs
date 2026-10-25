@@ -4,7 +4,7 @@ use crate::ProtocolError;
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(2);
+    pub const CURRENT: Self = Self(3);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,6 +38,7 @@ pub struct PacketFlags(u8);
 impl PacketFlags {
     pub const KEYFRAME: Self = Self(1);
     pub const LAST_FRAGMENT: Self = Self(1 << 1);
+    pub const ACK: Self = Self(1 << 2);
 
     pub const fn empty() -> Self {
         Self(0)
