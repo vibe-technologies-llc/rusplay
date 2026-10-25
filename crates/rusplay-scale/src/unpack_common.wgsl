@@ -21,6 +21,7 @@ struct Params {
 
 const TRANSFER_SRGB: u32 = 1u;
 const TRANSFER_BT709: u32 = 2u;
+const TRANSFER_GAMMA22: u32 = 3u;
 
 fn decode_transfer(encoded: vec3<f32>) -> vec3<f32> {
     let x = clamp(encoded, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -30,6 +31,9 @@ fn decode_transfer(encoded: vec3<f32>) -> vec3<f32> {
         }
         case TRANSFER_BT709: {
             return select(pow((x + 0.099) / 1.099, vec3<f32>(1.0 / 0.45)), x / 4.5, x < vec3<f32>(0.081));
+        }
+        case TRANSFER_GAMMA22: {
+            return pow(x, vec3<f32>(2.2));
         }
         default: {
             return x;

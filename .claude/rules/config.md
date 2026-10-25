@@ -6,7 +6,7 @@ paths:
 # Configuration
 
 - `Config` is the root, with one section per subsystem: `video`, `audio`, `network`, `input`,
-  `capture`, `scaling`, `peers`. Each section is its own module and struct.
+  `capture`, `scaling`, `color`, `peers`. Each section is its own module and struct.
 - Every struct is `#[serde(default, deny_unknown_fields)]` with a hand-written `Default` holding
   the shipped default. A missing key means the default, and a misspelt key is an error. The empty
   document parses to `Config::default()`, and a test keeps it that way.

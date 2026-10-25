@@ -62,6 +62,12 @@ impl VideoConfig {
         if !hdr.peak_in_range() {
             return Err(ConfigError::PeakLuminanceOutOfRange(hdr.peak_nits));
         }
+        if let Some(mastering) = hdr.mastering.filter(|mastering| !mastering.is_ordered()) {
+            return Err(ConfigError::MasteringLuminanceInverted {
+                min_nits: mastering.min_nits.nits(),
+                max_nits: mastering.max_nits.nits(),
+            });
+        }
 
         if self.decode_queue_frames == 0 {
             return Err(ConfigError::ZeroDecodeQueue);

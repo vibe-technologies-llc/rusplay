@@ -75,8 +75,9 @@ paths:
   then the HLG OETF. Both levels are validated into `1..=10000` (`ReferenceWhiteOutOfRange`,
   `PeakLuminanceOutOfRange`) and sit in the params uniform's `hdr` vector. The other
   transfers ignore them.
-  The matrix is `YuvMatrix` (BT.709 or BT.2020 non-constant luminance, `for_primaries` maps
-  `ColorPrimaries`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
+  Gamma 2.2 encodes as `x^(1/2.2)` and `Linear` passes values through clamped. The matrix is
+  `rusplay_core::MatrixCoefficients` (BT.709, BT.601 or BT.2020 non-constant luminance, the
+  caller resolving it with `ColorSpace::matrix_coefficients`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
   `2^(n-1) + (2^n - 1) * C`, limited are `219/224 * 2^(n-8)` around `16/128 * 2^(n-8)`.
 - Every source pixel is loaded and run through the OETF exactly once, in the first pass, which
   computes Y'CbCr there and packs luma straight into the output buffer. Chroma is then
@@ -115,9 +116,9 @@ paths:
 - Y'CbCr to RGB on the client is `RgbConverter` (`unpack.rs`, `unpack_*.wgsl`), reading a
   `YuvFrame` upload buffer laid out by `FrameLayout::packed` (planar or semi-planar, any depth).
   `unpack_chroma` applies the horizontal chroma taps straight from the buffer into an `rg32float`
-  intermediate at luma width, `unpack_rgb` applies the vertical taps, the `YuvMatrix::inverse_rows`
-  and, for `OutputLight::Linear`, the inverse OETF (sRGB or BT.709; PQ and HLG must use
-  `OutputLight::Encoded`), into an `rgba16float` storage texture. Chroma is upsampled with
+  intermediate at luma width, `unpack_rgb` applies the vertical taps, the `MatrixCoefficients::inverse_rows`
+  and, for `OutputLight::Linear`, the inverse OETF (sRGB, BT.709, gamma 2.2 or linear; PQ and HLG
+  must use `OutputLight::Encoded`), into an `rgba16float` storage texture. Chroma is upsampled with
   `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
   and must be separable. `reference::unpack_rgb` is its CPU reference.
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
@@ -131,6 +132,10 @@ paths:
   size and shape (the inner loop is ALU-bound and the texture cache already captures the
   reuse), and the separable passes already run at roughly 85% of memory bandwidth even for an
   8K to 720p Hermite downscale, so a tile has nothing left to win.
+- Tone and gamut mapping (`color.rs`, `color/`, `color_*.wgsl`) share `ScalePipelines`
+  (`ColorPipelines`: the map pass at 8x8 with a params and tone-state layout, and the
+  histogram and peak passes on an analysis layout), the source and destination layouts and
+  the `GroupCache` scheme with the scaler. Their design is in `.claude/rules/color.md`.
 - `bench.rs` is an ignored test that prints per-frame GPU times for the representative
   workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
   --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's

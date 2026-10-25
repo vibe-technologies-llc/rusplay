@@ -99,6 +99,10 @@ paths:
   `RateControlUnsupported`; a size outside `vaQuerySurfaceAttributes` and
   `VAConfigAttribMaxPicture*` is `ResolutionUnsupported` (radeonsi on RDNA 4: HEVC from 384x128,
   AV1 from 320x128, H.264 from 96x32).
+- Colour codes in the VUI and AV1 `color_config` are the H.273 codes from `rusplay-core`
+  (`ColorPrimaries::h273_code`, `TransferFunction::h273_code`, the resolved
+  `MatrixCoefficients`); custom primaries have no code and fail at open with
+  `ColorPrimariesUnsignalable`.
 - Rusplay writes the headers and hands them to the driver as packed headers wherever
   `VAConfigAttribEncPackedHeaders` allows: VPS+SPS and PPS for HEVC, SPS and PPS for H.264, the
   slice header of every picture for both, the AV1 sequence header on keyframes and the frame header

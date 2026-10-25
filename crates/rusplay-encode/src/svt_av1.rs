@@ -10,7 +10,7 @@ use rusplay_capture::Frame;
 use rusplay_config::{SvtAv1Config, VideoConfig};
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, EncodedFrame,
-    FrameRate, PixelFormat, Resolution, Timestamp, TransferFunction,
+    FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp, TransferFunction,
 };
 
 use crate::{
@@ -47,17 +47,26 @@ const LOW_LATENCY_DEFAULTS: [(&str, &str); 4] = [
     ("keyint", "-1"),
 ];
 
-const fn primaries_id(primaries: ColorPrimaries) -> u32 {
+const fn primaries_id(primaries: ColorPrimaries) -> Result<u32, EncodeError> {
     match primaries {
-        ColorPrimaries::Bt709 => sys::EbColorPrimaries_EB_CICP_CP_BT_709,
-        ColorPrimaries::Bt2020 => sys::EbColorPrimaries_EB_CICP_CP_BT_2020,
+        ColorPrimaries::Bt709 => Ok(sys::EbColorPrimaries_EB_CICP_CP_BT_709),
+        ColorPrimaries::DisplayP3 => Ok(sys::EbColorPrimaries_EB_CICP_CP_SMPTE_432),
+        ColorPrimaries::DciP3 => Ok(sys::EbColorPrimaries_EB_CICP_CP_SMPTE_431),
+        ColorPrimaries::Bt2020 => Ok(sys::EbColorPrimaries_EB_CICP_CP_BT_2020),
+        ColorPrimaries::Bt601_525 => Ok(sys::EbColorPrimaries_EB_CICP_CP_BT_601),
+        ColorPrimaries::Bt601_625 => Ok(sys::EbColorPrimaries_EB_CICP_CP_BT_470_B_G),
+        ColorPrimaries::Custom(_) => Err(EncodeError::ColorPrimariesUnsignalable {
+            backend: BACKEND,
+            primaries,
+        }),
     }
 }
 
-const fn matrix_id(primaries: ColorPrimaries) -> u32 {
-    match primaries {
-        ColorPrimaries::Bt709 => sys::EbMatrixCoefficients_EB_CICP_MC_BT_709,
-        ColorPrimaries::Bt2020 => sys::EbMatrixCoefficients_EB_CICP_MC_BT_2020_NCL,
+const fn matrix_id(matrix: MatrixCoefficients) -> u32 {
+    match matrix {
+        MatrixCoefficients::Bt709 => sys::EbMatrixCoefficients_EB_CICP_MC_BT_709,
+        MatrixCoefficients::Bt601 => sys::EbMatrixCoefficients_EB_CICP_MC_BT_601,
+        MatrixCoefficients::Bt2020Ncl => sys::EbMatrixCoefficients_EB_CICP_MC_BT_2020_NCL,
     }
 }
 
@@ -65,8 +74,10 @@ const fn transfer_id(transfer: TransferFunction) -> u32 {
     match transfer {
         TransferFunction::Bt709 => sys::EbTransferCharacteristics_EB_CICP_TC_BT_709,
         TransferFunction::Srgb => sys::EbTransferCharacteristics_EB_CICP_TC_SRGB,
+        TransferFunction::Gamma22 => sys::EbTransferCharacteristics_EB_CICP_TC_BT_470_M,
         TransferFunction::Pq => sys::EbTransferCharacteristics_EB_CICP_TC_SMPTE_2084,
         TransferFunction::Hlg => sys::EbTransferCharacteristics_EB_CICP_TC_HLG,
+        TransferFunction::Linear => sys::EbTransferCharacteristics_EB_CICP_TC_LINEAR,
     }
 }
 
@@ -303,8 +314,8 @@ impl Settings {
         config.encoder_bit_depth = u32::from(self.pixel_format.depth.bits());
         config.encoder_color_format = sys::EbColorFormat_EB_YUV420;
         config.target_bit_rate = bits_per_second(self.bitrate_kbps)?;
-        config.color_primaries = primaries_id(self.color.primaries);
-        config.matrix_coefficients = matrix_id(self.color.primaries);
+        config.color_primaries = primaries_id(self.color.primaries)?;
+        config.matrix_coefficients = matrix_id(self.color.matrix_coefficients());
         config.transfer_characteristics = transfer_id(self.color.transfer);
         config.color_range = range_id(self.color.range);
 

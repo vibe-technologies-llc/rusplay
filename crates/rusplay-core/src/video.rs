@@ -125,69 +125,6 @@ pub struct PixelFormat {
     pub depth: BitDepth,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ColorPrimaries {
-    #[default]
-    Bt709,
-    Bt2020,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TransferFunction {
-    #[default]
-    Bt709,
-    Srgb,
-    Pq,
-    Hlg,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ColorRange {
-    Limited,
-    #[default]
-    Full,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct HdrLevels {
-    pub reference_white_nits: u32,
-    pub peak_nits: u32,
-}
-
-impl HdrLevels {
-    pub const MAX_NITS: u32 = 10_000;
-
-    pub const fn reference_white_in_range(self) -> bool {
-        self.reference_white_nits >= 1 && self.reference_white_nits <= Self::MAX_NITS
-    }
-
-    pub const fn peak_in_range(self) -> bool {
-        self.peak_nits >= 1 && self.peak_nits <= Self::MAX_NITS
-    }
-}
-
-impl Default for HdrLevels {
-    fn default() -> Self {
-        Self {
-            reference_white_nits: 203,
-            peak_nits: 1000,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ColorSpace {
-    pub primaries: ColorPrimaries,
-    pub transfer: TransferFunction,
-    pub range: ColorRange,
-    pub hdr: HdrLevels,
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

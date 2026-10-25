@@ -32,6 +32,22 @@ pub enum ScaleError {
     RowAlignmentInvalid(u32),
     #[error("a frame of {bytes} bytes exceeds the addressable 16 GiB")]
     FrameTooLarge { bytes: u64 },
+    #[error("reference white {0} cd/m² is outside 0..=10000")]
+    ReferenceWhiteNitsOutOfRange(f64),
+    #[error("peak luminance {0} cd/m² is outside 0..=10000")]
+    PeakNitsOutOfRange(f64),
+    #[error("black level {black_nits} cd/m² is not between 0 and the peak {peak_nits} cd/m²")]
+    BlackNitsOutOfRange { black_nits: f64, peak_nits: f64 },
+    #[error("gamut mapping knee {0} is outside 0.0..1.0")]
+    GamutKneeOutOfRange(f64),
+    #[error("peak detection percentile {0} is outside 0..=100")]
+    PeakPercentileOutOfRange(f64),
+    #[error("peak detection must smooth over at least one frame")]
+    ZeroSmoothingFrames,
+    #[error("scene cut threshold {0} dB is not a positive number")]
+    SceneThresholdOutOfRange(f64),
+    #[error("a colour conversion matrix is singular")]
+    SingularColorMatrix,
     #[error("the yuv frame was created for a different layout than the converter's")]
     FrameLayoutMismatch,
 }

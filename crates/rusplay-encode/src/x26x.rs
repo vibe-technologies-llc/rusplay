@@ -1,7 +1,9 @@
 use std::ffi::CStr;
 
 use rusplay_config::SoftwarePreset;
-use rusplay_core::{ColorPrimaries, TransferFunction};
+use rusplay_core::{ColorPrimaries, MatrixCoefficients, TransferFunction};
+
+use crate::{Backend, EncodeError};
 
 pub const fn preset_name(preset: SoftwarePreset) -> &'static CStr {
     match preset {
@@ -18,17 +20,28 @@ pub const fn preset_name(preset: SoftwarePreset) -> &'static CStr {
     }
 }
 
-pub const fn colour_primaries_name(primaries: ColorPrimaries) -> &'static str {
+pub const fn colour_primaries_name(
+    backend: Backend,
+    primaries: ColorPrimaries,
+) -> Result<&'static str, EncodeError> {
     match primaries {
-        ColorPrimaries::Bt709 => "bt709",
-        ColorPrimaries::Bt2020 => "bt2020",
+        ColorPrimaries::Bt709 => Ok("bt709"),
+        ColorPrimaries::DisplayP3 => Ok("smpte432"),
+        ColorPrimaries::DciP3 => Ok("smpte431"),
+        ColorPrimaries::Bt2020 => Ok("bt2020"),
+        ColorPrimaries::Bt601_525 => Ok("smpte170m"),
+        ColorPrimaries::Bt601_625 => Ok("bt470bg"),
+        ColorPrimaries::Custom(_) => {
+            Err(EncodeError::ColorPrimariesUnsignalable { backend, primaries })
+        }
     }
 }
 
-pub const fn colour_matrix_name(primaries: ColorPrimaries) -> &'static str {
-    match primaries {
-        ColorPrimaries::Bt709 => "bt709",
-        ColorPrimaries::Bt2020 => "bt2020nc",
+pub const fn colour_matrix_name(matrix: MatrixCoefficients) -> &'static str {
+    match matrix {
+        MatrixCoefficients::Bt709 => "bt709",
+        MatrixCoefficients::Bt601 => "smpte170m",
+        MatrixCoefficients::Bt2020Ncl => "bt2020nc",
     }
 }
 
@@ -36,7 +49,9 @@ pub const fn transfer_name(transfer: TransferFunction) -> &'static str {
     match transfer {
         TransferFunction::Bt709 => "bt709",
         TransferFunction::Srgb => "iec61966-2-1",
+        TransferFunction::Gamma22 => "bt470m",
         TransferFunction::Pq => "smpte2084",
         TransferFunction::Hlg => "arib-std-b67",
+        TransferFunction::Linear => "linear",
     }
 }

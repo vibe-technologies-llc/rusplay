@@ -690,6 +690,12 @@ unsafe impl Send for VaapiEncoder {}
 impl VaapiEncoder {
     pub fn new(video: &VideoConfig, vaapi: &VaapiConfig) -> Result<Self, EncodeError> {
         let params = VaapiParams::parse(&vaapi.params)?;
+        if video.color.primaries.h273_code().is_none() {
+            return Err(EncodeError::ColorPrimariesUnsignalable {
+                backend: BACKEND,
+                primaries: video.color.primaries,
+            });
+        }
         let device = Device::open(video, vaapi, &params)?;
 
         let settings = Settings {

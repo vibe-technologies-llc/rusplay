@@ -1,5 +1,6 @@
 mod audio;
 mod capture;
+mod color;
 mod decoder;
 mod error;
 mod input;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::{
     audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
+    color::{ColorConfig, DisplayTargetConfig, GamutMappingConfig, ToneMappingConfig},
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
     input::{InputConfig, PointerMode},
@@ -43,6 +45,7 @@ pub struct Config {
     pub input: InputConfig,
     pub capture: CaptureConfig,
     pub scaling: ScalingConfig,
+    pub color: ColorConfig,
 }
 
 impl Config {
@@ -108,7 +111,8 @@ impl Config {
         self.peers.validate()?;
         self.capture.validate()?;
         self.input.validate()?;
-        self.scaling.validate()
+        self.scaling.validate()?;
+        self.color.validate()
     }
 }
 
@@ -121,6 +125,8 @@ fn staging_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_core::{ColorPrimaries, MatrixCoefficients, TransferFunction};
+
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
@@ -259,6 +265,95 @@ mod tests {
             no_white.validate(),
             Err(ConfigError::ReferenceWhiteOutOfRange(0))
         ));
+    }
+
+    #[test]
+    fn colour_description_parses_named_and_custom_primaries() {
+        let named: Config = toml::from_str(
+            r#"
+            [video.color]
+            primaries = "display-p3"
+            transfer = "gamma22"
+            matrix = "bt601"
+            "#,
+        )
+        .unwrap();
+        let custom: Config = toml::from_str(
+            r"
+            [video.color.primaries.custom]
+            red = [0.68, 0.32]
+            green = [0.265, 0.69]
+            blue = [0.15, 0.06]
+            white = [0.3127, 0.329]
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(named.video.color.primaries, ColorPrimaries::DisplayP3);
+        assert_eq!(named.video.color.transfer, TransferFunction::Gamma22);
+        assert_eq!(
+            named.video.color.matrix_coefficients(),
+            MatrixCoefficients::Bt601
+        );
+        assert_eq!(
+            custom.video.color.primaries.chromaticities(),
+            ColorPrimaries::DisplayP3.chromaticities()
+        );
+        assert_eq!(
+            toml::from_str::<Config>(&custom.to_toml_string().unwrap()).unwrap(),
+            custom
+        );
+    }
+
+    #[test]
+    fn degenerate_custom_primaries_fail_to_parse() {
+        let parsed = toml::from_str::<Config>(
+            r"
+            [video.color.primaries.custom]
+            red = [0.1, 0.1]
+            green = [0.2, 0.2]
+            blue = [0.3, 0.3]
+            white = [0.3127, 0.329]
+            ",
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn hdr_metadata_is_optional_and_validated() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [video.color.hdr.mastering]
+            primaries = "bt2020"
+            max_nits = 4000.0
+            min_nits = 0.005
+
+            [video.color.hdr.content_light]
+            max_cll_nits = 1200
+            max_fall_nits = 300
+            "#,
+        )
+        .unwrap();
+        let inverted: Config = toml::from_str(
+            r"
+            [video.color.hdr.mastering]
+            max_nits = 0.001
+            min_nits = 0.01
+            ",
+        )
+        .unwrap();
+
+        let mastering = parsed.video.color.hdr.mastering.unwrap();
+        assert_eq!(mastering.primaries, ColorPrimaries::Bt2020);
+        assert_eq!(mastering.min_nits.units(), 50);
+        assert!((parsed.video.color.hdr.content_peak_nits() - 1200.0).abs() < f64::EPSILON);
+        assert!(parsed.validate().is_ok());
+        assert!(matches!(
+            inverted.validate(),
+            Err(ConfigError::MasteringLuminanceInverted { .. })
+        ));
+        assert_eq!(Config::default().video.color.hdr.mastering, None);
     }
 
     #[test]

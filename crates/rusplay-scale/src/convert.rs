@@ -1,6 +1,6 @@
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, HdrLevels, PixelFormat, Resolution,
-    ScaleFilter, TransferFunction,
+    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, MatrixCoefficients, PixelFormat,
+    Resolution, ScaleFilter, TransferFunction,
 };
 
 use crate::{
@@ -24,57 +24,10 @@ const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
 const TRANSFER_PQ: u32 = 3;
 const TRANSFER_HLG: u32 = 4;
+const TRANSFER_GAMMA22: u32 = 5;
 const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
 const HLG_REFERENCE_GAMMA: f64 = 1.2;
 const HLG_GAMMA_PER_DECADE: f64 = 0.42;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum YuvMatrix {
-    Bt709,
-    Bt2020,
-}
-
-impl YuvMatrix {
-    pub const fn for_primaries(primaries: ColorPrimaries) -> Self {
-        match primaries {
-            ColorPrimaries::Bt709 => Self::Bt709,
-            ColorPrimaries::Bt2020 => Self::Bt2020,
-        }
-    }
-
-    pub const fn red_blue_coefficients(self) -> (f64, f64) {
-        match self {
-            Self::Bt709 => (0.2126, 0.0722),
-            Self::Bt2020 => (0.2627, 0.0593),
-        }
-    }
-
-    pub fn rows(self) -> [[f64; 3]; 3] {
-        let (red, blue) = self.red_blue_coefficients();
-        let green = 1.0 - red - blue;
-        let blue_scale = 2.0 * (1.0 - blue);
-        let red_scale = 2.0 * (1.0 - red);
-
-        [
-            [red, green, blue],
-            [-red / blue_scale, -green / blue_scale, 0.5],
-            [0.5, -green / red_scale, -blue / red_scale],
-        ]
-    }
-
-    pub fn inverse_rows(self) -> [[f64; 3]; 3] {
-        let (red, blue) = self.red_blue_coefficients();
-        let green = 1.0 - red - blue;
-        let blue_scale = 2.0 * (1.0 - blue);
-        let red_scale = 2.0 * (1.0 - red);
-
-        [
-            [1.0, 0.0, red_scale],
-            [1.0, -blue * blue_scale / green, -red * red_scale / green],
-            [1.0, blue_scale, 0.0],
-        ]
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneLayout {
@@ -123,7 +76,7 @@ pub struct ConvertSettings {
     pub resolution: Resolution,
     pub format: PixelFormat,
     pub layout: PlaneLayout,
-    pub matrix: YuvMatrix,
+    pub matrix: MatrixCoefficients,
     pub range: ColorRange,
     pub transfer: TransferFunction,
     pub hdr: HdrLevels,
@@ -159,11 +112,14 @@ impl ConvertSettings {
 
     fn transfer_code(&self) -> u32 {
         match (self.input, self.transfer) {
-            (InputLight::Encoded, _) => TRANSFER_NONE,
+            (InputLight::Encoded, _) | (InputLight::Linear, TransferFunction::Linear) => {
+                TRANSFER_NONE
+            }
             (InputLight::Linear, TransferFunction::Srgb) => TRANSFER_SRGB,
             (InputLight::Linear, TransferFunction::Bt709) => TRANSFER_BT709,
             (InputLight::Linear, TransferFunction::Pq) => TRANSFER_PQ,
             (InputLight::Linear, TransferFunction::Hlg) => TRANSFER_HLG,
+            (InputLight::Linear, TransferFunction::Gamma22) => TRANSFER_GAMMA22,
         }
     }
 
@@ -845,7 +801,7 @@ mod tests {
             resolution: Resolution::new(resolution.0, resolution.1),
             format: PixelFormat { chroma, depth },
             layout,
-            matrix: YuvMatrix::Bt709,
+            matrix: MatrixCoefficients::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
             hdr: HdrLevels::default(),
@@ -929,9 +885,9 @@ mod tests {
         {
             assert_matches_reference(ConvertSettings {
                 matrix: if index % 2 == 0 {
-                    YuvMatrix::Bt709
+                    MatrixCoefficients::Bt709
                 } else {
-                    YuvMatrix::Bt2020
+                    MatrixCoefficients::Bt2020Ncl
                 },
                 range: if index % 3 == 0 {
                     ColorRange::Full
@@ -964,8 +920,15 @@ mod tests {
                 ..base
             });
         }
+        for transfer in [
+            TransferFunction::Bt709,
+            TransferFunction::Gamma22,
+            TransferFunction::Linear,
+        ] {
+            assert_matches_reference(ConvertSettings { transfer, ..base });
+        }
         assert_matches_reference(ConvertSettings {
-            transfer: TransferFunction::Bt709,
+            matrix: MatrixCoefficients::Bt601,
             ..base
         });
         assert_matches_reference(ConvertSettings {
@@ -1181,6 +1144,7 @@ mod tests {
                     HdrLevels {
                         reference_white_nits: 100,
                         peak_nits: 600,
+                        ..HdrLevels::default()
                     },
                     BitDepth::Twelve,
                 ),
@@ -1188,6 +1152,7 @@ mod tests {
                     HdrLevels {
                         reference_white_nits: 400,
                         peak_nits: 4000,
+                        ..HdrLevels::default()
                     },
                     BitDepth::Ten,
                 ),
@@ -1197,7 +1162,7 @@ mod tests {
                     ConvertSettings {
                         transfer,
                         hdr,
-                        matrix: YuvMatrix::Bt2020,
+                        matrix: MatrixCoefficients::Bt2020Ncl,
                         range: if index == 0 {
                             ColorRange::Limited
                         } else {
@@ -1224,7 +1189,7 @@ mod tests {
             _ => [0.5; 4],
         });
         let base = ConvertSettings {
-            matrix: YuvMatrix::Bt2020,
+            matrix: MatrixCoefficients::Bt2020Ncl,
             ..settings(
                 (8, 2),
                 ChromaSubsampling::Yuv444,
@@ -1245,6 +1210,7 @@ mod tests {
             hdr: HdrLevels {
                 reference_white_nits: 1000,
                 peak_nits: 1000,
+                ..HdrLevels::default()
             },
             ..base
         };

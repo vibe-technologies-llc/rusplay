@@ -2,7 +2,7 @@ use std::{fmt, io, path::PathBuf};
 
 use rusplay_capture::DrmFourcc;
 use rusplay_config::RateControl;
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, Resolution};
+use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorPrimaries, Resolution};
 use thiserror::Error;
 
 use crate::{Backend, input::fourcc_text};
@@ -20,6 +20,11 @@ pub enum EncodeError {
     },
     #[error("the {backend} encoder cannot produce {}-bit video", .depth.bits())]
     BitDepthUnsupported { backend: Backend, depth: BitDepth },
+    #[error("the {backend} encoder cannot signal {primaries} colour primaries")]
+    ColorPrimariesUnsignalable {
+        backend: Backend,
+        primaries: ColorPrimaries,
+    },
     #[error("bitrate of {kbps} kbps is rejected by the {backend} encoder")]
     BitrateRejected { backend: Backend, kbps: u32 },
     #[error("the {backend} encoder does not know the parameter {key}")]

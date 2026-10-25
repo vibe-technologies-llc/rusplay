@@ -1,6 +1,7 @@
 use rusplay_capture::DrmFourcc;
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, PixelFormat, TransferFunction,
+    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, MatrixCoefficients, PixelFormat,
+    TransferFunction,
 };
 
 use crate::{
@@ -74,27 +75,21 @@ pub(super) const fn coded_bytes_per_pixel_x2(format: PixelFormat) -> u64 {
     samples_x2 * bytes
 }
 
+const UNSPECIFIED_PRIMARIES: u8 = 2;
+
 pub(super) const fn colour_primaries(primaries: ColorPrimaries) -> u8 {
-    match primaries {
-        ColorPrimaries::Bt709 => 1,
-        ColorPrimaries::Bt2020 => 9,
+    match primaries.h273_code() {
+        Some(code) => code,
+        None => UNSPECIFIED_PRIMARIES,
     }
 }
 
-pub(super) const fn matrix_coefficients(primaries: ColorPrimaries) -> u8 {
-    match primaries {
-        ColorPrimaries::Bt709 => 1,
-        ColorPrimaries::Bt2020 => 9,
-    }
+pub(super) const fn matrix_coefficients(matrix: MatrixCoefficients) -> u8 {
+    matrix.h273_code()
 }
 
 pub(super) const fn transfer_characteristics(transfer: TransferFunction) -> u8 {
-    match transfer {
-        TransferFunction::Bt709 => 1,
-        TransferFunction::Srgb => 13,
-        TransferFunction::Pq => 16,
-        TransferFunction::Hlg => 18,
-    }
+    transfer.h273_code()
 }
 
 pub(super) const fn full_range(range: ColorRange) -> bool {

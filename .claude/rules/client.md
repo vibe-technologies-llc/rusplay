@@ -57,10 +57,11 @@ paths:
 - The hand-off is `FrameSink` (`present(&mut self, PresentedFrame)` on the present thread, also
   implemented for `FnMut(PresentedFrame)` closures) and `LatestFrame`, a cloneable latest-wins
   sink with `take` and `wait`. Sinks must not block.
-- Every `PresentedFrame` carries `FrameColor`: the `ColorSpace` (primaries, transfer, range), the
-  `YuvMatrix` used, the coded `PixelFormat`, the `OutputLight` of the texture and
-  `hdr: Option<HdrMetadata>`, a placeholder that stays `None` until `session-stream-format` brings
-  mastering metadata. SDR transfers (sRGB, BT.709) are linearised (`OutputLight::Linear`), PQ and
+- Every `PresentedFrame` carries `FrameColor`: the `ColorSpace` (primaries, transfer, range,
+  matrix and the `HdrLevels` with optional mastering and content light metadata, taken from the
+  client's own `video.color` until `session-stream-format` carries the host's), the resolved
+  `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. SDR
+  transfers (sRGB, BT.709, gamma 2.2, linear) are linearised (`OutputLight::Linear`), PQ and
   HLG are left encoded (`OutputLight::Encoded`, no sigmoid) in the stream's own primaries, so
   nothing assumes an sRGB or BT.709 display. The colour describes what the texture holds: a
   gamut or tone-mapping pass goes in `present.rs` between the unpack and the scaler, on the

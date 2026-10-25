@@ -521,7 +521,10 @@ mod tests {
     use std::{collections::BTreeSet, num::NonZeroU32};
 
     use rusplay_config::{EncoderParams, NvencPreset, X264Tune, X265Tune};
-    use rusplay_core::{FrameRate, Resolution};
+    use rusplay_core::{
+        ColorPrimaries, ContentLightLevel, FrameRate, Luminance, MasteringDisplay,
+        MatrixCoefficients, Resolution, TransferFunction,
+    };
 
     use super::*;
 
@@ -560,6 +563,24 @@ mod tests {
         base.peers.client_file = Some("/tmp/rusplay-hosts".into());
         base.audio.flac.compression_level = 5;
         base.audio.opus.bitrate_kbps = 128;
+        base.video.color.matrix = Some(MatrixCoefficients::Bt601);
+        base.color.target.primaries = Some(ColorPrimaries::DisplayP3);
+        base.color.target.transfer = Some(TransferFunction::Pq);
+        base.color.target.reference_white_nits = Some(203);
+        base.color.target.peak_nits = Some(600);
+        base.color.target.black_nits = Some(Luminance::from_units(500).unwrap());
+        base.color.gamut_mapping.knee = 0.75;
+        base.color.tone_mapping.dynamic_peak = true;
+        base.color.tone_mapping.peak_percentile = 99.9;
+        base.video.color.hdr.mastering = Some(MasteringDisplay {
+            primaries: ColorPrimaries::Bt2020,
+            max_nits: Luminance::from_whole_nits(4000).unwrap(),
+            min_nits: Luminance::from_units(50).unwrap(),
+        });
+        base.video.color.hdr.content_light = Some(ContentLightLevel {
+            max_cll_nits: 1200,
+            max_fall_nits: 300,
+        });
 
         let params = EncoderParams::from([
             ("aq-mode".to_owned(), "3".to_owned()),

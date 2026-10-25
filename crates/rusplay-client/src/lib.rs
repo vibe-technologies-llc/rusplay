@@ -9,10 +9,10 @@ mod slot;
 mod stats;
 
 pub use rusplay_net::{PeerRecord, PeerSecret, Pin};
-pub use rusplay_scale::{OutputLight, YuvMatrix};
+pub use rusplay_scale::OutputLight;
 
 pub use crate::{
-    color::{FrameColor, HdrMetadata},
+    color::FrameColor,
     error::{ClientError, Stage},
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},

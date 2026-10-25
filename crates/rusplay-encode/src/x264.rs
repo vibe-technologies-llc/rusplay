@@ -222,12 +222,12 @@ impl Settings {
         parse(
             param,
             "colorprim",
-            colour_primaries_name(self.color.primaries),
+            colour_primaries_name(BACKEND, self.color.primaries)?,
         )?;
         parse(
             param,
             "colormatrix",
-            colour_matrix_name(self.color.primaries),
+            colour_matrix_name(self.color.matrix_coefficients()),
         )?;
         parse(param, "transfer", transfer_name(self.color.transfer))?;
         param.vui.b_fullrange = full_range_flag(self.color.range);

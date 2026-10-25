@@ -216,7 +216,10 @@ impl H264Stream {
         rbsp.flag(true);
         rbsp.bits(u64::from(colour_primaries(color.primaries)), 8);
         rbsp.bits(u64::from(transfer_characteristics(color.transfer)), 8);
-        rbsp.bits(u64::from(matrix_coefficients(color.primaries)), 8);
+        rbsp.bits(
+            u64::from(matrix_coefficients(color.matrix_coefficients())),
+            8,
+        );
         rbsp.flag(false);
         rbsp.flag(true);
         rbsp.bits(u64::from(self.info.frame_rate.denominator), 32);

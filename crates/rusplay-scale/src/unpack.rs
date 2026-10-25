@@ -1,10 +1,11 @@
 use rusplay_core::{
-    ChromaSubsampling, ColorRange, PixelFormat, Resolution, ScaleFilter, TransferFunction,
+    ChromaSubsampling, ColorRange, MatrixCoefficients, PixelFormat, Resolution, ScaleFilter,
+    TransferFunction,
 };
 
 use crate::{
     ChromaSiting, FrameLayout, Geometry, Kernel, PlaneContent, PlaneLayout, Quantization,
-    Reconfigured, ScaleError, TapTable, YuvFrame, YuvMatrix,
+    Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
     gpu::{self, CHROMA_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer},
     scaler::{GroupCache, resolution_pair},
@@ -15,6 +16,7 @@ const LEFT_SITING_UPSAMPLE_PHASE: f64 = 0.25;
 const TRANSFER_NONE: u32 = 0;
 const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
+const TRANSFER_GAMMA22: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputLight {
@@ -25,7 +27,10 @@ pub enum OutputLight {
 impl OutputLight {
     pub const fn linearizable(transfer: TransferFunction) -> Self {
         match transfer {
-            TransferFunction::Srgb | TransferFunction::Bt709 => Self::Linear,
+            TransferFunction::Srgb
+            | TransferFunction::Bt709
+            | TransferFunction::Gamma22
+            | TransferFunction::Linear => Self::Linear,
             TransferFunction::Pq | TransferFunction::Hlg => Self::Encoded,
         }
     }
@@ -36,7 +41,7 @@ pub struct RgbConvertSettings {
     pub resolution: Resolution,
     pub format: PixelFormat,
     pub layout: PlaneLayout,
-    pub matrix: YuvMatrix,
+    pub matrix: MatrixCoefficients,
     pub range: ColorRange,
     pub transfer: TransferFunction,
     pub output: OutputLight,
@@ -62,9 +67,12 @@ impl RgbConvertSettings {
 
     fn transfer_code(&self) -> Result<u32, ScaleError> {
         match (self.output, self.transfer) {
-            (OutputLight::Encoded, _) => Ok(TRANSFER_NONE),
+            (OutputLight::Encoded, _) | (OutputLight::Linear, TransferFunction::Linear) => {
+                Ok(TRANSFER_NONE)
+            }
             (OutputLight::Linear, TransferFunction::Srgb) => Ok(TRANSFER_SRGB),
             (OutputLight::Linear, TransferFunction::Bt709) => Ok(TRANSFER_BT709),
+            (OutputLight::Linear, TransferFunction::Gamma22) => Ok(TRANSFER_GAMMA22),
             (OutputLight::Linear, transfer @ (TransferFunction::Pq | TransferFunction::Hlg)) => {
                 Err(ScaleError::LinearOutputTransferUnsupported(transfer))
             }
@@ -390,7 +398,7 @@ mod tests {
             resolution: Resolution::new(resolution.0, resolution.1),
             format: PixelFormat { chroma, depth },
             layout,
-            matrix: YuvMatrix::Bt709,
+            matrix: MatrixCoefficients::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
             output: OutputLight::Linear,
@@ -485,9 +493,9 @@ mod tests {
         {
             assert_matches_reference(RgbConvertSettings {
                 matrix: if index % 2 == 0 {
-                    YuvMatrix::Bt709
+                    MatrixCoefficients::Bt709
                 } else {
-                    YuvMatrix::Bt2020
+                    MatrixCoefficients::Bt2020Ncl
                 },
                 range: if index % 3 == 0 {
                     ColorRange::Full
@@ -567,7 +575,7 @@ mod tests {
 
     #[test]
     fn inverse_matrix_undoes_the_forward_matrix() {
-        for matrix in [YuvMatrix::Bt709, YuvMatrix::Bt2020] {
+        for matrix in MatrixCoefficients::ALL {
             let forward = matrix.rows();
             let inverse = matrix.inverse_rows();
 

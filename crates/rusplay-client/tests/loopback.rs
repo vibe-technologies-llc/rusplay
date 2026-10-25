@@ -79,7 +79,6 @@ fn frames_arrive_decoded_at_the_source_resolution() {
         )
     );
     assert_eq!(seen[0].color.light, OutputLight::Linear);
-    assert!(seen[0].color.hdr.is_none());
     assert!(
         !host
             .messages()

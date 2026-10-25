@@ -302,7 +302,10 @@ impl Av1Stream {
         header.flag(true);
         header.bits(u64::from(colour_primaries(color.primaries)), 8);
         header.bits(u64::from(transfer_characteristics(color.transfer)), 8);
-        header.bits(u64::from(matrix_coefficients(color.primaries)), 8);
+        header.bits(
+            u64::from(matrix_coefficients(color.matrix_coefficients())),
+            8,
+        );
         header.flag(full_range(color.range));
         if self.profile == Av1Profile::Main {
             header.bits(0, 2);

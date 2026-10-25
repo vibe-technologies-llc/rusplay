@@ -1,13 +1,14 @@
 use std::time::{Duration, Instant};
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, PixelFormat, Resolution, ScaleFilter,
-    TransferFunction,
+    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, GamutMapMode, HdrLevels,
+    MatrixCoefficients, PixelFormat, Resolution, ScaleFilter, TransferFunction,
 };
 
 use crate::{
-    ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, InputLight, PlaneLayout,
-    ScalePipelines, ScaleSettings, Scaler, YuvMatrix,
+    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings,
+    DEFAULT_ROW_ALIGNMENT, DynamicPeak, GamutMapping, InputLight, PlaneLayout, ScalePipelines,
+    ScaleSettings, Scaler, ToneMapping,
     testing::{self, Gpu, Image},
 };
 
@@ -66,6 +67,87 @@ fn convert_frame_time(gpu: &Gpu, settings: ConvertSettings) -> Duration {
             .encode(&gpu.device, encoder, &source, &frame)
             .unwrap();
     })
+}
+
+fn color_frame_time(gpu: &Gpu, settings: ColorMapSettings, size: (u32, u32)) -> Duration {
+    let pipelines = ScalePipelines::new(&gpu.device);
+    let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();
+    let image = Image::pattern(size.0, size.1, 1);
+    let source = testing::view(&testing::upload(gpu, &image));
+    let target = testing::view(&testing::storage_target(gpu, size.0, size.1));
+
+    best_frame_time(gpu, |encoder| {
+        mapper.encode(&gpu.device, encoder, &source, &target);
+    })
+}
+
+fn color_cases() -> Vec<(&'static str, ColorMapSettings)> {
+    let sdr = |primaries| ColorVolume {
+        primaries,
+        ..ColorVolume::srgb_display()
+    };
+    let hdr = |primaries, peak_nits| ColorVolume {
+        primaries,
+        transfer: TransferFunction::Pq,
+        peak_nits,
+        ..ColorVolume::srgb_display()
+    };
+    let with_mode = |source, target, mode| ColorMapSettings {
+        source,
+        target,
+        gamut: GamutMapping {
+            mode,
+            ..GamutMapping::default()
+        },
+        ..ColorMapSettings::default()
+    };
+
+    let tone_mapped = |dynamic_peak| ColorMapSettings {
+        tone: ToneMapping {
+            dynamic_peak,
+            ..ToneMapping::default()
+        },
+        ..with_mode(
+            hdr(ColorPrimaries::Bt2020, 4000.0),
+            sdr(ColorPrimaries::DisplayP3),
+            GamutMapMode::Perceptual,
+        )
+    };
+
+    vec![
+        (
+            "bt2020 pq 4000 -> p3 sdr bt2390 perceptual",
+            tone_mapped(None),
+        ),
+        (
+            "bt2020 pq 4000 -> p3 sdr bt2390 dynamic perceptual",
+            tone_mapped(Some(DynamicPeak::default())),
+        ),
+        (
+            "bt2020 sdr -> p3 sdr perceptual",
+            with_mode(
+                sdr(ColorPrimaries::Bt2020),
+                sdr(ColorPrimaries::DisplayP3),
+                GamutMapMode::Perceptual,
+            ),
+        ),
+        (
+            "bt2020 pq -> p3 pq perceptual",
+            with_mode(
+                hdr(ColorPrimaries::Bt2020, 1000.0),
+                hdr(ColorPrimaries::DisplayP3, 1000.0),
+                GamutMapMode::Perceptual,
+            ),
+        ),
+        (
+            "bt2020 sdr -> p3 sdr relative",
+            with_mode(
+                sdr(ColorPrimaries::Bt2020),
+                sdr(ColorPrimaries::DisplayP3),
+                GamutMapMode::Relative,
+            ),
+        ),
+    ]
 }
 
 #[test]
@@ -129,7 +211,7 @@ fn scaling_frame_times() {
             resolution: Resolution::new(3840, 2160),
             format: PixelFormat { chroma, depth },
             layout,
-            matrix: YuvMatrix::Bt709,
+            matrix: MatrixCoefficients::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
             hdr: HdrLevels::default(),
@@ -142,6 +224,13 @@ fn scaling_frame_times() {
         println!(
             "convert {chroma} {depth:?} {layout:?} {chroma_filter} -> 3840x2160: {:?}",
             convert_frame_time(gpu, settings)
+        );
+    }
+
+    for (name, settings) in color_cases() {
+        println!(
+            "color {name} 3840x2160: {:?}",
+            color_frame_time(gpu, settings, (3840, 2160))
         );
     }
 }
