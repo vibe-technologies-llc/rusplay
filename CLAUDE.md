@@ -42,6 +42,9 @@ depend only on `host`/`client`/`config`. No crate depends upward, and no media c
   reasonably want to change.
 - Chroma above 4:2:0 and bit depth above 8 are first-class paths, not fallbacks.
 - Scaling is always done with Rusplay's own GPU kernels, never by a driver's built-in scaler.
+- Colour is managed end to end: the source's colour description travels with the stream, and the
+  client tone maps and gamut maps (perceptually by default) to its display, never clipping per
+  channel.
 - Stub code never panics: unimplemented paths return a specific error variant.
 
 ## Commands
@@ -81,6 +84,7 @@ The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/config.md` | Configuration tree, defaults, validation |
 | `.claude/rules/capture.md` | Portal and PipeWire capture |
 | `.claude/rules/scaling.md` | GPU scaling kernels and pipeline |
+| `.claude/rules/color.md` | End-to-end colour management: description, signalling, tone and gamut mapping |
 | `.claude/rules/video-encode.md` | Encoder backends, chroma, latency settings, parameter passthrough |
 | `.claude/rules/video-decode.md` | Decoder backends and presentation hand-off |
 | `.claude/rules/audio.md` | Audio codecs, threads, resampling |
