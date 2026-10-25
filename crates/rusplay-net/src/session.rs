@@ -18,7 +18,10 @@ const REPLAY_WINDOW: u64 = 64;
 pub const SEALED_OVERHEAD: usize = COUNTER_LEN + TAG_LEN;
 
 pub const fn requires_sealing(stream: StreamKind) -> bool {
-    !matches!(stream, StreamKind::Discovery | StreamKind::Pairing)
+    !matches!(
+        stream,
+        StreamKind::Discovery | StreamKind::Pairing | StreamKind::Reconnect
+    )
 }
 
 pub struct SessionKeys {
@@ -388,6 +391,7 @@ mod tests {
         assert!(requires_sealing(StreamKind::Control));
         assert!(requires_sealing(StreamKind::Fec));
         assert!(!requires_sealing(StreamKind::Pairing));
+        assert!(!requires_sealing(StreamKind::Reconnect));
         assert!(!requires_sealing(StreamKind::Discovery));
     }
 

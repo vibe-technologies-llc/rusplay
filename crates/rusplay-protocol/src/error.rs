@@ -40,6 +40,10 @@ pub enum ProtocolError {
     UnknownPairingTag(u8),
     #[error("unknown pairing rejection reason {0}")]
     UnknownPairingRejection(u8),
+    #[error("unknown reconnect message tag {0}")]
+    UnknownReconnectTag(u8),
+    #[error("unknown reconnect rejection reason {0}")]
+    UnknownReconnectRejection(u8),
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),
     #[error("cursor flags {0:#04x} carry unknown bits")]

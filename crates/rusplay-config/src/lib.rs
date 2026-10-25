@@ -3,6 +3,7 @@ mod capture;
 mod error;
 mod input;
 mod network;
+mod peers;
 mod scaling;
 mod video;
 
@@ -16,6 +17,7 @@ pub use crate::{
     error::ConfigError,
     input::{InputConfig, PointerMode},
     network::NetworkConfig,
+    peers::PeersConfig,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
         EncoderParams, NvencConfig, NvencPreset, NvencTuning, RateControl, SoftwarePreset,
@@ -30,6 +32,7 @@ pub struct Config {
     pub video: VideoConfig,
     pub audio: AudioConfig,
     pub network: NetworkConfig,
+    pub peers: PeersConfig,
     pub input: InputConfig,
     pub capture: CaptureConfig,
     pub scaling: ScalingConfig,
@@ -55,6 +58,7 @@ impl Config {
         self.video.validate()?;
         self.audio.validate()?;
         self.network.validate()?;
+        self.peers.validate()?;
         self.capture.validate()?;
         self.scaling.validate()
     }
@@ -106,6 +110,43 @@ mod tests {
         assert!(matches!(
             parsed.validate(),
             Err(ConfigError::EmptyRestoreTokenFile)
+        ));
+    }
+
+    #[test]
+    fn peer_files_are_configurable() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [peers]
+            host_file = "/tmp/clients"
+            client_file = "/tmp/hosts"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.peers.host_file,
+            Some(std::path::PathBuf::from("/tmp/clients"))
+        );
+        assert_eq!(
+            parsed.peers.client_file,
+            Some(std::path::PathBuf::from("/tmp/hosts"))
+        );
+        assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_peer_files_are_rejected() {
+        let host: Config = toml::from_str("[peers]\nhost_file = \"\"").unwrap();
+        let client: Config = toml::from_str("[peers]\nclient_file = \"\"").unwrap();
+
+        assert!(matches!(
+            host.validate(),
+            Err(ConfigError::EmptyHostPeersFile)
+        ));
+        assert!(matches!(
+            client.validate(),
+            Err(ConfigError::EmptyClientPeersFile)
         ));
     }
 

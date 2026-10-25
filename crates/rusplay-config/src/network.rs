@@ -29,6 +29,7 @@ pub struct NetworkConfig {
     pub pairing_pin_digits: u8,
     pub pairing_max_attempts: u8,
     pub pairing_timeout_ms: u32,
+    pub reconnect_timeout_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -49,6 +50,7 @@ impl Default for NetworkConfig {
             pairing_pin_digits: 6,
             pairing_max_attempts: 3,
             pairing_timeout_ms: 120_000,
+            reconnect_timeout_ms: 5_000,
         }
     }
 }
@@ -93,6 +95,10 @@ impl NetworkConfig {
 
         if self.pairing_timeout_ms == 0 {
             return Err(ConfigError::ZeroPairingTimeout);
+        }
+
+        if self.reconnect_timeout_ms == 0 {
+            return Err(ConfigError::ZeroReconnectTimeout);
         }
 
         Ok(())
@@ -196,6 +202,19 @@ mod tests {
         assert!(matches!(
             timeout.validate(),
             Err(ConfigError::ZeroPairingTimeout)
+        ));
+    }
+
+    #[test]
+    fn zero_reconnect_timeout_is_rejected() {
+        let config = NetworkConfig {
+            reconnect_timeout_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroReconnectTimeout)
         ));
     }
 }

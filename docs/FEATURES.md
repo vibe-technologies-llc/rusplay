@@ -17,9 +17,6 @@
 - [L] `decode-nvdec`: NVDEC decoder
 - [M] `decode-rav1d`: software AV1 decode via rav1d
 
-# Networking
-- [M] `net-remembered-peers`: persist a pairing secret so a paired client reconnects without a new PIN
-
 # Input
 - [M] `input-libei`: host injection through the RemoteDesktop portal and libei
 - [M] `input-gamepad`: virtual gamepads on the host
