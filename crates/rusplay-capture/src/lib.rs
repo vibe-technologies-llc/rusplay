@@ -17,7 +17,7 @@ pub use crate::{
     },
     error::CaptureError,
     frame::{DrmFourcc, Frame, FrameBuffer, Plane},
-    handoff::{Received, Subscriber},
+    handoff::{Publisher, Received, Subscriber, latest},
     modifier::{
         DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
         choose_modifier, modifiers_for,

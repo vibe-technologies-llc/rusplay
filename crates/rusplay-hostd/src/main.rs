@@ -1,5 +1,6 @@
 mod cli;
 mod discovery;
+mod responder;
 
 use std::{env, error::Error, path::Path, process::ExitCode, sync::Arc};
 
@@ -13,6 +14,7 @@ use thiserror::Error;
 use crate::{
     cli::{CliError, Command, HELP, VERSION},
     discovery::{ConfigSource, Environment},
+    responder::{Responder, ResponderError},
 };
 
 const USAGE_EXIT_CODE: u8 = 2;
@@ -26,6 +28,8 @@ enum HostdError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     Host(#[from] HostError),
+    #[error(transparent)]
+    Discovery(#[from] ResponderError),
 }
 
 fn main() -> ExitCode {
@@ -67,7 +71,13 @@ fn serve(config: Config) -> Result<(), HostdError> {
     let feed = open_portal_capture(&config)?;
     let gpu = Gpu::open()?;
     let host = HostSession::bind(config, peers)?;
-    eprintln!("rusplay-hostd: listening on {}", host.local_addr()?);
+    let address = host.local_addr()?;
+    eprintln!("rusplay-hostd: listening on {address}");
+    let _responder = Responder::start(
+        &host.config().network,
+        address.port(),
+        host.config().peers.host_name.as_deref(),
+    )?;
 
     loop {
         match serve_next(&host, &gpu, &feed) {

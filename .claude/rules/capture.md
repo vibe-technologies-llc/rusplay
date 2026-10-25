@@ -24,7 +24,9 @@ paths:
   next `next_frame` once the handoff closes.
 - Frames cross threads through `handoff::latest`, a single-slot mailbox: a new frame replaces an
   unconsumed one (counted by `superseded_frames`), so the consumer always gets the newest frame
-  and nothing queues. `process` also drains PipeWire's queue down to the newest buffer.
+  and nothing queues. `process` also drains PipeWire's queue down to the newest buffer. `latest`,
+  `Publisher` and `Subscriber` are public so other crates can build a feed (the host's tests make
+  cursor feeds with them), which also keeps them used without the `pipewire` feature.
 - The format pods, the buffer → `Frame` conversion and the SPA ↔ DRM fourcc table are pure
   functions in `format.rs` and `convert.rs`, unit tested without a daemon. SPA names formats in
   byte order and DRM in little-endian word order, so SPA `BGRx` is DRM `XR24`. Formats are

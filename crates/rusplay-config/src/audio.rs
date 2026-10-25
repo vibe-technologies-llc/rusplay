@@ -5,6 +5,7 @@ use crate::ConfigError;
 
 const MAX_FLAC_COMPRESSION: u8 = 8;
 const MAX_JITTER_BUFFER_MS: u32 = 500;
+const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const FLAC_BLOCK_SIZES: std::ops::RangeInclusive<u16> = 32..=32767;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +17,7 @@ pub struct AudioConfig {
     pub jitter_buffer_ms: u32,
     pub decode_queue_packets: u16,
     pub max_conceal_ms: u16,
+    pub fec_overhead_percent: u8,
     pub opus: OpusConfig,
     pub flac: FlacConfig,
 }
@@ -29,6 +31,7 @@ impl Default for AudioConfig {
             jitter_buffer_ms: 10,
             decode_queue_packets: 32,
             max_conceal_ms: 50,
+            fec_overhead_percent: 0,
             opus: OpusConfig::default(),
             flac: FlacConfig::default(),
         }
@@ -57,6 +60,12 @@ impl AudioConfig {
 
         if !FLAC_BLOCK_SIZES.contains(&self.flac.block_size) {
             return Err(ConfigError::FlacBlockSizeOutOfRange(self.flac.block_size));
+        }
+
+        if self.fec_overhead_percent > MAX_FEC_OVERHEAD_PERCENT {
+            return Err(ConfigError::AudioFecOverheadOutOfRange(
+                self.fec_overhead_percent,
+            ));
         }
 
         Ok(())
@@ -197,5 +206,19 @@ mod tests {
                 Err(ConfigError::FlacBlockSizeOutOfRange(found)) if found == block_size
             ));
         }
+    }
+
+    #[test]
+    fn audio_fec_is_off_by_default_and_capped_at_one_hundred_percent() {
+        let excessive = AudioConfig {
+            fec_overhead_percent: 101,
+            ..AudioConfig::default()
+        };
+
+        assert_eq!(AudioConfig::default().fec_overhead_percent, 0);
+        assert!(matches!(
+            excessive.validate(),
+            Err(ConfigError::AudioFecOverheadOutOfRange(101))
+        ));
     }
 }

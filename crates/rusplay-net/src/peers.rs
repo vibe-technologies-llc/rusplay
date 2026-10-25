@@ -562,6 +562,7 @@ mod tests {
         let config = PeersConfig {
             host_file: Some(directory.path().join("clients")),
             client_file: Some(directory.path().join("hosts")),
+            ..PeersConfig::default()
         };
 
         assert_eq!(

@@ -133,8 +133,9 @@ paths:
   (position, visibility, `Arc<CursorImage>`); a position-only message keeps the previous image's
   `Arc`, so the app re-uploads the shape only when `Arc::ptr_eq` says it changed. `updates` counts
   messages and `wait_after(seen, timeout)` blocks for a newer one. A malformed message counts in
-  `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is not
-  repaired (see `docs/BUGS.md`).
+  `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is repaired
+  by the host, which repeats the image every `network.cursor_image_repeat_ms` (`host.md`); the
+  client never asks for it.
 - The display's colour target comes from the `display` module (`query_target`,
   `resolve_target`), documented in `color.md`; nothing in the session calls it yet
   (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
@@ -161,7 +162,15 @@ paths:
   H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
   datagram, keyframe restarts on `RequestKeyframe`, Opus audio packets every 5 ms with a drop
-  rule, cursor messages and a closing `Goodbye`. They connect with `connect_with_audio` and a
-  capturing output, so they need no PipeWire. They return early
-  without a GPU adapter. The client config in the tests raises `video.decode_queue_frames`
-  because the unoptimised rav1d build is slow.
+  rule and cursor messages. They connect with `connect_with_audio` and a capturing output, so
+  they need no PipeWire, and return early without a GPU adapter.
+- The loopback tests are written to hold on a loaded machine, without timeouts stretched to
+  hide a race. The test host sends no `Goodbye`; a test waits until the last frame it sent is
+  presented (`settle`) and then stops the client, so nothing is cut off mid-decode. The decode
+  queue is `u8::MAX` frames, more than any test sends, so warm-up can never overflow it. The
+  latest-wins slot may supersede the opening keyframe, so "the first presented frame is a
+  keyframe" is asserted as "or `frames_superseded + frames_unpresented` covers the frames before
+  it", and the keyframe restart test asserts `frames_skipped`, `decode_errors == 0` and a later
+  presented frame rather than that the first one back is a keyframe. Host-side messages are
+  awaited with `TestHost::wait_for`, never read immediately. The scaling test holds the host
+  back with `HostOptions::gate` until `set_target` has run, so every presented frame is scaled.

@@ -2,7 +2,13 @@
 
 mod common;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
 use parking_lot::Mutex;
@@ -54,7 +60,10 @@ fn frames_arrive_decoded_at_the_source_resolution() {
     let Some(gpu) = common::gpu() else {
         return;
     };
-    let host = TestHost::start(HostOptions::default());
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
     let session = ClientSession::new(common::client_config());
     let (seen, sink) = recorder();
 
@@ -67,14 +76,16 @@ fn frames_arrive_decoded_at_the_source_resolution() {
     )
     .unwrap();
     let paired = stream.paired_secret().is_some();
-    let stats = wait_for_end(stream);
+    let stats = settle(stream, &seen, common::DEFAULT_FRAMES - 1);
 
     let seen = seen.lock().clone();
     let source = Resolution::new(FIXTURE_WIDTH, FIXTURE_HEIGHT);
 
     assert!(paired);
     assert_eq!(stats.keyframe_requests_sent, 0);
-    assert!(seen.first().is_some_and(|first| first.keyframe));
+    assert_eq!(stats.frames_dropped, 0);
+    assert_eq!(stats.frames_decoded, u64::from(common::DEFAULT_FRAMES));
+    assert!(first_is_keyframe_or_was_superseded(&seen, &stats));
     assert!(seen.iter().all(|frame| frame.resolution == source));
     assert!(seen.windows(2).all(|pair| pair[0].frame < pair[1].frame));
     let described = common::stream_description();
@@ -134,8 +145,12 @@ fn frames_are_scaled_to_the_requested_target() {
     let Some(gpu) = common::gpu() else {
         return;
     };
+    let frames = 48;
+    let gate = Arc::new(AtomicBool::new(false));
     let host = TestHost::start(HostOptions {
-        frames: 48,
+        frames,
+        goodbye: false,
+        gate: Some(Arc::clone(&gate)),
         ..HostOptions::default()
     });
     let session = ClientSession::new(common::client_config());
@@ -151,12 +166,12 @@ fn frames_are_scaled_to_the_requested_target() {
     )
     .unwrap();
     stream.set_target(Some(upscaled));
-    stream.wait().unwrap();
+    gate.store(true, Ordering::Release);
+    settle(stream, &seen, frames - 1);
 
     let seen = seen.lock().clone();
 
-    assert!(seen.iter().any(|frame| frame.resolution == upscaled));
-    assert_eq!(seen.last().unwrap().resolution, upscaled);
+    assert!(seen.iter().all(|frame| frame.resolution == upscaled));
 }
 
 #[test]
@@ -168,6 +183,7 @@ fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
         drop: Box::new(|outgoing: Outgoing| {
             outgoing.frame % 4 == 2 && !outgoing.parity && outgoing.index == 0
         }),
+        goodbye: false,
         ..HostOptions::default()
     });
     let session = ClientSession::new(common::client_config());
@@ -181,19 +197,18 @@ fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
         sink,
     )
     .unwrap();
-    let stats_before_end = wait_for_end(stream);
+    let stats = settle(stream, &seen, common::DEFAULT_FRAMES - 1);
 
-    let seen = seen.lock().clone();
-
-    assert!(stats_before_end.frames_recovered > 0);
-    assert_eq!(stats_before_end.frames_lost, 0);
-    assert!(stats_before_end.loss_reports_sent > 0);
-    assert!(seen.iter().any(|frame| frame.frame % 4 == 2));
-    assert!(
-        host.messages()
-            .iter()
-            .any(|message| matches!(message, ControlMessage::ReportLoss { .. }))
-    );
+    assert!(stats.frames_recovered > 0);
+    assert_eq!(stats.frames_lost, 0);
+    assert_eq!(stats.frames_dropped, 0);
+    assert_eq!(stats.decode_errors, 0);
+    assert_eq!(stats.frames_decoded, u64::from(common::DEFAULT_FRAMES));
+    assert!(stats.loss_reports_sent > 0);
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
+        message,
+        ControlMessage::ReportLoss { .. }
+    )));
 }
 
 #[test]
@@ -201,9 +216,11 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
     let Some(gpu) = common::gpu() else {
         return;
     };
+    let frames = 120;
     let host = TestHost::start(HostOptions {
-        frames: 40,
+        frames,
         drop: Box::new(|outgoing: Outgoing| outgoing.frame == LOST_FRAME),
+        goodbye: false,
         ..HostOptions::default()
     });
     let session = ClientSession::new(common::client_config());
@@ -217,19 +234,16 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
         sink,
     )
     .unwrap();
-    let stats = wait_for_end(stream);
+    let stats = settle(stream, &seen, frames - 1);
 
     let seen = seen.lock().clone();
-    let resumed = seen
-        .iter()
-        .find(|frame| frame.frame > LOST_FRAME)
-        .copied()
-        .unwrap();
 
     assert!(stats.frames_lost >= 1);
     assert!(stats.keyframe_requests_sent >= 1);
-    assert!(resumed.keyframe);
-    assert!(host.messages().iter().any(|message| matches!(
+    assert!(stats.frames_skipped >= 1);
+    assert_eq!(stats.decode_errors, 0);
+    assert!(seen.iter().any(|frame| frame.frame > LOST_FRAME));
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
         ControlMessage::RequestKeyframe { frame } if *frame == LOST_FRAME
     )));
@@ -393,13 +407,30 @@ fn input_events_reach_the_host_in_order() {
     assert!(stats.input_packets_sent >= 1);
 }
 
-fn wait_for_end(stream: rusplay_client::ClientStream) -> rusplay_client::ClientStats {
+fn settle(
+    stream: rusplay_client::ClientStream,
+    seen: &Mutex<Vec<Seen>>,
+    last_frame: u32,
+) -> rusplay_client::ClientStats {
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
-    while !stream.is_finished() && std::time::Instant::now() < deadline {
+    while !seen.lock().iter().any(|frame| frame.frame == last_frame)
+        && std::time::Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(5));
     }
     let stats = stream.stats();
-    stream.wait().unwrap();
+    stream.stop().unwrap();
+
+    assert!(
+        seen.lock().iter().any(|frame| frame.frame == last_frame),
+        "frame {last_frame} was never presented"
+    );
 
     stats
+}
+
+fn first_is_keyframe_or_was_superseded(seen: &[Seen], stats: &rusplay_client::ClientStats) -> bool {
+    let first = seen[0];
+
+    first.keyframe || stats.frames_superseded + stats.frames_unpresented >= u64::from(first.frame)
 }

@@ -2,9 +2,11 @@ use std::{fmt, io, net::SocketAddr, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, DrmFourcc};
+use rusplay_core::AudioCodec;
 use rusplay_encode::{EncodeError, input::fourcc_text};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
+use rusplay_protocol::ProtocolError;
 use rusplay_scale::ScaleError;
 use thiserror::Error;
 
@@ -14,6 +16,8 @@ pub enum Stage {
     Encode,
     Send,
     Control,
+    Audio,
+    Cursor,
 }
 
 impl Stage {
@@ -23,6 +27,8 @@ impl Stage {
             Self::Encode => "encode",
             Self::Send => "send",
             Self::Control => "control",
+            Self::Audio => "audio",
+            Self::Cursor => "cursor",
         }
     }
 }
@@ -45,6 +51,8 @@ pub enum HostError {
     Input(#[from] InputError),
     #[error(transparent)]
     Net(#[from] NetError),
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
     #[error(transparent)]
     Scale(#[from] ScaleError),
     #[error("no gpu adapter is available")]
@@ -94,6 +102,10 @@ pub enum HostError {
     CaptureStrideTooSmall { stride: u32, width: u32 },
     #[error("screen capture needs the pipewire feature")]
     CaptureNotCompiled,
+    #[error("audio codec {codec} is not compiled into this host")]
+    AudioCodecNotCompiled { codec: AudioCodec },
+    #[error("the {width}x{height} cursor image does not fit the wire format")]
+    CursorImageTooLarge { width: u32, height: u32 },
 }
 
 impl HostError {

@@ -630,6 +630,14 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Audio,
+        "Stream",
+        "audio.fec_overhead_percent",
+        "FEC overhead",
+        U8,
+    )
+    .unit("%"),
+    field(
+        Section::Audio,
         "Opus",
         "audio.opus.bitrate_kbps",
         "Bitrate",
@@ -812,6 +820,22 @@ pub static FIELDS: &[Field] = &[
         U16,
     )
     .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.cursor_image_repeat_ms",
+        "Cursor image repeat",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Peers",
+        "peers.host_name",
+        "Host name",
+        Kind::Text,
+    )
+    .optional(),
     field(
         Section::Network,
         "Peers",
