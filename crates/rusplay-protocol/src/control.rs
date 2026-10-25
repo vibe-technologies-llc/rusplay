@@ -332,7 +332,7 @@ mod tests {
         .encode(&mut buf)
         .unwrap();
 
-        assert_eq!(&buf[..len], [5, 2, 1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&buf[..len], [6, 2, 1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]
