@@ -6,6 +6,7 @@ mod modifier;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 mod portal;
+mod token;
 
 #[cfg(feature = "pipewire")]
 pub use crate::pipewire::{PipeWireCapture, StreamOptions, default_formats};
@@ -22,6 +23,7 @@ pub use crate::{
         choose_modifier, modifiers_for,
     },
     portal::{PortalSession, PortalStream},
+    token::{RestoreTokenStore, default_path as default_restore_token_path},
 };
 
 pub trait CaptureSource {

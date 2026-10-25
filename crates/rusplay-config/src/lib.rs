@@ -55,6 +55,7 @@ impl Config {
         self.video.validate()?;
         self.audio.validate()?;
         self.network.validate()?;
+        self.capture.validate()?;
         self.scaling.validate()
     }
 }
@@ -73,6 +74,39 @@ mod tests {
         let parsed: Config = toml::from_str("").unwrap();
 
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn restore_token_file_is_configurable() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [capture]
+            restore_token_file = "/tmp/rusplay-token"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.capture.restore_token_file,
+            Some(std::path::PathBuf::from("/tmp/rusplay-token"))
+        );
+        assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_restore_token_file_is_rejected() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [capture]
+            restore_token_file = ""
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::EmptyRestoreTokenFile)
+        ));
     }
 
     #[test]

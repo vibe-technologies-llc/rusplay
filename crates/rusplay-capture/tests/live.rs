@@ -39,7 +39,7 @@ use pipewire::{
 };
 use rusplay_capture::{
     CaptureSource, DRM_FORMAT_MOD_LINEAR, DrmFourcc, FrameBuffer, PipeWireCapture, PortalSession,
-    Received, StreamOptions,
+    Received, RestoreTokenStore, StreamOptions,
 };
 use rusplay_config::Config;
 use rusplay_core::Resolution;
@@ -57,6 +57,8 @@ const CURSOR_PIXELS: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 
 #[test]
 #[ignore = "needs a Wayland session, the screencast portal and a click in its picker"]
 fn portal_stream_delivers_a_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RestoreTokenStore::new(dir.path().join("restore-token"));
     let config = Config::default();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -64,14 +66,16 @@ fn portal_stream_delivers_a_frame() {
         .unwrap();
 
     let session = runtime
-        .block_on(PortalSession::open(&config.capture))
+        .block_on(PortalSession::open_persistent(&config.capture, &store))
         .unwrap();
+    let session_token = session.restore_token.clone();
     let mut capture =
         PipeWireCapture::from_portal(session, StreamOptions::new(&config.capture, &config.video))
             .unwrap();
     let frame = capture.next_frame_timeout(FRAME_WAIT).unwrap().unwrap();
 
     assert!(frame.resolution.pixel_count() > 0);
+    assert_eq!(store.load().unwrap(), session_token);
 }
 
 #[test]

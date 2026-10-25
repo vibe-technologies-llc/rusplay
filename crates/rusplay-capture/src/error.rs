@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use thiserror::Error;
 
@@ -23,6 +23,12 @@ pub enum CaptureError {
     ThreadExited,
     #[error("failed to serialize the spa param {param}")]
     PodSerialize { param: u32 },
+    #[error("neither XDG_STATE_HOME nor HOME names an absolute directory for the restore token")]
+    NoStateDirectory,
+    #[error("failed to read the restore token from {path}")]
+    RestoreTokenRead { path: PathBuf, source: io::Error },
+    #[error("failed to write the restore token to {path}")]
+    RestoreTokenWrite { path: PathBuf, source: io::Error },
     #[error("the negotiated format pod could not be parsed")]
     FormatPodMalformed,
     #[error("the negotiated format lacks spa property {key}")]

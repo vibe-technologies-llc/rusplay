@@ -13,7 +13,7 @@ use ashpd::{
 use rusplay_config::{CaptureConfig, CursorMode, SourceKind};
 use rusplay_core::Resolution;
 
-use crate::CaptureError;
+use crate::{CaptureError, RestoreTokenStore};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortalStream {
@@ -30,6 +30,33 @@ pub struct PortalSession {
 
 impl PortalSession {
     pub async fn open(config: &CaptureConfig) -> Result<Self, CaptureError> {
+        Self::open_with_token(config, config.restore_token.as_deref()).await
+    }
+
+    pub async fn open_persistent(
+        config: &CaptureConfig,
+        store: &RestoreTokenStore,
+    ) -> Result<Self, CaptureError> {
+        if !config.persist_session {
+            return Self::open(config).await;
+        }
+
+        let stored = match &config.restore_token {
+            Some(token) => Some(token.clone()),
+            None => store.load()?,
+        };
+        let session = Self::open_with_token(config, stored.as_deref()).await?;
+
+        if let Some(token) = &session.restore_token {
+            store.store(token)?;
+        }
+        Ok(session)
+    }
+
+    async fn open_with_token(
+        config: &CaptureConfig,
+        restore_token: Option<&str>,
+    ) -> Result<Self, CaptureError> {
         let proxy = Screencast::new().await?;
         let session = proxy
             .create_session(CreateSessionOptions::default())
@@ -45,7 +72,7 @@ impl PortalSession {
             .set_sources(portal_sources(config.source))
             .set_multiple(false)
             .set_persist_mode(persist)
-            .set_restore_token(config.restore_token.as_deref());
+            .set_restore_token(restore_token);
         proxy.select_sources(&session, sources).await?;
 
         let response = proxy

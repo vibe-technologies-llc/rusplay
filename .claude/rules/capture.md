@@ -9,8 +9,13 @@ paths:
   `screencast` feature) and then the PipeWire node the portal returns. No compositor-specific
   protocols (wlr-screencopy, ext-image-copy-capture) until the portal path is complete, and no X11.
 - The portal session asks for persistence (`PersistMode::ExplicitlyRevoked`) when
-  `capture.persist_session` is on, and the restore token is handed back so the host can store it
-  and skip the picker on the next run.
+  `capture.persist_session` is on. `PortalSession::open_persistent` reads the restore token from
+  a `RestoreTokenStore` (an explicit `capture.restore_token` wins), and writes the token the portal
+  returns after a successful start, so the next run skips the picker. A stale token just brings the
+  picker back. The file is `capture.restore_token_file`, defaulting to
+  `$XDG_STATE_HOME/rusplay/restore-token` (ignored unless absolute, per the XDG spec) or
+  `~/.local/state/rusplay/restore-token`; it is written to a staging file with mode 0600 and
+  renamed into place. With persistence off the store is neither read nor written.
 - PipeWire consumption lives behind the `pipewire` feature (`src/pipewire/`). `PipeWireCapture`
   connects to the portal's remote fd and node id and implements `CaptureSource`. The PipeWire main
   loop runs on its own `rusplay-pipewire` thread; setup errors come back synchronously from
