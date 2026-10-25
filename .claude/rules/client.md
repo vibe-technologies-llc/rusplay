@@ -105,6 +105,10 @@ paths:
   `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is not
   repaired (see `docs/BUGS.md`).
 - DMA-BUF frames from VAAPI fail with `DmaBufPresentUnsupported` until `client-dmabuf-present`.
+- The display's colour target comes from the `display` module (`query_target`,
+  `resolve_target`), documented in `color.md`; nothing in the session calls it yet
+  (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
+  compositor.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation and queue overflow;

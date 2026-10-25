@@ -191,9 +191,11 @@ impl GpuPipeline {
         let layout = conversion.converter.layout();
         let settings = conversion.converter.settings();
         let stride = u32::try_from(conversion.planes.luma_stride).unwrap_or(u32::MAX);
+        let color = self.config.video.color;
         let input = self.input.get_or_insert_with(|| Frame {
             resolution: settings.resolution,
             format: fourcc_for(settings.format),
+            color,
             timestamp,
             buffer: FrameBuffer::Shm {
                 data: Vec::new(),

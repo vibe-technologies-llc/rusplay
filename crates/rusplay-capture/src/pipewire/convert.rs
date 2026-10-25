@@ -70,6 +70,7 @@ pub(crate) fn dmabuf_frame(
         resolution: format.size,
         format: format.fourcc,
         timestamp,
+        color: format.color,
         buffer: FrameBuffer::DmaBuf {
             fd: OwnedFd::from(file),
             modifier: format.modifier.unwrap_or(DRM_FORMAT_MOD_INVALID),
@@ -140,6 +141,7 @@ pub(crate) fn shm_frame(
         resolution: format.size,
         format: format.fourcc,
         timestamp,
+        color: format.color,
         buffer: FrameBuffer::Shm {
             data: pixels.to_vec(),
             stride,
@@ -151,7 +153,7 @@ pub(crate) fn shm_frame(
 mod tests {
     use std::os::fd::AsFd;
 
-    use rusplay_core::Resolution;
+    use rusplay_core::{ColorSpace, Resolution};
 
     use super::*;
     use crate::DrmFourcc;
@@ -163,6 +165,7 @@ mod tests {
             fourcc: DrmFourcc::from_code(*b"XR24"),
             size: Resolution::new(width, height),
             modifier: None,
+            color: ColorSpace::default(),
         }
     }
 

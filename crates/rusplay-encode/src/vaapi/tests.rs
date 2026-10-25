@@ -160,6 +160,7 @@ fn pattern_frame(format: PixelFormat, resolution: Resolution, index: u64) -> Fra
         resolution,
         format: fourcc_for(format),
         timestamp: timestamp(index),
+        color: ColorSpace::default(),
         buffer: FrameBuffer::Shm {
             data,
             stride: u32::try_from(resolution.width as usize * sample).unwrap_or(0),
@@ -686,6 +687,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
         resolution: RESOLUTION,
         format: DrmFourcc(surface_format.drm_fourcc),
         timestamp: timestamp(index),
+        color: ColorSpace::default(),
         buffer: FrameBuffer::DmaBuf {
             fd: exported.fd,
             modifier: exported.modifier,
@@ -750,6 +752,7 @@ fn fake_dma_buf(format: DrmFourcc, planes: usize) -> Frame {
         resolution: RESOLUTION,
         format,
         timestamp: Timestamp::ZERO,
+        color: ColorSpace::default(),
         buffer: FrameBuffer::DmaBuf {
             fd: OwnedFd::from(File::open("/dev/null").unwrap()),
             modifier: 0,

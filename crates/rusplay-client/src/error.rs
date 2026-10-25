@@ -7,6 +7,7 @@ use rusplay_input::InputError;
 use rusplay_net::NetError;
 use rusplay_scale::ScaleError;
 use thiserror::Error;
+use wayland_client::{ConnectError, DispatchError, globals::GlobalError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
@@ -67,6 +68,24 @@ pub enum ClientError {
     HostSilent(Duration),
     #[error("audio codec {codec} is not compiled into this client")]
     AudioCodecNotCompiled { codec: AudioCodec },
+    #[error("failed to connect to the wayland compositor")]
+    WaylandConnect(#[source] ConnectError),
+    #[error("failed to list the wayland globals")]
+    WaylandRegistry(#[source] GlobalError),
+    #[error("the wayland connection failed while querying the display")]
+    WaylandDispatch(#[source] DispatchError),
+    #[error("the compositor does not implement wp_color_manager_v1")]
+    ColorManagementUnsupported,
+    #[error("the compositor advertises no outputs")]
+    NoOutputs,
+    #[error("no output is named {name}")]
+    OutputNotFound { name: String },
+    #[error("the compositor could not describe the output (cause {cause}): {message}")]
+    ImageDescriptionFailed { cause: u32, message: String },
+    #[error("the compositor ended the output description without all of its information")]
+    ImageInformationIncomplete,
+    #[error("the target black level {black_nits} cd/m² is not below the peak {peak_nits} cd/m²")]
+    TargetBlackNotBelowPeak { black_nits: f64, peak_nits: f64 },
     #[error("decoded {fourcc} dma-buf frames cannot be presented without dma-buf import into wgpu")]
     DmaBufPresentUnsupported { fourcc: DrmFourcc },
     #[error("decoded frame has {found} planes, presentation needs {expected}")]

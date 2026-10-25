@@ -4733,6 +4733,8 @@ dependencies = [
  "rusplay-protocol",
  "rusplay-scale",
  "thiserror 2.0.21",
+ "wayland-client",
+ "wayland-protocols",
  "wgpu 30.0.1",
 ]
 

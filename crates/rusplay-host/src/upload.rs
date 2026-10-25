@@ -114,7 +114,7 @@ impl EncoderPlanes {
 #[cfg(test)]
 mod tests {
     use rusplay_capture::{Frame, FrameBuffer};
-    use rusplay_core::{BitDepth, PixelFormat, Resolution, Timestamp};
+    use rusplay_core::{BitDepth, ColorSpace, PixelFormat, Resolution, Timestamp};
     use rusplay_encode::{
         Backend,
         input::{YuvFrame, fourcc_for},
@@ -154,6 +154,7 @@ mod tests {
                     let frame = Frame {
                         resolution,
                         format: fourcc_for(format),
+                        color: ColorSpace::default(),
                         timestamp: Timestamp::ZERO,
                         buffer: FrameBuffer::Shm {
                             data: packed,

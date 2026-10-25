@@ -10,7 +10,7 @@ use std::{
 
 use rusplay_capture::{CaptureError, DrmFourcc, Frame, FrameBuffer};
 use rusplay_config::{Config, NetworkConfig};
-use rusplay_core::{Codec, EncodedFrame, Resolution, Timestamp};
+use rusplay_core::{Codec, ColorSpace, EncodedFrame, Resolution, Timestamp};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
     Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport, TransportOptions,
@@ -76,6 +76,7 @@ impl FrameSource for CountingSource {
         Ok(Some(Frame {
             resolution: FRAME_SIZE,
             format: DrmFourcc::from_code(*b"XR24"),
+            color: ColorSpace::default(),
             timestamp: Timestamp::from_micros(u64::from(self.produced) * 10_000),
             buffer: FrameBuffer::Shm {
                 data: vec![fill; (stride * FRAME_SIZE.height) as usize],

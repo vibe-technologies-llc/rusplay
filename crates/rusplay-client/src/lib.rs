@@ -2,6 +2,7 @@ mod audio;
 mod color;
 mod cursor;
 mod decode;
+mod display;
 mod error;
 mod present;
 mod receive;
@@ -18,6 +19,10 @@ pub use crate::{
     audio::{AudioOutput, AudioOutputStats, default_audio_output},
     color::FrameColor,
     cursor::{CursorState, LatestCursor},
+    display::{
+        DisplayImage, LuminanceRange, Luminances, OutputDisplay, query_display, query_outputs,
+        query_target, resolve_target,
+    },
     error::{ClientError, Stage},
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},

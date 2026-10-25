@@ -18,6 +18,7 @@ impl Chromaticity {
     pub const UNITS_PER_ONE: u16 = 50_000;
     pub const D65: Self = Self::units(15_635, 16_450);
     pub const DCI: Self = Self::units(15_700, 17_550);
+    pub const ILLUMINANT_C: Self = Self::units(15_500, 15_800);
 
     const fn units(x: u16, y: u16) -> Self {
         Self { x, y }
@@ -134,6 +135,31 @@ impl Chromaticities {
         Chromaticity::units(32_000, 16_500),
         Chromaticity::units(14_500, 30_000),
         Chromaticity::units(7_500, 3_000),
+        Chromaticity::D65,
+    );
+
+    pub const ADOBE_RGB: Self = Self::named(
+        Chromaticity::units(32_000, 16_500),
+        Chromaticity::units(10_500, 35_500),
+        Chromaticity::units(7_500, 3_000),
+        Chromaticity::D65,
+    );
+    pub const BT470M: Self = Self::named(
+        Chromaticity::units(33_500, 16_500),
+        Chromaticity::units(10_500, 35_500),
+        Chromaticity::units(7_000, 4_000),
+        Chromaticity::ILLUMINANT_C,
+    );
+    pub const GENERIC_FILM: Self = Self::named(
+        Chromaticity::units(34_050, 15_950),
+        Chromaticity::units(12_150, 34_600),
+        Chromaticity::units(7_250, 2_450),
+        Chromaticity::ILLUMINANT_C,
+    );
+    pub const EBU3213: Self = Self::named(
+        Chromaticity::units(31_500, 17_000),
+        Chromaticity::units(14_750, 30_250),
+        Chromaticity::units(7_750, 3_850),
         Chromaticity::D65,
     );
 
@@ -380,6 +406,30 @@ mod tests {
         for channel in matrix.apply([1.0; 3]) {
             assert!((channel - 1.0).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn historical_and_wide_gamut_sets_are_valid_gamuts() {
+        for set in [
+            Chromaticities::ADOBE_RGB,
+            Chromaticities::BT470M,
+            Chromaticities::GENERIC_FILM,
+            Chromaticities::EBU3213,
+        ] {
+            assert_eq!(
+                Chromaticities::new(set.red(), set.green(), set.blue(), set.white()),
+                Ok(set)
+            );
+        }
+    }
+
+    #[test]
+    fn adobe_rgb_shares_the_bt709_blue_and_red_extent() {
+        let adobe = Chromaticities::ADOBE_RGB;
+
+        assert_eq!(adobe.red(), Chromaticities::BT709.red());
+        assert_eq!(adobe.blue(), Chromaticities::BT709.blue());
+        assert_eq!(adobe.white(), Chromaticity::D65);
     }
 
     #[test]

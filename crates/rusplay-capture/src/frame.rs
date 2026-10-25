@@ -1,6 +1,6 @@
 use std::os::fd::OwnedFd;
 
-use rusplay_core::{Resolution, Timestamp};
+use rusplay_core::{ColorSpace, Resolution, Timestamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DrmFourcc(pub u32);
@@ -35,5 +35,6 @@ pub struct Frame {
     pub resolution: Resolution,
     pub format: DrmFourcc,
     pub timestamp: Timestamp,
+    pub color: ColorSpace,
     pub buffer: FrameBuffer,
 }

@@ -60,8 +60,8 @@ paths:
     linearises on load, which is the copy the CPU path cannot avoid. `open_portal_capture`
     therefore asks PipeWire for exactly those formats with `prefer_dmabuf` off. A DMA-BUF frame
     is `DmaBufCaptureUnsupported` until `host-dmabuf-capture`; another fourcc is
-    `CaptureFormatUnsupported`. The captured surface is taken to be sRGB until
-    `capture-color-description`.
+    `CaptureFormatUnsupported`. The captured surface is taken to be sRGB: `Frame::color`
+    is not read yet (`host-source-color`).
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). When `video.color.primaries` is not BT.709 a `ColorMapper` maps sRGB into the

@@ -12,7 +12,9 @@ use rusplay_config::{
     Config, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VideoDecoderConfig,
     VideoEncoderConfig,
 };
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, PixelFormat, Resolution, Timestamp};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
+};
 use rusplay_host::{
     CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostSession, PeerStore, Pin,
 };
@@ -52,6 +54,7 @@ impl FrameSource for MovingBox {
         Ok(Some(Frame {
             resolution: SOURCE,
             format: DrmFourcc::from_code(*b"XR24"),
+            color: ColorSpace::default(),
             timestamp: Timestamp::from_micros(u64::from(self.index) * 16_000),
             buffer: FrameBuffer::Shm { data, stride },
         }))
