@@ -69,6 +69,10 @@ const fn unsigned(max: i64) -> Kind {
 const U8: Kind = unsigned(u8::MAX as i64);
 const U16: Kind = unsigned(u16::MAX as i64);
 const U32: Kind = unsigned(u32::MAX as i64);
+const HDR_NITS: Kind = Kind::Integer {
+    min: 1,
+    max: 10_000,
+};
 const POSITIVE_U32: Kind = Kind::Integer {
     min: 1,
     max: u32::MAX as i64,
@@ -312,6 +316,22 @@ pub static FIELDS: &[Field] = &[
         "Range",
         Kind::Choice(RANGES),
     ),
+    field(
+        Section::Video,
+        "Colour",
+        "video.color.hdr.reference_white_nits",
+        "HDR reference white",
+        HDR_NITS,
+    )
+    .unit("nits"),
+    field(
+        Section::Video,
+        "Colour",
+        "video.color.hdr.peak_nits",
+        "HDR peak luminance",
+        HDR_NITS,
+    )
+    .unit("nits"),
     field(
         Section::Video,
         "Encoder",

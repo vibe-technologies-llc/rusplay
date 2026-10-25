@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorRange, PixelFormat, Resolution, ScaleFilter, TransferFunction,
+    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, PixelFormat, Resolution, ScaleFilter,
+    TransferFunction,
 };
 
 use crate::{
@@ -98,21 +99,30 @@ fn scaling_frame_times() {
         );
     }
 
-    for (chroma, depth, layout) in [
+    for (chroma, depth, layout, chroma_filter) in [
         (
             ChromaSubsampling::Yuv420,
             BitDepth::Eight,
             PlaneLayout::SemiPlanar,
+            ScaleFilter::Hermite,
         ),
         (
             ChromaSubsampling::Yuv420,
             BitDepth::Ten,
             PlaneLayout::SemiPlanar,
+            ScaleFilter::Hermite,
+        ),
+        (
+            ChromaSubsampling::Yuv420,
+            BitDepth::Ten,
+            PlaneLayout::SemiPlanar,
+            ScaleFilter::EwaLanczos,
         ),
         (
             ChromaSubsampling::Yuv444,
             BitDepth::Ten,
             PlaneLayout::Planar,
+            ScaleFilter::Hermite,
         ),
     ] {
         let settings = ConvertSettings {
@@ -122,14 +132,15 @@ fn scaling_frame_times() {
             matrix: YuvMatrix::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
+            hdr: HdrLevels::default(),
             input: InputLight::Linear,
-            chroma_filter: ScaleFilter::Hermite,
+            chroma_filter,
             chroma_siting: ChromaSiting::Left,
             row_alignment: DEFAULT_ROW_ALIGNMENT,
         };
 
         println!(
-            "convert {chroma} {depth:?} {layout:?} -> 3840x2160: {:?}",
+            "convert {chroma} {depth:?} {layout:?} {chroma_filter} -> 3840x2160: {:?}",
             convert_frame_time(gpu, settings)
         );
     }

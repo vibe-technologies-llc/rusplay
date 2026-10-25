@@ -7,15 +7,15 @@ const RESAMPLE_SHADER: &str = concat!(
     include_str!("shaping.wgsl"),
     include_str!("resample.wgsl")
 );
-const CONVERT_LUMA_SHADER: &str = concat!(
+const CONVERT_DIRECT_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("convert_common.wgsl"),
-    include_str!("convert_luma.wgsl")
+    include_str!("convert_direct.wgsl")
 );
-const CONVERT_CHROMA_SHADER: &str = concat!(
+const CONVERT_ROWS_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("convert_common.wgsl"),
-    include_str!("convert_chroma.wgsl")
+    include_str!("convert_rows.wgsl")
 );
 const PACK_CHROMA_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
@@ -25,12 +25,27 @@ const PACK_CHROMA_SHADER: &str = concat!(
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
+    include_str!("destination_rgba16float.wgsl"),
     include_str!("polar.wgsl")
+);
+const POLAR_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("shaping.wgsl"),
+    include_str!("destination_rg32float.wgsl"),
+    include_str!("polar.wgsl")
+);
+const CONVERT_FULL_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("convert_common.wgsl"),
+    include_str!("convert_full.wgsl")
 );
 
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
 const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
+const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
+
+pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
@@ -49,13 +64,116 @@ pub struct ScalePipelines {
     pub(crate) separable: ShaderPass,
     pub(crate) polar_layout: wgpu::BindGroupLayout,
     pub(crate) polar: ShaderPass,
-    pub(crate) output_layout: wgpu::BindGroupLayout,
-    pub(crate) chroma_target_layout: wgpu::BindGroupLayout,
-    pub(crate) convert_params_layout: wgpu::BindGroupLayout,
-    pub(crate) convert_table_layout: wgpu::BindGroupLayout,
-    pub(crate) convert_luma: ShaderPass,
-    pub(crate) convert_chroma: ShaderPass,
-    pub(crate) pack_chroma: ShaderPass,
+    pub(crate) convert: ConvertPipelines,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConvertPipelines {
+    pub output_layout: wgpu::BindGroupLayout,
+    pub chroma_target_layout: wgpu::BindGroupLayout,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub table_layout: wgpu::BindGroupLayout,
+    pub direct: ShaderPass,
+    pub rows: ShaderPass,
+    pub full: ShaderPass,
+    pub polar_chroma: ShaderPass,
+    pub pack_chroma: ShaderPass,
+}
+
+impl ConvertPipelines {
+    fn new(
+        device: &wgpu::Device,
+        source_layout: &wgpu::BindGroupLayout,
+        polar_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let output_layout = layout(
+            device,
+            "rusplay-convert-output",
+            &[writable_storage_buffer_entry(0)],
+        );
+        let chroma_target_layout = layout(
+            device,
+            "rusplay-convert-chroma-target",
+            &[storage_texture_entry(0, CHROMA_FORMAT)],
+        );
+        let params_layout = layout(device, "rusplay-convert-params", &[uniform_entry(0)]);
+        let table_layout = layout(
+            device,
+            "rusplay-convert-table",
+            &[
+                uniform_entry(0),
+                storage_buffer_entry(1),
+                storage_buffer_entry(2),
+            ],
+        );
+        let direct = compute_pipeline(
+            device,
+            "rusplay-convert-direct",
+            &[source_layout, &output_layout, &params_layout],
+            CONVERT_DIRECT_SHADER,
+            "convert_direct",
+            CONVERT_WORKGROUP,
+            &[],
+        );
+        let rows = compute_pipeline(
+            device,
+            "rusplay-convert-rows",
+            &[
+                source_layout,
+                &output_layout,
+                &table_layout,
+                &chroma_target_layout,
+            ],
+            CONVERT_ROWS_SHADER,
+            "convert_rows",
+            CONVERT_ROWS_WORKGROUP,
+            &[("MAX_CHROMA_TAPS", f64::from(MAX_CHROMA_TAPS))],
+        );
+        let full = compute_pipeline(
+            device,
+            "rusplay-convert-full",
+            &[
+                source_layout,
+                &output_layout,
+                &params_layout,
+                &chroma_target_layout,
+            ],
+            CONVERT_FULL_SHADER,
+            "convert_full",
+            CONVERT_WORKGROUP,
+            &[],
+        );
+        let polar_chroma = compute_pipeline(
+            device,
+            "rusplay-resample-polar-chroma",
+            &[source_layout, &chroma_target_layout, polar_layout],
+            POLAR_CHROMA_SHADER,
+            "resample_polar",
+            POLAR_WORKGROUP,
+            &[],
+        );
+        let pack_chroma = compute_pipeline(
+            device,
+            "rusplay-pack-chroma",
+            &[source_layout, &output_layout, &table_layout],
+            PACK_CHROMA_SHADER,
+            "pack_chroma",
+            CONVERT_WORKGROUP,
+            &[],
+        );
+
+        Self {
+            output_layout,
+            chroma_target_layout,
+            params_layout,
+            table_layout,
+            direct,
+            rows,
+            full,
+            polar_chroma,
+            pack_chroma,
+        }
+    }
 }
 
 impl ScalePipelines {
@@ -84,6 +202,7 @@ impl ScalePipelines {
             RESAMPLE_SHADER,
             "resample",
             SEPARABLE_WORKGROUP,
+            &[],
         );
 
         let polar_layout = layout(
@@ -98,52 +217,10 @@ impl ScalePipelines {
             POLAR_SHADER,
             "resample_polar",
             POLAR_WORKGROUP,
+            &[],
         );
 
-        let output_layout = layout(
-            device,
-            "rusplay-convert-output",
-            &[writable_storage_buffer_entry(0)],
-        );
-        let chroma_target_layout = layout(
-            device,
-            "rusplay-convert-chroma-target",
-            &[storage_texture_entry(0, CHROMA_FORMAT)],
-        );
-        let convert_params_layout = layout(device, "rusplay-convert-params", &[uniform_entry(0)]);
-        let convert_table_layout = layout(
-            device,
-            "rusplay-convert-table",
-            &[
-                uniform_entry(0),
-                storage_buffer_entry(1),
-                storage_buffer_entry(2),
-            ],
-        );
-        let convert_luma = compute_pipeline(
-            device,
-            "rusplay-convert-luma",
-            &[&source_layout, &output_layout, &convert_params_layout],
-            CONVERT_LUMA_SHADER,
-            "convert_luma",
-            CONVERT_WORKGROUP,
-        );
-        let convert_chroma = compute_pipeline(
-            device,
-            "rusplay-convert-chroma",
-            &[&source_layout, &chroma_target_layout, &convert_table_layout],
-            CONVERT_CHROMA_SHADER,
-            "convert_chroma",
-            CONVERT_WORKGROUP,
-        );
-        let pack_chroma = compute_pipeline(
-            device,
-            "rusplay-pack-chroma",
-            &[&source_layout, &output_layout, &convert_table_layout],
-            PACK_CHROMA_SHADER,
-            "pack_chroma",
-            CONVERT_WORKGROUP,
-        );
+        let convert = ConvertPipelines::new(device, &source_layout, &polar_layout);
 
         Self {
             source_layout,
@@ -152,13 +229,7 @@ impl ScalePipelines {
             separable,
             polar_layout,
             polar,
-            output_layout,
-            chroma_target_layout,
-            convert_params_layout,
-            convert_table_layout,
-            convert_luma,
-            convert_chroma,
-            pack_chroma,
+            convert,
         }
     }
 
@@ -197,6 +268,7 @@ pub(crate) fn compute_pipeline(
     shader: &str,
     entry_point: &str,
     workgroup: (u32, u32),
+    overrides: &[(&str, f64)],
 ) -> ShaderPass {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -210,10 +282,13 @@ pub(crate) fn compute_pipeline(
         immediate_size: 0,
     });
 
-    let constants = [
+    let constants: Vec<(&str, f64)> = [
         ("WORKGROUP_X", f64::from(workgroup.0)),
         ("WORKGROUP_Y", f64::from(workgroup.1)),
-    ];
+    ]
+    .into_iter()
+    .chain(overrides.iter().copied())
+    .collect();
 
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(label),

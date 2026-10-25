@@ -1,4 +1,4 @@
-use rusplay_core::{Resolution, ScaleFilter, TransferFunction};
+use rusplay_core::{ChromaSubsampling, Resolution, ScaleFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -13,10 +13,17 @@ pub enum ScaleError {
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]
     SigmoidSlopeOutOfRange(f32),
-    #[error("chroma filter {0} is polar, chroma downscaling needs a separable filter")]
-    ChromaFilterNotSeparable(ScaleFilter),
-    #[error("encoding linear light with the {0:?} transfer function is not supported")]
-    TransferUnsupported(TransferFunction),
+    #[error(
+        "chroma filter {filter} is polar and cannot downscale {chroma} chroma, which keeps full vertical resolution"
+    )]
+    PolarChromaFilterUnsupported {
+        filter: ScaleFilter,
+        chroma: ChromaSubsampling,
+    },
+    #[error("hdr reference white {0} nits is outside 1..=10000")]
+    ReferenceWhiteOutOfRange(u32),
+    #[error("hdr peak luminance {0} nits is outside 1..=10000")]
+    PeakLuminanceOutOfRange(u32),
     #[error("row alignment {0} is not a power of two of at least 4 bytes")]
     RowAlignmentInvalid(u32),
     #[error("a frame of {bytes} bytes exceeds the addressable 16 GiB")]

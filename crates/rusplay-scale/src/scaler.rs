@@ -200,7 +200,7 @@ impl Plan {
     ) {
         match self {
             Self::Separable(plan) => plan.encode(pipelines, encoder, source_group, target_group),
-            Self::Polar(plan) => plan.encode(pipelines, encoder, source_group, target_group),
+            Self::Polar(plan) => plan.encode(encoder, source_group, target_group),
         }
     }
 }

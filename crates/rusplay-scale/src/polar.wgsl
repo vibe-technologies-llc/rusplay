@@ -6,11 +6,10 @@ struct Params {
     stretch: vec2<f32>,
     radius: f32,
     lut_size: u32,
-    padding: vec2<u32>,
+    phase: vec2<f32>,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
-@group(1) @binding(0) var destination: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(0) var<storage, read> radial_lut: array<f32>;
 @group(2) @binding(1) var<uniform> params: Params;
 
@@ -27,7 +26,7 @@ fn resample_polar(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    let center = (vec2<f32>(id.xy) + 0.5) * params.ratio - 0.5;
+    let center = (vec2<f32>(id.xy) + 0.5) * params.ratio - 0.5 + params.phase;
     let extent = params.radius * params.stretch;
     let first = vec2<i32>(floor(center - extent)) + 1;
     let last = vec2<i32>(ceil(center + extent)) - 1;

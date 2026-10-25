@@ -213,6 +213,44 @@ mod tests {
     }
 
     #[test]
+    fn hdr_levels_are_configurable_and_range_checked() {
+        let parsed: Config = toml::from_str(
+            r"
+            [video.color.hdr]
+            reference_white_nits = 100
+            peak_nits = 600
+            ",
+        )
+        .unwrap();
+        let too_bright: Config = toml::from_str(
+            r"
+            [video.color.hdr]
+            peak_nits = 10001
+            ",
+        )
+        .unwrap();
+        let no_white: Config = toml::from_str(
+            r"
+            [video.color.hdr]
+            reference_white_nits = 0
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.video.color.hdr.reference_white_nits, 100);
+        assert_eq!(parsed.video.color.hdr.peak_nits, 600);
+        assert!(parsed.validate().is_ok());
+        assert!(matches!(
+            too_bright.validate(),
+            Err(ConfigError::PeakLuminanceOutOfRange(10001))
+        ));
+        assert!(matches!(
+            no_white.validate(),
+            Err(ConfigError::ReferenceWhiteOutOfRange(0))
+        ));
+    }
+
+    #[test]
     fn restore_token_file_is_configurable() {
         let parsed: Config = toml::from_str(
             r#"
