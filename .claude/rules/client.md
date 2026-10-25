@@ -104,11 +104,18 @@ paths:
   messages and `wait_after(seen, timeout)` blocks for a newer one. A malformed message counts in
   `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is not
   repaired (see `docs/BUGS.md`).
-- DMA-BUF frames from VAAPI fail with `DmaBufPresentUnsupported` until `client-dmabuf-present`.
 - The display's colour target comes from the `display` module (`query_target`,
   `resolve_target`), documented in `color.md`; nothing in the session calls it yet
   (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
   compositor.
+- DMA-BUF frames from VAAPI (`NV12`/`P010`) are imported by a `DmaBufImporter` created on the
+  first one, which needs a `Gpu` whose device came from `rusplay_scale::device_descriptor`
+  (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
+  `RgbConverter::encode_planes` (`SemiPlanar` settings) with no copy, and the decoded frame, the
+  surface's lease, goes to `release_after_submission` after the submit, so the decoder reuses the
+  surface only once the GPU has read it. CPU frames keep their upload buffer, created on the first
+  one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
+  source size and upscaled, and requires identical output.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation and queue overflow;

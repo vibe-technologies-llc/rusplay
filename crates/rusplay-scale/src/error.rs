@@ -1,5 +1,9 @@
-use rusplay_core::{Resolution, ScaleFilter, TransferFunction};
+use ash::vk;
+use rusplay_core::{PixelFormat, Resolution, ScaleFilter, TransferFunction};
+use rustix::io::Errno;
 use thiserror::Error;
+
+use crate::{PlaneLayout, dmabuf::fourcc_name};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ScaleError {
@@ -43,4 +47,62 @@ pub enum ScaleError {
     SingularColorMatrix,
     #[error("the yuv frame was created for a different layout than the converter's")]
     FrameLayoutMismatch,
+    #[error(
+        "the device was created without dma-buf import (VK_EXT_external_memory_dma_buf and VK_EXT_image_drm_format_modifier)"
+    )]
+    DmaBufImportUnavailable,
+    #[error("dma-buf import needs the vulkan backend")]
+    DmaBufNeedsVulkan,
+    #[error("dma-buf format {} cannot be imported", fourcc_name(*.0))]
+    DmaBufFormatUnsupported(u32),
+    #[error("dma-buf format {} with modifier {modifier:#018x} cannot be imported", fourcc_name(*fourcc))]
+    DmaBufModifierUnsupported { fourcc: u32, modifier: u64 },
+    #[error(
+        "dma-buf format {} with modifier {modifier:#018x} needs {expected} planes, the buffer has {found}",
+        fourcc_name(*fourcc)
+    )]
+    DmaBufPlaneCount {
+        fourcc: u32,
+        modifier: u64,
+        expected: usize,
+        found: usize,
+    },
+    #[error("dma-buf plane {plane} lives in another buffer than plane 0")]
+    DmaBufPlanesSplit { plane: usize },
+    #[error("dma-buf plane {plane} starts at {offset}, past the buffer's {size} bytes")]
+    DmaBufPlaneOutOfBounds {
+        plane: usize,
+        offset: u64,
+        size: u64,
+    },
+    #[error("a {width}x{height} dma-buf plane exceeds what the device can import")]
+    DmaBufExtentUnsupported { width: u32, height: u32 },
+    #[error("failed to duplicate a dma-buf file descriptor")]
+    DmaBufFdDup(#[source] Errno),
+    #[error("failed to stat a dma-buf file descriptor")]
+    DmaBufFdStat(#[source] Errno),
+    #[error("vkCreateImage failed for a dma-buf import")]
+    DmaBufImageCreate(#[source] vk::Result),
+    #[error("vkGetMemoryFdPropertiesKHR failed for a dma-buf")]
+    DmaBufMemoryProperties(#[source] vk::Result),
+    #[error("no memory type can hold both the image and the dma-buf")]
+    DmaBufNoMemoryType,
+    #[error("vkAllocateMemory failed to import a dma-buf")]
+    DmaBufMemoryImport(#[source] vk::Result),
+    #[error("vkBindImageMemory failed for an imported dma-buf")]
+    DmaBufMemoryBind(#[source] vk::Result),
+    #[error(
+        "dma-buf format {} does not hold {format:?} frames in a {layout:?} layout",
+        fourcc_name(*fourcc)
+    )]
+    DmaBufFormatMismatch {
+        fourcc: u32,
+        format: PixelFormat,
+        layout: PlaneLayout,
+    },
+    #[error("a {found} dma-buf is smaller than the {needed} frame")]
+    DmaBufTooSmall {
+        found: Resolution,
+        needed: Resolution,
+    },
 }

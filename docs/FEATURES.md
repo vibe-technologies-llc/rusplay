@@ -1,5 +1,6 @@
 # Scaling
-- [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
+- [S] `scale-dmabuf-swizzled-rgb`: import the RGB DMA-BUF formats wgpu has no texture format for (`XR30`/`AR30`, which compositors offer first for 10-bit, and `BX24`/`RX24`/`RX30`/`BX30`) by passing a channel order to the scaler and colour converter source reads; `DmaBufImporter` returns `DmaBufFormatUnsupported` for them today
+- [S] `scale-dmabuf-sync`: wait for a capture DMA-BUF's implicit fence (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` imported as a Vulkan semaphore) or PipeWire's explicit sync timeline before reading it; only VAAPI frames are synchronised today (`vaSyncSurface`)
 
 # Video encode
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
@@ -14,11 +15,10 @@
 
 # Sessions
 - [M] `session-stream-format`: carry codec, resolution, pixel format, `ColorSpace` and HDR metadata in the handshake; the client decodes with its own `video.codec` and labels frames with its own `video.color` today
-- [M, blocked by: scale-dmabuf-import] `client-dmabuf-present`: present VAAPI DMA-BUF frames (`NV12`/`P010`); the present stage returns `DmaBufPresentUnsupported` today, so only the software decoder streams
 - [M] `host-audio`: capture with `AudioCapture`, encode on a codec thread and send `StreamKind::Audio` from the host session
 - [M] `host-input`: receive input events on the control path and inject them through one combined RemoteDesktop + ScreenCast portal session (`LibeiInjector`, `UinputGamepads`)
 - [S] `host-cursor`: send the capture's `cursor_feed` as latest-wins `CursorMessage`s on `StreamKind::Cursor`
-- [M, blocked by: scale-dmabuf-import] `host-dmabuf-capture`: convert DMA-BUF capture frames on the GPU and let PipeWire negotiate them again; the host asks for shared memory and returns `DmaBufCaptureUnsupported` today
+- [M] `host-dmabuf-capture`: convert DMA-BUF capture frames on the GPU and let PipeWire negotiate them again; the host asks for shared memory and returns `DmaBufCaptureUnsupported` today
 - [M] `host-ten-bit-capture`: accept the 10-bit `XR30`/`XB30` capture formats, which have no sRGB texture view, by linearising them in a shader before scaling
 - [M] `host-source-color`: linearise and map each capture frame from its `Frame::color` (transfer, primaries, HDR levels) instead of assuming sRGB in `GpuPipeline`, reconfiguring the mapper when the description changes
 - [S] `hostd-discovery`: run `DiscoveryResponder` in `rusplay-hostd` so clients find the host without an address

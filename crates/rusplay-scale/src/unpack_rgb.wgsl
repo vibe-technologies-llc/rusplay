@@ -1,4 +1,3 @@
-@group(0) @binding(0) var<storage, read> input: array<u32>;
 @group(1) @binding(0) var chroma: texture_2d<f32>;
 @group(2) @binding(0) var target_texture: texture_storage_2d<rgba16float, write>;
 @group(3) @binding(0) var<uniform> params: Params;

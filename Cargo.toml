@@ -22,6 +22,7 @@ rusplay-net.path = "crates/rusplay-net"
 rusplay-protocol.path = "crates/rusplay-protocol"
 rusplay-scale.path = "crates/rusplay-scale"
 
+ash = { version = "0.38.0", default-features = false }
 ashpd = { version = "0.13.13", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false }

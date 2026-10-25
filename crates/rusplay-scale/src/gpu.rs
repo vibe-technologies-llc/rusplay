@@ -27,11 +27,25 @@ const PACK_CHROMA_SHADER: &str = concat!(
 const UNPACK_CHROMA_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
     include_str!("unpack_chroma.wgsl")
 );
 const UNPACK_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_PLANES_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_chroma.wgsl")
+);
+const UNPACK_PLANES_RGB_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
 const POLAR_SHADER: &str = concat!(
@@ -112,6 +126,9 @@ pub(crate) struct UnpackPasses {
     pub input_layout: wgpu::BindGroupLayout,
     pub chroma: ShaderPass,
     pub rgb: ShaderPass,
+    pub planes_layout: wgpu::BindGroupLayout,
+    pub planes_chroma: ShaderPass,
+    pub planes_rgb: ShaderPass,
 }
 
 #[derive(Debug, Clone)]
@@ -382,42 +399,77 @@ impl ScalePipelines {
 }
 
 fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) -> UnpackPasses {
+    let input_layout = layout(device, "rusplay-unpack-input", &[storage_buffer_entry(0)]);
+    let planes_layout = layout(
+        device,
+        "rusplay-unpack-planes",
+        &[uint_texture_entry(0), uint_texture_entry(1)],
+    );
+    let [chroma, rgb] = unpack_pair(
+        device,
+        "rusplay-unpack",
+        &input_layout,
+        layouts,
+        [UNPACK_CHROMA_SHADER, UNPACK_RGB_SHADER],
+    );
+    let [planes_chroma, planes_rgb] = unpack_pair(
+        device,
+        "rusplay-unpack-planes",
+        &planes_layout,
+        layouts,
+        [UNPACK_PLANES_CHROMA_SHADER, UNPACK_PLANES_RGB_SHADER],
+    );
+
+    UnpackPasses {
+        input_layout,
+        chroma,
+        rgb,
+        planes_layout,
+        planes_chroma,
+        planes_rgb,
+    }
+}
+
+fn unpack_pair(
+    device: &wgpu::Device,
+    label: &str,
+    input_layout: &wgpu::BindGroupLayout,
+    layouts: [&wgpu::BindGroupLayout; 4],
+    shaders: [&str; 2],
+) -> [ShaderPass; 2] {
     let [
         source_layout,
         destination_layout,
         chroma_target_layout,
         convert_table_layout,
     ] = layouts;
-    let input_layout = layout(device, "rusplay-unpack-input", &[storage_buffer_entry(0)]);
-    let unpack_chroma = compute_pipeline(
+    let [chroma_shader, rgb_shader] = shaders;
+
+    let chroma = compute_pipeline(
         device,
-        "rusplay-unpack-chroma",
-        &[&input_layout, chroma_target_layout, convert_table_layout],
-        UNPACK_CHROMA_SHADER,
+        &format!("{label}-chroma"),
+        &[input_layout, chroma_target_layout, convert_table_layout],
+        chroma_shader,
         "unpack_chroma",
         CONVERT_WORKGROUP,
         &[],
     );
-    let unpack_rgb = compute_pipeline(
+    let rgb = compute_pipeline(
         device,
-        "rusplay-unpack-rgb",
+        &format!("{label}-rgb"),
         &[
-            &input_layout,
+            input_layout,
             source_layout,
             destination_layout,
             convert_table_layout,
         ],
-        UNPACK_RGB_SHADER,
+        rgb_shader,
         "unpack_rgb",
         CONVERT_WORKGROUP,
         &[],
     );
 
-    UnpackPasses {
-        input_layout,
-        chroma: unpack_chroma,
-        rgb: unpack_rgb,
-    }
+    [chroma, rgb]
 }
 
 pub(crate) fn layout(
@@ -483,6 +535,17 @@ pub(crate) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
         binding,
         wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+    )
+}
+
+fn uint_texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    compute_entry(
+        binding,
+        wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Uint,
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },

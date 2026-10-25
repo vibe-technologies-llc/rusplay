@@ -2,7 +2,7 @@ use std::{fmt, io, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_core::AudioCodec;
-use rusplay_decode::{DecodeError, DrmFourcc};
+use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
 use rusplay_net::NetError;
 use rusplay_scale::ScaleError;
@@ -86,8 +86,8 @@ pub enum ClientError {
     ImageInformationIncomplete,
     #[error("the target black level {black_nits} cd/m² is not below the peak {peak_nits} cd/m²")]
     TargetBlackNotBelowPeak { black_nits: f64, peak_nits: f64 },
-    #[error("decoded {fourcc} dma-buf frames cannot be presented without dma-buf import into wgpu")]
-    DmaBufPresentUnsupported { fourcc: DrmFourcc },
+    #[error("decoded dma-buf plane {plane} names object {object}, which the frame does not have")]
+    DmaBufObjectMissing { plane: usize, object: usize },
     #[error("decoded frame has {found} planes, presentation needs {expected}")]
     PlaneCountMismatch { found: usize, expected: usize },
     #[error(

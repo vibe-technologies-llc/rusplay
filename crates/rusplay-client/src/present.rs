@@ -9,10 +9,11 @@ use std::{
 use parking_lot::Mutex;
 use rusplay_config::ScalingConfig;
 use rusplay_core::Resolution;
-use rusplay_decode::{CpuFrame, DecodedBuffer};
+use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ChromaSiting, FrameLayout, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
-    ScalePipelines, ScaleSettings, Scaler, Sigmoid, YuvFrame,
+    ChromaSiting, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout, OutputLight,
+    PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
+    YuvFrame,
 };
 
 use crate::{
@@ -63,7 +64,12 @@ pub(crate) fn run(
 
 struct Unpacker {
     converter: RgbConverter,
-    upload: YuvFrame,
+    upload: Option<YuvFrame>,
+}
+
+enum UnpackInput {
+    Upload,
+    Planes(DmaBufTexture),
 }
 
 struct LinearSource {
@@ -76,6 +82,7 @@ struct PresentStage {
     options: PresentOptions,
     pipelines: ScalePipelines,
     unpacker: Option<Unpacker>,
+    importer: Option<DmaBufImporter>,
     linear: Option<LinearSource>,
     scaler: Option<Scaler>,
     outputs: OutputPool,
@@ -90,6 +97,7 @@ impl PresentStage {
             options,
             pipelines,
             unpacker: None,
+            importer: None,
             linear: None,
             scaler: None,
             outputs: OutputPool::default(),
@@ -102,22 +110,31 @@ impl PresentStage {
         links: &mut PresentLinks,
     ) -> Result<(), ClientError> {
         let source = video.decoded.resolution;
-        let format = video.decoded.format;
-        let cpu = match &video.decoded.buffer {
-            DecodedBuffer::Cpu(cpu) => cpu,
+        let color = FrameColor::of_stream(video.color, video.decoded.format);
+        let device = &self.gpu.device;
+
+        let (layout, input) = match &video.decoded.buffer {
+            DecodedBuffer::Cpu(_) => (PlaneLayout::Planar, UnpackInput::Upload),
             DecodedBuffer::DmaBuf(frame) => {
-                return Err(ClientError::DmaBufPresentUnsupported {
-                    fourcc: frame.image().fourcc,
-                });
+                let importer = match &mut self.importer {
+                    Some(importer) => importer,
+                    None => self.importer.insert(DmaBufImporter::new(device)?),
+                };
+                let planes = importer.import(&describe(frame.image())?)?;
+                (PlaneLayout::SemiPlanar, UnpackInput::Planes(planes))
             }
         };
-
-        let color = FrameColor::of_stream(video.color, format);
-        let settings = convert_settings(&self.options, source, color);
-        let device = &self.gpu.device;
+        let settings = convert_settings(&self.options, source, color, layout);
         let unpacker = ensure_unpacker(&self.pipelines, device, &mut self.unpacker, settings)?;
-        upload_planes(&self.gpu.queue, cpu, unpacker)?;
-        drop(video.decoded);
+
+        let lease = match &video.decoded.buffer {
+            DecodedBuffer::Cpu(cpu) => {
+                upload_planes(device, &self.gpu.queue, cpu, unpacker)?;
+                drop(video.decoded);
+                None
+            }
+            DecodedBuffer::DmaBuf(_) => Some(video.decoded),
+        };
 
         let target = links.target.lock().unwrap_or(source);
         let Some(output) = self.outputs.acquire(device, target) else {
@@ -130,14 +147,10 @@ impl PresentStage {
             label: Some("rusplay-client-present"),
         });
         if target == source {
-            unpacker
-                .converter
-                .encode(device, &mut encoder, &unpacker.upload, &output_view)?;
+            unpack(unpacker, device, &mut encoder, &input, &output_view)?;
         } else {
             let linear = ensure_linear(device, &mut self.linear, source);
-            unpacker
-                .converter
-                .encode(device, &mut encoder, &unpacker.upload, &linear.view)?;
+            unpack(unpacker, device, &mut encoder, &input, &linear.view)?;
             let settings = scale_settings(&self.options.scaling, source, target, color.light);
             ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
                 device,
@@ -147,6 +160,9 @@ impl PresentStage {
             );
         }
         self.gpu.queue.submit([encoder.finish()]);
+        if let Some(lease) = lease {
+            rusplay_scale::release_after_submission(&self.gpu.queue, lease);
+        }
 
         links.counters.frames_presented.increment();
         links.sink.present(PresentedFrame {
@@ -164,15 +180,64 @@ impl PresentStage {
     }
 }
 
+fn unpack(
+    unpacker: &mut Unpacker,
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    input: &UnpackInput,
+    target: &wgpu::TextureView,
+) -> Result<(), ClientError> {
+    match (input, &unpacker.upload) {
+        (UnpackInput::Upload, Some(upload)) => {
+            unpacker.converter.encode(device, encoder, upload, target)
+        }
+        (UnpackInput::Upload, None) => Ok(()),
+        (UnpackInput::Planes(planes), _) => unpacker
+            .converter
+            .encode_planes(device, encoder, planes, target),
+    }
+    .map_err(ClientError::from)
+}
+
+fn describe(image: &DmaBufImage) -> Result<DmaBuf<'_>, ClientError> {
+    let planes = image
+        .planes
+        .iter()
+        .enumerate()
+        .map(|(index, plane)| {
+            let fd = image
+                .plane_fd(index)
+                .ok_or(ClientError::DmaBufObjectMissing {
+                    plane: index,
+                    object: plane.object,
+                })?;
+            Ok(DmaBufPlane {
+                fd,
+                offset: plane.offset,
+                stride: plane.pitch,
+            })
+        })
+        .collect::<Result<Vec<_>, ClientError>>()?;
+
+    Ok(DmaBuf {
+        fourcc: image.fourcc.as_u32(),
+        modifier: image.modifier,
+        width: image.width,
+        height: image.height,
+        planes,
+    })
+}
+
 fn convert_settings(
     options: &PresentOptions,
     resolution: Resolution,
     color: FrameColor,
+    layout: PlaneLayout,
 ) -> RgbConvertSettings {
     RgbConvertSettings {
         resolution,
         format: color.coded,
-        layout: PlaneLayout::Planar,
+        layout,
         matrix: color.matrix,
         range: color.space.range,
         transfer: color.space.transfer,
@@ -193,14 +258,13 @@ fn ensure_unpacker<'a>(
         Some(unpacker) if unpacker.converter.settings() == settings => unpacker,
         Some(mut unpacker) => {
             unpacker.converter.configure(device, settings)?;
-            unpacker.upload = unpacker.converter.create_frame(device);
+            unpacker.upload = None;
             unpacker
         }
-        None => {
-            let converter = RgbConverter::new(pipelines, device, settings)?;
-            let upload = converter.create_frame(device);
-            Unpacker { converter, upload }
-        }
+        None => Unpacker {
+            converter: RgbConverter::new(pipelines, device, settings)?,
+            upload: None,
+        },
     };
 
     Ok(slot.insert(unpacker))
@@ -272,9 +336,10 @@ fn scale_settings(
 }
 
 fn upload_planes(
+    device: &wgpu::Device,
     queue: &wgpu::Queue,
     cpu: &CpuFrame,
-    unpacker: &Unpacker,
+    unpacker: &mut Unpacker,
 ) -> Result<(), ClientError> {
     let layout = unpacker.converter.layout();
     let found = cpu.plane_count();
@@ -289,7 +354,10 @@ fn upload_planes(
     let Some(size) = wgpu::BufferSize::new(layout.size) else {
         return Ok(());
     };
-    let Some(mut staging) = queue.write_buffer_with(unpacker.upload.buffer(), 0, size) else {
+    let upload = unpacker
+        .upload
+        .get_or_insert_with(|| unpacker.converter.create_frame(device));
+    let Some(mut staging) = queue.write_buffer_with(upload.buffer(), 0, size) else {
         return Ok(());
     };
 
@@ -390,4 +458,182 @@ fn create_texture(device: &wgpu::Device, label: &str, resolution: Resolution) ->
             | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
+}
+
+#[cfg(all(test, feature = "software", feature = "vaapi"))]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use rusplay_config::{Config, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig};
+    use rusplay_core::{Codec, EncodedFrame, Timestamp};
+
+    use super::*;
+    use crate::stats::Counters;
+
+    const IVF_HEADER_LEN: usize = 32;
+    const IVF_FRAME_HEADER_LEN: usize = 12;
+    const RGBA16F_BYTES: u32 = 8;
+
+    fn gpu() -> Option<Gpu> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..wgpu::RequestAdapterOptions::default()
+        }))
+        .ok()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
+                .ok()?;
+
+        device
+            .features()
+            .contains(rusplay_scale::DMABUF_FEATURES)
+            .then_some(Gpu { device, queue })
+    }
+
+    fn ivf_frames(name: &str) -> Vec<Vec<u8>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../rusplay-decode/tests/data")
+            .join(name);
+        let file = fs::read(path).unwrap();
+
+        let mut frames = Vec::new();
+        let mut cursor = IVF_HEADER_LEN;
+        while cursor + IVF_FRAME_HEADER_LEN <= file.len() {
+            let size = u32::from_le_bytes(file[cursor..cursor + 4].try_into().unwrap());
+            let start = cursor + IVF_FRAME_HEADER_LEN;
+            let end = start + usize::try_from(size).unwrap();
+            frames.push(file[start..end].to_vec());
+            cursor = end;
+        }
+        frames
+    }
+
+    fn read_texture(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
+        let (width, height) = (texture.width(), texture.height());
+        let tight_row = (width * RGBA16F_BYTES) as usize;
+        let row_bytes =
+            (width * RGBA16F_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rusplay-test-readback"),
+            size: u64::from(row_bytes * height),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: None,
+                },
+            },
+            texture.size(),
+        );
+        gpu.queue.submit([encoder.finish()]);
+        staging.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+
+        let bytes = staging
+            .get_mapped_range(..)
+            .unwrap()
+            .chunks_exact(row_bytes as usize)
+            .flat_map(|row| &row[..tight_row])
+            .copied()
+            .collect();
+        staging.unmap();
+        bytes
+    }
+
+    fn present_clip(
+        gpu: &Gpu,
+        backend: &VideoDecoderConfig,
+        clip: &str,
+        target: Option<Resolution>,
+    ) -> Option<Vec<Vec<u8>>> {
+        let mut decoder = rusplay_decode::open(Codec::Av1, backend).ok()?;
+        let config = Config::default();
+        let presented = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let presented = Arc::clone(&presented);
+            move |frame: PresentedFrame| presented.lock().push(frame)
+        };
+        let mut links = PresentLinks {
+            input: Arc::new(Slot::new()),
+            target: Arc::new(Mutex::new(target)),
+            sink: Box::new(sink),
+            stop: Arc::new(AtomicBool::new(false)),
+            counters: Arc::new(Counters::default()),
+        };
+        let mut stage = PresentStage::new(
+            gpu.clone(),
+            PresentOptions {
+                scaling: config.scaling,
+            },
+        );
+
+        for (number, data) in (0..).zip(ivf_frames(clip)) {
+            let frame = EncodedFrame {
+                codec: Codec::Av1,
+                timestamp: Timestamp::ZERO,
+                keyframe: number == 0,
+                data,
+            };
+            let Some(picture) = decoder.decode(&frame).unwrap() else {
+                continue;
+            };
+            let video = DecodedVideo {
+                decoded: picture,
+                number,
+                keyframe: frame.keyframe,
+                color: config.video.color,
+                received_at: Instant::now(),
+                decoded_at: Instant::now(),
+            };
+            stage.present(video, &mut links).unwrap();
+        }
+
+        let frames = presented.lock();
+        Some(
+            frames
+                .iter()
+                .map(|frame| read_texture(gpu, &frame.texture))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn vaapi_dmabuf_frames_present_like_software_frames() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let vaapi = VideoDecoderConfig::Vaapi(VaapiDecoderConfig::default());
+        let software = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+
+        for clip in ["av1-420-8bit.ivf", "av1-420-10bit.ivf"] {
+            for target in [None, Some(Resolution::new(400, 224))] {
+                let Some(hardware) = present_clip(&gpu, &vaapi, clip, target) else {
+                    return;
+                };
+                let reference = present_clip(&gpu, &software, clip, target).unwrap();
+
+                assert!(!hardware.is_empty(), "{clip}");
+                assert_eq!(hardware.len(), reference.len(), "{clip}");
+                for (index, (actual, expected)) in hardware.iter().zip(&reference).enumerate() {
+                    assert!(
+                        actual == expected,
+                        "{clip} {target:?} frame {index} differs"
+                    );
+                }
+            }
+        }
+    }
 }

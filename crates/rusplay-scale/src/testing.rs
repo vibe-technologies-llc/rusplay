@@ -29,7 +29,7 @@ async fn request_gpu() -> Option<Gpu> {
         .await
         .ok()?;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&crate::device_descriptor(&adapter))
         .await
         .ok()?;
 
@@ -156,7 +156,29 @@ pub(crate) fn storage_target(gpu: &Gpu, width: u32, height: u32) -> wgpu::Textur
 
 pub(crate) fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Image {
     let (width, height) = (texture.width(), texture.height());
-    let row_bytes = (width * RGBA16F_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+
+    let pixels = download_raw(gpu, texture, RGBA16F_BYTES)
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|texel| {
+            std::array::from_fn(|channel| {
+                f16::from_le_bytes([texel[2 * channel], texel[2 * channel + 1]]).to_f32()
+            })
+        })
+        .collect();
+
+    Image {
+        width,
+        height,
+        pixels,
+    }
+}
+
+pub(crate) fn download_raw(gpu: &Gpu, texture: &wgpu::Texture, texel_bytes: u32) -> Vec<u8> {
+    let (width, height) = (texture.width(), texture.height());
+    let tight_row = (width * texel_bytes) as usize;
+    let row_bytes = (width * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let staging = readback_buffer(gpu, u64::from(row_bytes * height));
 
     let mut encoder = gpu
@@ -176,22 +198,11 @@ pub(crate) fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Image {
     );
     gpu.queue.submit([encoder.finish()]);
 
-    let bytes = map_read(gpu, &staging);
-    let pixels = bytes
+    map_read(gpu, &staging)
         .chunks_exact(row_bytes as usize)
-        .flat_map(|row| row[..(width * RGBA16F_BYTES) as usize].as_chunks::<8>().0)
-        .map(|texel| {
-            std::array::from_fn(|channel| {
-                f16::from_le_bytes([texel[2 * channel], texel[2 * channel + 1]]).to_f32()
-            })
-        })
-        .collect();
-
-    Image {
-        width,
-        height,
-        pixels,
-    }
+        .flat_map(|row| &row[..tight_row])
+        .copied()
+        .collect()
 }
 
 pub(crate) fn download_buffer(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
