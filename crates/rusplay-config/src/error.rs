@@ -45,6 +45,10 @@ pub enum ConfigError {
     ZeroPairingAttempts,
     #[error("pairing timeout must be greater than zero")]
     ZeroPairingTimeout,
+    #[error("sigmoid center {0} is outside 0.0..=1.0")]
+    SigmoidCenterOutOfRange(f32),
+    #[error("sigmoid slope {0} is outside 1.0..=20.0")]
+    SigmoidSlopeOutOfRange(f32),
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]

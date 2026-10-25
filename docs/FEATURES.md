@@ -1,13 +1,10 @@
 # Scaling
-- [M] `scale-gpu-tests`: headless wgpu tests comparing GPU output with a CPU reference of the kernels
-- [M] `scale-polar-pass`: single-pass 2D EWA shader for the polar filters
-- [S] `scale-antiringing`: clamp upscaled output to the local min/max by `antiringing` strength
-- [S] `scale-sigmoid`: sigmoidal light transform around the upscale pass
 - [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
-- [M] `scale-color-convert`: RGB to YUV 4:2:0/4:2:2/4:4:4 conversion on the GPU with the chroma downscale filter
+- [S] `scale-polar-chroma`: polar (EWA) filters for the chroma downscale in `ColorConverter`, which rejects them today
+- [M] `scale-hdr-transfer`: PQ and HLG encoding in `ColorConverter` for linear-light HDR input
 
 # Video encode
-- [L, blocked by: scale-color-convert] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
+- [L] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
 - [S] `encode-svt-av1-log`: route SVT-AV1 log output through svt_av1_set_log_callback instead of stderr
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device

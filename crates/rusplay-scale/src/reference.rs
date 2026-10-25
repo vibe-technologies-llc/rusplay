@@ -1,0 +1,239 @@
+use rusplay_core::TransferFunction;
+
+use crate::{
+    ConvertSettings, FrameLayout, InputLight, Kernel, PlaneLayout, ScaleSettings, TapTable,
+    polar::PolarGeometry, scaler::Axis, shaping::Shaping, testing::Image,
+};
+
+pub(crate) fn resample_separable(
+    source: &Image,
+    table: &TapTable,
+    axis: Axis,
+    shaping: &Shaping,
+) -> Image {
+    let target_len = u32::try_from(table.firsts.len()).expect("table length fits u32");
+    let (width, height) = match axis {
+        Axis::Horizontal => (target_len, source.height),
+        Axis::Vertical => (source.width, target_len),
+    };
+
+    Image::from_fn(width, height, |x, y| {
+        let output_index = match axis {
+            Axis::Horizontal => x,
+            Axis::Vertical => y,
+        } as usize;
+        let taps = table.taps_per_pixel as usize;
+        let first = i64::from(table.firsts[output_index]);
+        let anchor = i64::from(table.anchors[output_index]);
+        let weights = &table.weights[output_index * taps..(output_index + 1) * taps];
+
+        let mut sum = [0.0_f32; 4];
+        let mut nearest_low = [f32::MAX; 4];
+        let mut nearest_high = [f32::MIN; 4];
+        for (offset, weight) in (0_i64..).zip(weights) {
+            let position = first + offset;
+            let texel = shaping.input(match axis {
+                Axis::Horizontal => source.texel(position, i64::from(y)),
+                Axis::Vertical => source.texel(i64::from(x), position),
+            });
+            for (total, value) in sum.iter_mut().zip(texel) {
+                *total += weight * value;
+            }
+            if (0..=1).contains(&(position - anchor)) {
+                for channel in 0..4 {
+                    nearest_low[channel] = nearest_low[channel].min(texel[channel]);
+                    nearest_high[channel] = nearest_high[channel].max(texel[channel]);
+                }
+            }
+        }
+
+        shaping.output(shaping.antiring(sum, nearest_low, nearest_high))
+    })
+}
+
+pub(crate) fn resample_polar(source: &Image, settings: &ScaleSettings) -> Image {
+    let geometry = PolarGeometry::new(settings);
+    let kernel = Kernel::new(settings.filter);
+    let shaping = settings.polar_shaping();
+    let radius = f64::from(geometry.radius);
+    let stretch = (f64::from(geometry.stretch.0), f64::from(geometry.stretch.1));
+
+    Image::from_fn(geometry.target.0, geometry.target.1, |x, y| {
+        #[allow(clippy::cast_precision_loss)]
+        let center = (
+            f64::from((x as f32 + 0.5) * geometry.ratio.0 - 0.5),
+            f64::from((y as f32 + 0.5) * geometry.ratio.1 - 0.5),
+        );
+
+        #[allow(clippy::cast_possible_truncation)]
+        let span = |middle: f64, stretch: f64| {
+            ((middle - radius * stretch).floor() as i64 + 1)
+                ..=((middle + radius * stretch).ceil() as i64 - 1)
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let anchor = (center.0.floor() as i64, center.1.floor() as i64);
+
+        let mut sum = [0.0_f64; 4];
+        let mut total = 0.0_f64;
+        let mut nearest_low = [f32::MAX; 4];
+        let mut nearest_high = [f32::MIN; 4];
+        for row in span(center.1, stretch.1) {
+            for column in span(center.0, stretch.0) {
+                #[allow(clippy::cast_precision_loss)]
+                let distance = ((column as f64 - center.0) / stretch.0)
+                    .hypot((row as f64 - center.1) / stretch.1);
+                if distance >= radius {
+                    continue;
+                }
+
+                let weight = kernel.weight(distance);
+                let texel = shaping.input(source.texel(column, row));
+                for (accumulated, value) in sum.iter_mut().zip(texel) {
+                    *accumulated += weight * f64::from(value);
+                }
+                total += weight;
+
+                if (0..=1).contains(&(column - anchor.0)) && (0..=1).contains(&(row - anchor.1)) {
+                    for channel in 0..4 {
+                        nearest_low[channel] = nearest_low[channel].min(texel[channel]);
+                        nearest_high[channel] = nearest_high[channel].max(texel[channel]);
+                    }
+                }
+            }
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let color = sum.map(|value| (value / total) as f32);
+        shaping.output(shaping.antiring(color, nearest_low, nearest_high))
+    })
+}
+
+pub(crate) type SamplePlanes = Vec<Vec<Vec<u32>>>;
+
+pub(crate) fn convert(source: &Image, settings: &ConvertSettings) -> SamplePlanes {
+    let rows = settings.matrix.rows();
+    let quantization = settings.quantization();
+    let (horizontal, vertical) = settings.chroma_tables();
+    let (chroma_width, chroma_height) = settings.chroma_size();
+    let encode = |texel: [f32; 4]| -> [f64; 3] {
+        std::array::from_fn(|channel| {
+            let linear = f64::from(texel[channel]).clamp(0.0, 1.0);
+            match (settings.input, settings.transfer) {
+                (InputLight::Linear, TransferFunction::Srgb) if linear > 0.003_130_8 => {
+                    1.055 * linear.powf(1.0 / 2.4) - 0.055
+                }
+                (InputLight::Linear, TransferFunction::Srgb) => 12.92 * linear,
+                (InputLight::Linear, TransferFunction::Bt709) if linear >= 0.018 => {
+                    1.099 * linear.powf(0.45) - 0.099
+                }
+                (InputLight::Linear, TransferFunction::Bt709) => 4.5 * linear,
+                _ => linear,
+            }
+        })
+    };
+    let dot = |row: [f64; 3], rgb: [f64; 3]| row.iter().zip(rgb).map(|(a, b)| a * b).sum::<f64>();
+    let quantize = |value: f64, (scale, offset): (f64, f64)| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let code = (value * scale + offset)
+            .round()
+            .clamp(0.0, f64::from(quantization.max_code)) as u32;
+        code
+    };
+    let filter = |table: &TapTable, index: u32, sample: &dyn Fn(i64) -> [f64; 2]| {
+        let taps = table.taps_per_pixel as usize;
+        let start = index as usize * taps;
+        (0_i64..).zip(&table.weights[start..start + taps]).fold(
+            [0.0; 2],
+            |sum, (offset, weight)| {
+                let value = sample(i64::from(table.firsts[index as usize]) + offset);
+                [
+                    sum[0] + f64::from(*weight) * value[0],
+                    sum[1] + f64::from(*weight) * value[1],
+                ]
+            },
+        )
+    };
+
+    let luma: Vec<Vec<u32>> = (0..source.height)
+        .map(|y| {
+            (0..source.width)
+                .map(|x| {
+                    let rgb = encode(source.texel(i64::from(x), i64::from(y)));
+                    quantize(dot(rows[0], rgb), quantization.luma)
+                })
+                .collect()
+        })
+        .collect();
+    let chroma_at = |x: i64, y: i64| {
+        let rgb = encode(source.texel(x, y));
+        [dot(rows[1], rgb), dot(rows[2], rgb)]
+    };
+    let rows_filtered: Vec<Vec<[f64; 2]>> = (0..source.height)
+        .map(|y| {
+            (0..chroma_width)
+                .map(|x| filter(&horizontal, x, &|column| chroma_at(column, i64::from(y))))
+                .collect()
+        })
+        .collect();
+    let last_row = i64::from(source.height) - 1;
+    let chroma: Vec<Vec<[u32; 2]>> = (0..chroma_height)
+        .map(|y| {
+            (0..chroma_width)
+                .map(|x| {
+                    let value = filter(&vertical, y, &|row| {
+                        rows_filtered[usize::try_from(row.clamp(0, last_row)).unwrap_or_default()]
+                            [x as usize]
+                    });
+                    value.map(|component| quantize(component, quantization.chroma))
+                })
+                .collect()
+        })
+        .collect();
+
+    let component = |index: usize| -> Vec<Vec<u32>> {
+        chroma
+            .iter()
+            .map(|row| row.iter().map(|pair| pair[index]).collect())
+            .collect()
+    };
+    match settings.layout {
+        PlaneLayout::Planar => vec![luma, component(0), component(1)],
+        PlaneLayout::SemiPlanar => vec![
+            luma,
+            chroma
+                .iter()
+                .map(|row| row.iter().flatten().copied().collect())
+                .collect(),
+        ],
+    }
+}
+
+pub(crate) fn unpack(bytes: &[u8], layout: &FrameLayout) -> SamplePlanes {
+    let sample_bytes = layout.bytes_per_sample as usize;
+    let shift = layout.sample_shift();
+
+    layout
+        .planes
+        .iter()
+        .map(|plane| {
+            let samples = (plane.width * plane.content.samples_per_pixel()) as usize;
+            (0..plane.height as usize)
+                .map(|row| {
+                    let start = usize::try_from(plane.offset).unwrap_or_default()
+                        + row * plane.stride as usize;
+                    bytes[start..start + samples * sample_bytes]
+                        .chunks_exact(sample_bytes)
+                        .map(|sample| {
+                            let raw = sample
+                                .iter()
+                                .rev()
+                                .fold(0_u32, |value, byte| value << 8 | u32::from(*byte));
+                            raw >> shift
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}

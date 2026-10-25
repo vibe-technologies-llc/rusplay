@@ -27,6 +27,7 @@ bindgen = { version = "0.73.2", default-features = false, features = ["runtime"]
 chacha20poly1305 = { version = "0.11.0", default-features = false }
 claxon = "0.4.3"
 flacenc = { version = "0.5.1", default-features = false }
+half = { version = "2.7.1", default-features = false }
 hkdf = { version = "0.13.0", default-features = false }
 lexopt = "0.3.2"
 libc = { version = "0.2.191", default-features = false }
@@ -34,6 +35,7 @@ opus-rs = { version = "0.1.40", default-features = false }
 parking_lot = { version = "0.13.0", default-features = false }
 pipewire = { version = "0.10.1", default-features = false }
 pkg-config = "0.3.34"
+pollster = "1.0.1"
 reed-solomon-simd = { version = "3.1.0", default-features = false }
 rtrb = "0.4.1"
 rubato = { version = "5.0.1", default-features = false }
