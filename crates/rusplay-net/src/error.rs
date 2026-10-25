@@ -15,6 +15,10 @@ pub enum NetError {
     Receive(#[source] io::Error),
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
+    #[error("reed-solomon coding failed")]
+    FecCoding(#[from] reed_solomon_simd::Error),
+    #[error("fec block expects {expected} data shards but {found} were given")]
+    FecShardCount { expected: usize, found: usize },
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
 }

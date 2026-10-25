@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+reed-solomon-simd = { workspace = true, features = ["std"] }
 rusplay-protocol.workspace = true
 thiserror.workspace = true
 

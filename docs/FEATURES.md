@@ -33,7 +33,6 @@
 - [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
 # Networking
-- [M] `net-fec`: Reed-Solomon shard encode/decode for `FecScheme`
 - [M] `net-reassembly`: fragment reassembly into frames with loss detection
 - [M] `net-control`: acknowledged control channel carrying `ControlMessage`
 - [M, blocked by: net-control] `net-pairing`: authenticated pairing and encrypted session keys
