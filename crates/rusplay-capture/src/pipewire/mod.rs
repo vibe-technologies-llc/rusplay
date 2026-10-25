@@ -1,4 +1,5 @@
 mod convert;
+mod cursor_meta;
 mod format;
 mod raw;
 
@@ -27,12 +28,13 @@ use pipewire::{
     },
     stream::{Stream, StreamFlags, StreamRc, StreamState},
 };
-use rusplay_config::{CaptureConfig, VideoConfig};
+use rusplay_config::{CaptureConfig, CursorMode, VideoConfig};
 use rusplay_core::{BitDepth, FrameRate, Resolution, Timestamp};
 
 pub use self::format::default_formats;
 use self::{
     convert::{DmaBufPlane, ShmPlane, dmabuf_frame, shm_frame},
+    cursor_meta::{cursor_meta_param, parse_cursor_meta},
     format::{
         FormatDecision, FormatRequest, ModifierRequest, NegotiatedFormat, buffers_param, decide,
         dmabuf_enum_format, enum_formats, header_meta_param, parse_format,
@@ -41,6 +43,7 @@ use self::{
 };
 use crate::{
     CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, PortalSession,
+    cursor::{CursorTracker, CursorUpdate},
     handoff::{Publisher, Received, Subscriber, latest},
     modifier::FormatModifiers,
 };
@@ -53,6 +56,7 @@ pub struct StreamOptions {
     pub formats: Vec<DrmFourcc>,
     pub prefer_dmabuf: bool,
     pub modifiers: Vec<FormatModifiers>,
+    pub cursor_metadata: bool,
     pub size_hint: Option<Resolution>,
     pub frame_rate: FrameRate,
 }
@@ -70,6 +74,7 @@ impl StreamOptions {
             formats,
             prefer_dmabuf: capture.prefer_dmabuf,
             modifiers,
+            cursor_metadata: capture.cursor == CursorMode::Metadata,
             size_hint: video.resolution,
             frame_rate: video.frame_rate,
         }
@@ -111,6 +116,7 @@ type Failure = Arc<Mutex<Option<CaptureError>>>;
 
 pub struct PipeWireCapture {
     deliveries: Subscriber<Delivery>,
+    cursor: Subscriber<CursorUpdate>,
     failure: Failure,
     control: channel::Sender<Command>,
     in_use: Option<BufferHandle>,
@@ -124,6 +130,7 @@ impl PipeWireCapture {
         options: StreamOptions,
     ) -> Result<Self, CaptureError> {
         let (publisher, deliveries) = latest();
+        let (cursor_publisher, cursor) = latest();
         let failure = Failure::default();
         let (control, commands) = channel::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
@@ -133,6 +140,7 @@ impl PipeWireCapture {
             node_id,
             options,
             publisher,
+            cursor_publisher,
             failure: Arc::clone(&failure),
             commands,
         };
@@ -147,6 +155,7 @@ impl PipeWireCapture {
 
         let mut capture = Self {
             deliveries,
+            cursor,
             failure,
             control,
             in_use: None,
@@ -239,6 +248,10 @@ impl CaptureSource for PipeWireCapture {
             None => Err(self.take_failure()),
         }
     }
+
+    fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
+        Some(self.cursor.clone())
+    }
 }
 
 impl Drop for PipeWireCapture {
@@ -252,6 +265,7 @@ struct WorkerSetup {
     node_id: u32,
     options: StreamOptions,
     publisher: Publisher<Delivery>,
+    cursor_publisher: Publisher<CursorUpdate>,
     failure: Failure,
     commands: channel::Receiver<Command>,
 }
@@ -260,6 +274,8 @@ struct Worker {
     options: StreamOptions,
     format: Option<NegotiatedFormat>,
     publisher: Publisher<Delivery>,
+    cursor_publisher: Publisher<CursorUpdate>,
+    cursor: CursorTracker,
     held: Rc<RefCell<HeldBuffers>>,
     failure: Failure,
     mainloop: MainLoopWeak,
@@ -274,6 +290,7 @@ impl Worker {
 
     fn stop(&mut self) {
         self.publisher.close();
+        self.cursor_publisher.close();
         if let Some(mainloop) = self.mainloop.upgrade() {
             mainloop.quit();
         }
@@ -312,7 +329,11 @@ impl Worker {
         let params = match decide(&parsed, table) {
             FormatDecision::Accept(format) => {
                 self.format = Some(format);
-                vec![buffers_param(format.memory())?, header_meta_param()?]
+                let mut params = vec![buffers_param(format.memory())?, header_meta_param()?];
+                if self.options.cursor_metadata {
+                    params.push(cursor_meta_param()?);
+                }
+                params
             }
             FormatDecision::Fixate { fourcc, modifier } => {
                 let fixated = dmabuf_enum_format(
@@ -335,7 +356,12 @@ impl Worker {
     }
 
     fn on_process(&mut self, stream: &Stream) {
-        let Some(mut buffer) = DequeuedBuffer::newest(stream) else {
+        let mut newest = None;
+        while let Some(buffer) = DequeuedBuffer::dequeue(stream) {
+            self.observe_cursor(&buffer);
+            newest = Some(buffer);
+        }
+        let Some(mut buffer) = newest else {
             return;
         };
 
@@ -357,6 +383,19 @@ impl Worker {
         let stale = self.publisher.replace(Delivery { frame, hold });
         if let Some(handle) = stale.and_then(|stale| stale.hold) {
             self.held.borrow_mut().release(handle, stream);
+        }
+    }
+
+    fn observe_cursor(&mut self, buffer: &DequeuedBuffer<'_>) {
+        let Some(observation) = buffer
+            .meta(spa_sys::SPA_META_Cursor)
+            .and_then(parse_cursor_meta)
+        else {
+            return;
+        };
+
+        if let Some(update) = self.cursor.observe(observation) {
+            self.cursor_publisher.merge(update, CursorUpdate::absorb);
         }
     }
 
@@ -451,6 +490,8 @@ fn run_worker(
         options: setup.options,
         format: None,
         publisher: setup.publisher,
+        cursor_publisher: setup.cursor_publisher,
+        cursor: CursorTracker::default(),
         held: Rc::clone(&held),
         failure: setup.failure,
         mainloop: mainloop.downgrade(),

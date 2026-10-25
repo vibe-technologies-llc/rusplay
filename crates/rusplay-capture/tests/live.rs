@@ -4,6 +4,7 @@ use std::{
     env,
     fs::File,
     io::Cursor,
+    mem,
     os::{
         fd::{AsRawFd, OwnedFd},
         unix::net::UnixStream,
@@ -38,7 +39,7 @@ use pipewire::{
 };
 use rusplay_capture::{
     CaptureSource, DRM_FORMAT_MOD_LINEAR, DrmFourcc, FrameBuffer, PipeWireCapture, PortalSession,
-    StreamOptions,
+    Received, StreamOptions,
 };
 use rusplay_config::Config;
 use rusplay_core::Resolution;
@@ -50,6 +51,8 @@ const SOURCE_BYTES: u32 = SOURCE_STRIDE * SOURCE_SIZE.height;
 const SOURCE_FILL: u8 = 0xAB;
 const AMD_TILED: u64 = 0x0200_0000_0000_0001;
 const FRAMES_TO_CYCLE: usize = 12;
+const CURSOR_EDGE: u32 = 2;
+const CURSOR_PIXELS: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 #[test]
 #[ignore = "needs a Wayland session, the screencast portal and a click in its picker"]
@@ -129,6 +132,38 @@ fn dmabuf_off_falls_back_to_shared_memory() {
     assert!(matches!(frame.buffer, FrameBuffer::Shm { .. }));
 }
 
+#[test]
+#[ignore = "needs a running PipeWire daemon"]
+fn local_source_forwards_cursor_metadata_once_per_bitmap() {
+    let source = TestSource::spawn(SourceMemory::Shared);
+    let config = Config::default();
+    let options = StreamOptions::new(&config.capture, &config.video);
+
+    let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+    let feed = capture.cursor_feed().unwrap();
+    for _ in 0..FRAMES_TO_CYCLE {
+        capture.next_frame().unwrap();
+    }
+    let first = feed.recv_timeout(FRAME_WAIT);
+    capture.next_frame().unwrap();
+    let later = feed.recv_timeout(FRAME_WAIT);
+
+    let Received::Value(first) = first else {
+        panic!("expected a cursor update, got {first:?}");
+    };
+    let bitmap = first.bitmap.unwrap();
+    assert_eq!((bitmap.width, bitmap.height), (CURSOR_EDGE, CURSOR_EDGE));
+    assert_eq!((bitmap.hotspot_x, bitmap.hotspot_y), (1, 0));
+    assert_eq!(bitmap.rgba, CURSOR_PIXELS);
+    assert!(first.visible);
+    assert_eq!(first.y, 10);
+    let Received::Value(later) = later else {
+        panic!("expected a cursor update, got {later:?}");
+    };
+    assert!(later.x > first.x);
+    assert_eq!(later.bitmap, None);
+}
+
 fn pipewire_socket() -> OwnedFd {
     let runtime_dir = env::var_os("XDG_RUNTIME_DIR").unwrap();
     let path = PathBuf::from(runtime_dir).join("pipewire-0");
@@ -146,6 +181,7 @@ struct SourceState {
     announced: bool,
     ready: mpsc::Sender<u32>,
     backing: Vec<File>,
+    produced: i32,
 }
 
 struct TestSource {
@@ -286,8 +322,12 @@ fn on_source_format(stream: &Stream, state: &SourceState, format: &Pod) {
     }
 
     let buffers = source_buffers(state.memory);
+    let cursor = source_cursor_meta();
     stream
-        .update_params(&mut [Pod::from_bytes(&buffers).unwrap()])
+        .update_params(&mut [
+            Pod::from_bytes(&buffers).unwrap(),
+            Pod::from_bytes(&cursor).unwrap(),
+        ])
         .unwrap();
 }
 
@@ -308,20 +348,85 @@ fn back_with_memory(state: &mut SourceState, buffer: *mut pw_sys::pw_buffer) {
     state.backing.push(file);
 }
 
-fn produce(stream: &Stream) {
-    let Some(mut buffer) = stream.dequeue_buffer() else {
+fn cursor_meta_size() -> usize {
+    mem::size_of::<sys::spa_meta_cursor>()
+        + mem::size_of::<sys::spa_meta_bitmap>()
+        + CURSOR_PIXELS.len()
+}
+
+fn source_cursor_meta() -> Vec<u8> {
+    serialize(Object {
+        type_: SpaTypes::ObjectParamMeta.as_raw(),
+        id: ParamType::Meta.as_raw(),
+        properties: vec![
+            Property::new(
+                sys::SPA_PARAM_META_type,
+                Value::Id(Id(sys::SPA_META_Cursor)),
+            ),
+            Property::new(
+                sys::SPA_PARAM_META_size,
+                Value::Int(i32::try_from(cursor_meta_size()).unwrap()),
+            ),
+        ],
+    })
+}
+
+fn write_cursor(buffer: *mut sys::spa_buffer, x: i32) {
+    let cursor =
+        unsafe { sys::spa_buffer_find_meta_data(buffer, sys::SPA_META_Cursor, cursor_meta_size()) }
+            .cast::<sys::spa_meta_cursor>();
+    if cursor.is_null() {
         return;
-    };
-    let Some(data) = buffer.datas_mut().first_mut() else {
-        return;
-    };
-    if let Some(bytes) = data.data() {
-        bytes.fill(SOURCE_FILL);
     }
-    let chunk = data.chunk_mut();
-    *chunk.offset_mut() = 0;
-    *chunk.size_mut() = SOURCE_BYTES;
-    *chunk.stride_mut() = i32::try_from(SOURCE_STRIDE).unwrap();
+
+    let cursor_size = mem::size_of::<sys::spa_meta_cursor>();
+    let bitmap_size = mem::size_of::<sys::spa_meta_bitmap>();
+    unsafe {
+        (*cursor).id = 1;
+        (*cursor).flags = 0;
+        (*cursor).position = sys::spa_point { x, y: 10 };
+        (*cursor).hotspot = sys::spa_point { x: 1, y: 0 };
+        (*cursor).bitmap_offset = u32::try_from(cursor_size).unwrap();
+
+        let bitmap = cursor.add(1).cast::<sys::spa_meta_bitmap>();
+        (*bitmap).format = VideoFormat::RGBA.as_raw();
+        (*bitmap).size = sys::spa_rectangle {
+            width: CURSOR_EDGE,
+            height: CURSOR_EDGE,
+        };
+        (*bitmap).stride = i32::try_from(CURSOR_EDGE * 4).unwrap();
+        (*bitmap).offset = u32::try_from(bitmap_size).unwrap();
+        bitmap
+            .add(1)
+            .cast::<u8>()
+            .copy_from_nonoverlapping(CURSOR_PIXELS.as_ptr(), CURSOR_PIXELS.len());
+    }
+}
+
+fn produce(stream: &Stream, state: &mut SourceState) {
+    let raw = unsafe { stream.dequeue_raw_buffer() };
+    if raw.is_null() {
+        return;
+    }
+
+    let buffer = unsafe { (*raw).buffer };
+    let data = unsafe { &mut *(*buffer).datas };
+    if !data.data.is_null() {
+        unsafe {
+            data.data
+                .cast::<u8>()
+                .write_bytes(SOURCE_FILL, usize::try_from(SOURCE_BYTES).unwrap());
+        }
+    }
+    let chunk = unsafe { &mut *data.chunk };
+    chunk.offset = 0;
+    chunk.size = SOURCE_BYTES;
+    chunk.stride = i32::try_from(SOURCE_STRIDE).unwrap();
+
+    state.produced += 1;
+    write_cursor(buffer, state.produced);
+
+    unsafe { stream.queue_raw_buffer(raw) };
 }
 
 fn run_source(memory: SourceMemory, ready: mpsc::Sender<u32>, stop: channel::Receiver<()>) {
@@ -346,6 +451,7 @@ fn run_source(memory: SourceMemory, ready: mpsc::Sender<u32>, stop: channel::Rec
         announced: false,
         ready,
         backing: Vec::new(),
+        produced: 0,
     };
     let _listener = stream
         .add_local_listener_with_user_data(state)
@@ -361,7 +467,7 @@ fn run_source(memory: SourceMemory, ready: mpsc::Sender<u32>, stop: channel::Rec
             }
         })
         .add_buffer(|_, state, buffer| back_with_memory(state, buffer))
-        .process(|stream, _| produce(stream))
+        .process(produce)
         .register()
         .unwrap();
 

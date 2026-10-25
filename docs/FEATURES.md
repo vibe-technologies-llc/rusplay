@@ -1,5 +1,4 @@
 # Capture
-- [S] `capture-cursor-metadata`: extract cursor metadata and forward it to the client
 - [S] `capture-restore-token`: persist the portal restore token between host runs
 
 # Scaling

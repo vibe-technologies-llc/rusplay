@@ -54,10 +54,24 @@ paths:
 - All unsafe PipeWire buffer access sits in `src/pipewire/raw.rs` (`DequeuedBuffer`, which requeues
   on drop, `borrow_fd`, `HeldBuffers`). The invariant it relies on: every pointer and fd it hands
   out belongs to a buffer that is dequeued for at least as long as the borrow.
-- `tests/live.rs` holds `#[ignore]`d tests. Three run an in-process PipeWire video source and
+- With `capture.cursor = "metadata"` (`StreamOptions::cursor_metadata`) the stream asks for
+  `SPA_META_Cursor` sized for bitmaps up to 512×512. Every dequeued buffer, including the
+  cursor-only ones and the stale ones drained before the newest, is parsed by
+  `parse_cursor_meta` (pure, over the meta's bytes: id 0 means no news, a bitmap offset below the
+  cursor struct means the shape is unchanged, a zero-sized bitmap means hidden). The bitmap is
+  normalised to tightly packed RGBA8. `CursorTracker` drops unchanged updates and strips a bitmap
+  identical to the last one, so a bitmap travels only when it changes.
+- Cursor updates have their own `latest` handoff, independent of frames, obtained with
+  `CaptureSource::cursor_feed` (a cloneable `Subscriber<CursorUpdate>`, `None` for sources without
+  cursor metadata). A newer update merges over an unconsumed one with `CursorUpdate::absorb`, which
+  keeps the stale bitmap when the newer update has none, so a shape change is never lost to
+  coalescing. On the wire the update becomes `rusplay_protocol::CursorMessage` on
+  `StreamKind::Cursor`.
+- `tests/live.rs` holds `#[ignore]`d tests. Four run an in-process PipeWire video source and
   capture from it (needs only a PipeWire daemon): shared memory, DMA-BUF (fake dma-bufs backed by
   temp files, exercising modifier fixation and buffer hold/release across a dozen frames) and the
-  `prefer_dmabuf = false` path. One goes through the real portal picker.
+  `prefer_dmabuf = false` path, plus cursor metadata (bitmap sent once, then position only). One
+  goes through the real portal picker.
 - The cursor defaults to `Metadata` so it can be drawn on the client at full rate and without
   compression artefacts. `Embedded` and `Hidden` are options.
 - Wine/Proton games need nothing special: they are Wayland (or XWayland) surfaces the

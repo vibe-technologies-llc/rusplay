@@ -25,14 +25,6 @@ impl<'s> DequeuedBuffer<'s> {
         NonNull::new(raw).map(|raw| Self { stream, raw })
     }
 
-    pub fn newest(stream: &'s Stream) -> Option<Self> {
-        let mut newest = Self::dequeue(stream)?;
-        while let Some(newer) = Self::dequeue(stream) {
-            newest = newer;
-        }
-        Some(newest)
-    }
-
     fn spa(&self) -> Option<&spa_sys::spa_buffer> {
         unsafe { self.raw.as_ref().buffer.as_ref() }
     }

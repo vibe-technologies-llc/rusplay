@@ -73,6 +73,22 @@ impl<T> Publisher<T> {
         stale
     }
 
+    pub fn merge(&self, value: T, combine: impl FnOnce(T, T) -> T) {
+        {
+            let mut guard = self.shared.state.lock();
+            let merged = match guard.pending.take() {
+                Some(stale) => {
+                    guard.superseded += 1;
+                    combine(value, stale)
+                }
+                None => value,
+            };
+            guard.pending = Some(merged);
+        }
+
+        self.shared.ready.notify_all();
+    }
+
     pub fn close(&self) {
         self.shared.state.lock().closed = true;
         self.shared.ready.notify_all();
@@ -144,6 +160,23 @@ mod tests {
         assert_eq!(second, Some(1));
         assert_eq!(subscriber.try_recv(), Received::Value(2));
         assert_eq!(subscriber.try_recv(), Received::Empty);
+        assert_eq!(subscriber.superseded(), 1);
+    }
+
+    #[test]
+    fn merge_combines_fresh_with_stale() {
+        let (publisher, subscriber) = latest();
+
+        publisher.merge(vec![1], |mut fresh, stale| {
+            fresh.extend(stale);
+            fresh
+        });
+        publisher.merge(vec![2], |mut fresh, stale| {
+            fresh.extend(stale);
+            fresh
+        });
+
+        assert_eq!(subscriber.try_recv(), Received::Value(vec![2, 1]));
         assert_eq!(subscriber.superseded(), 1);
     }
 

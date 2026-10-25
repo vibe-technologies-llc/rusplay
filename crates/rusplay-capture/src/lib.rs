@@ -1,3 +1,4 @@
+mod cursor;
 mod error;
 mod frame;
 mod handoff;
@@ -9,6 +10,10 @@ mod portal;
 #[cfg(feature = "pipewire")]
 pub use crate::pipewire::{PipeWireCapture, StreamOptions, default_formats};
 pub use crate::{
+    cursor::{
+        CursorBitmap, CursorObservation, CursorPixelOrder, CursorPixels, CursorShape,
+        CursorTracker, CursorUpdate,
+    },
     error::CaptureError,
     frame::{DrmFourcc, Frame, FrameBuffer, Plane},
     handoff::{Received, Subscriber},
@@ -21,4 +26,8 @@ pub use crate::{
 
 pub trait CaptureSource {
     fn next_frame(&mut self) -> Result<Frame, CaptureError>;
+
+    fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
+        None
+    }
 }

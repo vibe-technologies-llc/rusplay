@@ -369,6 +369,10 @@ pub(crate) fn buffers_param(memory: BufferMemory) -> Result<Vec<u8>, CaptureErro
 pub(crate) fn meta_param(meta_type: u32, size: MetaSize) -> Result<Vec<u8>, CaptureError> {
     let size = match size {
         MetaSize::Fixed(size) => Value::Int(size),
+        MetaSize::Range { default, min, max } => Value::Choice(ChoiceValue::Int(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Range { default, min, max },
+        ))),
     };
 
     serialize(Object {
@@ -384,6 +388,7 @@ pub(crate) fn meta_param(meta_type: u32, size: MetaSize) -> Result<Vec<u8>, Capt
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetaSize {
     Fixed(i32),
+    Range { default: i32, min: i32, max: i32 },
 }
 
 pub(crate) fn header_meta_param() -> Result<Vec<u8>, CaptureError> {
