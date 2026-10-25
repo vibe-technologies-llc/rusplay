@@ -4,6 +4,7 @@ use crate::{Kernel, Taps};
 pub struct TapTable {
     pub taps_per_pixel: u32,
     pub firsts: Vec<i32>,
+    pub anchors: Vec<i32>,
     pub weights: Vec<f32>,
 }
 
@@ -18,10 +19,8 @@ impl TapTable {
             .max()
             .unwrap_or(0);
 
-        let firsts = rows
-            .iter()
-            .map(|taps| i32::try_from(taps.first).unwrap_or(i32::MIN))
-            .collect();
+        let firsts = rows.iter().map(|taps| saturate(taps.first)).collect();
+        let anchors = rows.iter().map(|taps| saturate(taps.anchor)).collect();
         let weights = rows
             .iter()
             .flat_map(|taps| {
@@ -36,9 +35,14 @@ impl TapTable {
         Self {
             taps_per_pixel: u32::try_from(width).unwrap_or(u32::MAX),
             firsts,
+            anchors,
             weights,
         }
     }
+}
+
+fn saturate(position: i64) -> i32 {
+    i32::try_from(position).unwrap_or(if position < 0 { i32::MIN } else { i32::MAX })
 }
 
 #[cfg(test)]
@@ -52,6 +56,7 @@ mod tests {
         let table = TapTable::build(Kernel::new(ScaleFilter::Hermite), 2560, 1920);
 
         assert_eq!(table.firsts.len(), 1920);
+        assert_eq!(table.anchors.len(), 1920);
         assert_eq!(table.weights.len(), 1920 * table.taps_per_pixel as usize);
     }
 }

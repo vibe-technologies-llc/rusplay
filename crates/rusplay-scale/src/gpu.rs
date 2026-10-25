@@ -29,7 +29,8 @@ impl ScalePipelines {
             &[
                 storage_buffer_entry(0),
                 storage_buffer_entry(1),
-                uniform_entry(2),
+                storage_buffer_entry(2),
+                uniform_entry(3),
             ],
         );
 

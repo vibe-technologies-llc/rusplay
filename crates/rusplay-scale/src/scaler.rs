@@ -5,8 +5,7 @@ use rusplay_core::{Resolution, ScaleFilter};
 use crate::{
     Geometry, Kernel, ScaleError, TapTable,
     gpu::{
-        self, INTERMEDIATE_FORMAT, ScalePipelines, buffer_group, storage_buffer, to_bytes,
-        uniform_buffer,
+        self, INTERMEDIATE_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer,
     },
 };
 
@@ -32,6 +31,7 @@ pub struct ScaleSettings {
     pub filter: ScaleFilter,
     pub source: Resolution,
     pub target: Resolution,
+    pub antiringing: f32,
 }
 
 impl ScaleSettings {
@@ -45,15 +45,23 @@ impl ScaleSettings {
         if self.filter.is_polar() {
             return Err(ScaleError::PolarPassUnavailable(self.filter));
         }
+        if !(0.0..=1.0).contains(&self.antiringing) {
+            return Err(ScaleError::AntiringingOutOfRange(self.antiringing));
+        }
 
         Ok(())
+    }
+
+    fn same_tables(&self, other: &Self) -> bool {
+        (self.filter, self.source, self.target) == (other.filter, other.source, other.target)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Reconfigured {
     Unchanged,
-    Rebuilt,
+    Parameters,
+    Tables,
 }
 
 #[derive(Debug)]
@@ -96,9 +104,15 @@ impl Scaler {
         }
         settings.validate()?;
 
-        self.plan = SeparablePlan::new(&self.pipelines, device, &settings);
+        let reconfigured = if settings.same_tables(&self.settings) {
+            self.plan.set_parameters(&self.pipelines, device, &settings);
+            Reconfigured::Parameters
+        } else {
+            self.plan = SeparablePlan::new(&self.pipelines, device, &settings);
+            Reconfigured::Tables
+        };
         self.settings = settings;
-        Ok(Reconfigured::Rebuilt)
+        Ok(reconfigured)
     }
 
     pub fn encode(
@@ -124,25 +138,30 @@ impl Scaler {
             &[
                 &source_group,
                 &plan.intermediate_destination,
-                &plan.horizontal,
+                &plan.horizontal_group,
             ],
-            plan.intermediate_size,
+            plan.horizontal.target_size,
         );
         gpu::dispatch(
             encoder,
             "rusplay-resample-vertical",
             &pipelines.separable,
-            &[&plan.intermediate_source, &target_group, &plan.vertical],
-            resolution_pair(self.settings.target),
+            &[
+                &plan.intermediate_source,
+                &target_group,
+                &plan.vertical_group,
+            ],
+            plan.vertical.target_size,
         );
     }
 }
 
 #[derive(Debug)]
 struct SeparablePlan {
-    horizontal: wgpu::BindGroup,
-    vertical: wgpu::BindGroup,
-    intermediate_size: (u32, u32),
+    horizontal: PassTables,
+    vertical: PassTables,
+    horizontal_group: wgpu::BindGroup,
+    vertical_group: wgpu::BindGroup,
     intermediate_source: wgpu::BindGroup,
     intermediate_destination: wgpu::BindGroup,
 }
@@ -156,6 +175,20 @@ impl SeparablePlan {
         let target = resolution_pair(settings.target);
         let intermediate_size = (target.0, source.1);
 
+        let horizontal = PassTables::new(
+            device,
+            &TapTable::build(kernel, source.0, target.0),
+            Axis::Horizontal,
+            source,
+            intermediate_size,
+        );
+        let vertical = PassTables::new(
+            device,
+            &TapTable::build(kernel, source.1, target.1),
+            Axis::Vertical,
+            intermediate_size,
+            target,
+        );
         let intermediate = gpu::storage_texture(
             device,
             "rusplay-resample-intermediate",
@@ -164,60 +197,91 @@ impl SeparablePlan {
         );
 
         Self {
-            horizontal: pass_group(
-                pipelines,
-                device,
-                &TapTable::build(kernel, source.0, target.0),
-                Axis::Horizontal,
-                source,
-                intermediate_size,
-            ),
-            vertical: pass_group(
-                pipelines,
-                device,
-                &TapTable::build(kernel, source.1, target.1),
-                Axis::Vertical,
-                intermediate_size,
-                target,
-            ),
-            intermediate_size,
+            horizontal_group: horizontal.group(pipelines, device, settings),
+            vertical_group: vertical.group(pipelines, device, settings),
+            horizontal,
+            vertical,
             intermediate_source: pipelines.source_group(device, &intermediate),
             intermediate_destination: pipelines.destination_group(device, &intermediate),
         }
     }
+
+    fn set_parameters(
+        &mut self,
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        settings: &ScaleSettings,
+    ) {
+        self.horizontal_group = self.horizontal.group(pipelines, device, settings);
+        self.vertical_group = self.vertical.group(pipelines, device, settings);
+    }
 }
 
-fn pass_group(
-    pipelines: &ScalePipelines,
-    device: &wgpu::Device,
-    table: &TapTable,
+#[derive(Debug)]
+struct PassTables {
+    firsts: wgpu::Buffer,
+    anchors: wgpu::Buffer,
+    weights: wgpu::Buffer,
+    taps_per_pixel: u32,
     axis: Axis,
     source_size: (u32, u32),
     target_size: (u32, u32),
-) -> wgpu::BindGroup {
-    let firsts = storage_buffer(device, "rusplay-resample-firsts", &table.firsts);
-    let weights = storage_buffer(device, "rusplay-resample-weights", &table.weights);
-    let params = uniform_buffer(
-        device,
-        "rusplay-resample-params",
-        &to_bytes(&[
-            source_size.0,
-            source_size.1,
-            target_size.0,
-            target_size.1,
-            table.taps_per_pixel,
-            axis.index(),
-            0,
-            0,
-        ]),
-    );
+}
 
-    buffer_group(
-        device,
-        "rusplay-resample-table",
-        &pipelines.separable_layout,
-        &[&firsts, &weights, &params],
-    )
+impl PassTables {
+    fn new(
+        device: &wgpu::Device,
+        table: &TapTable,
+        axis: Axis,
+        source_size: (u32, u32),
+        target_size: (u32, u32),
+    ) -> Self {
+        Self {
+            firsts: storage_buffer(device, "rusplay-resample-firsts", &table.firsts),
+            anchors: storage_buffer(device, "rusplay-resample-anchors", &table.anchors),
+            weights: storage_buffer(device, "rusplay-resample-weights", &table.weights),
+            taps_per_pixel: table.taps_per_pixel,
+            axis,
+            source_size,
+            target_size,
+        }
+    }
+
+    fn group(
+        &self,
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        settings: &ScaleSettings,
+    ) -> wgpu::BindGroup {
+        let params = uniform_buffer(
+            device,
+            "rusplay-resample-params",
+            &self.params_bytes(settings),
+        );
+
+        buffer_group(
+            device,
+            "rusplay-resample-table",
+            &pipelines.separable_layout,
+            &[&self.firsts, &self.anchors, &self.weights, &params],
+        )
+    }
+
+    fn params_bytes(&self, settings: &ScaleSettings) -> Vec<u8> {
+        [
+            self.source_size.0,
+            self.source_size.1,
+            self.target_size.0,
+            self.target_size.1,
+            self.taps_per_pixel,
+            self.axis.index(),
+            settings.antiringing.to_bits(),
+            0,
+        ]
+        .iter()
+        .flat_map(|word| word.to_ne_bytes())
+        .collect()
+    }
 }
 
 pub(crate) const fn resolution_pair(resolution: Resolution) -> (u32, u32) {
@@ -276,6 +340,7 @@ mod tests {
             filter,
             source: Resolution::new(source.0, source.1),
             target: Resolution::new(target.0, target.1),
+            antiringing: 0.0,
         }
     }
 
@@ -285,9 +350,10 @@ mod tests {
         let vertical = TapTable::build(kernel, settings.source.height, settings.target.height);
 
         resample_separable(
-            &resample_separable(image, &horizontal, Axis::Horizontal),
+            &resample_separable(image, &horizontal, Axis::Horizontal, settings.antiringing),
             &vertical,
             Axis::Vertical,
+            settings.antiringing,
         )
     }
 
@@ -384,9 +450,79 @@ mod tests {
         let difference = scale(gpu, &mut scaler, &image).max_difference(&expected(&image, &second));
 
         assert_eq!(unchanged, Reconfigured::Unchanged);
-        assert_eq!(rebuilt, Reconfigured::Rebuilt);
+        assert_eq!(rebuilt, Reconfigured::Tables);
         assert_eq!(scaler.settings(), second);
         assert!(difference <= RGBA16F_TOLERANCE);
+    }
+
+    #[test]
+    fn antiringing_matches_reference() {
+        for antiringing in [0.5, 1.0] {
+            assert_matches_reference(ScaleSettings {
+                antiringing,
+                ..settings(ScaleFilter::Lanczos3, (29, 23), (80, 61))
+            });
+        }
+        assert_matches_reference(ScaleSettings {
+            antiringing: 1.0,
+            ..settings(ScaleFilter::Lanczos4, (64, 48), (27, 20))
+        });
+    }
+
+    #[test]
+    fn full_antiringing_removes_overshoot_at_edges() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+        let step = Image::from_fn(24, 8, |x, _| {
+            let level = if x < 12 { 0.2 } else { 0.8 };
+            [level, level, level, 1.0]
+        });
+        let ringing = settings(ScaleFilter::Lanczos3, (24, 8), (77, 25));
+        let clamped = ScaleSettings {
+            antiringing: 1.0,
+            ..ringing
+        };
+        let range = |image: &Image| {
+            image
+                .pixels
+                .iter()
+                .map(|texel| texel[0])
+                .fold((f32::MAX, f32::MIN), |(low, high), value| {
+                    (low.min(value), high.max(value))
+                })
+        };
+
+        let mut scaler = Scaler::new(&pipelines, &gpu.device, ringing).unwrap();
+        let ringing_range = range(&scale(gpu, &mut scaler, &step));
+        let reconfigured = scaler.configure(&gpu.device, clamped).unwrap();
+        let clamped_range = range(&scale(gpu, &mut scaler, &step));
+
+        assert_eq!(reconfigured, Reconfigured::Parameters);
+        assert!(ringing_range.0 < 0.19 && ringing_range.1 > 0.81);
+        assert!(clamped_range.0 >= 0.2 - 1e-3 && clamped_range.1 <= 0.8 + 1e-3);
+    }
+
+    #[test]
+    fn antiringing_strength_is_validated() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+
+        let result = Scaler::new(
+            &pipelines,
+            &gpu.device,
+            ScaleSettings {
+                antiringing: 1.5,
+                ..settings(ScaleFilter::Lanczos3, (8, 8), (16, 16))
+            },
+        );
+
+        assert_eq!(result.unwrap_err(), ScaleError::AntiringingOutOfRange(1.5));
     }
 
     #[test]

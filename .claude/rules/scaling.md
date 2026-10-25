@@ -25,11 +25,18 @@ paths:
 - Linear light comes from sampling an sRGB view of the source, so `textureLoad` returns
   linearised values. Do not add manual transfer functions where a texture view format does the
   job.
+- Anti-ringing follows mpv/libplacebo: each separable pass tracks the min/max of the two source
+  texels bracketing the sample centre (`TapTable::anchors` holds the left one,
+  `floor(centre)`), and the result is `mix(sum, clamp(sum, low, high), strength)`. The strength
+  is `ScaleSettings::antiringing` (0..=1), which the client fills from
+  `scaling.upscale.antiringing`; the host's downscale passes 0.
 - `ScalePipelines` holds the compiled pipelines and explicit bind group layouts, built once per
   device and cloned (cheap handles) into every `Scaler`. A `Scaler` is one cached plan for a
   `ScaleSettings`: tap table buffers, params uniforms, the intermediate texture and every bind
   group that does not involve a frame texture are built in `Scaler::new`, and
-  `Scaler::configure` rebuilds the tables only when the filter or a resolution changes. Nothing
+  `Scaler::configure` rebuilds the tables only when the filter or a resolution changes
+  (`Reconfigured::Tables`); a change to the shaping parameters (anti-ringing, sigmoid) only
+  replaces the params uniforms and their bind groups (`Reconfigured::Parameters`). Nothing
   is allocated on the per-frame path except a bind group for a frame view not seen recently.
 - Bind groups are split by lifetime: group 0 is the source texture, group 1 the storage
   destination, group 2 the pass's tables and params. Frame views get groups 0 and 1 from a small

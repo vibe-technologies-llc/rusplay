@@ -3,6 +3,7 @@ use crate::{Geometry, Kernel};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Taps {
     pub first: i64,
+    pub anchor: i64,
     pub weights: Vec<f32>,
 }
 
@@ -20,6 +21,9 @@ impl Taps {
         #[allow(clippy::cast_possible_truncation)]
         let last = (center + support).ceil() as i64 - 1;
 
+        #[allow(clippy::cast_possible_truncation)]
+        let anchor = center.floor() as i64;
+
         #[allow(clippy::cast_precision_loss)]
         let raw: Vec<f64> = (first..=last)
             .map(|tap| kernel.weight((tap as f64 - center) / stretch))
@@ -29,7 +33,11 @@ impl Taps {
         #[allow(clippy::cast_possible_truncation)]
         let weights = raw.iter().map(|weight| (weight / total) as f32).collect();
 
-        Self { first, weights }
+        Self {
+            first,
+            anchor,
+            weights,
+        }
     }
 }
 
@@ -57,5 +65,6 @@ mod tests {
         let taps = Taps::separable(kernel, 1920, 2560, 1000);
 
         assert_eq!(taps.weights.len(), 6);
+        assert_eq!(taps.anchor - taps.first, 2);
     }
 }

@@ -7,6 +7,8 @@ pub enum ScaleError {
     EmptySource(Resolution),
     #[error("target resolution {0} has no pixels")]
     EmptyTarget(Resolution),
+    #[error("antiringing strength {0} is outside 0.0..=1.0")]
+    AntiringingOutOfRange(f32),
     #[error("the polar pass for {0} is not built yet")]
     PolarPassUnavailable(ScaleFilter),
 }
