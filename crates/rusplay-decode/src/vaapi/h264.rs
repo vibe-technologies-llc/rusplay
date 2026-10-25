@@ -1,9 +1,8 @@
-use std::{cmp::Reverse, io::Cursor, rc::Rc};
+mod dpb;
 
-use cros_codecs::codec::h264::parser::{
-    MaxLongTermFrameIdx, NaluHeader, NaluType, Parser, Pps, RefPicListModification, RefPicMarking,
-    RefPicMarkingInner, Slice, SliceType, Sps,
-};
+use std::{io::Cursor, rc::Rc};
+
+use cros_codecs::codec::h264::parser::{NaluHeader, NaluType, Parser, Pps, Slice, SliceType, Sps};
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
 };
@@ -12,14 +11,19 @@ use crate::{
     BitstreamUnit, DecodeError, DecodedFrame,
     vaapi::{
         Stream, StreamFormat, annexb, ffi,
-        va::{Display, INVALID_SURFACE, PoolSurface, Profile},
+        h264::dpb::{
+            Decoded, Dpb, MAX_REFERENCE_FRAMES, OrderCount, Reference, ReferenceList, Structure,
+            invalid_picture,
+        },
+        reorder::{Depth, Reorder},
+        va::{Display, PoolSurface, Profile, SurfaceId},
     },
 };
 
 const CODEC: Codec = Codec::H264;
-const MAX_REFERENCE_FRAMES: usize = 16;
 const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
+const BASELINE_PROFILE_IDC: u8 = 66;
 const ZIGZAG_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 const ZIGZAG_8X8: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
@@ -31,74 +35,42 @@ fn malformed(unit: BitstreamUnit) -> impl FnOnce(String) -> DecodeError {
     annexb::malformed(CODEC, unit)
 }
 
-#[derive(Debug, Clone)]
-struct Reference {
+struct OpenFrame {
     surface: PoolSurface,
+    first: Structure,
     frame_num: u32,
-    frame_num_wrap: i32,
-    long_term_frame_idx: Option<u32>,
-    top: i32,
-    bottom: i32,
+    timestamp: Timestamp,
+    pocs: [Option<i32>; 2],
+    restart: bool,
 }
 
-impl Reference {
-    fn poc(&self) -> i32 {
-        self.top.min(self.bottom)
-    }
-
-    fn is_short_term(&self) -> bool {
-        self.long_term_frame_idx.is_none()
-    }
-
-    fn va_picture(&self) -> ffi::VAPictureH264 {
-        let (frame_idx, flags) = match self.long_term_frame_idx {
-            Some(index) => (index, ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE),
-            None => (self.frame_num, ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE),
-        };
-
-        ffi::VAPictureH264 {
-            picture_id: self.surface.id,
-            frame_idx,
-            flags,
-            TopFieldOrderCnt: self.top,
-            BottomFieldOrderCnt: self.bottom,
-            ..Default::default()
+impl OpenFrame {
+    fn new(surface: PoolSurface, first: Structure, frame_num: u32, timestamp: Timestamp) -> Self {
+        Self {
+            surface,
+            first,
+            frame_num,
+            timestamp,
+            pocs: [None, None],
+            restart: false,
         }
     }
-}
 
-fn invalid_picture() -> ffi::VAPictureH264 {
-    ffi::VAPictureH264 {
-        picture_id: INVALID_SURFACE,
-        flags: ffi::VA_PICTURE_H264_INVALID,
-        ..Default::default()
+    fn completes_with(&self, structure: Structure, frame_num: u32, idr: bool) -> bool {
+        structure == self.first.opposite() && frame_num == self.frame_num && !idr
     }
-}
 
-#[derive(Debug, Default, Clone, Copy)]
-struct PreviousPicture {
-    frame_num: u32,
-    frame_num_offset: u32,
-    had_mmco5: bool,
-}
+    fn record(&mut self, structure: Structure, top: Option<i32>, bottom: Option<i32>, shift: i32) {
+        if structure != Structure::Bottom {
+            self.pocs[0] = top.map(|count| count - shift);
+        }
+        if structure != Structure::Top {
+            self.pocs[1] = bottom.map(|count| count - shift);
+        }
+    }
 
-#[derive(Debug, Default, Clone, Copy)]
-struct PreviousReference {
-    poc_msb: i32,
-    poc_lsb: i32,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OrderCount {
-    top: i32,
-    bottom: i32,
-    poc_msb: i32,
-    frame_num_offset: u32,
-}
-
-impl OrderCount {
-    fn poc(&self) -> i32 {
-        self.top.min(self.bottom)
+    fn key(&self) -> i32 {
+        self.pocs.iter().flatten().copied().min().unwrap_or(0)
     }
 }
 
@@ -106,6 +78,8 @@ pub(super) struct H264Decoder {
     parser: Parser,
     stream: Option<Stream>,
     dpb: Dpb,
+    reorder: Reorder<DecodedFrame>,
+    open_frame: Option<OpenFrame>,
 }
 
 impl H264Decoder {
@@ -114,7 +88,17 @@ impl H264Decoder {
             parser: Parser::default(),
             stream: None,
             dpb: Dpb::default(),
+            reorder: Reorder::new(),
+            open_frame: None,
         }
+    }
+
+    pub(super) fn drain(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
+        if let Some(open) = self.open_frame.take() {
+            self.complete(&open)?;
+        }
+
+        Ok(self.reorder.drain())
     }
 
     pub(super) fn decode(
@@ -124,7 +108,6 @@ impl H264Decoder {
     ) -> Result<Option<DecodedFrame>, DecodeError> {
         let mut cursor = Cursor::new(frame.data.as_slice());
         let mut slices: Vec<Slice<'_>> = Vec::new();
-        let mut output = None;
 
         while let Some(nalu) = annexb::next_nalu::<NaluHeader>(&mut cursor, CODEC)? {
             match nalu.header.type_ {
@@ -144,8 +127,8 @@ impl H264Decoder {
                         .parse_slice_header(nalu)
                         .map_err(malformed(BitstreamUnit::SliceHeader))?;
 
-                    if slice.header.first_mb_in_slice == 0 && !slices.is_empty() {
-                        output = Some(self.decode_picture(display, &slices, frame.timestamp)?);
+                    if starts_new_picture(&slice, slices.last()) {
+                        self.decode_picture(display, &slices, frame.timestamp)?;
                         slices.clear();
                     }
 
@@ -156,10 +139,64 @@ impl H264Decoder {
         }
 
         if !slices.is_empty() {
-            output = Some(self.decode_picture(display, &slices, frame.timestamp)?);
+            self.decode_picture(display, &slices, frame.timestamp)?;
         }
 
-        Ok(output)
+        Ok(self.reorder.pop())
+    }
+
+    fn complete(&mut self, open: &OpenFrame) -> Result<(), DecodeError> {
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or(DecodeError::MissingParameterSet {
+                codec: CODEC,
+                unit: BitstreamUnit::SequenceParameterSet,
+                id: 0,
+            })?;
+        let output = stream.output(&open.surface, open.timestamp)?;
+
+        if open.restart {
+            self.reorder.flush();
+        }
+        self.reorder.push(open.key(), output);
+
+        Ok(())
+    }
+
+    fn take_partner(
+        &mut self,
+        structure: Structure,
+        frame_num: u32,
+        idr: bool,
+    ) -> Result<Option<OpenFrame>, DecodeError> {
+        let Some(open) = self.open_frame.take() else {
+            return Ok(None);
+        };
+
+        if open.completes_with(structure, frame_num, idr) {
+            Ok(Some(open))
+        } else {
+            self.complete(&open)?;
+            Ok(None)
+        }
+    }
+
+    fn settle(&mut self, mut open: OpenFrame, picture: &Decoded<'_>) -> Result<(), DecodeError> {
+        self.dpb.finish(picture);
+
+        let order = picture.order;
+        let had_mmco5 = self.dpb.previous.had_mmco5;
+        let shift = if had_mmco5 { order.poc() } else { 0 };
+        open.record(picture.structure, order.top, order.bottom, shift);
+        open.restart |= picture.idr || had_mmco5;
+
+        if picture.structure.is_field() && !picture.second_field {
+            self.open_frame = Some(open);
+            Ok(())
+        } else {
+            self.complete(&open)
+        }
     }
 
     fn decode_picture(
@@ -167,13 +204,16 @@ impl H264Decoder {
         display: &Rc<Display>,
         slices: &[Slice<'_>],
         timestamp: Timestamp,
-    ) -> Result<DecodedFrame, DecodeError> {
+    ) -> Result<(), DecodeError> {
         let first = &slices[0];
         let header = &first.header;
 
-        if header.field_pic_flag {
-            return Err(DecodeError::InterlacedUnsupported { codec: CODEC });
-        }
+        let structure = Structure::of(header.field_pic_flag, header.bottom_field_flag);
+        let idr = first.nalu.header.idr_pic_flag;
+        let nal_ref_idc = first.nalu.header.ref_idc;
+        let frame_num = u32::from(header.frame_num);
+
+        let mut partner = self.take_partner(structure, frame_num, idr)?;
 
         let pps = Rc::clone(self.parser.get_pps(header.pic_parameter_set_id).ok_or(
             DecodeError::MissingParameterSet {
@@ -187,39 +227,30 @@ impl H264Decoder {
         let format = stream_format(&sps)?;
         let (stream, reopened) = Stream::ensure(&mut self.stream, display, CODEC, format)?;
         if reopened {
-            self.dpb.references.clear();
-            self.dpb.max_long_term_frame_idx = None;
+            self.dpb.reset();
+            partner = None;
         }
+        self.reorder.configure(reorder_depth(&sps));
 
-        let idr = first.nalu.header.idr_pic_flag;
-        let nal_ref_idc = first.nalu.header.ref_idc;
-        let frame_num = u32::from(header.frame_num);
         let max_frame_num = sps.max_frame_num();
 
         if idr {
-            self.dpb.references.clear();
+            self.dpb.reset();
         }
+        self.dpb.update_frame_num_wrap(frame_num, max_frame_num);
 
-        for reference in &mut self.dpb.references {
-            reference.frame_num_wrap = if reference.frame_num > frame_num {
-                i32::try_from(reference.frame_num).unwrap_or(i32::MAX)
-                    - i32::try_from(max_frame_num).unwrap_or(i32::MAX)
-            } else {
-                i32::try_from(reference.frame_num).unwrap_or(i32::MAX)
-            };
-        }
-
-        let order = self.dpb.order_count(&sps, first, idr, nal_ref_idc);
-        let surface = stream.pool.acquire()?;
-
-        let picture = ffi::VAPictureH264 {
-            picture_id: surface.id,
-            frame_idx: frame_num,
-            flags: 0,
-            TopFieldOrderCnt: order.top,
-            BottomFieldOrderCnt: order.bottom,
-            ..Default::default()
+        let order = self
+            .dpb
+            .order_count(&sps, first, idr, nal_ref_idc, structure);
+        let surface = match &partner {
+            Some(open) => open.surface.clone(),
+            None => stream.pool.acquire()?,
         };
+        let partner_poc = partner
+            .as_ref()
+            .and_then(|open| open.pocs[1 - structure.parity().unwrap_or(0)]);
+
+        let picture = current_picture(surface.id, frame_num, structure, &order, partner_poc);
 
         let mut buffers = vec![
             stream.session.parameter(
@@ -231,6 +262,7 @@ impl H264Decoder {
                     &self.dpb.references,
                     frame_num,
                     nal_ref_idc,
+                    structure,
                 ),
             )?,
             stream
@@ -239,9 +271,9 @@ impl H264Decoder {
         ];
 
         for slice in slices {
-            let lists = self
-                .dpb
-                .reference_lists(slice, order.poc(), frame_num, max_frame_num);
+            let lists =
+                self.dpb
+                    .reference_lists(slice, structure, order.poc(), frame_num, max_frame_num);
             let parameters = slice_parameters(slice, &sps, &pps, &lists, &self.dpb.references);
             buffers.push(
                 stream
@@ -254,470 +286,78 @@ impl H264Decoder {
         stream.session.decode(surface.id, &buffers)?;
         drop(buffers);
 
-        let output = stream.output(&surface, timestamp)?;
+        let second_field = partner.is_some();
+        let open = partner
+            .take()
+            .unwrap_or_else(|| OpenFrame::new(surface.clone(), structure, frame_num, timestamp));
 
-        self.dpb.finish(&Decoded {
-            marking: &header.dec_ref_pic_marking,
-            idr,
-            nal_ref_idc,
-            max_num_ref_frames: sps.max_num_ref_frames,
-            surface,
-            frame_num,
-            pic_order_cnt_lsb: i32::from(header.pic_order_cnt_lsb),
-            order,
-        });
-
-        Ok(output)
+        self.settle(
+            open,
+            &Decoded {
+                marking: &header.dec_ref_pic_marking,
+                idr,
+                nal_ref_idc,
+                max_num_ref_frames: sps.max_num_ref_frames,
+                surface,
+                structure,
+                second_field,
+                partner_poc,
+                frame_num,
+                pic_order_cnt_lsb: i32::from(header.pic_order_cnt_lsb),
+                order,
+            },
+        )
     }
 }
 
-struct Decoded<'a> {
-    marking: &'a RefPicMarking,
-    idr: bool,
-    nal_ref_idc: u8,
-    max_num_ref_frames: u8,
-    surface: PoolSurface,
+fn current_picture(
+    surface: SurfaceId,
     frame_num: u32,
-    pic_order_cnt_lsb: i32,
-    order: OrderCount,
-}
+    structure: Structure,
+    order: &OrderCount,
+    partner_poc: Option<i32>,
+) -> ffi::VAPictureH264 {
+    let (top, bottom) = match structure {
+        Structure::Frame => (order.top, order.bottom),
+        Structure::Top => (order.top, partner_poc),
+        Structure::Bottom => (partner_poc, order.bottom),
+    };
 
-#[derive(Debug, Default)]
-struct Dpb {
-    references: Vec<Reference>,
-    max_long_term_frame_idx: Option<u32>,
-    previous: PreviousPicture,
-    previous_reference: PreviousReference,
-}
-
-impl Dpb {
-    fn order_count(&self, sps: &Sps, slice: &Slice<'_>, idr: bool, nal_ref_idc: u8) -> OrderCount {
-        let header = &slice.header;
-        let frame_num = u32::from(header.frame_num);
-        let max_frame_num = sps.max_frame_num();
-
-        let previous_offset = if self.previous.had_mmco5 {
-            0
-        } else {
-            self.previous.frame_num_offset
-        };
-        let frame_num_offset = if idr {
-            0
-        } else if self.previous.frame_num > frame_num {
-            previous_offset.wrapping_add(max_frame_num)
-        } else {
-            previous_offset
-        };
-
-        match sps.pic_order_cnt_type {
-            0 => {
-                let (previous_high, previous_low) = if idr {
-                    (0, 0)
-                } else {
-                    (
-                        self.previous_reference.poc_msb,
-                        self.previous_reference.poc_lsb,
-                    )
-                };
-                let wrap = 1_i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
-                let low = i32::from(header.pic_order_cnt_lsb);
-
-                let high = if low < previous_low && previous_low - low >= wrap / 2 {
-                    previous_high + wrap
-                } else if low > previous_low && low - previous_low > wrap / 2 {
-                    previous_high - wrap
-                } else {
-                    previous_high
-                };
-
-                let top = high + low;
-                OrderCount {
-                    top,
-                    bottom: top + header.delta_pic_order_cnt_bottom,
-                    poc_msb: high,
-                    frame_num_offset,
-                }
-            }
-            1 => {
-                let cycle_length = u32::from(sps.num_ref_frames_in_pic_order_cnt_cycle);
-                let mut absolute = if cycle_length == 0 {
-                    0
-                } else {
-                    frame_num_offset.wrapping_add(frame_num)
-                };
-                if nal_ref_idc == 0 && absolute > 0 {
-                    absolute -= 1;
-                }
-
-                let mut expected = 0_i32;
-                if absolute > 0 {
-                    let cycles = (absolute - 1) / cycle_length;
-                    let in_cycle = (absolute - 1) % cycle_length;
-                    expected = i32::try_from(cycles)
-                        .unwrap_or(i32::MAX)
-                        .wrapping_mul(sps.expected_delta_per_pic_order_cnt_cycle);
-                    for offset in
-                        &sps.offset_for_ref_frame[..=usize::try_from(in_cycle).unwrap_or(0)]
-                    {
-                        expected = expected.wrapping_add(*offset);
-                    }
-                }
-                if nal_ref_idc == 0 {
-                    expected = expected.wrapping_add(sps.offset_for_non_ref_pic);
-                }
-
-                let top = expected + header.delta_pic_order_cnt[0];
-                OrderCount {
-                    top,
-                    bottom: top
-                        + sps.offset_for_top_to_bottom_field
-                        + header.delta_pic_order_cnt[1],
-                    poc_msb: 0,
-                    frame_num_offset,
-                }
-            }
-            _ => {
-                let doubled = i32::try_from(frame_num_offset.wrapping_add(frame_num))
-                    .unwrap_or(i32::MAX)
-                    .wrapping_mul(2);
-                let count = if idr {
-                    0
-                } else if nal_ref_idc == 0 {
-                    doubled - 1
-                } else {
-                    doubled
-                };
-
-                OrderCount {
-                    top: count,
-                    bottom: count,
-                    poc_msb: 0,
-                    frame_num_offset,
-                }
-            }
-        }
-    }
-
-    fn reference_lists(
-        &self,
-        slice: &Slice<'_>,
-        poc: i32,
-        frame_num: u32,
-        max_frame_num: u32,
-    ) -> [Vec<Option<usize>>; 2] {
-        let header = &slice.header;
-        let short_term: Vec<usize> = (0..self.references.len())
-            .filter(|&index| self.references[index].is_short_term())
-            .collect();
-        let mut long_term: Vec<usize> = (0..self.references.len())
-            .filter(|&index| !self.references[index].is_short_term())
-            .collect();
-        long_term.sort_by_key(|&index| self.references[index].long_term_frame_idx);
-
-        let (initial0, initial1) = match header.slice_type {
-            SliceType::P | SliceType::Sp => {
-                let mut list = short_term;
-                list.sort_by_key(|&index| Reverse(self.references[index].frame_num_wrap));
-                list.extend(&long_term);
-                (list, Vec::new())
-            }
-            SliceType::B => {
-                let mut before: Vec<usize> = short_term
-                    .iter()
-                    .copied()
-                    .filter(|&index| self.references[index].poc() < poc)
-                    .collect();
-                before.sort_by_key(|&index| Reverse(self.references[index].poc()));
-                let mut after: Vec<usize> = short_term
-                    .iter()
-                    .copied()
-                    .filter(|&index| self.references[index].poc() > poc)
-                    .collect();
-                after.sort_by_key(|&index| self.references[index].poc());
-
-                let mut list0 = before.clone();
-                list0.extend(&after);
-                list0.extend(&long_term);
-
-                let mut list1 = after;
-                list1.extend(&before);
-                list1.extend(&long_term);
-
-                if list1.len() > 1 && list1 == list0 {
-                    list1.swap(0, 1);
-                }
-
-                (list0, list1)
-            }
-            SliceType::I | SliceType::Si => (Vec::new(), Vec::new()),
-        };
-
-        let active0 = usize::from(header.num_ref_idx_l0_active_minus1) + 1;
-        let active1 = usize::from(header.num_ref_idx_l1_active_minus1) + 1;
-
-        let list0 = if header.slice_type == SliceType::I || header.slice_type == SliceType::Si {
-            Vec::new()
-        } else {
-            self.modify_list(
-                initial0,
-                active0,
-                header.ref_pic_list_modification_flag_l0,
-                &header.ref_pic_list_modification_l0,
-                frame_num,
-                max_frame_num,
-            )
-        };
-        let list1 = if header.slice_type == SliceType::B {
-            self.modify_list(
-                initial1,
-                active1,
-                header.ref_pic_list_modification_flag_l1,
-                &header.ref_pic_list_modification_l1,
-                frame_num,
-                max_frame_num,
-            )
-        } else {
-            Vec::new()
-        };
-
-        [list0, list1]
-    }
-
-    fn modify_list(
-        &self,
-        initial: Vec<usize>,
-        active: usize,
-        modified: bool,
-        modifications: &[RefPicListModification],
-        frame_num: u32,
-        max_frame_num: u32,
-    ) -> Vec<Option<usize>> {
-        let mut list: Vec<Option<usize>> = initial.into_iter().map(Some).collect();
-        list.resize(active, None);
-
-        if !modified {
-            return list;
-        }
-
-        let current_pic_num = i64::from(frame_num);
-        let max_pic_num = i64::from(max_frame_num);
-        let mut predicted = current_pic_num;
-
-        for (position, modification) in modifications.iter().enumerate() {
-            if position >= active {
-                break;
-            }
-
-            let target = match modification.modification_of_pic_nums_idc {
-                0 | 1 => {
-                    let difference = i64::from(modification.abs_diff_pic_num_minus1) + 1;
-                    let mut no_wrap = if modification.modification_of_pic_nums_idc == 0 {
-                        predicted - difference
-                    } else {
-                        predicted + difference
-                    };
-                    if no_wrap < 0 {
-                        no_wrap += max_pic_num;
-                    } else if no_wrap >= max_pic_num {
-                        no_wrap -= max_pic_num;
-                    }
-                    predicted = no_wrap;
-
-                    let pic_num = if no_wrap > current_pic_num {
-                        no_wrap - max_pic_num
-                    } else {
-                        no_wrap
-                    };
-                    self.references.iter().position(|reference| {
-                        reference.is_short_term() && i64::from(reference.frame_num_wrap) == pic_num
-                    })
-                }
-                2 => self.references.iter().position(|reference| {
-                    reference.long_term_frame_idx == Some(modification.long_term_pic_num)
-                }),
-                _ => break,
-            };
-
-            list.insert(position, target);
-            if let Some(duplicate) = list
-                .iter()
-                .skip(position + 1)
-                .position(|entry| entry.is_some() && *entry == target)
-            {
-                list.remove(position + 1 + duplicate);
-            }
-            list.truncate(active);
-        }
-
-        list
-    }
-
-    fn finish(&mut self, picture: &Decoded<'_>) {
-        let had_mmco5 = self.mark_references(picture);
-        let order = picture.order;
-
-        self.previous = PreviousPicture {
-            frame_num: if had_mmco5 { 0 } else { picture.frame_num },
-            frame_num_offset: if had_mmco5 { 0 } else { order.frame_num_offset },
-            had_mmco5,
-        };
-
-        if picture.nal_ref_idc == 0 {
-            return;
-        }
-
-        self.previous_reference = if had_mmco5 {
-            PreviousReference {
-                poc_msb: 0,
-                poc_lsb: order.top - order.poc(),
-            }
-        } else {
-            PreviousReference {
-                poc_msb: order.poc_msb,
-                poc_lsb: picture.pic_order_cnt_lsb,
-            }
-        };
-    }
-
-    fn mark_references(&mut self, picture: &Decoded<'_>) -> bool {
-        let Decoded {
-            marking,
-            idr,
-            nal_ref_idc,
-            max_num_ref_frames,
-            ref surface,
-            frame_num,
-            order,
-            ..
-        } = *picture;
-
-        if nal_ref_idc == 0 {
-            return false;
-        }
-
-        let mut current_long_term = None;
-        let mut had_mmco5 = false;
-
-        if idr {
-            self.references.clear();
-            if marking.long_term_reference_flag {
-                current_long_term = Some(0);
-                self.max_long_term_frame_idx = Some(0);
-            } else {
-                self.max_long_term_frame_idx = None;
-            }
-        } else if marking.adaptive_ref_pic_marking_mode_flag {
-            for operation in &marking.inner {
-                match self.apply_operation(operation, frame_num) {
-                    Marked::Nothing => {}
-                    Marked::AllUnused => had_mmco5 = true,
-                    Marked::CurrentLongTerm(index) => current_long_term = Some(index),
-                }
-            }
-        } else {
-            self.slide_window(max_num_ref_frames);
-        }
-
-        if self.references.len() >= MAX_REFERENCE_FRAMES {
-            self.references.remove(0);
-        }
-
-        let shift = if had_mmco5 { order.poc() } else { 0 };
-        self.references.push(Reference {
-            surface: surface.clone(),
-            frame_num: if had_mmco5 { 0 } else { frame_num },
-            frame_num_wrap: 0,
-            long_term_frame_idx: current_long_term,
-            top: order.top - shift,
-            bottom: order.bottom - shift,
-        });
-
-        had_mmco5
-    }
-
-    fn apply_operation(&mut self, operation: &RefPicMarkingInner, frame_num: u32) -> Marked {
-        let pic_num =
-            i64::from(frame_num) - (i64::from(operation.difference_of_pic_nums_minus1) + 1);
-        let short_term_with_pic_num = |reference: &Reference| {
-            reference.is_short_term() && i64::from(reference.frame_num_wrap) == pic_num
-        };
-
-        match operation.memory_management_control_operation {
-            1 => {
-                self.references
-                    .retain(|reference| !short_term_with_pic_num(reference));
-            }
-            2 => {
-                self.references.retain(|reference| {
-                    reference.long_term_frame_idx != Some(operation.long_term_pic_num)
-                });
-            }
-            3 => {
-                let index = operation.long_term_frame_idx;
-                self.references
-                    .retain(|reference| reference.long_term_frame_idx != Some(index));
-                if let Some(reference) = self
-                    .references
-                    .iter_mut()
-                    .find(|reference| short_term_with_pic_num(reference))
-                {
-                    reference.long_term_frame_idx = Some(index);
-                }
-            }
-            4 => {
-                self.max_long_term_frame_idx = match operation.max_long_term_frame_idx {
-                    MaxLongTermFrameIdx::NoLongTermFrameIndices => None,
-                    MaxLongTermFrameIdx::Idx(index) => Some(index),
-                };
-                let limit = self.max_long_term_frame_idx;
-                self.references
-                    .retain(|reference| match (reference.long_term_frame_idx, limit) {
-                        (Some(index), Some(limit)) => index <= limit,
-                        (Some(_), None) => false,
-                        (None, _) => true,
-                    });
-            }
-            5 => {
-                self.references.clear();
-                self.max_long_term_frame_idx = None;
-                return Marked::AllUnused;
-            }
-            6 => {
-                let index = operation.long_term_frame_idx;
-                self.references
-                    .retain(|reference| reference.long_term_frame_idx != Some(index));
-                return Marked::CurrentLongTerm(index);
-            }
-            _ => {}
-        }
-
-        Marked::Nothing
-    }
-
-    fn slide_window(&mut self, max_num_ref_frames: u8) {
-        let limit = usize::from(max_num_ref_frames).max(1);
-        while self.references.len() >= limit {
-            let oldest = self
-                .references
-                .iter()
-                .enumerate()
-                .filter(|(_, reference)| reference.is_short_term())
-                .min_by_key(|(_, reference)| reference.frame_num_wrap)
-                .map(|(index, _)| index);
-            match oldest {
-                Some(index) => {
-                    self.references.remove(index);
-                }
-                None => break,
-            }
-        }
+    ffi::VAPictureH264 {
+        picture_id: surface,
+        frame_idx: frame_num,
+        flags: structure.va_flags(),
+        TopFieldOrderCnt: top.unwrap_or(0),
+        BottomFieldOrderCnt: bottom.unwrap_or(0),
+        ..Default::default()
     }
 }
 
-enum Marked {
-    Nothing,
-    AllUnused,
-    CurrentLongTerm(u32),
+fn starts_new_picture(slice: &Slice<'_>, previous: Option<&Slice<'_>>) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    let (header, other) = (&slice.header, &previous.header);
+
+    header.first_mb_in_slice == 0
+        || header.field_pic_flag != other.field_pic_flag
+        || header.bottom_field_flag != other.bottom_field_flag
+}
+
+pub(super) fn reorder_depth(sps: &Sps) -> Depth {
+    let vui = &sps.vui_parameters;
+
+    if sps.vui_parameters_present_flag && vui.bitstream_restriction_flag {
+        let buffering = usize::try_from(vui.max_dec_frame_buffering).unwrap_or(usize::MAX);
+        let reorder = usize::try_from(vui.max_num_reorder_frames).unwrap_or(usize::MAX);
+        Depth::Fixed(reorder.min(buffering).min(MAX_REFERENCE_FRAMES))
+    } else if sps.pic_order_cnt_type == 2 || sps.profile_idc == BASELINE_PROFILE_IDC {
+        Depth::Fixed(0)
+    } else {
+        Depth::Learned {
+            ceiling: sps.max_dpb_frames().min(MAX_REFERENCE_FRAMES),
+        }
+    }
 }
 
 fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
@@ -765,6 +405,7 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         reference_frames: sps
             .max_dpb_frames()
             .max(usize::from(sps.max_num_ref_frames)),
+        reorder_frames: reorder_depth(sps).capacity(),
     })
 }
 
@@ -775,6 +416,7 @@ fn picture_parameters(
     references: &[Reference],
     frame_num: u32,
     nal_ref_idc: u8,
+    structure: Structure,
 ) -> ffi::VAPictureParameterBufferH264 {
     let mut parameters = ffi::VAPictureParameterBufferH264 {
         CurrPic: current,
@@ -796,14 +438,14 @@ fn picture_parameters(
 
     let ordered = references
         .iter()
-        .filter(|reference| reference.is_short_term())
+        .filter(|reference| !reference.has_long_term())
         .chain(
             references
                 .iter()
-                .filter(|reference| !reference.is_short_term()),
+                .filter(|reference| reference.has_long_term()),
         );
     for (slot, reference) in parameters.ReferenceFrames.iter_mut().zip(ordered) {
-        *slot = reference.va_picture();
+        *slot = reference.va_frame();
     }
 
     let sequence = unsafe { &mut parameters.seq_fields.bits };
@@ -827,7 +469,7 @@ fn picture_parameters(
     picture.set_weighted_pred_flag(u32::from(pps.weighted_pred_flag));
     picture.set_weighted_bipred_idc(u32::from(pps.weighted_bipred_idc));
     picture.set_transform_8x8_mode_flag(u32::from(pps.transform_8x8_mode_flag));
-    picture.set_field_pic_flag(0);
+    picture.set_field_pic_flag(u32::from(structure.is_field()));
     picture.set_constrained_intra_pred_flag(u32::from(pps.constrained_intra_pred_flag));
     picture.set_pic_order_present_flag(u32::from(pps.bottom_field_pic_order_in_frame_present_flag));
     picture.set_deblocking_filter_control_present_flag(u32::from(
@@ -860,7 +502,7 @@ fn slice_parameters(
     slice: &Slice<'_>,
     sps: &Sps,
     pps: &Pps,
-    lists: &[Vec<Option<usize>>; 2],
+    lists: &[ReferenceList; 2],
     references: &[Reference],
 ) -> ffi::VASliceParameterBufferH264 {
     let header = &slice.header;
@@ -893,8 +535,10 @@ fn slice_parameters(
         .zip(lists)
     {
         for (slot, entry) in target.iter_mut().zip(list) {
-            if let Some(reference) = entry.and_then(|index| references.get(index)) {
-                *slot = reference.va_picture();
+            if let Some(entry) = entry
+                && let Some(reference) = references.get(entry.index)
+            {
+                *slot = reference.va_picture(entry.structure);
             }
         }
     }

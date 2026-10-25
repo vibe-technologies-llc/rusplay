@@ -9,8 +9,6 @@
 
 # Video decode
 - [L] `decode-nvdec`: NVDEC decoder
-- [S] `decode-reorder`: hold frames for display order when a stream signals reordering (B-frames); the VAAPI backend outputs in decode order, which is display order for Rusplay's own encoders
-- [S] `decode-vaapi-interlaced`: field-coded H.264 pictures in the VAAPI backend (returns `InterlacedUnsupported` today)
 
 # Input
 - [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad

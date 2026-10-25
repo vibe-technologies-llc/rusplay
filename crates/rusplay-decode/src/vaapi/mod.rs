@@ -3,6 +3,7 @@ mod av1;
 mod ffi;
 mod h264;
 mod hevc;
+mod reorder;
 #[cfg(test)]
 mod tests;
 mod va;
@@ -102,6 +103,14 @@ impl VideoDecoder for VaapiDecoder {
             CodecState::Av1(decoder) => decoder.decode(&self.display, frame),
         }
     }
+
+    fn flush(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
+        Ok(match &mut self.state {
+            CodecState::H264(decoder) => decoder.drain()?,
+            CodecState::Hevc(decoder) => decoder.drain(),
+            CodecState::Av1(_) => Vec::new(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +121,7 @@ struct StreamFormat {
     coded: Resolution,
     visible: Resolution,
     reference_frames: usize,
+    reorder_frames: usize,
 }
 
 impl StreamFormat {
@@ -200,7 +210,7 @@ impl Stream {
             rt_format,
             format.coded.width,
             format.coded.height,
-            format.reference_frames + 1 + OUTPUT_FRAMES_IN_FLIGHT,
+            format.reference_frames + format.reorder_frames + 1 + OUTPUT_FRAMES_IN_FLIGHT,
         );
 
         Ok(Self {

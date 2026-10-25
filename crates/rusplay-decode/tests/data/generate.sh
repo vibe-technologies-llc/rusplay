@@ -19,6 +19,8 @@ ffmpeg $source -frames:v 8 -pix_fmt yuv422p $x265 hevc-422-8bit.hevc
 ffmpeg $source -frames:v 12 -pix_fmt yuv420p -c:v libx264 -preset medium \
     -x264-params aud=1:slices=4:bframes=3:ref=4:weightp=2:b-pyramid=normal \
     -f h264 h264-420-8bit-bframes.h264
+ffmpeg $source -frames:v 12 -pix_fmt yuv420p -c:v libx264 -preset medium -flags +ilme+ildct \
+    -x264-params aud=1:tff=1:bframes=3:ref=3:weightp=0 -f h264 h264-420-8bit-mbaff.h264
 ffmpeg $source -frames:v 12 -pix_fmt yuv420p -c:v libx265 -preset medium \
     -x265-params aud=1:log-level=error:slices=4:bframes=3:ref=4:weightp=1:weightb=1:b-pyramid=1 \
     -f hevc hevc-420-8bit-bframes.hevc

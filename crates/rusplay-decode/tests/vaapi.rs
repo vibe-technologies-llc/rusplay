@@ -10,6 +10,7 @@ use rusplay_decode::{Backend, DecodeError, DecodedBuffer, DrmFourcc, VaapiDecode
 
 const FIXTURE_RESOLUTION: Resolution = Resolution::new(256, 144);
 const FIXTURE_FRAMES: usize = 8;
+const REORDER_DELAY_LIMIT: usize = 3;
 
 fn open(codec: Codec) -> Option<VaapiDecoder> {
     let config = VaapiDecoderConfig::default();
@@ -193,4 +194,51 @@ fn hevc_422_decodes_or_reports_the_chroma() {
         }) => {}
         other => panic!("unexpected result for 4:2:2 hevc: {other:?}"),
     }
+}
+
+fn every_packet_comes_out_once_after_a_flush(codec: Codec, name: &str, frames: usize) {
+    let Some(mut decoder) = open(codec) else {
+        return;
+    };
+    let packets = common::annexb_access_units(codec, &common::fixture(name));
+    assert_eq!(packets.len(), frames);
+
+    let mut outputs = Vec::new();
+    for packet in &packets {
+        outputs.extend(decoder.decode(packet).unwrap());
+    }
+    let before_flush = outputs.len();
+    outputs.extend(decoder.flush().unwrap());
+
+    assert!(before_flush < frames);
+    assert!(before_flush + REORDER_DELAY_LIMIT >= frames);
+    assert!(decoder.flush().unwrap().is_empty());
+
+    let mut timestamps: Vec<_> = outputs.iter().map(|output| output.timestamp).collect();
+    timestamps.sort_unstable();
+    let mut expected: Vec<_> = packets.iter().map(|packet| packet.timestamp).collect();
+    expected.sort_unstable();
+    assert_eq!(timestamps, expected);
+}
+
+#[test]
+fn h264_with_b_frames_holds_a_few_pictures_and_flushes_them() {
+    every_packet_comes_out_once_after_a_flush(Codec::H264, "h264-420-8bit-bframes.h264", 12);
+}
+
+#[test]
+fn hevc_with_b_frames_holds_a_few_pictures_and_flushes_them() {
+    every_packet_comes_out_once_after_a_flush(Codec::Hevc, "hevc-420-8bit-bframes.hevc", 12);
+}
+
+#[test]
+fn streams_without_reordering_flush_nothing() {
+    let Some(mut decoder) = open(Codec::H264) else {
+        return;
+    };
+    for packet in common::annexb_access_units(Codec::H264, &common::fixture("h264-420-8bit.h264")) {
+        assert!(decoder.decode(&packet).unwrap().is_some());
+    }
+
+    assert!(decoder.flush().unwrap().is_empty());
 }
