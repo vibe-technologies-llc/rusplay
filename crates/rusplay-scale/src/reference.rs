@@ -1,5 +1,6 @@
 use crate::{
-    Axis, TapTable,
+    TapTable,
+    scaler::Axis,
     testing::{Image, quantize_f16},
 };
 

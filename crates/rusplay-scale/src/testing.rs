@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use half::f16;
 
 pub(crate) const RGBA16F_BYTES: u32 = 8;
+pub(crate) const RGBA16F_TOLERANCE: f32 = 4.0 / 1024.0;
 
 pub(crate) struct Gpu {
     pub device: wgpu::Device,
@@ -130,6 +131,10 @@ pub(crate) fn upload(gpu: &Gpu, image: &Image) -> wgpu::Texture {
     );
 
     texture
+}
+
+pub(crate) fn view(texture: &wgpu::Texture) -> wgpu::TextureView {
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 pub(crate) fn storage_target(gpu: &Gpu, width: u32, height: u32) -> wgpu::Texture {

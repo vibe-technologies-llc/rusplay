@@ -7,10 +7,10 @@ struct Params {
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
-@group(0) @binding(1) var destination: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(2) var<storage, read> firsts: array<i32>;
-@group(0) @binding(3) var<storage, read> weights: array<f32>;
-@group(0) @binding(4) var<uniform> params: Params;
+@group(1) @binding(0) var destination: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(0) var<storage, read> firsts: array<i32>;
+@group(2) @binding(1) var<storage, read> weights: array<f32>;
+@group(2) @binding(2) var<uniform> params: Params;
 
 @compute @workgroup_size(8, 8)
 fn resample(@builtin(global_invocation_id) id: vec3<u32>) {

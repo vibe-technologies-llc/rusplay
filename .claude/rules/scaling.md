@@ -8,7 +8,7 @@ paths:
 
 - All resampling runs on the GPU through wgpu compute shaders (`resample.wgsl`). The CPU only
   builds the tap tables (`TapTable`) from the kernel functions in `kernel.rs`, once per
-  resolution change, and uploads them. Hardware scalers (VAAPI VPP, NVENC's internal resize,
+  resolution or filter change, and uploads them. Hardware scalers (VAAPI VPP, NVENC's internal resize,
   compositor scaling) are never used, because they are bilinear-grade.
 - Host downscale (capture resolution above stream resolution) defaults to **Hermite** in linear
   light: a non-ringing weighted average with the kernel stretched by the scale ratio, so every
@@ -25,6 +25,17 @@ paths:
 - Linear light comes from sampling an sRGB view of the source, so `textureLoad` returns
   linearised values. Do not add manual transfer functions where a texture view format does the
   job.
+- `ScalePipelines` holds the compiled pipelines and explicit bind group layouts, built once per
+  device and cloned (cheap handles) into every `Scaler`. A `Scaler` is one cached plan for a
+  `ScaleSettings`: tap table buffers, params uniforms, the intermediate texture and every bind
+  group that does not involve a frame texture are built in `Scaler::new`, and
+  `Scaler::configure` rebuilds the tables only when the filter or a resolution changes. Nothing
+  is allocated on the per-frame path except a bind group for a frame view not seen recently.
+- Bind groups are split by lifetime: group 0 is the source texture, group 1 the storage
+  destination, group 2 the pass's tables and params. Frame views get groups 0 and 1 from a small
+  per-scaler cache keyed by `TextureView` (`CACHED_VIEW_GROUPS`), sized for a capture or decode
+  swapchain cycling a few buffers. Sources are bound as non-filterable float textures, so any
+  float format can be the input; destinations are `rgba16float`.
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a
