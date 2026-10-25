@@ -1,5 +1,6 @@
 mod audio;
 mod capture;
+mod decoder;
 mod error;
 mod input;
 mod network;
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub use crate::{
     audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
+    decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
     input::{InputConfig, PointerMode},
     network::NetworkConfig,

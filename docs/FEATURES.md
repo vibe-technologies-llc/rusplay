@@ -9,9 +9,9 @@
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device
 
 # Video decode
-- [L] `decode-vaapi`: VAAPI decoder that exports DMA-BUF frames
 - [L] `decode-nvdec`: NVDEC decoder
-- [M] `decode-rav1d`: software AV1 decode via rav1d
+- [S] `decode-reorder`: hold frames for display order when a stream signals reordering (B-frames); the VAAPI backend outputs in decode order, which is display order for Rusplay's own encoders
+- [S] `decode-vaapi-interlaced`: field-coded H.264 pictures in the VAAPI backend (returns `InterlacedUnsupported` today)
 
 # Input
 - [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad
@@ -19,7 +19,7 @@
 
 # Sessions
 - [L, blocked by: encode-vaapi] `host-pipeline`: run capture → scale → encode → send in `HostSession`
-- [L, blocked by: decode-vaapi] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
+- [L] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 
 # Desktop app
 - [M, blocked by: client-pipeline] `app-stream-view`: present the stream through the shared wgpu device

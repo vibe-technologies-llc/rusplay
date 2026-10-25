@@ -57,6 +57,8 @@ pub enum ConfigError {
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
     EmptyClientPeersFile,
+    #[error("software decoder thread count {0} is above 256")]
+    DecoderThreadsOutOfRange(u32),
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]
@@ -99,6 +101,7 @@ impl ConfigError {
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
+            Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),
             Self::Read { .. }
             | Self::Parse { .. }
             | Self::NoConfigHome

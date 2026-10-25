@@ -52,16 +52,17 @@ paths:
   choices gain a `(none)` entry), chips for multi-choices, `TextField` for numbers and text, and
   an editable list for `params`.
 - A new `rusplay-config` option needs a row in `FIELDS`; tests fail until it has one:
-  `every_serialized_option_has_a_form_field` walks populated configs for every encoder backend and
+  `every_serialized_option_has_a_form_field` walks populated configs for every encoder and decoder backend and
   `every_choice_option_is_accepted_by_the_config` feeds each listed choice through serde. Choice
   strings are the serde names, never display labels.
-- `when` only gates the tagged-enum selectors (`video.encoder.backend` and
-  `video.encoder.rate_control.mode`), because those decide which keys exist at all and the structs
-  are `deny_unknown_fields`. Everything else is always shown and always written, so a value that
-  does not apply to the current codec is never lost on save. A test pins this.
+- `when` only gates the tagged-enum selectors (`video.encoder.backend`,
+  `video.encoder.rate_control.mode` and `video.decoder.backend`), because those decide which keys
+  exist at all and the structs are `deny_unknown_fields`. Everything else is always shown and
+  always written, so a value that does not apply to the current codec is never lost on save. A
+  test pins this.
 - Switching backend or rate-control mode reveals rows that were absent from the loaded file; their
   initial values come from the config crate's defaults (`RateControl::DEFAULT_VBR`,
-  `DEFAULT_CONSTANT_QUALITY` and each backend's `Default`), never from the UI.
+  `DEFAULT_CONSTANT_QUALITY` and each encoder and decoder backend's `Default`), never from the UI.
 - Errors are per field. Typed parsing reports on the edited field as the user types; `Save` runs
   every visible row, collects all type errors, and only when there are none runs
   `Config::validate`, whose `ConfigError::field()` names the row to mark. A rejected save jumps to

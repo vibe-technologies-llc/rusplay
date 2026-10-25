@@ -1,7 +1,8 @@
 use std::net::IpAddr;
 
 use rusplay_config::{
-    Config, ConfigError, NvencConfig, RateControl, SvtAv1Config, VaapiConfig, VideoEncoderConfig,
+    Config, ConfigError, NvdecDecoderConfig, NvencConfig, RateControl, SoftwareDecoderConfig,
+    SvtAv1Config, VaapiConfig, VaapiDecoderConfig, VideoDecoderConfig, VideoEncoderConfig,
     X264Config, X265Config,
 };
 use thiserror::Error;
@@ -94,6 +95,11 @@ impl FormModel {
         for encoder in encoder_alternatives() {
             let mut alternative = config.clone();
             alternative.video.encoder = encoder;
+            sources.push(to_table(&alternative)?);
+        }
+        for decoder in decoder_alternatives() {
+            let mut alternative = config.clone();
+            alternative.video.decoder = decoder;
             sources.push(to_table(&alternative)?);
         }
 
@@ -255,6 +261,14 @@ impl FormModel {
 
 fn to_table(config: &Config) -> Result<Table, ConfigError> {
     Table::try_from(config).map_err(|source| ConfigError::Serialize { source })
+}
+
+fn decoder_alternatives() -> [VideoDecoderConfig; 3] {
+    [
+        VideoDecoderConfig::Vaapi(VaapiDecoderConfig::default()),
+        VideoDecoderConfig::Nvdec(NvdecDecoderConfig::default()),
+        VideoDecoderConfig::Software(SoftwareDecoderConfig::default()),
+    ]
 }
 
 fn encoder_alternatives() -> Vec<VideoEncoderConfig> {
@@ -594,14 +608,28 @@ mod tests {
             }),
         ];
 
-        encoders
-            .into_iter()
-            .map(|encoder| {
-                let mut config = base.clone();
-                config.video.encoder = encoder;
-                config
-            })
-            .collect()
+        let decoders = [
+            VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
+                device: "/dev/dri/renderD129".into(),
+            }),
+            VideoDecoderConfig::Nvdec(NvdecDecoderConfig { gpu_index: 1 }),
+            VideoDecoderConfig::Software(SoftwareDecoderConfig {
+                threads: NonZeroU32::new(4),
+            }),
+        ];
+
+        let with_encoders = encoders.into_iter().map(|encoder| {
+            let mut config = base.clone();
+            config.video.encoder = encoder;
+            config
+        });
+        let with_decoders = decoders.into_iter().map(|decoder| {
+            let mut config = base.clone();
+            config.video.decoder = decoder;
+            config
+        });
+
+        with_encoders.chain(with_decoders).collect()
     }
 
     fn leaf_paths(prefix: &str, value: &Toml, out: &mut BTreeSet<String>) {
@@ -727,7 +755,11 @@ mod tests {
 
     #[test]
     fn conditions_gate_only_on_tagged_enum_selectors() {
-        let selectors = ["video.encoder.backend", "video.encoder.rate_control.mode"];
+        let selectors = [
+            "video.encoder.backend",
+            "video.encoder.rate_control.mode",
+            "video.decoder.backend",
+        ];
 
         for field in FIELDS {
             for condition in field.when {

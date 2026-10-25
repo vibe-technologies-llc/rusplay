@@ -1,16 +1,42 @@
 mod error;
+mod frame;
+#[cfg(feature = "software")]
+mod software;
+#[cfg(feature = "vaapi")]
+mod vaapi;
 
-use std::{fmt, os::fd::OwnedFd};
+use std::fmt;
 
-use rusplay_core::{EncodedFrame, PixelFormat, Resolution, Timestamp};
+use rusplay_config::{SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig};
+use rusplay_core::{Codec, EncodedFrame};
 
-pub use crate::error::DecodeError;
+#[cfg(feature = "software")]
+pub use crate::software::Rav1dDecoder;
+#[cfg(feature = "vaapi")]
+pub use crate::vaapi::VaapiDecoder;
+pub use crate::{
+    error::{BitstreamUnit, DecodeError, VaCall, VaStatus},
+    frame::{
+        CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
+        DmaBufPlane, DrmFourcc,
+    },
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
     Vaapi,
     Nvdec,
     Software,
+}
+
+impl Backend {
+    pub const fn of(config: &VideoDecoderConfig) -> Self {
+        match config {
+            VideoDecoderConfig::Vaapi(_) => Self::Vaapi,
+            VideoDecoderConfig::Nvdec(_) => Self::Nvdec,
+            VideoDecoderConfig::Software(_) => Self::Software,
+        }
+    }
 }
 
 impl fmt::Display for Backend {
@@ -23,24 +49,131 @@ impl fmt::Display for Backend {
     }
 }
 
-#[derive(Debug)]
-pub enum DecodedBuffer {
-    DmaBuf { fd: OwnedFd, modifier: u64 },
-    Cpu { planes: Vec<Vec<u8>> },
-}
-
-#[derive(Debug)]
-pub struct DecodedFrame {
-    pub resolution: Resolution,
-    pub format: PixelFormat,
-    pub timestamp: Timestamp,
-    pub buffer: DecodedBuffer,
-}
-
 pub trait VideoDecoder {
     fn decode(&mut self, frame: &EncodedFrame) -> Result<Option<DecodedFrame>, DecodeError>;
 }
 
-pub fn open(backend: Backend) -> Result<Box<dyn VideoDecoder>, DecodeError> {
-    Err(DecodeError::BackendNotCompiled { backend })
+pub fn open(
+    codec: Codec,
+    config: &VideoDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    match config {
+        VideoDecoderConfig::Vaapi(vaapi) => open_vaapi(codec, vaapi),
+        VideoDecoderConfig::Nvdec(_) => Err(DecodeError::BackendNotCompiled {
+            backend: Backend::Nvdec,
+        }),
+        VideoDecoderConfig::Software(software) => open_software(codec, software),
+    }
+}
+
+#[cfg(feature = "vaapi")]
+fn open_vaapi(
+    codec: Codec,
+    config: &VaapiDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Ok(Box::new(VaapiDecoder::new(codec, config)?))
+}
+
+#[cfg(not(feature = "vaapi"))]
+fn open_vaapi(
+    _codec: Codec,
+    _config: &VaapiDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Err(DecodeError::BackendNotCompiled {
+        backend: Backend::Vaapi,
+    })
+}
+
+#[cfg(feature = "software")]
+fn open_software(
+    codec: Codec,
+    config: &SoftwareDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    match codec {
+        Codec::Av1 => Ok(Box::new(Rav1dDecoder::new(config)?)),
+        Codec::H264 | Codec::Hevc => Err(DecodeError::CodecUnsupported {
+            backend: Backend::Software,
+            codec,
+        }),
+    }
+}
+
+#[cfg(not(feature = "software"))]
+fn open_software(
+    _codec: Codec,
+    _config: &SoftwareDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Err(DecodeError::BackendNotCompiled {
+        backend: Backend::Software,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rusplay_config::NvdecDecoderConfig;
+
+    use super::*;
+
+    #[test]
+    fn nvdec_is_not_compiled() {
+        let config = VideoDecoderConfig::Nvdec(NvdecDecoderConfig::default());
+
+        assert!(matches!(
+            open(Codec::Hevc, &config),
+            Err(DecodeError::BackendNotCompiled {
+                backend: Backend::Nvdec
+            })
+        ));
+    }
+
+    #[test]
+    fn software_backend_matches_its_feature() {
+        let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+
+        let av1 = open(Codec::Av1, &config);
+        let h264 = open(Codec::H264, &config);
+
+        if cfg!(feature = "software") {
+            assert!(av1.is_ok());
+            assert!(matches!(
+                h264,
+                Err(DecodeError::CodecUnsupported {
+                    backend: Backend::Software,
+                    codec: Codec::H264,
+                })
+            ));
+        } else {
+            assert!(matches!(
+                av1,
+                Err(DecodeError::BackendNotCompiled {
+                    backend: Backend::Software
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn vaapi_open_matches_its_feature() {
+        let config = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
+            device: "/dev/dri/rusplay-missing-node".into(),
+        });
+
+        let result = open(Codec::Av1, &config);
+
+        if cfg!(feature = "vaapi") {
+            assert!(matches!(result, Err(DecodeError::DeviceOpen { .. })));
+        } else {
+            assert!(matches!(
+                result,
+                Err(DecodeError::BackendNotCompiled {
+                    backend: Backend::Vaapi
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn backend_follows_the_config() {
+        assert_eq!(Backend::of(&VideoDecoderConfig::default()), Backend::Vaapi);
+    }
 }

@@ -26,6 +26,7 @@ ashpd = { version = "0.13.13", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false }
 claxon = "0.4.3"
+cros-codecs = { version = "0.0.6", default-features = false }
 evdev = { version = "0.13.2", default-features = false }
 flacenc = { version = "0.5.1", default-features = false }
 gpui = {
@@ -47,6 +48,7 @@ parking_lot = { version = "0.13.0", default-features = false }
 pipewire = { version = "0.10.1", default-features = false }
 pkg-config = "0.3.34"
 pollster = "1.0.1"
+rav1d = { version = "1.1.0", default-features = false }
 reed-solomon-simd = { version = "3.1.0", default-features = false }
 reis = { version = "0.7.1", default-features = false }
 rtrb = "0.4.1"

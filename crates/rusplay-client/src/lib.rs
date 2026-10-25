@@ -1,6 +1,6 @@
 use rusplay_audio::AudioError;
 use rusplay_config::Config;
-use rusplay_decode::{Backend, DecodeError};
+use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
 use rusplay_net::NetError;
 use thiserror::Error;
@@ -32,7 +32,7 @@ impl ClientSession {
     }
 
     pub fn run(&mut self) -> Result<(), ClientError> {
-        let _decoder = rusplay_decode::open(Backend::Vaapi)?;
+        let _decoder = rusplay_decode::open(self.config.video.codec, &self.config.video.decoder)?;
         let _audio = rusplay_audio::OpusAudioDecoder::new(&self.config.audio)?;
 
         Ok(())

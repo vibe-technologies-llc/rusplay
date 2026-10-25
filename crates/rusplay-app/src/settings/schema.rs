@@ -81,6 +81,7 @@ const PRIMARIES: &[&str] = &["bt709", "bt2020"];
 const TRANSFERS: &[&str] = &["bt709", "srgb", "pq", "hlg"];
 const RANGES: &[&str] = &["limited", "full"];
 const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
+const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
 const RATE_CONTROL_MODES: &[&str] = &["cbr", "vbr", "constant-quality"];
 const NVENC_PRESETS: &[&str] = &["p1", "p2", "p3", "p4", "p5", "p6", "p7"];
 const NVENC_TUNINGS: &[&str] = &["ultra-low-latency", "low-latency", "high-quality"];
@@ -141,6 +142,20 @@ const SCALE_FILTERS: &[&str] = &[
 const BACKEND_PATH: &str = "video.encoder.backend";
 const MODE_PATH: &str = "video.encoder.rate_control.mode";
 
+const DECODER_BACKEND_PATH: &str = "video.decoder.backend";
+
+const VAAPI_DECODER: &[Condition] = &[Condition {
+    path: DECODER_BACKEND_PATH,
+    any_of: &["vaapi"],
+}];
+const NVDEC_DECODER: &[Condition] = &[Condition {
+    path: DECODER_BACKEND_PATH,
+    any_of: &["nvdec"],
+}];
+const SOFTWARE_DECODER: &[Condition] = &[Condition {
+    path: DECODER_BACKEND_PATH,
+    any_of: &["software"],
+}];
 const VAAPI: &[Condition] = &[Condition {
     path: BACKEND_PATH,
     any_of: &["vaapi"],
@@ -434,6 +449,38 @@ pub static FIELDS: &[Field] = &[
         "Parameters",
         Kind::Pairs,
     ),
+    field(
+        Section::Video,
+        "Decoder",
+        DECODER_BACKEND_PATH,
+        "Backend",
+        Kind::Choice(DECODER_BACKENDS),
+    ),
+    field(
+        Section::Video,
+        "Decoder",
+        "video.decoder.device",
+        "Device",
+        Kind::Text,
+    )
+    .when(VAAPI_DECODER),
+    field(
+        Section::Video,
+        "Decoder",
+        "video.decoder.gpu_index",
+        "GPU index",
+        U32,
+    )
+    .when(NVDEC_DECODER),
+    field(
+        Section::Video,
+        "Decoder",
+        "video.decoder.threads",
+        "Threads",
+        POSITIVE_U32,
+    )
+    .optional()
+    .when(SOFTWARE_DECODER),
     field(
         Section::Audio,
         "Stream",

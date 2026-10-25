@@ -5,12 +5,101 @@ paths:
 
 # Video decode
 
-- `VideoDecoder` is the backend-neutral trait. Backends are VAAPI, NVDEC and software, each
-  behind its own cargo feature, and `open` returns `BackendNotCompiled` when it is off.
-- Hardware decoders hand frames out as DMA-BUF (`DecodedBuffer::DmaBuf`) for import into wgpu,
-  where `rusplay-scale` upscales and converts to the display format. CPU frames are the
-  software path only.
-- Software decode prefers pure Rust (`rav1d` for AV1). H.264/HEVC software decode needs a
-  C-backed crate and is feature gated.
+- `VideoDecoder` is the backend-neutral trait: one `EncodedFrame` (a whole access unit / temporal
+  unit) in, at most one `DecodedFrame` out. Backends are VAAPI, NVDEC and software, each behind
+  its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
+  config's backend and returns `BackendNotCompiled` when that feature is off (always for NVDEC,
+  which has no backend yet) and `CodecUnsupported` when the backend cannot decode the codec.
+  The backend types (`VaapiDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
+  decoder lives on the thread that created it.
+- The decoder backend and its options are `video.decoder` in `rusplay-config`
+  (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
+- `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the
+  stream was coded in, the input `timestamp` and a `DecodedBuffer`:
+  - `DecodedBuffer::DmaBuf(DmaBufFrame)` from hardware decoders, for import into wgpu where
+    `rusplay-scale` upscales and converts to the display format. `DmaBufFrame::image()` is a
+    `DmaBufImage`: DRM `fourcc`, `modifier`, allocated `width`/`height`, the `objects` (an
+    owned fd and size each) and the `planes` (object index, offset, pitch), which is exactly
+    what `VK_EXT_image_drm_format_modifier` import needs. The `DmaBufFrame` is a lease: the
+    buffer is not reused by the decoder until it is dropped, so it must outlive the GPU work
+    that reads it. Importers dup the fd if the API takes ownership.
+  - `DecodedBuffer::Cpu(CpuFrame)`, the software path only: three planes (Y, U, V) borrowed
+    from the decoder's own picture without a copy. Each `CpuPlane` has `data`, `stride` in
+    bytes, `width`/`height` in samples and `bytes_per_sample` (1 for 8-bit, 2 for 10/12-bit,
+    whose samples are little-endian `u16`s holding the value in the low bits).
+- Monochrome streams are rejected with `DecodeError::Monochrome`; there is no 4:0:0
+  `ChromaSubsampling`.
 - No decoder-side frame buffering beyond what the codec requires: a decoded frame is presented
-  as soon as it exists.
+  as soon as it exists. When one packet yields several pictures, the newest one wins. Frames
+  come out in decode order, which is display order for Rusplay's encoders (no B-frames);
+  honouring reordering for foreign streams is `decode-reorder` in `docs/FEATURES.md`.
+
+## Software (`software` feature)
+
+- AV1 through `rav1d` (pure Rust port of dav1d), driven through its dav1d C API
+  (`dav1d_open`, `dav1d_send_data`, `dav1d_get_picture`), which is the only public interface it
+  has. The unsafe calls are confined to `src/software.rs` and wrapped in owning types
+  (`InputData`, `OwnedPicture`) that unref on drop.
+- `max_frame_delay = 1` turns frame threading off so every packet yields its picture on the same
+  call; `SoftwareDecoderConfig::threads` sets the tile/postfilter thread count (`None` lets
+  rav1d use every logical CPU, at most 256).
+- rav1d is built with `default-features = false` plus `bitdepth_8` and `bitdepth_16`. Its `asm`
+  feature needs `nasm` at build time and is off; see `decode-rav1d-asm` in
+  `docs/PERFORMANCE.md`.
+- H.264/HEVC software decode would need a C-backed crate and is not implemented: the software
+  backend decodes AV1 only.
+
+## VAAPI (`vaapi` feature)
+
+- `VaapiDecoder::new(codec, &VaapiDecoderConfig)` opens `video.decoder.device` (default
+  `/dev/dri/renderD128`) with `vaGetDisplayDRM`, and fails with `CodecUnsupported` when the
+  driver has no VLD entrypoint for the codec's base profile (H.264 Constrained Baseline/Main/
+  High, HEVC Main, AV1 Profile 0).
+- libva is reached through bindgen bindings generated in `build.rs` from the system headers
+  (`src/vaapi/ffi.rs`); `src/vaapi/va.rs` wraps display, config/context (`Session`), buffers and
+  surfaces in owning types, and is the only place with libva calls besides the parameter-buffer
+  unions. Errors are `DecodeError::Va { call, status }`.
+- Parsing uses the `cros-codecs` parsers (`codec::h264`, `codec::h265`, `codec::av1`). The
+  decoding processes are Rusplay's own, one module per codec, because the `cros-codecs`
+  stateless decoders finish a picture only when the next one starts and output H.264 only once
+  the DPB is full, which is a frame or more of latency, and their VAAPI backend cannot be built
+  here (see `.claude/rules/dependencies.md`):
+  - `h264.rs`: frame pictures only (field pictures are `InterlacedUnsupported`), picture order
+    count types 0/1/2, sliding-window and MMCO 1-6 reference marking, P/B list initialisation and
+    `ref_pic_list_modification`, explicit weighted prediction, scaling matrices (zig-zag to
+    raster). A picture is submitted at the end of its packet.
+  - `hevc.rs`: POC from the previous TemporalId-0 picture, the short- and long-term RPS (from the
+    SPS or the slice), RefPicList construction with `list_entry` modification, dependent slice
+    segments, RASL skipping after a random-access IRAP, range-extension buffers
+    (`VAPictureParameterBufferHEVCExtension`) for the 4:2:2/4:4:4/12-bit profiles.
+  - `av1.rs`: OBUs from the packet, the eight reference slots, `show_existing_frame`, tile
+    groups (a frame is submitted as soon as its last tile arrives, so the parser sees the updated
+    reference state for the next header), film grain into a separate display surface.
+- The stream format (VA profile, chroma, bit depth, coded size) is read from the SPS / sequence
+  header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
+  lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
+  `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
+- Surfaces are driver-allocated (`vaCreateSurfaces` with the RT format and decoder/export usage
+  hints), exported once with `vaExportSurfaceHandle` (`DRM_PRIME_2`, read-only, composed layers)
+  into an `Arc<DmaBufImage>`, and pooled. A surface is free when only the pool holds its `Arc`:
+  reference pictures and handed-out `DmaBufFrame`s keep it busy. The pool grows on demand up to
+  the stream's reference count + 1 + `OUTPUT_FRAMES_IN_FLIGHT` (8) and then fails with
+  `SurfacePoolExhausted`. 8-bit 4:2:0 exports as `NV12`, 10-bit as `P010`.
+- Output waits for the picture with `vaSyncSurface` before it is handed out, since wgpu/Vulkan do
+  not wait on implicit DMA-BUF fences.
+
+## Test fixtures
+
+- `tests/data/` holds 256x144 clips made by `tests/data/generate.sh` with ffmpeg: 8 frames of
+  AV1 in IVF (8-bit and 10-bit 4:2:0, 8-bit 4:4:4), H.264 and HEVC as Annex B with access unit
+  delimiters (8-bit 4:2:0, HEVC 10-bit and 4:2:2), plus 12-frame stress clips: H.264 and HEVC
+  with B-pyramids, four slices, several references and weighted prediction, and AV1 with hidden
+  frames, `show_existing_frame` and 2x2 tiles. `tests/common` has the IVF and Annex B splitters.
+- `tests/vaapi.rs` checks the public contract on the GPU (one frame per packet, `NV12`/`P010`
+  DMA-BUF layout, surfaces of held frames never reused, the 4:2:2 error path). The unit tests
+  in `src/vaapi/tests.rs` re-import each exported DMA-BUF as a VA surface, read it back with
+  `vaGetImage` and compare a 64-bit FNV-1a of the cropped `NV12`/`P010` planes with ffmpeg's
+  decode of the same fixture (`ffmpeg -i <fixture> -f rawvideo -pix_fmt nv12|p010le -`, hashed
+  per frame; the stress clips compare sorted hashes since B-frames come out in decode order).
+  Regenerated fixtures need new hashes. Every VAAPI test returns early when the render node,
+  the codec or the profile is missing.
