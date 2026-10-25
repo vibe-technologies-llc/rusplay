@@ -1,15 +1,9 @@
-# Capture
-- [M] `capture-pipewire`: consume the portal's PipeWire node into `Frame`s behind the `pipewire` feature
-- [M, blocked by: capture-pipewire] `capture-dmabuf`: negotiate DMA-BUF with modifiers, falling back to shared memory
-- [S, blocked by: capture-pipewire] `capture-cursor-metadata`: extract cursor metadata and forward it to the client
-- [S] `capture-restore-token`: persist the portal restore token between host runs
-
 # Scaling
 - [M] `scale-gpu-tests`: headless wgpu tests comparing GPU output with a CPU reference of the kernels
 - [M] `scale-polar-pass`: single-pass 2D EWA shader for the polar filters
 - [S] `scale-antiringing`: clamp upscaled output to the local min/max by `antiringing` strength
 - [S] `scale-sigmoid`: sigmoidal light transform around the upscale pass
-- [M, blocked by: capture-dmabuf] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
+- [M] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
 - [M] `scale-color-convert`: RGB to YUV 4:2:0/4:2:2/4:4:4 conversion on the GPU with the chroma downscale filter
 
 # Video encode
@@ -36,7 +30,7 @@
 - [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
-- [L, blocked by: capture-pipewire, encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
+- [L, blocked by: encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 
 # Desktop app

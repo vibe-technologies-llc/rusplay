@@ -1,4 +1,8 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
+
+use crate::ConfigError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -26,6 +30,7 @@ pub struct CaptureConfig {
     pub prefer_dmabuf: bool,
     pub persist_session: bool,
     pub restore_token: Option<String>,
+    pub restore_token_file: Option<PathBuf>,
 }
 
 impl Default for CaptureConfig {
@@ -36,6 +41,16 @@ impl Default for CaptureConfig {
             prefer_dmabuf: true,
             persist_session: true,
             restore_token: None,
+            restore_token_file: None,
+        }
+    }
+}
+
+impl CaptureConfig {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+        match &self.restore_token_file {
+            Some(path) if path.as_os_str().is_empty() => Err(ConfigError::EmptyRestoreTokenFile),
+            _ => Ok(()),
         }
     }
 }

@@ -13,4 +13,10 @@ pub enum ProtocolError {
     },
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),
+    #[error("cursor flags {0:#04x} carry unknown bits")]
+    UnknownCursorFlags(u8),
+    #[error("cursor image holds {found} pixel bytes, its size needs {expected}")]
+    CursorImageSizeMismatch { expected: usize, found: usize },
+    #[error("{0} bytes follow the end of the message")]
+    TrailingBytes(usize),
 }

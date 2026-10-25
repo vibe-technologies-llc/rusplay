@@ -7,9 +7,18 @@ publish.workspace = true
 
 [dependencies]
 ashpd = { workspace = true, features = ["tokio", "screencast"] }
+parking_lot.workspace = true
+pipewire = { workspace = true, optional = true, features = ["v0_3_33"] }
 rusplay-config.workspace = true
 rusplay-core.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[features]
+pipewire = ["dep:pipewire"]
 
 [lints]
 workspace = true

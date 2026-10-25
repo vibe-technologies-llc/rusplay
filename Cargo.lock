@@ -1247,9 +1247,13 @@ name = "rusplay-capture"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "parking_lot 0.13.0",
+ "pipewire",
  "rusplay-config",
  "rusplay-core",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

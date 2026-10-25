@@ -33,4 +33,6 @@ pub enum ConfigError {
     AntiringingOutOfRange(f32),
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
+    #[error("capture.restore_token_file is set to an empty path")]
+    EmptyRestoreTokenFile,
 }
