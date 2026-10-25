@@ -6,7 +6,9 @@ mod fec;
 mod pacer;
 mod packetizer;
 mod pairing;
+mod peers;
 mod reassembly;
+mod reconnect;
 mod session;
 mod transport;
 
@@ -19,11 +21,16 @@ pub use crate::{
     pacer::Pacer,
     packetizer::{Packetizer, shard_len_for},
     pairing::{
-        MAX_PIN_DIGITS, MIN_PIN_DIGITS, PairingInitiator, PairingResponder, PairingStep,
-        PairingTiming, Pin, ResponderOutput, pair_as_client, pair_as_host,
+        MAX_PIN_DIGITS, MIN_PIN_DIGITS, PairingInitiator, PairingOutcome, PairingResponder,
+        PairingStep, PairingTiming, Pin, ResponderOutput, pair_as_client, pair_as_host,
     },
+    peers::{MAX_PEER_NAME_BYTES, PEER_SECRET_LEN, PeerRecord, PeerSecret, PeerStore},
     reassembly::{
         ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReassemblyStats,
+    },
+    reconnect::{
+        ReconnectAccepted, ReconnectInitiator, ReconnectOutput, ReconnectResponder, ReconnectStep,
+        ReconnectTiming, reconnect_as_client, reconnect_as_host,
     },
     session::{KEY_LEN, SEALED_OVERHEAD, SessionCipher, SessionKeys, requires_sealing},
     transport::{SocketBuffers, Transport, TransportOptions, max_datagram_len},

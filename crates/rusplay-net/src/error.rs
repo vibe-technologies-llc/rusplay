@@ -1,9 +1,10 @@
 use std::{
     io,
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
 };
 
-use rusplay_protocol::{PairingRejection, ProtocolError, StreamKind};
+use rusplay_protocol::{PairingRejection, ProtocolError, ReconnectRejection, StreamKind};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -58,6 +59,28 @@ pub enum NetError {
     PairingLocked,
     #[error("pairing did not finish in time")]
     PairingTimeout,
+    #[error("reconnect key derivation failed")]
+    ReconnectKeyDerivation(#[source] hkdf::InvalidLength),
+    #[error("host did not prove it knows the remembered secret")]
+    ReconnectAuthentication,
+    #[error("peer rejected the reconnect: {reason:?}")]
+    ReconnectRejected { reason: ReconnectRejection },
+    #[error("reconnect did not finish in time")]
+    ReconnectTimeout,
+    #[error("peer name must not be empty")]
+    PeerNameEmpty,
+    #[error("peer name of {len} bytes exceeds the limit of {max}")]
+    PeerNameTooLong { len: usize, max: usize },
+    #[error("peer name contains a control character")]
+    PeerNameControlCharacter,
+    #[error("neither XDG_STATE_HOME nor HOME gives an absolute state directory")]
+    NoStateDirectory,
+    #[error("failed to read the peer store {path}")]
+    PeerStoreRead { path: PathBuf, source: io::Error },
+    #[error("failed to write the peer store {path}")]
+    PeerStoreWrite { path: PathBuf, source: io::Error },
+    #[error("peer store {path} is corrupt at line {line}")]
+    PeerStoreCorrupt { path: PathBuf, line: usize },
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]

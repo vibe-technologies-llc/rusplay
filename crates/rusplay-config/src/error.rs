@@ -51,6 +51,12 @@ pub enum ConfigError {
     SigmoidSlopeOutOfRange(f32),
     #[error("gamepad slot count {0} is outside 1..=16")]
     GamepadSlotsOutOfRange(u8),
+    #[error("reconnect timeout must be greater than zero")]
+    ZeroReconnectTimeout,
+    #[error("peers.host_file is set to an empty path")]
+    EmptyHostPeersFile,
+    #[error("peers.client_file is set to an empty path")]
+    EmptyClientPeersFile,
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]

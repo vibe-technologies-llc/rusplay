@@ -4,7 +4,7 @@ use crate::ProtocolError;
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(6);
+    pub const CURRENT: Self = Self(7);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +18,7 @@ pub enum StreamKind {
     Cursor = 5,
     Discovery = 6,
     Pairing = 7,
+    Reconnect = 8,
 }
 
 impl TryFrom<u8> for StreamKind {
@@ -33,6 +34,7 @@ impl TryFrom<u8> for StreamKind {
             5 => Ok(Self::Cursor),
             6 => Ok(Self::Discovery),
             7 => Ok(Self::Pairing),
+            8 => Ok(Self::Reconnect),
             unknown => Err(ProtocolError::UnknownStreamKind(unknown)),
         }
     }

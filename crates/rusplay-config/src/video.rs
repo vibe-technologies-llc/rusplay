@@ -227,11 +227,24 @@ pub struct X265Config {
     pub params: EncoderParams,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SvtAv1LogLevel {
+    Off,
+    Fatal,
+    Error,
+    #[default]
+    Warn,
+    Info,
+    Debug,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SvtAv1Config {
     pub preset: u8,
     pub low_latency: bool,
+    pub log_level: SvtAv1LogLevel,
     pub threads: Option<NonZeroU32>,
     pub params: EncoderParams,
 }
@@ -241,6 +254,7 @@ impl Default for SvtAv1Config {
         Self {
             preset: 10,
             low_latency: true,
+            log_level: SvtAv1LogLevel::default(),
             threads: None,
             params: EncoderParams::new(),
         }

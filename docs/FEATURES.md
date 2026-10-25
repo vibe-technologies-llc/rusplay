@@ -6,16 +6,12 @@
 # Video encode
 - [L] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
-- [S] `encode-svt-av1-log`: route SVT-AV1 log output through svt_av1_set_log_callback instead of stderr
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device
 
 # Video decode
 - [L] `decode-vaapi`: VAAPI decoder that exports DMA-BUF frames
 - [L] `decode-nvdec`: NVDEC decoder
 - [M] `decode-rav1d`: software AV1 decode via rav1d
-
-# Networking
-- [M] `net-remembered-peers`: persist a pairing secret so a paired client reconnects without a new PIN
 
 # Input
 - [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad

@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+flac = ["rusplay-host/flac"]
+pipewire = ["rusplay-host/pipewire"]
+software-encoders = ["rusplay-host/software-encoders"]
+svt-av1 = ["rusplay-host/svt-av1"]
+x264 = ["rusplay-host/x264"]
+x265 = ["rusplay-host/x265"]
+
 [dependencies]
 lexopt.workspace = true
 rusplay-config.workspace = true

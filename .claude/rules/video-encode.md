@@ -58,8 +58,17 @@ paths:
   `force_key_frames` plus a key picture type on the input. `set_bitrate` attaches a
   `RATE_CHANGE_EVENT` to the next input picture. `threads` maps to `level_of_parallelism`
   (1 to 6, not a thread count). `svt_av1_enc_parse_parameter` does not tell an unknown key from
-  a bad value, so both are `InvalidParameterValue` naming the key and value. The library prints
-  its banner to stderr (`encode-svt-av1-log` tracks routing it).
+  a bad value, so both are `InvalidParameterValue` naming the key and value. The library's
+  logging is global and finalised by the first `svt_av1_enc_init_handle`, so `svt_av1/log.rs`
+  registers `svt_av1_set_log_callback` once (`parking_lot::Once`) before any handle exists. The
+  callback formats the message with `vsnprintf` (the bindgen `va_list` pointer is passed straight
+  through) and writes `svt-av1 <level> <tag>: <message>` to stderr when the level is at or below
+  `log_level` (`off`, `fatal`, `error`, default `warn`, `info`, `debug`); the banner is an info
+  message, so the default drops it. The threshold is process-wide and the last encoder opened
+  sets it. The library still applies its own `SVT_LOG` filter before the callback runs, so
+  `debug` output needs that variable set by the user. `force_key_frames` is set only outside
+  `low_latency` (the library warns and clears it there), and dropping an initialised handle sends
+  EOS and drains the encoder first, because `svt_av1_enc_deinit` logs an error otherwise.
 - Bindings are generated at build time from the system headers (see
   `.claude/rules/dependencies.md`). Each library handle lives in a safe wrapper with a `Drop`
   that closes it, and the only `unsafe` blocks are the FFI calls inside those wrappers.

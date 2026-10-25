@@ -15,6 +15,7 @@ use zeroize::Zeroize;
 
 use crate::{
     NetError, Transport,
+    peers::PeerSecret,
     session::{KEY_LEN, SessionKeys},
 };
 
@@ -115,7 +116,7 @@ impl From<&NetworkConfig> for PairingTiming {
     }
 }
 
-fn fill_random(buf: &mut [u8]) -> Result<(), NetError> {
+pub(crate) fn fill_random(buf: &mut [u8]) -> Result<(), NetError> {
     let mut filled = 0;
 
     while filled < buf.len() {
@@ -131,6 +132,7 @@ struct KeySchedule {
     client_confirm: [u8; KEY_LEN],
     client_to_host: [u8; KEY_LEN],
     host_to_client: [u8; KEY_LEN],
+    peer_secret: [u8; KEY_LEN],
 }
 
 impl Drop for KeySchedule {
@@ -139,7 +141,14 @@ impl Drop for KeySchedule {
         self.client_confirm.zeroize();
         self.client_to_host.zeroize();
         self.host_to_client.zeroize();
+        self.peer_secret.zeroize();
     }
+}
+
+#[derive(Debug)]
+pub struct PairingOutcome {
+    pub keys: SessionKeys,
+    pub secret: PeerSecret,
 }
 
 impl KeySchedule {
@@ -157,15 +166,22 @@ impl KeySchedule {
             client_confirm: expand(b"rusplay pairing client confirm")?,
             client_to_host: expand(b"rusplay session client to host")?,
             host_to_client: expand(b"rusplay session host to client")?,
+            peer_secret: expand(b"rusplay peer secret")?,
         })
     }
 
-    fn client_keys(&self) -> SessionKeys {
-        SessionKeys::new(self.client_to_host, self.host_to_client)
+    fn client_outcome(&self) -> PairingOutcome {
+        PairingOutcome {
+            keys: SessionKeys::new(self.client_to_host, self.host_to_client),
+            secret: PeerSecret::from_bytes(self.peer_secret),
+        }
     }
 
-    fn host_keys(&self) -> SessionKeys {
-        SessionKeys::new(self.host_to_client, self.client_to_host)
+    fn host_outcome(&self) -> PairingOutcome {
+        PairingOutcome {
+            keys: SessionKeys::new(self.host_to_client, self.client_to_host),
+            secret: PeerSecret::from_bytes(self.peer_secret),
+        }
     }
 }
 
@@ -202,12 +218,15 @@ fn is_equal(a: &Confirmation, b: &Confirmation) -> bool {
 #[derive(Debug)]
 pub enum PairingStep {
     Pending,
-    Complete(SessionKeys),
+    Complete(PairingOutcome),
 }
 
 enum InitiatorStage {
     AwaitReply(Spake2<Ed25519Group>),
-    AwaitDone { confirm: Vec<u8>, keys: SessionKeys },
+    AwaitDone {
+        confirm: Vec<u8>,
+        outcome: PairingOutcome,
+    },
     Finished,
 }
 
@@ -283,8 +302,8 @@ impl PairingInitiator {
             (InitiatorStage::AwaitReply(state), PairingMessage::Reply { spake, confirm, .. }) => {
                 self.accept_reply(state, spake, confirm)
             }
-            (InitiatorStage::AwaitDone { keys, .. }, PairingMessage::Done { .. }) => {
-                Ok(PairingStep::Complete(keys))
+            (InitiatorStage::AwaitDone { outcome, .. }, PairingMessage::Done { .. }) => {
+                Ok(PairingStep::Complete(outcome))
             }
             (stage, _) => {
                 self.stage = stage;
@@ -329,7 +348,7 @@ impl PairingInitiator {
 
         self.stage = InitiatorStage::AwaitDone {
             confirm,
-            keys: schedule.client_keys(),
+            outcome: schedule.client_outcome(),
         };
         Ok(PairingStep::Pending)
     }
@@ -339,7 +358,7 @@ struct ActiveAttempt {
     attempt: u32,
     reply: Vec<u8>,
     expected_confirm: Confirmation,
-    keys: Option<SessionKeys>,
+    outcome: Option<PairingOutcome>,
 }
 
 struct FinishedAttempt {
@@ -350,7 +369,7 @@ struct FinishedAttempt {
 #[derive(Debug, Default)]
 pub struct ResponderOutput {
     pub reply: Option<Vec<u8>>,
-    pub keys: Option<SessionKeys>,
+    pub paired: Option<PairingOutcome>,
 }
 
 pub struct PairingResponder {
@@ -462,7 +481,7 @@ impl PairingResponder {
                 &client_spake,
                 &host_spake,
             )?,
-            keys: Some(schedule.host_keys()),
+            outcome: Some(schedule.host_outcome()),
         });
 
         Ok(reply_with(reply))
@@ -494,7 +513,7 @@ impl PairingResponder {
             return rejection(attempt, PairingRejection::WrongPin);
         }
 
-        let keys = active.keys.take();
+        let paired = active.outcome.take();
         let done = PairingMessage::Done { attempt }.to_datagram()?;
         self.active = None;
         self.finished = Some(FinishedAttempt {
@@ -504,7 +523,7 @@ impl PairingResponder {
 
         Ok(ResponderOutput {
             reply: Some(done),
-            keys,
+            paired,
         })
     }
 }
@@ -512,7 +531,7 @@ impl PairingResponder {
 fn reply_with(datagram: Vec<u8>) -> ResponderOutput {
     ResponderOutput {
         reply: Some(datagram),
-        keys: None,
+        paired: None,
     }
 }
 
@@ -527,7 +546,7 @@ pub fn pair_as_client(
     host: SocketAddr,
     pin: &Pin,
     timing: PairingTiming,
-) -> Result<SessionKeys, NetError> {
+) -> Result<PairingOutcome, NetError> {
     let mut initiator = PairingInitiator::new(pin)?;
     let deadline = Instant::now() + timing.timeout;
     let mut buf = [0; RECEIVE_BUFFER_LEN];
@@ -549,7 +568,7 @@ pub fn pair_as_client(
             }
 
             match initiator.handle(&buf[..len]) {
-                Ok(PairingStep::Complete(keys)) => return Ok(keys),
+                Ok(PairingStep::Complete(outcome)) => return Ok(outcome),
                 Ok(PairingStep::Pending) | Err(NetError::Protocol(_)) => {}
                 Err(error) => return Err(error),
             }
@@ -563,11 +582,11 @@ pub fn pair_as_host(
     transport: &Transport,
     responder: &mut PairingResponder,
     timing: PairingTiming,
-) -> Result<(SocketAddr, SessionKeys), NetError> {
+) -> Result<(SocketAddr, PairingOutcome), NetError> {
     let deadline = Instant::now() + timing.timeout;
     let linger = timing.retransmit * LINGER_RETRANSMITS;
     let mut buf = [0; RECEIVE_BUFFER_LEN];
-    let mut paired: Option<(SocketAddr, SessionKeys)> = None;
+    let mut paired: Option<(SocketAddr, PairingOutcome)> = None;
     let mut linger_until: Option<Instant> = None;
 
     loop {
@@ -591,8 +610,8 @@ pub fn pair_as_host(
             transport.send_to(&reply, from)?;
         }
 
-        if let Some(keys) = output.keys {
-            paired = Some((from, keys));
+        if let Some(outcome) = output.paired {
+            paired = Some((from, outcome));
             linger_until = Some(Instant::now() + linger);
         }
 
@@ -625,22 +644,22 @@ mod tests {
     fn handshake(
         initiator: &mut PairingInitiator,
         responder: &mut PairingResponder,
-    ) -> (SessionKeys, SessionKeys) {
+    ) -> (PairingOutcome, PairingOutcome) {
         let reply = responder.handle(&start(initiator)).unwrap().reply.unwrap();
         assert!(matches!(initiator.handle(&reply), Ok(PairingStep::Pending)));
 
         let done = responder.handle(&start(initiator)).unwrap();
-        let host_keys = done.keys.unwrap();
-        let Ok(PairingStep::Complete(client_keys)) = initiator.handle(&done.reply.unwrap()) else {
+        let host = done.paired.unwrap();
+        let Ok(PairingStep::Complete(client)) = initiator.handle(&done.reply.unwrap()) else {
             panic!("client did not complete");
         };
 
-        (client_keys, host_keys)
+        (client, host)
     }
 
-    fn assert_keys_interoperate(client: &SessionKeys, host: &SessionKeys) {
-        let client = SessionCipher::new(client);
-        let host = SessionCipher::new(host);
+    fn assert_keys_interoperate(client: &PairingOutcome, host: &PairingOutcome) {
+        let client = SessionCipher::new(&client.keys);
+        let host = SessionCipher::new(&host.keys);
         let datagram = PairingMessage::Done { attempt: 1 }.to_datagram().unwrap();
 
         assert_eq!(
@@ -666,12 +685,34 @@ mod tests {
     }
 
     #[test]
+    fn both_sides_derive_the_same_peer_secret() {
+        let mut initiator = PairingInitiator::new(&pin("123456")).unwrap();
+        let mut responder = PairingResponder::new(pin("123456"), 3);
+
+        let (client, host) = handshake(&mut initiator, &mut responder);
+
+        assert_eq!(client.secret, host.secret);
+        assert_eq!(client.secret.id(), host.secret.id());
+    }
+
+    #[test]
+    fn every_pairing_yields_a_different_peer_secret() {
+        let secret = || {
+            let mut initiator = PairingInitiator::new(&pin("123456")).unwrap();
+            let mut responder = PairingResponder::new(pin("123456"), 3);
+            handshake(&mut initiator, &mut responder).0.secret
+        };
+
+        assert_ne!(secret(), secret());
+    }
+
+    #[test]
     fn every_pairing_yields_different_keys() {
         let keys = |_: u8| {
             let mut initiator = PairingInitiator::new(&pin("123456")).unwrap();
             let mut responder = PairingResponder::new(pin("123456"), 3);
             let (client, _) = handshake(&mut initiator, &mut responder);
-            let cipher = SessionCipher::new(&client);
+            let cipher = SessionCipher::new(&client.keys);
             cipher
                 .seal(&PairingMessage::Done { attempt: 0 }.to_datagram().unwrap())
                 .unwrap()
@@ -716,7 +757,7 @@ mod tests {
                 reason: PairingRejection::WrongPin,
             }
         );
-        assert!(output.keys.is_none());
+        assert!(output.paired.is_none());
         assert!(responder.is_locked());
     }
 
@@ -775,7 +816,7 @@ mod tests {
             PairingMessage::from_datagram(&repeat.reply.unwrap()),
             Ok(PairingMessage::Done { .. })
         ));
-        assert!(repeat.keys.is_none());
+        assert!(repeat.paired.is_none());
 
         let stranger = PairingInitiator::new(&pin("123456")).unwrap();
         let reply = responder.handle(&start(&stranger)).unwrap().reply.unwrap();
@@ -799,8 +840,8 @@ mod tests {
         let first = responder.handle(&confirm).unwrap();
         let second = responder.handle(&confirm).unwrap();
 
-        assert!(first.keys.is_some());
-        assert!(second.keys.is_none());
+        assert!(first.paired.is_some());
+        assert!(second.paired.is_none());
         assert_eq!(first.reply, second.reply);
     }
 
@@ -928,12 +969,13 @@ mod tests {
 
         let host = thread::spawn(move || {
             let mut responder = PairingResponder::new(pin("424242"), 3);
-            let (peer, keys) = pair_as_host(&host_transport, &mut responder, timing()).unwrap();
-            host_transport.install_session(&keys);
+            let (peer, outcome) = pair_as_host(&host_transport, &mut responder, timing()).unwrap();
+            host_transport.install_session(&outcome.keys);
             (host_transport, peer)
         });
-        let keys = pair_as_client(&client_transport, host_addr, &pin("424242"), timing()).unwrap();
-        client_transport.install_session(&keys);
+        let outcome =
+            pair_as_client(&client_transport, host_addr, &pin("424242"), timing()).unwrap();
+        client_transport.install_session(&outcome.keys);
         let (host_transport, peer) = host.join().unwrap();
 
         assert_eq!(peer, client_transport.local_addr().unwrap());

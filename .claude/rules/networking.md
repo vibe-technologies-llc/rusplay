@@ -109,9 +109,40 @@ paths:
 - Without a session the transport stays plaintext, which is what tests and unpaired development
   use; refusing to stream before pairing is the session layer's policy. Key material is zeroized on
   drop and never printed by `Debug`.
-- Known limits: pairing is per session (the PIN is single use and nothing is remembered between
-  runs), and a LAN attacker can burn the attempt budget with garbage `Start`s, which only denies
-  pairing and never grants access.
+- Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
+  `Start`s, which only denies pairing and never grants access.
+- A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF
+  `rusplay peer secret` from the same SPAKE2 key), identical on both sides. Its `PeerId` is the
+  first 16 bytes of SHA-256 over a domain label and the secret, so ids need no extra wire field.
+
+## Remembered peers
+
+- `PeerStore` is a plain list of `PeerRecord`s (id, name of at most 64 bytes without control
+  characters, secret) used on both sides: the host's paired clients and the client's paired hosts.
+  The file is one line per peer, `<id hex> <secret hex> <name>`; loading refuses a malformed line,
+  an id that is not the secret's, and duplicates (`PeerStoreCorrupt` with the line number).
+- Files live in `$XDG_STATE_HOME/rusplay/` (fallback `~/.local/state/rusplay/`, relative values
+  ignored): `paired-clients` for the host, `paired-hosts` for the client. `peers.host_file` and
+  `peers.client_file` override them (`PeerStore::open_host`/`open_client`). The directory is
+  created `0700`; writes go to a freshly created `0600` staging file that is synced and renamed over
+  the store, so a crash leaves the old file and a stale permissive staging file is never reused.
+  `remember` and `forget` persist before they change the in-memory list, so a failed write changes
+  nothing. `forget` is the revocation API; the host shares the store as
+  `RwLock<PeerStore>` so a forget applies to the next datagram.
+- Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
+  `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
+  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`, `Authentication`).
+  Both proofs and both direction keys are HKDF-SHA256 outputs keyed by the secret and salted with
+  peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
+  secret and freshness from both sides, a reflected message never verifies, and session keys are
+  never reused across reconnects. The client checks the host proof before it sends its own.
+- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps the last 16
+  attempts (retransmitted `Hello`/`Proof` are answered from cache), re-checks the store when the
+  `Proof` arrives, and keeps an attempt alive after a bad `Proof` so a forged one cannot spoil the
+  genuine client's attempt. An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
+  falls back to PIN pairing.
+- `reconnect_as_client`/`reconnect_as_host` mirror the pairing drivers, bounded by
+  `network.reconnect_timeout_ms`; the host lingers after success to repeat `Accepted`.
 
 ## Fragmentation and reassembly
 

@@ -5,6 +5,7 @@ mod error;
 mod fec;
 mod header;
 mod pairing;
+mod reconnect;
 
 pub use crate::{
     control::{ControlMessage, ControlPacket},
@@ -14,4 +15,5 @@ pub use crate::{
     fec::FecHeader,
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},
     pairing::{PairingMessage, PairingRejection},
+    reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
 };
