@@ -88,7 +88,7 @@ impl CursorMessage {
 
         let image = if flags & HAS_IMAGE == 0 {
             if !rest.is_empty() {
-                return Err(ProtocolError::TrailingBytes(rest.len()));
+                return Err(ProtocolError::TrailingBytes { extra: rest.len() });
             }
             None
         } else {
@@ -236,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             CursorMessage::decode(&trailing),
-            Err(ProtocolError::TrailingBytes(1))
+            Err(ProtocolError::TrailingBytes { extra: 1 })
         );
     }
 }

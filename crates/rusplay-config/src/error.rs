@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::{io, net::Ipv4Addr, path::PathBuf};
 
 use thiserror::Error;
 
@@ -31,6 +31,20 @@ pub enum ConfigError {
     MtuOutOfRange(u16),
     #[error("antiringing strength {0} is outside 0.0..=1.0")]
     AntiringingOutOfRange(f32),
+    #[error("reassembly timeout must be greater than zero")]
+    ZeroReassemblyTimeout,
+    #[error("control retransmit timeout must be greater than zero")]
+    ZeroControlRetransmit,
+    #[error("discovery port must be greater than zero")]
+    ZeroDiscoveryPort,
+    #[error("discovery group {0} is not a multicast address")]
+    DiscoveryGroupNotMulticast(Ipv4Addr),
+    #[error("pairing pin length {0} is outside 4..=12 digits")]
+    PinDigitsOutOfRange(u8),
+    #[error("pairing must allow at least one attempt")]
+    ZeroPairingAttempts,
+    #[error("pairing timeout must be greater than zero")]
+    ZeroPairingTimeout,
     #[error("fec overhead {0}% is above 100%")]
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]

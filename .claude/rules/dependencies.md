@@ -36,6 +36,11 @@ paths:
   links anything C.
 
   Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
-  `ashpd` over zbus (portals), `wgpu` (GPU scaling), `rav1d` for software AV1 decode, `rubato`
-  for audio resampling when it is needed.
+  `ashpd` over zbus (portals), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
+  its `net` feature needs `time` to compile), `wgpu` (GPU scaling), `rav1d` for software AV1
+  decode, `rubato` for audio resampling when it is needed. Pairing and transport encryption use
+  RustCrypto only: `spake2` (pinned to 0.4.0, the latest stable release; 0.5 is still a
+  pre-release), `hkdf`, `sha2`, `chacha20poly1305`, `subtle` and `zeroize`. `libc` is allowed as
+  bare syscall declarations only for what rustix lacks (`recvmmsg`); it links nothing std does
+  not already.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.
