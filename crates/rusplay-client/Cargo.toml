@@ -1,0 +1,17 @@
+[package]
+name = "rusplay-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusplay-audio.workspace = true
+rusplay-config.workspace = true
+rusplay-decode.workspace = true
+rusplay-input.workspace = true
+rusplay-net.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

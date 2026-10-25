@@ -1,0 +1,13 @@
+[package]
+name = "rusplay-hostd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusplay-config.workspace = true
+rusplay-host.workspace = true
+
+[lints]
+workspace = true

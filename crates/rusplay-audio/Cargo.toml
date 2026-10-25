@@ -1,0 +1,19 @@
+[package]
+name = "rusplay-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+flac = ["dep:flacenc"]
+
+[dependencies]
+flacenc = { workspace = true, optional = true }
+opus-rs = { workspace = true, features = ["std"] }
+rusplay-config.workspace = true
+rusplay-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

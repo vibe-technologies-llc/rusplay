@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace.dependencies]
+rusplay-audio.path = "crates/rusplay-audio"
+rusplay-capture.path = "crates/rusplay-capture"
+rusplay-client.path = "crates/rusplay-client"
+rusplay-config.path = "crates/rusplay-config"
+rusplay-core.path = "crates/rusplay-core"
+rusplay-decode.path = "crates/rusplay-decode"
+rusplay-encode.path = "crates/rusplay-encode"
+rusplay-host.path = "crates/rusplay-host"
+rusplay-input.path = "crates/rusplay-input"
+rusplay-net.path = "crates/rusplay-net"
+rusplay-protocol.path = "crates/rusplay-protocol"
+rusplay-scale.path = "crates/rusplay-scale"
+
+ashpd = { version = "0.13.13", default-features = false }
+flacenc = { version = "0.5.1", default-features = false }
+opus-rs = { version = "0.1.40", default-features = false }
+serde = { version = "1.0.229", default-features = false }
+thiserror = "2.0.21"
+toml = { version = "1.1.8", default-features = false }
+wgpu = { version = "30.0.1", default-features = false }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"
+panic = "unwind"

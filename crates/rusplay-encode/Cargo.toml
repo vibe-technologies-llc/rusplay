@@ -1,0 +1,15 @@
+[package]
+name = "rusplay-encode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusplay-capture.workspace = true
+rusplay-config.workspace = true
+rusplay-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

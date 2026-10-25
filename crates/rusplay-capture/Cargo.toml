@@ -1,0 +1,15 @@
+[package]
+name = "rusplay-capture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ashpd = { workspace = true, features = ["tokio", "screencast"] }
+rusplay-config.workspace = true
+rusplay-core.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

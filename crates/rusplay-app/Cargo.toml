@@ -1,0 +1,17 @@
+[package]
+name = "rusplay-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "rusplay"
+path = "src/main.rs"
+
+[dependencies]
+rusplay-client.workspace = true
+rusplay-config.workspace = true
+
+[lints]
+workspace = true
