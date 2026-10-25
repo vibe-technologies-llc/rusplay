@@ -16,7 +16,8 @@ use rusplay_core::{
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::{YuvFrame, bytes_per_sample},
-    software::{CParam, VBV_BUFFER_FRAMES},
+    rate::VBV_BUFFER_FRAMES,
+    software::CParam,
 };
 
 #[allow(

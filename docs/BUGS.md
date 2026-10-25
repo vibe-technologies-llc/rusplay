@@ -1,0 +1,3 @@
+# Video decode
+- [S] `decode-rav1d-render-size`: `Rav1dDecoder` reports the coded frame size instead of the AV1 render size, so a stream whose encoder pads the frame decodes wider than it was captured (radeonsi codes a 402-wide AV1 frame as 408 and signals 402 as the render size; the VAAPI decoder already honours it)
+- [S] `decode-rav1d-cdef-overlap`: rav1d 1.1.0 with several threads trips its `DisjointMut` overlap check between `cdef.rs:207` and `cdef_apply.rs:76` on radeonsi AV1 output (about one decode in eight of the 400x216 VAAPI test stream), which aborts a debug build; the encode tests decode with one thread until it is understood or fixed upstream

@@ -10,6 +10,7 @@ flac = ["rusplay-audio/flac"]
 pipewire = ["rusplay-audio/pipewire", "rusplay-capture/pipewire"]
 software-encoders = ["svt-av1", "x264", "x265"]
 svt-av1 = ["rusplay-encode/svt-av1"]
+vaapi = ["rusplay-encode/vaapi"]
 x264 = ["rusplay-encode/x264"]
 x265 = ["rusplay-encode/x265"]
 

@@ -1,9 +1,7 @@
 use std::ffi::CStr;
 
 use rusplay_config::SoftwarePreset;
-use rusplay_core::{ColorPrimaries, FrameRate, TransferFunction};
-
-use crate::software::VBV_BUFFER_FRAMES;
+use rusplay_core::{ColorPrimaries, TransferFunction};
 
 pub const fn preset_name(preset: SoftwarePreset) -> &'static CStr {
     match preset {
@@ -41,12 +39,4 @@ pub const fn transfer_name(transfer: TransferFunction) -> &'static str {
         TransferFunction::Pq => "smpte2084",
         TransferFunction::Hlg => "arib-std-b67",
     }
-}
-
-pub fn vbv_buffer_kbit(bitrate_kbps: u32, frame_rate: FrameRate) -> u32 {
-    let numerator = u64::from(frame_rate.numerator).max(1);
-    let kbit =
-        u64::from(bitrate_kbps) * u64::from(frame_rate.denominator) * VBV_BUFFER_FRAMES / numerator;
-
-    u32::try_from(kbit.max(1)).unwrap_or(u32::MAX)
 }
