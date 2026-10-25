@@ -18,7 +18,10 @@ paths:
   the client's final handshake datagram (`Confirm` or `Proof`) and its reply (`Replay`), and the
   control stage answers a byte-identical retransmit from it. Any other pairing or reconnect
   datagram during a session is ignored; a restarted client is noticed by the peer timeout.
-- `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. Four named threads,
+- `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
+  `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
+  shared by the control and encode stages; each lock is held for one channel call, never across
+  a socket wait. Four named threads,
   each returning `Result<(), HostError>`, share `Shared` (stop flag, `Counters`, the capture
   mailbox). Any stage that ends stops the others; `wait`/`stop` join all four and return the
   first error, and dropping the stream stops it. `HostError::is_session_failure` tells the
@@ -32,6 +35,14 @@ paths:
     unconsumed one (`frames_superseded`), and nothing is delivered before the client's `Hello`,
     so the first encoded frame is a keyframe the client will see. Each consumed frame is moved
     into the feed as the retained frame, never copied.
+  - After every encode it compares `VideoPipeline::stream_format` (codec, the encoder's
+    resolution, pixel format and colour) with the last one announced; on a change (the first
+    frame, a reopen after a capture resize) it bumps the generation and calls
+    `ControlOutbox::announce`, which sends `ControlMessage::StreamFormat` and flushes it on the
+    encode thread before the frame is handed to the send stage, so on an ordered path the
+    description reaches the client ahead of the keyframe it describes. A full control window
+    leaves the announcement pending and the control stage sends it on its next pass; an
+    undeliverable announcement that is still the latest is sent again.
   - `rusplay-host-send` owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
@@ -85,8 +96,10 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives, with a `FakePipeline` behind the internal `serve_with`
   (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
-  both ways, keepalives, handshake and peer timeouts). `tests/loopback.rs` streams a synthetic
+  both ways, keepalives, handshake and peer timeouts, the stream format announced before the
+  first frame and again with a newer generation after a resize). `tests/loopback.rs` streams a synthetic
   moving box through `GpuPipeline` with SVT-AV1 and with VAAPI AV1 into the real
-  `rusplay_client::ClientSession` (software decode, a test-only dev-dependency) and checks the
+  `rusplay_client::ClientSession` (software decode, a test-only dev-dependency, configured for
+  H.264 so only the host's `StreamFormat` can make it decode AV1) and checks the
   decoded grey in linear light; each returns early without a GPU adapter or without the encoder
   backend and format.

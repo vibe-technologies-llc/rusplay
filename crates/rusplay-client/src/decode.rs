@@ -9,7 +9,7 @@ use std::{
 
 use rusplay_config::VideoDecoderConfig;
 use rusplay_core::{Codec, ColorSpace};
-use rusplay_decode::{DecodedFrame, VideoDecoder};
+use rusplay_decode::{DecodeError, DecodedFrame, VideoDecoder};
 
 use crate::{
     ClientError,
@@ -33,7 +33,6 @@ pub(crate) struct DecodeLinks {
     pub queue: Receiver<EncodedVideo>,
     pub output: Arc<Slot<DecodedVideo>>,
     pub feedback: Sender<Feedback>,
-    pub ready: Sender<Result<(), ClientError>>,
     pub stop: Arc<AtomicBool>,
     pub counters: Arc<Counters>,
 }
@@ -46,36 +45,38 @@ impl Drop for CloseOnExit<'_> {
     }
 }
 
-pub(crate) fn run(
-    codec: Codec,
-    color: ColorSpace,
-    config: &VideoDecoderConfig,
-    links: &DecodeLinks,
-) -> Result<(), ClientError> {
+pub(crate) fn run(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), ClientError> {
     let _close = CloseOnExit(&links.output);
 
-    let decoder = match rusplay_decode::open(codec, config) {
-        Ok(decoder) => {
-            links.ready.send(Ok(())).ok();
-            decoder
-        }
-        Err(error) => {
-            links.ready.send(Err(error.into())).ok();
-            return Ok(());
-        }
-    };
-
-    let result = decode_loop(decoder, color, links);
+    let result = decode_loop(config, links);
     links.stop.store(true, Ordering::Relaxed);
 
     result
 }
 
-fn decode_loop(
-    mut decoder: Box<dyn VideoDecoder>,
-    color: ColorSpace,
-    links: &DecodeLinks,
-) -> Result<(), ClientError> {
+struct OpenDecoder {
+    codec: Codec,
+    decoder: Box<dyn VideoDecoder>,
+}
+
+fn decoder_for<'a>(
+    slot: &'a mut Option<OpenDecoder>,
+    codec: Codec,
+    config: &VideoDecoderConfig,
+) -> Result<&'a mut dyn VideoDecoder, DecodeError> {
+    let open = match slot.take() {
+        Some(open) if open.codec == codec => open,
+        _ => OpenDecoder {
+            codec,
+            decoder: rusplay_decode::open(codec, config)?,
+        },
+    };
+
+    Ok(slot.insert(open).decoder.as_mut())
+}
+
+fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), ClientError> {
+    let mut active = None;
     let mut skipping = false;
 
     while let Ok(video) = links.queue.recv() {
@@ -90,9 +91,11 @@ fn decode_loop(
             continue;
         }
 
-        match decoder.decode(&video.frame) {
+        let result = decoder_for(&mut active, video.stream.codec, config)?.decode(&video.frame);
+        match result {
             Ok(Some(picture)) => {
                 links.counters.frames_decoded.increment();
+                let color = picture.color.over(video.stream.color);
                 let output = DecodedVideo {
                     decoded: picture,
                     number: video.number,

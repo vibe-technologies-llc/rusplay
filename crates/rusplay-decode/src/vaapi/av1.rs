@@ -1,18 +1,20 @@
 use std::rc::Rc;
 
 use cros_codecs::codec::av1::parser::{
-    BitDepth as Av1BitDepth, FrameHeaderObu, FrameType, NUM_REF_FRAMES, ObuAction, ParsedObu,
-    Parser, Profile as Av1Profile, SEG_LVL_MAX, SegmentationParams, SequenceHeaderObu,
+    BitDepth as Av1BitDepth, FrameHeaderObu, FrameType, NUM_REF_FRAMES, ObuAction, ObuType,
+    ParsedObu, Parser, Profile as Av1Profile, SEG_LVL_MAX, SegmentationParams, SequenceHeaderObu,
     TileGroupObu,
 };
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
+    Timestamp,
 };
 
 use crate::{
     Backend, BitstreamUnit, DecodeError, DecodedFrame,
     vaapi::{
         Stream, StreamFormat, annexb, ffi,
+        signal::HdrTracker,
         va::{Buffer, Display, INVALID_SURFACE, PoolSurface},
     },
 };
@@ -44,6 +46,7 @@ pub(super) struct Av1Decoder {
     stream: Option<Stream>,
     sequence: Option<Rc<SequenceHeaderObu>>,
     slots: [Option<Slot>; NUM_REF_FRAMES],
+    hdr: HdrTracker,
 }
 
 impl Av1Decoder {
@@ -53,6 +56,7 @@ impl Av1Decoder {
             stream: None,
             sequence: None,
             slots: Default::default(),
+            hdr: HdrTracker::default(),
         }
     }
 
@@ -80,6 +84,9 @@ impl Av1Decoder {
                 }
             };
             let length = obu.bytes_used;
+            if obu.header.obu_type == ObuType::Metadata {
+                self.hdr.read_av1_metadata(obu.as_ref());
+            }
 
             match self
                 .parser
@@ -163,6 +170,10 @@ impl Av1Decoder {
         if reopened {
             self.slots = Default::default();
         }
+        stream.color = self.hdr.resolve(
+            signalled_color(&sequence),
+            header.frame_type == FrameType::KeyFrame,
+        );
 
         let surface = stream.pool.acquire()?;
         let grain = if header.film_grain_params.apply_grain {
@@ -299,6 +310,21 @@ impl Av1Decoder {
             .map(|slot| stream.output_sized(&slot.display, timestamp, slot.render))
             .transpose()
     }
+}
+
+fn signalled_color(sequence: &SequenceHeaderObu) -> SignalledColor {
+    let color = &sequence.color_config;
+    let signalled = SignalledColor::default().with_full_range(color.color_range);
+    if !color.color_description_present_flag {
+        return signalled;
+    }
+
+    let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
+    signalled.with_h273_codes(
+        code(color.color_primaries as u32),
+        code(color.transfer_characteristics as u32),
+        code(color.matrix_coefficients as u32),
+    )
 }
 
 fn stream_format(sequence: &SequenceHeaderObu) -> Result<StreamFormat, DecodeError> {

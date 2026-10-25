@@ -1,10 +1,11 @@
 use crate::{
     EncodeError,
     vaapi::{
-        CodecBuffers, INFINITE_INTRA_PERIOD, Picture, StreamInfo,
+        CodecBuffers, INFINITE_INTRA_PERIOD, PackedKind, Picture, StreamInfo,
         bits::{BitWriter, nal_unit, nal_unit_prefix, packed},
         codec_buffers, ffi,
         format::{colour_primaries, full_range, matrix_coefficients, transfer_characteristics},
+        hdr::{SeiNal, sei},
         level::{self, Demand, Level},
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, PackedHeader, Profile},
@@ -422,9 +423,16 @@ impl H264Stream {
             context,
             picture,
             [
-                picture.keyframe.then(|| self.sps()),
-                picture.keyframe.then(|| self.pps()),
-                Some(self.slice_header(picture.keyframe)),
+                (PackedKind::Sequence, picture.keyframe.then(|| self.sps())),
+                (PackedKind::Picture, picture.keyframe.then(|| self.pps())),
+                (
+                    PackedKind::Raw,
+                    picture
+                        .keyframe
+                        .then(|| sei(SeiNal::H264, &self.info.color.hdr))
+                        .flatten(),
+                ),
+                (PackedKind::Slice, Some(self.slice_header(picture.keyframe))),
             ],
         )?;
         let buffers = codec_buffers(

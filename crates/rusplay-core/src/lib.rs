@@ -9,8 +9,8 @@ pub use audio::{AudioCodec, ChannelLayout, SampleRate};
 pub use color::{
     Chromaticities, Chromaticity, ColorError, ColorPrimaries, ColorRange, ColorSpace,
     ContentLightLevel, GamutMapMode, HdrLevels, Luminance, MasteringDisplay, Matrix3,
-    MatrixCoefficients, ToneMapOperator, TransferFunction, WhiteAdaptation, bradford_adaptation,
-    pq_from_nits, pq_to_nits,
+    MatrixCoefficients, SignalledColor, ToneMapOperator, TransferFunction, WhiteAdaptation,
+    bradford_adaptation, pq_from_nits, pq_to_nits,
 };
 pub use media::EncodedFrame;
 pub use scale::ScaleFilter;

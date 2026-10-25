@@ -25,6 +25,7 @@ use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, Vi
 
 use crate::{
     EncodeError, VideoEncoder, capabilities,
+    hdr::fixtures::{hdr10_color, signalled},
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
     vaapi::{
@@ -521,6 +522,46 @@ fn decoded_frames_match_the_source() {
         }
         if codec == Codec::Av1 {
             check_pictures(codec, &decode_rav1d(&packets), format, RESOLUTION);
+        }
+    }
+}
+
+#[test]
+fn colour_description_and_hdr_metadata_reach_the_decoder() {
+    let cases = [
+        (Codec::H264, BitDepth::Eight),
+        (Codec::Hevc, BitDepth::Ten),
+        (Codec::Av1, BitDepth::Ten),
+    ];
+    let color = hdr10_color();
+    let expected = signalled(&color);
+
+    for (codec, depth) in cases {
+        let format = yuv420(depth);
+        let config = VideoConfig {
+            color,
+            ..video(codec, format, RESOLUTION)
+        };
+        let Some(mut encoder) = try_open(&config) else {
+            continue;
+        };
+        let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, 3));
+
+        if let Ok(mut decoder) = VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
+            for packet in &packets {
+                let output = decoder.decode(packet).unwrap().unwrap();
+                assert_eq!(output.color, expected, "{codec} through vaapi");
+            }
+        }
+        if codec == Codec::Av1 {
+            let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig {
+                threads: NonZeroU32::new(1),
+            })
+            .unwrap();
+            for packet in &packets {
+                let output = decoder.decode(packet).unwrap().unwrap();
+                assert_eq!(output.color, expected, "av1 through rav1d");
+            }
         }
     }
 }

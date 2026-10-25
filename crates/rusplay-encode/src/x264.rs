@@ -8,12 +8,13 @@ use std::{
 use rusplay_capture::Frame;
 use rusplay_config::{VideoConfig, X264Config, X264Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, FrameRate,
+    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, FrameRate, HdrLevels,
     PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
     Backend, EncodeError, VideoEncoder,
+    hdr::St2086,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
     software::CParam,
@@ -231,8 +232,31 @@ impl Settings {
         )?;
         parse(param, "transfer", transfer_name(self.color.transfer))?;
         param.vui.b_fullrange = full_range_flag(self.color.range);
+        apply_hdr(param, &self.color.hdr);
 
         Ok(())
+    }
+}
+
+fn apply_hdr(param: &mut sys::x264_param_t, hdr: &HdrLevels) {
+    let point = |[x, y]: [u16; 2]| (c_int::from(x), c_int::from(y));
+
+    if let Some(display) = &hdr.mastering {
+        let units = St2086::of(display);
+        let target = &mut param.mastering_display;
+        target.b_mastering_display = 1;
+        (target.i_green_x, target.i_green_y) = point(units.green);
+        (target.i_blue_x, target.i_blue_y) = point(units.blue);
+        (target.i_red_x, target.i_red_y) = point(units.red);
+        (target.i_white_x, target.i_white_y) = point(units.white);
+        target.i_display_max = i64::from(units.max_luminance);
+        target.i_display_min = i64::from(units.min_luminance);
+    }
+    if let Some(light) = &hdr.content_light {
+        let target = &mut param.content_light_level;
+        target.b_cll = 1;
+        target.i_max_cll = c_int::from(light.max_cll_nits);
+        target.i_max_fall = c_int::from(light.max_fall_nits);
     }
 }
 
@@ -475,10 +499,13 @@ impl VideoEncoder for X264Encoder {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::VideoEncoderConfig;
+    use rusplay_config::{VaapiDecoderConfig, VideoEncoderConfig};
 
     use super::*;
-    use crate::testing::{self, pixel, start_code_offsets, video};
+    use crate::{
+        hdr::fixtures::hdr10_color,
+        testing::{self, pixel, start_code_offsets, video},
+    };
 
     const IDR_NAL_TYPE: u8 = 5;
 
@@ -541,6 +568,67 @@ mod tests {
             &with_params(&[("bframes", "plenty")]),
             "bframes",
             "plenty",
+        );
+    }
+
+    #[test]
+    fn hdr_metadata_maps_onto_the_sei_fields() {
+        let config = VideoConfig {
+            color: hdr10_color(),
+            ..config(PixelFormat::default(), X264Config::default())
+        };
+        let VideoEncoderConfig::X264(x264) = &config.encoder else {
+            return;
+        };
+        let settings = Settings::new(&config, x264).unwrap();
+
+        let param = settings.param(testing::TEST_RESOLUTION).unwrap();
+        let display = &param.mastering_display;
+        let light = &param.content_light_level;
+
+        assert_eq!(display.b_mastering_display, 1);
+        assert_eq!((display.i_green_x, display.i_green_y), (13_250, 34_500));
+        assert_eq!((display.i_blue_x, display.i_blue_y), (7_500, 3_000));
+        assert_eq!((display.i_red_x, display.i_red_y), (34_000, 16_000));
+        assert_eq!((display.i_white_x, display.i_white_y), (15_635, 16_450));
+        assert_eq!(
+            (display.i_display_max, display.i_display_min),
+            (10_000_000, 50)
+        );
+        assert_eq!(
+            (light.b_cll, light.i_max_cll, light.i_max_fall),
+            (1, 1000, 400)
+        );
+    }
+
+    #[test]
+    fn sdr_streams_write_no_hdr_sei() {
+        let config = config(PixelFormat::default(), X264Config::default());
+        let VideoEncoderConfig::X264(x264) = &config.encoder else {
+            return;
+        };
+        let settings = Settings::new(&config, x264).unwrap();
+
+        let param = settings.param(testing::TEST_RESOLUTION).unwrap();
+
+        assert_eq!(param.mastering_display.b_mastering_display, 0);
+        assert_eq!(param.content_light_level.b_cll, 0);
+    }
+
+    #[test]
+    fn colour_description_reaches_the_decoder() {
+        let Ok(mut decoder) =
+            rusplay_decode::VaapiDecoder::new(Codec::H264, &VaapiDecoderConfig::default())
+        else {
+            return;
+        };
+
+        testing::check_colour_reaches_the_decoder(
+            &config(
+                pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+                X264Config::default(),
+            ),
+            &mut decoder,
         );
     }
 

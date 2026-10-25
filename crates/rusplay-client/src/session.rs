@@ -17,13 +17,14 @@ use rusplay_net::{
     PairingTiming, PeerRecord, PeerSecret, Pin, ReconnectTiming, Transport, TransportOptions,
     pair_as_client, reconnect_as_client,
 };
+use rusplay_protocol::StreamDescription;
 
 use crate::{
     AudioOutput, ClientError, ClientStats, FrameSink, LatestCursor, Stage,
     audio::{self, AudioLinks, EncodedAudio},
     decode::{self, DecodeLinks},
     present::{self, PresentLinks, PresentOptions, SharedTarget},
-    receive::{Links, ReceiveStage},
+    receive::{EncodedVideo, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
     stats::Counters,
 };
@@ -110,6 +111,7 @@ impl ClientSession {
             stop: Arc::new(AtomicBool::new(false)),
             counters: Arc::new(Counters::default()),
             target: Arc::new(Mutex::new(None)),
+            format: Arc::new(Mutex::new(None)),
             cursor: LatestCursor::new(),
             paired,
         };
@@ -128,12 +130,13 @@ impl ClientSession {
             decode_queue: queue,
             audio_queue,
             cursor: stream.cursor.clone(),
+            format: Arc::clone(&stream.format),
             feedback,
             handshake,
             stop: Arc::clone(&stream.stop),
             counters: Arc::clone(&stream.counters),
         };
-        let receive = ReceiveStage::new(transport, host, self.config.video.codec, network, links);
+        let receive = ReceiveStage::new(transport, host, network, links);
         stream.spawn(Stage::Receive, None, move || receive.run())?;
 
         let timeout = Duration::from_millis(u64::from(network.handshake_timeout_ms));
@@ -185,6 +188,7 @@ pub struct ClientStream {
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     target: SharedTarget,
+    format: SharedFormat,
     cursor: LatestCursor,
     paired: Option<PeerSecret>,
 }
@@ -200,6 +204,10 @@ impl ClientStream {
 
     pub fn target(&self) -> Option<Resolution> {
         *self.target.lock()
+    }
+
+    pub fn stream_format(&self) -> Option<StreamDescription> {
+        *self.format.lock()
     }
 
     pub fn cursor(&self) -> LatestCursor {
@@ -286,46 +294,23 @@ impl ClientStream {
         &mut self,
         config: &Config,
         decoded: &Arc<Slot<decode::DecodedVideo>>,
-    ) -> Result<
-        (
-            mpsc::SyncSender<crate::receive::EncodedVideo>,
-            mpsc::Receiver<crate::receive::Feedback>,
-        ),
-        ClientError,
-    > {
+    ) -> Result<(mpsc::SyncSender<EncodedVideo>, mpsc::Receiver<Feedback>), ClientError> {
         let (queue, queued) = mpsc::sync_channel(usize::from(config.video.decode_queue_frames));
         let (feedback, feedback_received) = mpsc::channel();
-        let (ready, ready_received) = mpsc::channel();
-        let codec = config.video.codec;
-        let color = config.video.color;
         let backend = config.video.decoder.clone();
         let links = DecodeLinks {
             queue: queued,
             output: Arc::clone(decoded),
             feedback,
-            ready,
             stop: Arc::clone(&self.stop),
             counters: Arc::clone(&self.counters),
         };
 
         self.spawn(Stage::Decode, Some(DECODE_STACK_BYTES), move || {
-            decode::run(codec, color, &backend, &links)
+            decode::run(&backend, &links)
         })?;
 
-        match ready_received.recv() {
-            Ok(Ok(())) => Ok((queue, feedback_received)),
-            Ok(Err(error)) => {
-                self.stop.store(true, Ordering::Relaxed);
-                self.join().ok();
-                Err(error)
-            }
-            Err(_) => {
-                self.stop.store(true, Ordering::Relaxed);
-                Err(self.join().err().unwrap_or(ClientError::StageNotReady {
-                    stage: Stage::Decode,
-                }))
-            }
-        }
+        Ok((queue, feedback_received))
     }
 
     fn spawn_audio(

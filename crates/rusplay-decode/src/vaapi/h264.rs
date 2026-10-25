@@ -4,7 +4,8 @@ use std::{io::Cursor, rc::Rc};
 
 use cros_codecs::codec::h264::parser::{NaluHeader, NaluType, Parser, Pps, Slice, SliceType, Sps};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
+    Timestamp,
 };
 
 use crate::{
@@ -16,11 +17,13 @@ use crate::{
             invalid_picture,
         },
         reorder::{Depth, Reorder},
+        signal::{HdrTracker, vui_color},
         va::{Display, PoolSurface, Profile, SurfaceId},
     },
 };
 
 const CODEC: Codec = Codec::H264;
+const NAL_HEADER_LEN: usize = 1;
 const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
 const BASELINE_PROFILE_IDC: u8 = 66;
@@ -80,6 +83,7 @@ pub(super) struct H264Decoder {
     dpb: Dpb,
     reorder: Reorder<DecodedFrame>,
     open_frame: Option<OpenFrame>,
+    hdr: HdrTracker,
 }
 
 impl H264Decoder {
@@ -90,6 +94,7 @@ impl H264Decoder {
             dpb: Dpb::default(),
             reorder: Reorder::new(),
             open_frame: None,
+            hdr: HdrTracker::default(),
         }
     }
 
@@ -120,6 +125,11 @@ impl H264Decoder {
                     self.parser
                         .parse_pps(&nalu)
                         .map_err(malformed(BitstreamUnit::PictureParameterSet))?;
+                }
+                NaluType::Sei => {
+                    if let Some(payload) = nalu.as_ref().get(NAL_HEADER_LEN..) {
+                        self.hdr.read_sei(payload);
+                    }
                 }
                 NaluType::Slice | NaluType::SliceIdr => {
                     let slice = self
@@ -230,6 +240,7 @@ impl H264Decoder {
             self.dpb.reset();
             partner = None;
         }
+        stream.color = self.hdr.resolve(signalled_color(&sps), idr);
         self.reorder.configure(reorder_depth(&sps));
 
         let max_frame_num = sps.max_frame_num();
@@ -358,6 +369,21 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
             ceiling: sps.max_dpb_frames().min(MAX_REFERENCE_FRAMES),
         }
     }
+}
+
+fn signalled_color(sps: &Sps) -> SignalledColor {
+    let vui = &sps.vui_parameters;
+
+    vui_color(
+        sps.vui_parameters_present_flag && vui.video_signal_type_present_flag,
+        vui.video_full_range_flag,
+        vui.colour_description_present_flag,
+        [
+            u32::from(vui.colour_primaries),
+            u32::from(vui.transfer_characteristics),
+            u32::from(vui.matrix_coefficients),
+        ],
+    )
 }
 
 fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {

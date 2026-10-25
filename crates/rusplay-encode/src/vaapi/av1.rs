@@ -3,10 +3,11 @@ use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 use crate::{
     EncodeError,
     vaapi::{
-        CodecBuffers, INFINITE_INTRA_PERIOD, Picture, StreamInfo,
+        CodecBuffers, INFINITE_INTRA_PERIOD, PackedKind, Picture, StreamInfo,
         bits::{BitWriter, leb128, packed},
         codec_buffers, ffi,
         format::{colour_primaries, full_range, matrix_coefficients, transfer_characteristics},
+        hdr::metadata_obus,
         level::{self, Demand, Level},
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, Profile},
@@ -533,9 +534,18 @@ impl Av1Stream {
             context,
             picture,
             [
-                picture.keyframe.then(|| packed(self.sequence_header())),
-                Some(packed(frame_header)),
-                None,
+                (
+                    PackedKind::Sequence,
+                    picture.keyframe.then(|| packed(self.sequence_header())),
+                ),
+                (
+                    PackedKind::Raw,
+                    picture
+                        .keyframe
+                        .then(|| metadata_obus(&self.info.color.hdr))
+                        .flatten(),
+                ),
+                (PackedKind::Picture, Some(packed(frame_header))),
             ],
         )?;
         let buffers = codec_buffers(

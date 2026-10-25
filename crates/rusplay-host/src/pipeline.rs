@@ -2,8 +2,11 @@ use std::sync::mpsc;
 
 use rusplay_capture::{Frame, FrameBuffer};
 use rusplay_config::Config;
-use rusplay_core::{ColorPrimaries, EncodedFrame, Resolution, Timestamp};
+use rusplay_core::{
+    Codec, ColorPrimaries, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp,
+};
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
+use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings,
     GamutMapping, InputLight, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
@@ -18,6 +21,26 @@ use crate::{
 const CONVERT_ROW_ALIGNMENT: u32 = 4;
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StreamFormat {
+    pub codec: Codec,
+    pub resolution: Resolution,
+    pub format: PixelFormat,
+    pub color: ColorSpace,
+}
+
+impl StreamFormat {
+    pub(crate) const fn describe(self, generation: u32) -> StreamDescription {
+        StreamDescription {
+            generation,
+            codec: self.codec,
+            resolution: self.resolution,
+            format: self.format,
+            color: self.color,
+        }
+    }
+}
+
 pub(crate) trait VideoPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError>;
 
@@ -28,6 +51,8 @@ pub(crate) trait VideoPipeline {
     ) -> Result<Option<EncodedFrame>, HostError>;
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError>;
+
+    fn stream_format(&self) -> Option<StreamFormat>;
 }
 
 struct Upload {
@@ -272,6 +297,17 @@ impl VideoPipeline for GpuPipeline {
             open.encoder.set_bitrate(kbps)?;
         }
         Ok(())
+    }
+
+    fn stream_format(&self) -> Option<StreamFormat> {
+        let video = &self.config.video;
+
+        self.encoder.as_ref().map(|open| StreamFormat {
+            codec: video.codec,
+            resolution: open.resolution,
+            format: video.pixel_format,
+            color: video.color,
+        })
     }
 }
 

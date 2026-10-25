@@ -5,10 +5,10 @@ use std::{
 };
 
 use rusplay_config::NetworkConfig;
-use rusplay_net::{ControlChannel, ControlConfig, ControlEvent, NetError, RecvBatch, Transport};
+use rusplay_net::{ControlEvent, NetError, RecvBatch, Transport};
 use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
 
-use crate::{HostError, accept::Replay, shared::Shared};
+use crate::{HostError, accept::Replay, outbox::ControlOutbox, shared::Shared};
 
 const RECV_BATCH_DATAGRAMS: usize = 32;
 const IDLE_WAKE: Duration = Duration::from_millis(20);
@@ -47,11 +47,11 @@ pub(crate) struct ControlLinks {
     pub transport: Arc<Transport>,
     pub client: SocketAddr,
     pub replay: Replay,
+    pub outbox: Arc<ControlOutbox>,
 }
 
 pub(crate) struct ControlStage {
     timing: ControlTiming,
-    control: ControlChannel,
     links: ControlLinks,
     streaming: bool,
     started: Instant,
@@ -66,7 +66,6 @@ impl ControlStage {
 
         Self {
             timing,
-            control: ControlChannel::new(ControlConfig::from(network)),
             links,
             streaming: false,
             started: now,
@@ -107,15 +106,15 @@ impl ControlStage {
                     self.route(datagram, &mut events)?;
                 }
             }
-            self.control.poll(now, &mut events);
+            self.links.outbox.channel().poll(now, &mut events);
 
             if self.handle(&mut events, now)? == Flow::Ended {
                 return Ok(());
             }
             self.keep_alive(now)?;
 
-            self.control
-                .flush(&self.links.transport, self.links.client)?;
+            self.links.outbox.send_announcement(now)?;
+            self.links.outbox.flush()?;
             self.links
                 .shared
                 .counters
@@ -139,7 +138,7 @@ impl ControlStage {
         let keepalive = self.streaming.then_some(self.next_keepalive);
 
         [
-            self.control.next_deadline(),
+            self.links.outbox.channel().next_deadline(),
             handshake_deadline,
             keepalive,
             Some(self.last_heard + self.timing.peer_timeout),
@@ -151,7 +150,12 @@ impl ControlStage {
 
     fn route(&mut self, datagram: &[u8], events: &mut Vec<ControlEvent>) -> Result<(), HostError> {
         let accepted = match PacketHeader::read(datagram).map(|header| header.stream) {
-            Ok(StreamKind::Control) => self.control.handle_datagram(datagram, events).is_ok(),
+            Ok(StreamKind::Control) => self
+                .links
+                .outbox
+                .channel()
+                .handle_datagram(datagram, events)
+                .is_ok(),
             Ok(StreamKind::Pairing | StreamKind::Reconnect) => {
                 if let Some(reply) = self.links.replay.answer(datagram) {
                     self.links.transport.send_to(reply, self.links.client)?;
@@ -208,10 +212,20 @@ impl ControlStage {
                     message: ControlMessage::Hello { .. },
                     ..
                 } => return Err(HostError::HelloUndeliverable),
+                ControlEvent::Undeliverable {
+                    message: ControlMessage::StreamFormat(description),
+                    ..
+                } => {
+                    shared.counters.control_undeliverable.increment();
+                    self.links.outbox.reannounce(&description);
+                }
                 ControlEvent::Undeliverable { .. } => {
                     shared.counters.control_undeliverable.increment();
                 }
-                ControlEvent::Received(ControlMessage::Keepalive) | ControlEvent::Acked { .. } => {}
+                ControlEvent::Received(
+                    ControlMessage::Keepalive | ControlMessage::StreamFormat(_),
+                )
+                | ControlEvent::Acked { .. } => {}
             }
         }
 
@@ -231,7 +245,8 @@ impl ControlStage {
     }
 
     fn send(&mut self, message: ControlMessage, now: Instant) -> Result<bool, HostError> {
-        match self.control.send(message, now) {
+        let sent = self.links.outbox.channel().send(message, now);
+        match sent {
             Ok(_) => Ok(true),
             Err(NetError::ControlWindowFull { .. }) => Ok(false),
             Err(error) => Err(error.into()),
@@ -239,7 +254,12 @@ impl ControlStage {
     }
 
     fn say_goodbye(&mut self) {
-        let Ok(goodbye) = self.control.send(ControlMessage::Goodbye, Instant::now()) else {
+        let sent = self
+            .links
+            .outbox
+            .channel()
+            .send(ControlMessage::Goodbye, Instant::now());
+        let Ok(goodbye) = sent else {
             return;
         };
         let deadline = Instant::now() + self.timing.goodbye_linger;
@@ -249,18 +269,16 @@ impl ControlStage {
         );
         let mut events = Vec::new();
 
-        while self
-            .control
-            .flush(&self.links.transport, self.links.client)
-            .is_ok()
-        {
+        while self.links.outbox.flush().is_ok() {
             let now = Instant::now();
             if now >= deadline || events.contains(&ControlEvent::Acked { id: goodbye }) {
                 return;
             }
 
             let wait = self
-                .control
+                .links
+                .outbox
+                .channel()
                 .next_deadline()
                 .unwrap_or(deadline)
                 .min(deadline)
@@ -278,10 +296,14 @@ impl ControlStage {
                     && PacketHeader::read(datagram)
                         .is_ok_and(|header| header.stream == StreamKind::Control)
                 {
-                    self.control.handle_datagram(datagram, &mut events).ok();
+                    let mut channel = self.links.outbox.channel();
+                    channel.handle_datagram(datagram, &mut events).ok();
                 }
             }
-            self.control.poll(Instant::now(), &mut events);
+            self.links
+                .outbox
+                .channel()
+                .poll(Instant::now(), &mut events);
         }
     }
 }

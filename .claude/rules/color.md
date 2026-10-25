@@ -33,10 +33,13 @@ clips per channel.
   source (for example 8-bit BT.709 for a client that asked for it). The host then maps with the
   same GPU stages the client uses.
 - **The stream is self-describing.** The colour description and HDR metadata go in the protocol's
-  stream description and in the bitstream (H.264/HEVC VUI `colour_primaries`,
-  `transfer_characteristics`, `matrix_coefficients`, `video_full_range_flag`; AV1
-  `color_config`; mastering display colour volume and content light level SEI/metadata OBUs).
-  The decoder reports what the bitstream says, and that wins over defaults.
+  stream description (`ControlMessage::StreamFormat`, `.claude/rules/networking.md`) and in the
+  bitstream (H.264/HEVC VUI `colour_primaries`, `transfer_characteristics`,
+  `matrix_coefficients`, `video_full_range_flag`; AV1 `color_config`; mastering display colour
+  volume and content light level SEI/metadata OBUs, written by every encoder backend,
+  `.claude/rules/video-encode.md`). The decoder reports what the bitstream says
+  (`DecodedFrame::color`, `.claude/rules/video-decode.md`), and the client lays it over the
+  stream description, so the bitstream wins wherever it says something.
 - **The client owns the mapping to its display.** The target is the output's image description
   from Wayland `wp_color_management_v1`: primaries, transfer, min/max/reference luminance, and
   the target colour volume. Config can override every field for displays that report nothing or
@@ -75,6 +78,12 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
   `content_peak_nits()` is the source peak for tone mapping: MaxCLL, then the mastering
   maximum, then `peak_nits`. The config validates mastering min below max
   (`MasteringLuminanceInverted`).
+- `SignalledColor` is what a bitstream said: every field optional (primaries, transfer, matrix,
+  range, mastering display, content light). `with_h273_codes` maps codes and leaves unknown or
+  unspecified (2) ones unset, `with_full_range` sets the range, and `over(ColorSpace)` replaces
+  exactly the fields that were signalled. `ColorPrimaries::from_chromaticities` names a known
+  set when the chromaticities match it exactly and is `Custom` otherwise, which is how mastering
+  display primaries read from SEI or AV1 metadata come back as `Bt2020` or `DisplayP3`.
 - An encoder that cannot signal a description fails with a specific error: custom primaries
   have no H.273 code, so the software encoders return `ColorPrimariesUnsignalable`.
 

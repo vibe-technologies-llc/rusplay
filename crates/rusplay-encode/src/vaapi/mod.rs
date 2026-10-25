@@ -3,6 +3,7 @@ mod bits;
 mod ffi;
 mod format;
 mod h264;
+mod hdr;
 mod hevc;
 mod level;
 mod params;
@@ -54,7 +55,8 @@ const CODED_BUFFER_HEADROOM: u64 = 64 * 1024;
 const IMPORT_CACHE_CAPACITY: usize = 16;
 const WANTED_PACKED_HEADERS: u32 = ffi::VA_ENC_PACKED_HEADER_SEQUENCE
     | ffi::VA_ENC_PACKED_HEADER_PICTURE
-    | ffi::VA_ENC_PACKED_HEADER_SLICE;
+    | ffi::VA_ENC_PACKED_HEADER_SLICE
+    | ffi::VA_ENC_PACKED_HEADER_RAW_DATA;
 
 #[derive(Debug, Clone, Copy)]
 struct StreamInfo {
@@ -99,30 +101,43 @@ fn sequence_buffer<T: Copy>(
         .transpose()
 }
 
-fn packed_buffers(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackedKind {
+    Sequence,
+    Picture,
+    Raw,
+    Slice,
+}
+
+impl PackedKind {
+    const fn flag(self) -> u32 {
+        match self {
+            Self::Sequence => ffi::VA_ENC_PACKED_HEADER_SEQUENCE,
+            Self::Picture => ffi::VA_ENC_PACKED_HEADER_PICTURE,
+            Self::Raw => ffi::VA_ENC_PACKED_HEADER_RAW_DATA,
+            Self::Slice => ffi::VA_ENC_PACKED_HEADER_SLICE,
+        }
+    }
+
+    const fn va(self) -> ffi::VAEncPackedHeaderType {
+        match self {
+            Self::Sequence => ffi::VAEncPackedHeaderType_VAEncPackedHeaderSequence,
+            Self::Picture => ffi::VAEncPackedHeaderType_VAEncPackedHeaderPicture,
+            Self::Raw => ffi::VAEncPackedHeaderType_VAEncPackedHeaderRawData,
+            Self::Slice => ffi::VAEncPackedHeaderType_VAEncPackedHeaderSlice,
+        }
+    }
+}
+
+fn packed_buffers<const N: usize>(
     context: &Context,
     picture: &Picture,
-    headers: [Option<PackedHeader>; 3],
+    headers: [(PackedKind, Option<PackedHeader>); N],
 ) -> Result<Vec<Buffer>, EncodeError> {
-    let kinds = [
-        (
-            ffi::VA_ENC_PACKED_HEADER_SEQUENCE,
-            ffi::VAEncPackedHeaderType_VAEncPackedHeaderSequence,
-        ),
-        (
-            ffi::VA_ENC_PACKED_HEADER_PICTURE,
-            ffi::VAEncPackedHeaderType_VAEncPackedHeaderPicture,
-        ),
-        (
-            ffi::VA_ENC_PACKED_HEADER_SLICE,
-            ffi::VAEncPackedHeaderType_VAEncPackedHeaderSlice,
-        ),
-    ];
-
     let mut buffers = Vec::new();
-    for ((flag, kind), header) in kinds.into_iter().zip(headers) {
-        if let Some(header) = header.filter(|_| picture.packed_headers & flag != 0) {
-            buffers.extend(context.packed_header(kind, &header)?);
+    for (kind, header) in headers {
+        if let Some(header) = header.filter(|_| picture.packed_headers & kind.flag() != 0) {
+            buffers.extend(context.packed_header(kind.va(), &header)?);
         }
     }
 

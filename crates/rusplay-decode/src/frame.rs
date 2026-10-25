@@ -4,12 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use rusplay_core::{PixelFormat, Resolution, Timestamp};
+use rusplay_core::{PixelFormat, Resolution, SignalledColor, Timestamp};
 
 #[derive(Debug)]
 pub struct DecodedFrame {
     pub resolution: Resolution,
     pub format: PixelFormat,
+    pub color: SignalledColor,
     pub timestamp: Timestamp,
     pub buffer: DecodedBuffer,
 }

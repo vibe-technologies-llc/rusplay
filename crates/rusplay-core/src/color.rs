@@ -2,6 +2,7 @@ mod hdr;
 mod mapping;
 mod matrix;
 mod primaries;
+mod signalled;
 mod transfer;
 
 use std::fmt;
@@ -14,6 +15,7 @@ pub use crate::color::{
     mapping::{GamutMapMode, ToneMapOperator},
     matrix::{Matrix3, bradford_adaptation},
     primaries::{Chromaticities, Chromaticity, ColorPrimaries, WhiteAdaptation},
+    signalled::SignalledColor,
     transfer::{TransferFunction, pq_from_nits, pq_to_nits},
 };
 

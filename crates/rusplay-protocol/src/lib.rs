@@ -6,6 +6,7 @@ mod fec;
 mod header;
 mod pairing;
 mod reconnect;
+mod stream;
 
 pub use crate::{
     control::{ControlMessage, ControlPacket},
@@ -16,4 +17,5 @@ pub use crate::{
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},
     pairing::{PairingMessage, PairingRejection},
     reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
+    stream::StreamDescription,
 };
