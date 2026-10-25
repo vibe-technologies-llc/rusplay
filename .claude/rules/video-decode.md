@@ -7,8 +7,11 @@ paths:
 
 - `VideoDecoder` is the backend-neutral trait: one `EncodedFrame` (a whole access unit / temporal
   unit) in, at most one `DecodedFrame` out. Backends are VAAPI, NVDEC and software, each behind
-  its own cargo feature, and `open` returns `BackendNotCompiled` when it is off. Decoders are
-  not `Send`: a decoder lives on the thread that created it.
+  its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
+  config's backend and returns `BackendNotCompiled` when that feature is off (always for NVDEC,
+  which has no backend yet) and `CodecUnsupported` when the backend cannot decode the codec.
+  The backend types (`VaapiDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
+  decoder lives on the thread that created it.
 - The decoder backend and its options are `video.decoder` in `rusplay-config`
   (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
 - `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the
