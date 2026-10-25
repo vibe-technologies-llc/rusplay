@@ -1,8 +1,12 @@
 use rusplay_core::TransferFunction;
 
 use crate::{
-    ConvertSettings, FrameLayout, InputLight, Kernel, PlaneLayout, ScaleSettings, TapTable,
-    polar::PolarGeometry, scaler::Axis, shaping::Shaping, testing::Image,
+    ConvertSettings, FrameLayout, InputLight, Kernel, OutputLight, PlaneContent, PlaneLayout,
+    Quantization, RgbConvertSettings, ScaleSettings, TapTable,
+    polar::PolarGeometry,
+    scaler::Axis,
+    shaping::Shaping,
+    testing::{Image, quantize_f16},
 };
 
 pub(crate) fn resample_separable(
@@ -236,4 +240,90 @@ pub(crate) fn unpack(bytes: &[u8], layout: &FrameLayout) -> SamplePlanes {
                 .collect()
         })
         .collect()
+}
+
+pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
+    let layout = settings.frame_layout().unwrap();
+    let planes = unpack(bytes, &layout);
+    let quantization = Quantization::new(settings.format.depth, settings.range);
+    let rows = settings.matrix.inverse_rows();
+    let (horizontal, vertical) = settings.chroma_tables();
+    let (chroma_width, chroma_height) = settings.chroma_size();
+    let interleaved = layout.planes[1].content == PlaneContent::CbCr;
+    let dequantize = |code: u32, (scale, offset): (f64, f64)| (f64::from(code) - offset) / scale;
+    let chroma_at = |x: i64, y: usize| -> [f64; 2] {
+        let x = usize::try_from(x.clamp(0, i64::from(chroma_width) - 1)).unwrap_or_default();
+        let (cb, cr) = if interleaved {
+            (planes[1][y][2 * x], planes[1][y][2 * x + 1])
+        } else {
+            (planes[1][y][x], planes[2][y][x])
+        };
+        [
+            dequantize(cb, quantization.chroma),
+            dequantize(cr, quantization.chroma),
+        ]
+    };
+    let weighted = |sum: [f64; 2], weight: f32, value: [f64; 2]| {
+        [
+            sum[0] + f64::from(weight) * value[0],
+            sum[1] + f64::from(weight) * value[1],
+        ]
+    };
+
+    let rows_filtered: Vec<Vec<[f64; 2]>> = (0..chroma_height as usize)
+        .map(|y| {
+            (0..settings.resolution.width)
+                .map(|x| {
+                    taps(&horizontal, x).fold([0.0; 2], |sum, (column, weight)| {
+                        weighted(sum, weight, chroma_at(column, y))
+                    })
+                })
+                .collect()
+        })
+        .collect();
+    let last_row = i64::from(chroma_height) - 1;
+    let decode = |encoded: f64| {
+        let x = encoded.clamp(0.0, 1.0);
+        match (settings.output, settings.transfer) {
+            (OutputLight::Linear, TransferFunction::Srgb) if x <= 0.040_45 => x / 12.92,
+            (OutputLight::Linear, TransferFunction::Srgb) => ((x + 0.055) / 1.055).powf(2.4),
+            (OutputLight::Linear, TransferFunction::Bt709) if x < 0.081 => x / 4.5,
+            (OutputLight::Linear, TransferFunction::Bt709) => {
+                ((x + 0.099) / 1.099).powf(1.0 / 0.45)
+            }
+            _ => x,
+        }
+    };
+
+    Image::from_fn(
+        settings.resolution.width,
+        settings.resolution.height,
+        |x, y| {
+            let chroma = taps(&vertical, y).fold([0.0; 2], |sum, (row, weight)| {
+                let row = usize::try_from(row.clamp(0, last_row)).unwrap_or_default();
+                weighted(sum, weight, rows_filtered[row][x as usize])
+            });
+            let ycbcr = [
+                dequantize(planes[0][y as usize][x as usize], quantization.luma),
+                chroma[0],
+                chroma[1],
+            ];
+            let channel = |row: [f64; 3]| {
+                let encoded = row.iter().zip(ycbcr).map(|(a, b)| a * b).sum::<f64>();
+                #[allow(clippy::cast_possible_truncation)]
+                let linear = decode(encoded) as f32;
+                quantize_f16(linear)
+            };
+
+            [channel(rows[0]), channel(rows[1]), channel(rows[2]), 1.0]
+        },
+    )
+}
+
+fn taps(table: &TapTable, index: u32) -> impl Iterator<Item = (i64, f32)> + '_ {
+    let count = table.taps_per_pixel as usize;
+    let start = index as usize * count;
+    let first = i64::from(table.firsts[index as usize]);
+
+    (first..).zip(table.weights[start..start + count].iter().copied())
 }

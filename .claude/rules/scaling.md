@@ -88,6 +88,14 @@ paths:
   wgpu's 256 so a plane can be copied straight into a texture). Shaders write whole `u32`
   words, one invocation per word, so no atomics are needed and row padding is zero.
   `ColorConverter::encode` refuses a frame created for another layout (`FrameLayoutMismatch`).
+- Y'CbCr to RGB on the client is `RgbConverter` (`unpack.rs`, `unpack_*.wgsl`), reading a
+  `YuvFrame` upload buffer laid out by `FrameLayout::packed` (planar or semi-planar, any depth).
+  `unpack_chroma` applies the horizontal chroma taps straight from the buffer into an `rg32float`
+  intermediate at luma width, `unpack_rgb` applies the vertical taps, the `YuvMatrix::inverse_rows`
+  and, for `OutputLight::Linear`, the inverse OETF (sRGB or BT.709; PQ and HLG must use
+  `OutputLight::Encoded`), into an `rgba16float` storage texture. Chroma is upsampled with
+  `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
+  and must be separable. `reference::unpack_rgb` is its CPU reference.
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1

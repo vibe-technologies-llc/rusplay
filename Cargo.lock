@@ -4722,12 +4722,18 @@ dependencies = [
 name = "rusplay-client"
 version = "0.1.0"
 dependencies = [
+ "parking_lot 0.13.0",
+ "pollster 1.0.1",
  "rusplay-audio",
  "rusplay-config",
+ "rusplay-core",
  "rusplay-decode",
  "rusplay-input",
  "rusplay-net",
+ "rusplay-protocol",
+ "rusplay-scale",
  "thiserror 2.0.21",
+ "wgpu 30.0.1",
 ]
 
 [[package]]

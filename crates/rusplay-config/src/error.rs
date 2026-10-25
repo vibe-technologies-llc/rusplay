@@ -53,6 +53,14 @@ pub enum ConfigError {
     GamepadSlotsOutOfRange(u8),
     #[error("reconnect timeout must be greater than zero")]
     ZeroReconnectTimeout,
+    #[error("handshake timeout must be greater than zero")]
+    ZeroHandshakeTimeout,
+    #[error("peer timeout must be greater than zero")]
+    ZeroPeerTimeout,
+    #[error("keyframe request interval must be greater than zero")]
+    ZeroKeyframeRequestInterval,
+    #[error("decode queue must hold at least one frame")]
+    ZeroDecodeQueue,
     #[error("peers.host_file is set to an empty path")]
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
@@ -96,6 +104,10 @@ impl ConfigError {
             Self::ZeroPairingAttempts => Some("network.pairing_max_attempts"),
             Self::ZeroPairingTimeout => Some("network.pairing_timeout_ms"),
             Self::ZeroReconnectTimeout => Some("network.reconnect_timeout_ms"),
+            Self::ZeroHandshakeTimeout => Some("network.handshake_timeout_ms"),
+            Self::ZeroPeerTimeout => Some("network.peer_timeout_ms"),
+            Self::ZeroKeyframeRequestInterval => Some("network.keyframe_request_interval_ms"),
+            Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
             Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),

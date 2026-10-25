@@ -1,0 +1,345 @@
+#![allow(dead_code)]
+
+use std::{
+    fs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
+};
+
+use parking_lot::Mutex;
+use rusplay_client::{Gpu, Pin};
+use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
+use rusplay_core::Codec;
+use rusplay_net::{
+    ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
+    PairingTiming, Transport, TransportOptions, pair_as_host,
+};
+use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
+
+pub const PIN: &str = "482916";
+pub const FIXTURE_WIDTH: u32 = 256;
+pub const FIXTURE_HEIGHT: u32 = 144;
+
+const IVF_HEADER_LEN: usize = 32;
+const IVF_FRAME_HEADER_LEN: usize = 12;
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const TEST_DECODE_QUEUE_FRAMES: u8 = 16;
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
+const FEC_DATA_SHARDS: u8 = 32;
+const HOST_PAIRING_TIMEOUT_MS: u32 = 3_000;
+const GOODBYE_LINGER: Duration = Duration::from_millis(200);
+
+pub fn gpu() -> Option<Gpu> {
+    static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
+
+    GPU.get_or_init(|| pollster::block_on(request_gpu()))
+        .clone()
+}
+
+async fn request_gpu() -> Option<Gpu> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..wgpu::RequestAdapterOptions::default()
+        })
+        .await
+        .ok()?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .ok()?;
+
+    Some(Gpu { device, queue })
+}
+
+pub fn client_config() -> Config {
+    let mut config = Config::default();
+    config.video.codec = Codec::Av1;
+    config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+    config.video.decode_queue_frames = TEST_DECODE_QUEUE_FRAMES;
+    config.network.bind_address = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+    config
+}
+
+pub fn pin() -> Pin {
+    Pin::parse(PIN).unwrap()
+}
+
+pub fn fixture_frames() -> Vec<Vec<u8>> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../rusplay-decode/tests/data/av1-420-8bit.ivf");
+    let file =
+        fs::read(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    assert_eq!(&file[..4], b"DKIF");
+
+    let mut frames = Vec::new();
+    let mut cursor = IVF_HEADER_LEN;
+    while cursor + IVF_FRAME_HEADER_LEN <= file.len() {
+        let size = u32::from_le_bytes(file[cursor..cursor + 4].try_into().unwrap());
+        let start = cursor + IVF_FRAME_HEADER_LEN;
+        let end = start + usize::try_from(size).unwrap();
+        frames.push(file[start..end].to_vec());
+        cursor = end;
+    }
+
+    frames
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Outgoing {
+    pub frame: u32,
+    pub index: usize,
+    pub parity: bool,
+}
+
+pub type DropRule = Box<dyn Fn(Outgoing) -> bool + Send>;
+
+pub struct HostOptions {
+    pub frames: u32,
+    pub drop: DropRule,
+    pub goodbye: bool,
+}
+
+impl Default for HostOptions {
+    fn default() -> Self {
+        Self {
+            frames: 24,
+            drop: Box::new(|_| false),
+            goodbye: true,
+        }
+    }
+}
+
+pub struct TestHost {
+    pub address: SocketAddr,
+    pub received: Arc<Mutex<Vec<ControlMessage>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl TestHost {
+    pub fn start(options: HostOptions) -> Self {
+        let network = NetworkConfig {
+            pairing_timeout_ms: HOST_PAIRING_TIMEOUT_MS,
+            ..NetworkConfig::default()
+        };
+        let transport = Transport::bind(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            TransportOptions::from(&network),
+        )
+        .unwrap();
+        let address = transport.local_addr().unwrap();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let thread = {
+            let received = Arc::clone(&received);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || serve(&transport, &network, &options, &received, &stop))
+        };
+
+        Self {
+            address,
+            received,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    pub fn messages(&self) -> Vec<ControlMessage> {
+        self.received.lock().clone()
+    }
+
+    pub fn wait_for(&self, timeout: Duration, matches: impl Fn(&ControlMessage) -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.received.lock().iter().any(&matches) {
+                return true;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        false
+    }
+}
+
+impl Drop for TestHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
+        }
+    }
+}
+
+fn serve(
+    transport: &Transport,
+    network: &NetworkConfig,
+    options: &HostOptions,
+    received: &Mutex<Vec<ControlMessage>>,
+    stop: &AtomicBool,
+) {
+    let mut responder = PairingResponder::new(pin(), network.pairing_max_attempts);
+    let Ok((client, outcome)) =
+        pair_as_host(transport, &mut responder, PairingTiming::from(network))
+    else {
+        return;
+    };
+    transport.install_session(&outcome.keys);
+
+    let fixture = fixture_frames();
+    let mut control = ControlChannel::new(ControlConfig::from(network));
+    let mut packetizer = Packetizer::new(
+        StreamKind::Video,
+        transport.max_datagram_len(&client),
+        FecScheme::for_overhead(FEC_DATA_SHARDS, network.fec_overhead_percent),
+    )
+    .unwrap();
+    let mut events = Vec::new();
+    let mut buf = vec![0; usize::from(network.mtu)];
+    let mut streaming = false;
+    let mut next_frame = 0_u32;
+    let mut fixture_index = 0_usize;
+    let mut next_send = Instant::now();
+    let mut finished_at: Option<Instant> = None;
+
+    while !stop.load(Ordering::Relaxed) {
+        if let Ok(Some((len, from))) = transport.recv_from_timeout(&mut buf, POLL_INTERVAL)
+            && from == client
+            && PacketHeader::read(&buf[..len])
+                .is_ok_and(|header| header.stream == StreamKind::Control)
+        {
+            control.handle_datagram(&buf[..len], &mut events).ok();
+        }
+        control.poll(Instant::now(), &mut events);
+
+        for event in events.drain(..) {
+            let ControlEvent::Received(message) = event else {
+                continue;
+            };
+            received.lock().push(message);
+            match message {
+                ControlMessage::Hello { .. } => {
+                    control
+                        .send(
+                            ControlMessage::Hello {
+                                version: ProtocolVersion::CURRENT,
+                            },
+                            Instant::now(),
+                        )
+                        .ok();
+                    streaming = true;
+                }
+                ControlMessage::RequestKeyframe { .. } => fixture_index = 0,
+                _ => {}
+            }
+        }
+
+        if streaming && next_frame < options.frames && Instant::now() >= next_send {
+            let keyframe = fixture_index == 0;
+            let datagrams = packetizer
+                .packetize(next_frame, keyframe, &fixture[fixture_index])
+                .unwrap();
+            let mut data_index = 0;
+            let mut parity_index = 0;
+            for datagram in &datagrams {
+                let parity = PacketHeader::read(datagram).unwrap().stream == StreamKind::Fec;
+                let index = if parity {
+                    &mut parity_index
+                } else {
+                    &mut data_index
+                };
+                let outgoing = Outgoing {
+                    frame: next_frame,
+                    index: *index,
+                    parity,
+                };
+                *index += 1;
+                if !(options.drop)(outgoing) {
+                    transport.send_to(datagram, client).unwrap();
+                }
+            }
+
+            next_frame += 1;
+            fixture_index = (fixture_index + 1) % fixture.len();
+            next_send += FRAME_INTERVAL;
+        }
+
+        if next_frame == options.frames && options.goodbye && finished_at.is_none() {
+            control.send(ControlMessage::Goodbye, Instant::now()).ok();
+            finished_at = Some(Instant::now());
+        }
+        if finished_at.is_some_and(|at| at.elapsed() >= GOODBYE_LINGER) {
+            control.flush(transport, client).ok();
+            return;
+        }
+
+        control.flush(transport, client).ok();
+    }
+}
+
+pub fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[u16; 4]> {
+    let (width, height) = (texture.width(), texture.height());
+    let texel_bytes = 8;
+    let row_bytes = (width * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rusplay-client-test-readback"),
+        size: u64::from(row_bytes * height),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row_bytes),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+
+    staging.map_async(wgpu::MapMode::Read, .., |result| {
+        result.expect("readback buffer maps");
+    });
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device finishes the readback");
+    let bytes = staging
+        .get_mapped_range(..)
+        .expect("mapped range is readable")
+        .to_vec();
+
+    bytes
+        .chunks_exact(row_bytes as usize)
+        .flat_map(|row| {
+            row[..(width * texel_bytes) as usize]
+                .as_chunks::<8>()
+                .0
+                .to_vec()
+        })
+        .map(|texel| {
+            std::array::from_fn(|channel| {
+                u16::from_le_bytes([texel[2 * channel], texel[2 * channel + 1]])
+            })
+        })
+        .collect()
+}

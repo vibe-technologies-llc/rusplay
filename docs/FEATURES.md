@@ -19,7 +19,10 @@
 
 # Sessions
 - [L, blocked by: encode-vaapi] `host-pipeline`: run capture → scale → encode → send in `HostSession`
-- [L] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
+- [M] `session-stream-format`: carry codec, resolution, pixel format, `ColorSpace` and HDR metadata in the handshake; the client decodes with its own `video.codec` and labels frames with its own `video.color` today
+- [M] `client-audio`: receive `StreamKind::Audio`, decode on a codec thread with PLC/FEC concealment and play through `AudioPlayback` in `ClientStream`
+- [S] `client-cursor`: consume `StreamKind::Cursor` in the receive stage and hand cursor position and image to the app beside `PresentedFrame`
+- [M, blocked by: scale-dmabuf-import] `client-dmabuf-present`: present VAAPI DMA-BUF frames (`NV12`/`P010`); the present stage returns `DmaBufPresentUnsupported` today, so only the software decoder streams
 
 # Desktop app
-- [M, blocked by: client-pipeline] `app-stream-view`: present the stream through the shared wgpu device
+- [M] `app-stream-view`: present the stream through the shared wgpu device

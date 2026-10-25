@@ -21,6 +21,7 @@ pub struct VideoConfig {
     pub bitrate_kbps: u32,
     pub encoder: VideoEncoderConfig,
     pub decoder: VideoDecoderConfig,
+    pub decode_queue_frames: u8,
 }
 
 impl Default for VideoConfig {
@@ -34,6 +35,7 @@ impl Default for VideoConfig {
             bitrate_kbps: 80_000,
             encoder: VideoEncoderConfig::default(),
             decoder: VideoDecoderConfig::default(),
+            decode_queue_frames: 3,
         }
     }
 }
@@ -49,6 +51,10 @@ impl VideoConfig {
 
         if self.bitrate_kbps == 0 {
             return Err(ConfigError::ZeroVideoBitrate);
+        }
+
+        if self.decode_queue_frames == 0 {
+            return Err(ConfigError::ZeroDecodeQueue);
         }
 
         self.encoder.validate()?;

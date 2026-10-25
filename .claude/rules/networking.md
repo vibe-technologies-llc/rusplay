@@ -35,7 +35,8 @@ paths:
   the whole batch is refused up front if any datagram exceeds the budget, and a short count means
   the socket buffer filled on a non-blocking socket, so the caller re-queues the tail).
   Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,
-  `MSG_WAITFORONE`, returns as soon as one datagram is in). rustix has no `recvmmsg`, so that call
+  `MSG_WAITFORONE`, returns as soon as one datagram is in; `recv_batch_timeout` sets
+  `SO_RCVTIMEO` first and returns 0 when nothing came). rustix has no `recvmmsg`, so that call
   is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets.

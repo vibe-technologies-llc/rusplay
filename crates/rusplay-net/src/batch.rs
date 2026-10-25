@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     os::fd::AsRawFd,
     ptr,
+    time::Duration,
 };
 
 use rustix::{
@@ -13,6 +14,7 @@ use rustix::{
 use crate::{NetError, Transport};
 
 const MAX_MESSAGES_PER_CALL: usize = 1024;
+const MIN_READ_TIMEOUT: Duration = Duration::from_micros(1);
 const SOCKADDR_LEN: usize = 28;
 const SOCKADDR_LEN_C: libc::socklen_t = 28;
 
@@ -101,6 +103,18 @@ impl Transport {
         }
 
         Ok(sent)
+    }
+
+    pub fn recv_batch_timeout(
+        &self,
+        batch: &mut RecvBatch,
+        timeout: Duration,
+    ) -> Result<usize, NetError> {
+        self.socket()
+            .set_read_timeout(Some(timeout.max(MIN_READ_TIMEOUT)))
+            .map_err(NetError::ReadTimeout)?;
+
+        self.recv_batch(batch)
     }
 
     pub fn recv_batch(&self, batch: &mut RecvBatch) -> Result<usize, NetError> {
@@ -201,7 +215,7 @@ fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::Instant;
 
     use super::*;
     use crate::TransportOptions;
@@ -434,5 +448,35 @@ mod tests {
         receiver.recv_batch(&mut batch).unwrap();
         assert_eq!(batch.iter().count(), 0);
         assert_eq!(receiver.rejected_datagrams(), 1);
+    }
+
+    #[test]
+    fn batch_receive_gives_up_after_the_timeout() {
+        let host = bind(LOOPBACK_V4);
+        let mut batch = RecvBatch::new(4, 2048);
+        let started = Instant::now();
+
+        let count = host
+            .recv_batch_timeout(&mut batch, Duration::from_millis(20))
+            .unwrap();
+
+        assert_eq!(count, 0);
+        assert!(batch.is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(15));
+    }
+
+    #[test]
+    fn batch_receive_with_timeout_returns_waiting_datagrams() {
+        let host = bind(LOOPBACK_V4);
+        let sender = bind(LOOPBACK_V4);
+        let mut batch = RecvBatch::new(4, 2048);
+        sender
+            .send_batch(&datagrams(2), host.local_addr().unwrap())
+            .unwrap();
+
+        let count = host.recv_batch_timeout(&mut batch, Duration::ZERO).unwrap();
+
+        assert!(count >= 1);
+        assert_eq!(collect(&batch)[0], datagrams(1)[0]);
     }
 }

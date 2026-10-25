@@ -459,6 +459,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Video,
         "Decoder",
+        "video.decode_queue_frames",
+        "Decode queue",
+        U8,
+    )
+    .unit("frames"),
+    field(
+        Section::Video,
+        "Decoder",
         "video.decoder.device",
         "Device",
         Kind::Text,
@@ -653,6 +661,30 @@ pub static FIELDS: &[Field] = &[
         "network.reconnect_timeout_ms",
         "Reconnect timeout",
         U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.handshake_timeout_ms",
+        "Handshake timeout",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.peer_timeout_ms",
+        "Peer timeout",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.keyframe_request_interval_ms",
+        "Keyframe request interval",
+        U16,
     )
     .unit("ms"),
     field(

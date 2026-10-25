@@ -1,0 +1,244 @@
+#![cfg(feature = "software")]
+
+mod common;
+
+use std::{sync::Arc, time::Duration};
+
+use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
+use parking_lot::Mutex;
+use rusplay_client::{
+    ClientError, ClientSession, Credentials, FrameColor, LatestFrame, OutputLight, Pin,
+    PresentedFrame,
+};
+use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution};
+use rusplay_net::NetError;
+use rusplay_protocol::ControlMessage;
+
+const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
+const LOST_FRAME: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Seen {
+    frame: u32,
+    keyframe: bool,
+    resolution: Resolution,
+    color: FrameColor,
+}
+
+fn recorder() -> (
+    Arc<Mutex<Vec<Seen>>>,
+    impl FnMut(PresentedFrame) + Send + 'static,
+) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = {
+        let seen = Arc::clone(&seen);
+        move |frame: PresentedFrame| {
+            seen.lock().push(Seen {
+                frame: frame.frame,
+                keyframe: frame.keyframe,
+                resolution: frame.resolution(),
+                color: frame.color,
+            });
+        }
+    };
+
+    (seen, sink)
+}
+
+#[test]
+fn frames_arrive_decoded_at_the_source_resolution() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions::default());
+    let session = ClientSession::new(common::client_config());
+    let (seen, sink) = recorder();
+
+    let stream = session
+        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
+        .unwrap();
+    let paired = stream.paired_secret().is_some();
+    let stats = wait_for_end(stream);
+
+    let seen = seen.lock().clone();
+    let source = Resolution::new(FIXTURE_WIDTH, FIXTURE_HEIGHT);
+
+    assert!(paired);
+    assert_eq!(stats.keyframe_requests_sent, 0);
+    assert!(seen.first().is_some_and(|first| first.keyframe));
+    assert!(seen.iter().all(|frame| frame.resolution == source));
+    assert!(seen.windows(2).all(|pair| pair[0].frame < pair[1].frame));
+    assert_eq!(
+        seen[0].color,
+        FrameColor::of_stream(
+            ColorSpace::default(),
+            PixelFormat {
+                chroma: ChromaSubsampling::Yuv420,
+                depth: BitDepth::Eight,
+            }
+        )
+    );
+    assert_eq!(seen[0].color.light, OutputLight::Linear);
+    assert!(seen[0].color.hdr.is_none());
+    assert!(
+        !host
+            .messages()
+            .iter()
+            .any(|message| matches!(message, ControlMessage::RequestKeyframe { .. }))
+    );
+}
+
+#[test]
+fn presented_texture_holds_the_picture() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let latest = LatestFrame::new();
+
+    let stream = session
+        .connect(
+            host.address,
+            &Credentials::Pin(common::pin()),
+            gpu.clone(),
+            latest.clone(),
+        )
+        .unwrap();
+    let frame = latest.wait(STREAM_TIMEOUT).unwrap();
+    let texels = common::download(&gpu, &frame.texture);
+    stream.stop().unwrap();
+
+    let distinct: std::collections::BTreeSet<[u16; 4]> = texels.iter().copied().collect();
+
+    assert_eq!(texels.len(), (FIXTURE_WIDTH * FIXTURE_HEIGHT) as usize);
+    assert!(distinct.len() > 100);
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| *message
+        == ControlMessage::Goodbye));
+}
+
+#[test]
+fn frames_are_scaled_to_the_requested_target() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        frames: 48,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let (seen, sink) = recorder();
+    let upscaled = Resolution::new(2 * FIXTURE_WIDTH, 2 * FIXTURE_HEIGHT);
+
+    let stream = session
+        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
+        .unwrap();
+    stream.set_target(Some(upscaled));
+    stream.wait().unwrap();
+
+    let seen = seen.lock().clone();
+
+    assert!(seen.iter().any(|frame| frame.resolution == upscaled));
+    assert_eq!(seen.last().unwrap().resolution, upscaled);
+}
+
+#[test]
+fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        drop: Box::new(|outgoing: Outgoing| {
+            outgoing.frame % 4 == 2 && !outgoing.parity && outgoing.index == 0
+        }),
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let (seen, sink) = recorder();
+
+    let stream = session
+        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
+        .unwrap();
+    let stats_before_end = wait_for_end(stream);
+
+    let seen = seen.lock().clone();
+
+    assert!(stats_before_end.frames_recovered > 0);
+    assert_eq!(stats_before_end.frames_lost, 0);
+    assert!(stats_before_end.loss_reports_sent > 0);
+    assert!(seen.iter().any(|frame| frame.frame % 4 == 2));
+    assert!(
+        host.messages()
+            .iter()
+            .any(|message| matches!(message, ControlMessage::ReportLoss { .. }))
+    );
+}
+
+#[test]
+fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        frames: 40,
+        drop: Box::new(|outgoing: Outgoing| outgoing.frame == LOST_FRAME),
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let (seen, sink) = recorder();
+
+    let stream = session
+        .connect(host.address, &Credentials::Pin(common::pin()), gpu, sink)
+        .unwrap();
+    let stats = wait_for_end(stream);
+
+    let seen = seen.lock().clone();
+    let resumed = seen
+        .iter()
+        .find(|frame| frame.frame > LOST_FRAME)
+        .copied()
+        .unwrap();
+
+    assert!(stats.frames_lost >= 1);
+    assert!(stats.keyframe_requests_sent >= 1);
+    assert!(resumed.keyframe);
+    assert!(host.messages().iter().any(|message| matches!(
+        message,
+        ControlMessage::RequestKeyframe { frame } if *frame == LOST_FRAME
+    )));
+}
+
+#[test]
+fn a_wrong_pin_is_refused_before_streaming() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions::default());
+    let session = ClientSession::new(common::client_config());
+
+    let result = session.connect(
+        host.address,
+        &Credentials::Pin(Pin::parse("000000").unwrap()),
+        gpu,
+        LatestFrame::new(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(ClientError::Net(NetError::PairingAuthentication))
+    ));
+}
+
+fn wait_for_end(stream: rusplay_client::ClientStream) -> rusplay_client::ClientStats {
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while !stream.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let stats = stream.stats();
+    stream.wait().unwrap();
+
+    stats
+}

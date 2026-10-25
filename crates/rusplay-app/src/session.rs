@@ -19,7 +19,7 @@ pub fn load_client_config(environment: &ConfigEnvironment) -> Result<Config, Con
 pub fn run_client(environment: &ConfigEnvironment) -> Result<(), SessionError> {
     let config = load_client_config(environment)?;
 
-    ClientSession::new(config).run()?;
+    ClientSession::new(config).probe()?;
 
     Ok(())
 }
