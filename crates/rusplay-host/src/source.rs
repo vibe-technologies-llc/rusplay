@@ -1,22 +1,30 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_capture::{CaptureError, Frame};
+use rusplay_capture::{CaptureError, CursorUpdate, Frame, Subscriber};
 
 pub trait FrameSource: Send {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError>;
+
+    fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
+        None
+    }
 }
 
 pub struct CaptureFeed {
     source: Mutex<Box<dyn FrameSource>>,
     retained: Mutex<Option<Frame>>,
+    cursor: Option<Subscriber<CursorUpdate>>,
+    cursor_state: Mutex<Option<CursorUpdate>>,
 }
 
 impl CaptureFeed {
     pub fn new(source: impl FrameSource + 'static) -> Arc<Self> {
         Arc::new(Self {
+            cursor: source.cursor_feed(),
             source: Mutex::new(Box::new(source)),
             retained: Mutex::new(None),
+            cursor_state: Mutex::new(None),
         })
     }
 
@@ -30,6 +38,18 @@ impl CaptureFeed {
 
     pub(crate) fn take_retained(&self) -> Option<Frame> {
         self.retained.lock().take()
+    }
+
+    pub(crate) fn cursor_subscriber(&self) -> Option<Subscriber<CursorUpdate>> {
+        self.cursor.clone()
+    }
+
+    pub(crate) fn take_cursor_state(&self) -> Option<CursorUpdate> {
+        self.cursor_state.lock().take()
+    }
+
+    pub(crate) fn keep_cursor_state(&self, state: Option<CursorUpdate>) {
+        *self.cursor_state.lock() = state;
     }
 }
 
@@ -47,8 +67,8 @@ mod portal {
     use std::{sync::Arc, time::Duration};
 
     use rusplay_capture::{
-        CaptureError, FormatModifiers, Frame, PipeWireCapture, PortalSession, RestoreTokenStore,
-        StreamOptions,
+        CaptureError, CaptureSource, CursorUpdate, FormatModifiers, Frame, PipeWireCapture,
+        PortalSession, RestoreTokenStore, StreamOptions, Subscriber,
     };
     use rusplay_config::Config;
 
@@ -57,6 +77,10 @@ mod portal {
     impl FrameSource for PipeWireCapture {
         fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
             self.next_frame_timeout(timeout)
+        }
+
+        fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
+            CaptureSource::cursor_feed(self)
         }
     }
 

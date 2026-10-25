@@ -21,10 +21,10 @@ paths:
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
-  a socket wait. Four named threads,
-  each returning `Result<(), HostError>`, share `Shared` (stop flag, `Counters`, the capture
-  mailbox). Any stage that ends stops the others; `wait`/`stop` join all four and return the
-  first error, and dropping the stream stops it. `HostError::is_session_failure` tells the
+  a socket wait. Four to six named threads, each returning `Result<(), HostError>`, share
+  `Shared` (stop flag, the streaming flag, `Counters`, the capture mailbox). Any stage that ends
+  stops the others; `wait`/`stop` join all of them and return the first error, and dropping the
+  stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
@@ -52,11 +52,35 @@ paths:
     answers the client's `Hello` with its own (another version is `VersionMismatch`, after a
     `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
+    The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
+    the audio and cursor stages wait for.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the
     client's proof of life and which keeps the client's own `HostSilent` timer quiet on a static
     screen. No `Hello` within `network.handshake_timeout_ms` is `HandshakeTimeout`; nothing from
     the client for `network.peer_timeout_ms` is `ClientSilent`. On stop it sends `Goodbye` and
     lingers up to four retransmit intervals for its acknowledgement.
+  - `rusplay-host-audio` (only when the session has an audio source) opens the encoder from
+    `audio.codec` (Opus, or FLAC with the `flac` feature; FLAC without it is
+    `AudioCodecNotCompiled`) and the source on its own thread, which runs on a
+    `CODEC_THREAD_STACK_BYTES` stack. It reads one codec frame at a time with a 20 ms timeout so
+    it sees the stop flag, drops frames until the streaming flag is set (so the first packet is
+    number 0 and no stale audio queues up before the client's `Hello`), then encodes, sends each
+    packet through its own `Packetizer` on `StreamKind::Audio` (`audio.fec_overhead_percent`,
+    0 by default since Opus carries in-band FEC) and counts up by one per packet, which is the
+    contract `client.md` describes. It shares nothing with the video path but the stop flag, the
+    counters and the socket, so a slow or starved source never delays a video frame; a source
+    error ends the session like any other stage.
+  - `rusplay-host-cursor` (only when the feed has a cursor subscriber) drains the feed's
+    `Subscriber<CursorUpdate>`, merging updates with `CursorUpdate::absorb`, and sends each change
+    as a `CursorMessage` on `StreamKind::Cursor` through a `Packetizer` without FEC. Messages are
+    latest-wins: updates that arrive while one is being sent merge into the next, so a burst
+    collapses to the newest position. The merged state lives on the `CaptureFeed` between
+    sessions, so the first message of a session always carries the current image, even when the
+    capture reported the shape before the client arrived. A message carries the image when the
+    shape changed, when the session's first message goes out, and again every
+    `network.cursor_image_repeat_ms` (0 turns repetition off), which repairs a lost image
+    message because the client cannot ask for one; the repeat also fires on an idle cursor. A
+    bitmap wider or taller than 65535 pixels is `CursorImageTooLarge`.
 - Encode → send is a `sync_channel` of two encoded frames filled with `try_send`. A full queue
   drops the frame without consuming a frame number and forces the next frame to be a keyframe,
   because later frames would reference the dropped one.
@@ -91,15 +115,29 @@ paths:
   behind the `pipewire` feature, tests feed synthetic frames. `open_portal_capture` opens the
   portal on the calling thread (`pollster`, restore token as configured) and returns the feed;
   without the `pipewire` feature it is `CaptureNotCompiled`.
-- Audio, input injection and the cursor stream are not wired: `host-audio`, `host-input` and
-  `host-cursor` in `docs/FEATURES.md`.
+- `AudioSource` (`read_frame(&mut [f32], timeout)`, `overruns`) is the audio capture seam, built
+  on the audio thread by an `AudioSourceFactory` (`Arc<dyn Fn(&AudioConfig)>`) so sources need
+  not be `Send`. `HostSession::bind` installs `rusplay_audio::AudioCapture` behind the
+  `pipewire` feature and no source without it; `with_audio_source` replaces it and
+  `without_audio` removes it. Tests that bind a session under `--all-features` must do one of
+  the two, or they open the real PipeWire monitor. `FrameSource::cursor_feed` is the matching
+  cursor seam (`PipeWireCapture` forwards its `cursor_feed`); `rusplay_capture::latest` builds a
+  feed for tests.
+- Input injection is not wired: `host-input` in `docs/FEATURES.md`.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives, with a `FakePipeline` behind the internal `serve_with`
   (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
-  first frame and again with a newer generation after a resize). `tests/loopback.rs` streams a synthetic
-  moving box through `GpuPipeline` with SVT-AV1 and with VAAPI AV1 into the real
-  `rusplay_client::ClientSession` (software decode, a test-only dev-dependency, configured for
-  H.264 so only the host's `StreamFormat` can make it decode AV1) and checks the
-  decoded grey in linear light; each returns early without a GPU adapter or without the encoder
-  backend and format.
+  first frame and again with a newer generation after a resize). `src/tests/media.rs` covers the
+  audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
+  decodes, a starved or failing source, cursor image on the first message, burst coalescing,
+  image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
+  synthetic moving box, a tone and a moving cursor through `GpuPipeline` with SVT-AV1 and with
+  VAAPI AV1 into the real `rusplay_client::ClientSession` (software decode, a test-only
+  dev-dependency, configured for H.264 so only the host's `StreamFormat` can make it decode AV1)
+  with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
+  amplitude and the final cursor position and image; each returns early without a GPU adapter or
+  without the encoder backend and format. The assertions hold on a loaded machine: the client's
+  decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
+  presented frame is a keyframe" is written as "or it was superseded", since the latest-wins
+  slot may drop the opening keyframe.

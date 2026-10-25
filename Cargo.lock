@@ -4812,6 +4812,7 @@ dependencies = [
  "lexopt",
  "rusplay-config",
  "rusplay-host",
+ "rusplay-net",
  "thiserror 2.0.21",
 ]
 

@@ -18,6 +18,10 @@ pub struct HostStats {
     pub control_undeliverable: u64,
     pub malformed_datagrams: u64,
     pub rejected_datagrams: u64,
+    pub audio_packets_sent: u64,
+    pub audio_overruns: u64,
+    pub cursor_messages_sent: u64,
+    pub cursor_images_sent: u64,
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +63,10 @@ pub(crate) struct Counters {
     pub control_undeliverable: Counter,
     pub malformed_datagrams: Counter,
     pub rejected_datagrams: Counter,
+    pub audio_packets_sent: Counter,
+    pub audio_overruns: Counter,
+    pub cursor_messages_sent: Counter,
+    pub cursor_images_sent: Counter,
 }
 
 impl Counters {
@@ -80,6 +88,10 @@ impl Counters {
             control_undeliverable: self.control_undeliverable.get(),
             malformed_datagrams: self.malformed_datagrams.get(),
             rejected_datagrams: self.rejected_datagrams.get(),
+            audio_packets_sent: self.audio_packets_sent.get(),
+            audio_overruns: self.audio_overruns.get(),
+            cursor_messages_sent: self.cursor_messages_sent.get(),
+            cursor_images_sent: self.cursor_images_sent.get(),
         }
     }
 }

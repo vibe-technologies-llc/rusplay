@@ -102,6 +102,12 @@ pub enum ConfigError {
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
     EmptyClientPeersFile,
+    #[error("peers.host_name is set to an empty name")]
+    EmptyHostName,
+    #[error("peers.host_name is {bytes} bytes, above 64")]
+    HostNameTooLong { bytes: usize },
+    #[error("audio fec overhead {0}% is above 100%")]
+    AudioFecOverheadOutOfRange(u8),
     #[error("software decoder thread count {0} is above 256")]
     DecoderThreadsOutOfRange(u32),
     #[error("fec overhead {0}% is above 100%")]
@@ -167,6 +173,8 @@ impl ConfigError {
             Self::GamepadDeadzoneOutOfRange(_) => Some("input.gamepad_deadzone"),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
+            Self::EmptyHostName | Self::HostNameTooLong { .. } => Some("peers.host_name"),
+            Self::AudioFecOverheadOutOfRange(_) => Some("audio.fec_overhead_percent"),
             Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),
             Self::Read { .. }
             | Self::Parse { .. }

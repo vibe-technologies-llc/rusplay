@@ -195,7 +195,7 @@ impl ControlStage {
                     if !self.streaming {
                         self.streaming = true;
                         self.next_keepalive = now + self.timing.keepalive_interval;
-                        shared.mailbox.start();
+                        shared.start();
                     }
                 }
                 ControlEvent::Received(ControlMessage::RequestKeyframe { frame }) => {

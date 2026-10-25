@@ -1,3 +1,5 @@
+mod media;
+
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
@@ -8,16 +10,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_capture::{CaptureError, DrmFourcc, Frame, FrameBuffer};
+use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
 use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
-    Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport, TransportOptions,
-    pair_as_client, reconnect_as_client,
+    ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport,
+    TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
-    ControlMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription, StreamKind,
+    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
+    StreamKind,
 };
 use tempfile::TempDir;
 
@@ -63,9 +66,14 @@ struct CountingSource {
     remaining: u32,
     produced: u32,
     resize_after: Option<u32>,
+    cursor: Option<Subscriber<CursorUpdate>>,
 }
 
 impl FrameSource for CountingSource {
+    fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
+        self.cursor.clone()
+    }
+
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
         if self.remaining == 0 {
             thread::sleep(timeout);
@@ -100,6 +108,7 @@ fn feed(frames: u32) -> Arc<CaptureFeed> {
         remaining: frames,
         produced: 0,
         resize_after: None,
+        cursor: None,
     })
 }
 
@@ -108,6 +117,16 @@ fn resizing_feed(frames: u32, after: u32) -> Arc<CaptureFeed> {
         remaining: frames,
         produced: 0,
         resize_after: Some(after),
+        cursor: None,
+    })
+}
+
+fn feed_with_cursor(frames: u32, cursor: Subscriber<CursorUpdate>) -> Arc<CaptureFeed> {
+    CaptureFeed::new(CountingSource {
+        remaining: frames,
+        produced: 0,
+        resize_after: None,
+        cursor: Some(cursor),
     })
 }
 
@@ -194,7 +213,11 @@ struct TestClient {
     host: SocketAddr,
     control: ControlChannel,
     video: Reassembler,
+    audio: Reassembler,
+    cursor: Reassembler,
     frames: Vec<ReceivedFrame>,
+    audio_packets: Vec<ReassembledFrame>,
+    cursor_messages: Vec<CursorMessage>,
     messages: Vec<ControlMessage>,
     formats: Vec<(usize, StreamDescription)>,
 }
@@ -213,7 +236,11 @@ impl TestClient {
             host,
             control: ControlChannel::new(ControlConfig::from(&network)),
             video: Reassembler::new(StreamKind::Video, ReassemblyLimits::from(&network)),
+            audio: Reassembler::new(StreamKind::Audio, ReassemblyLimits::from(&network)),
+            cursor: Reassembler::new(StreamKind::Cursor, ReassemblyLimits::from(&network)),
             frames: Vec::new(),
+            audio_packets: Vec::new(),
+            cursor_messages: Vec::new(),
             messages: Vec::new(),
             formats: Vec::new(),
         }
@@ -323,6 +350,18 @@ impl TestClient {
             StreamKind::Video => {
                 self.video.push(datagram, Instant::now(), events).ok();
             }
+            StreamKind::Audio => {
+                let packets = complete(&mut self.audio, datagram);
+                self.audio_packets.extend(packets);
+            }
+            StreamKind::Cursor => {
+                let messages = complete(&mut self.cursor, datagram);
+                self.cursor_messages.extend(
+                    messages
+                        .iter()
+                        .map(|frame| CursorMessage::decode(&frame.data).unwrap()),
+                );
+            }
             StreamKind::Fec
                 if FecHeader::parse(payload)
                     .is_ok_and(|(fec, _)| fec.protects == StreamKind::Video) =>
@@ -344,6 +383,19 @@ impl TestClient {
     }
 }
 
+fn complete(reassembler: &mut Reassembler, datagram: &[u8]) -> Vec<ReassembledFrame> {
+    let mut events = Vec::new();
+    reassembler.push(datagram, Instant::now(), &mut events).ok();
+
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            ReassemblyEvent::Frame(frame) => Some(frame),
+            _ => None,
+        })
+        .collect()
+}
+
 struct Fixture {
     _dir: TempDir,
     host: Arc<HostSession>,
@@ -352,9 +404,13 @@ struct Fixture {
 
 impl Fixture {
     fn new(config: Config) -> Self {
+        Self::with_session(config, HostSession::without_audio)
+    }
+
+    fn with_session(config: Config, configure: impl FnOnce(HostSession) -> HostSession) -> Self {
         let dir = TempDir::new().unwrap();
         let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
-        let host = Arc::new(HostSession::bind(config, store).unwrap());
+        let host = Arc::new(configure(HostSession::bind(config, store).unwrap()));
         let address = host.local_addr().unwrap();
 
         Self {

@@ -20,6 +20,8 @@ paths:
 - The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, a
   flags byte (visible, has image) and, only when the shape changed, a `CursorImage` (u16 size and
   hotspot, then tightly packed RGBA8). It is latest-wins like video, never queued behind frames.
+  The receiver cannot ask for a lost image, so the host repeats it every
+  `network.cursor_image_repeat_ms`.
 - Input travels on `StreamKind::Input` as `InputPacket`: the header `sequence` counts datagrams
   and the payload is a big-endian `u16` length of the `current` section, the `current` section and
   the `previous` section (the preceding datagram's `current`), each a run of `[len u8][record]`.

@@ -37,10 +37,11 @@ pub const PIN: &str = "482916";
 pub const FIXTURE_WIDTH: u32 = 256;
 pub const FIXTURE_HEIGHT: u32 = 144;
 
+pub const DEFAULT_FRAMES: u32 = 24;
 const IVF_HEADER_LEN: usize = 32;
 const IVF_FRAME_HEADER_LEN: usize = 12;
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
-const TEST_DECODE_QUEUE_FRAMES: u8 = 16;
+const TEST_DECODE_QUEUE_FRAMES: u8 = u8::MAX;
 const AUDIO_INTERVAL: Duration = Duration::from_millis(5);
 const AUDIO_PACKET_BUFFER: usize = 4000;
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -141,17 +142,19 @@ pub struct HostOptions {
     pub audio: Vec<Vec<u8>>,
     pub audio_drop: Box<dyn Fn(u32) -> bool + Send>,
     pub cursor: Vec<CursorMessage>,
+    pub gate: Option<Arc<AtomicBool>>,
 }
 
 impl Default for HostOptions {
     fn default() -> Self {
         Self {
-            frames: 24,
+            frames: DEFAULT_FRAMES,
             drop: Box::new(|_| false),
             goodbye: true,
             audio: Vec::new(),
             audio_drop: Box::new(|_| false),
             cursor: Vec::new(),
+            gate: None,
         }
     }
 }
@@ -341,6 +344,13 @@ fn answer_hello(
     control.flush(transport, client).ok();
 }
 
+fn gate_open(options: &HostOptions) -> bool {
+    options
+        .gate
+        .as_ref()
+        .is_none_or(|gate| gate.load(Ordering::Acquire))
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
@@ -374,6 +384,7 @@ fn serve(
     let mut fixture_index = 0_usize;
     let mut next_send = Instant::now();
     let mut finished_at: Option<Instant> = None;
+    let mut live = false;
 
     while !stop.load(Ordering::Relaxed) {
         if let Ok(Some((len, from))) = transport.recv_from_timeout(&mut buf, POLL_INTERVAL)
@@ -404,7 +415,12 @@ fn serve(
             }
         }
 
-        if streaming && next_frame < options.frames && Instant::now() >= next_send {
+        if streaming && !live && gate_open(options) {
+            live = true;
+            next_send = Instant::now();
+        }
+
+        if live && next_frame < options.frames && Instant::now() >= next_send {
             let keyframe = fixture_index == 0;
             let datagrams = packetizer
                 .packetize(next_frame, keyframe, &fixture[fixture_index])
@@ -434,7 +450,7 @@ fn serve(
             next_send += FRAME_INTERVAL;
         }
 
-        if streaming {
+        if live {
             extras.send_due(transport, client, options);
         }
 

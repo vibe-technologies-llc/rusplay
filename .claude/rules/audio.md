@@ -58,3 +58,6 @@ paths:
 - The client consumes these through `AudioDecoder` and `AudioPlayback` and owns the loss policy
   (see `client.md`): it calls `conceal`/`recover` for the frames missing between two received
   packet numbers and submits the results in order, so the playback buffer sees a gapless stream.
+- The host consumes `AudioCapture` and the encoders from its audio stage (see `host.md`): one
+  codec frame per `read_frame`, one packet per frame, numbered from 0 once the client is
+  streaming.

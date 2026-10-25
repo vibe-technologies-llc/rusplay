@@ -1,10 +1,13 @@
 use std::{
+    fmt,
     net::SocketAddr,
     sync::{Arc, mpsc},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use parking_lot::RwLock;
+use rusplay_audio::CODEC_THREAD_STACK_BYTES;
 use rusplay_config::Config;
 use rusplay_net::{
     ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
@@ -13,8 +16,10 @@ use rusplay_net::{
 use crate::{
     CaptureFeed, Client, Gpu, HostError, HostStats, Stage,
     accept::accept,
+    audio::{self, AudioLinks, AudioSourceFactory, default_audio_source},
     capture,
     control::{ControlLinks, ControlStage},
+    cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
     outbox::ControlOutbox,
     pipeline::{GpuPipeline, VideoPipeline},
@@ -26,11 +31,23 @@ const FEC_BLOCK_DATA_SHARDS: u8 = 32;
 const SEND_QUEUE_FRAMES: usize = 2;
 const PERCENT: u32 = 100;
 
-#[derive(Debug)]
 pub struct HostSession {
     config: Config,
     transport: Arc<Transport>,
     peers: Arc<RwLock<PeerStore>>,
+    audio: Option<AudioSourceFactory>,
+}
+
+impl fmt::Debug for HostSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostSession")
+            .field("config", &self.config)
+            .field("transport", &self.transport)
+            .field("peers", &self.peers)
+            .field("audio", &self.audio.is_some())
+            .finish()
+    }
 }
 
 impl HostSession {
@@ -45,7 +62,20 @@ impl HostSession {
             config,
             transport: Arc::new(transport),
             peers: Arc::new(RwLock::new(peers)),
+            audio: default_audio_source(),
         })
+    }
+
+    #[must_use]
+    pub fn with_audio_source(mut self, factory: AudioSourceFactory) -> Self {
+        self.audio = Some(factory);
+        self
+    }
+
+    #[must_use]
+    pub fn without_audio(mut self) -> Self {
+        self.audio = None;
+        self
     }
 
     pub fn config(&self) -> &Config {
@@ -126,11 +156,41 @@ impl HostSession {
         };
         stream.spawn(Stage::Encode, move || encode::run(factory, &encode_links))?;
 
+        if let Some(factory) = self.audio.clone() {
+            let links = AudioLinks {
+                shared: Arc::clone(&shared),
+                transport: Arc::clone(&self.transport),
+                client: client.address(),
+            };
+            let audio = self.config.audio;
+            stream.spawn_on(Stage::Audio, Some(CODEC_THREAD_STACK_BYTES), move || {
+                audio::run(audio, &factory, &links)
+            })?;
+        }
+
+        if let Some(subscriber) = feed.cursor_subscriber() {
+            let links = CursorLinks {
+                shared: Arc::clone(&shared),
+                feed: Arc::clone(feed),
+                subscriber,
+                transport: Arc::clone(&self.transport),
+                client: client.address(),
+            };
+            let repeat = image_repeat(&self.config);
+            stream.spawn(Stage::Cursor, move || cursor::run(repeat, &links))?;
+        }
+
         let feed = Arc::clone(feed);
         stream.spawn(Stage::Capture, move || capture::run(&feed, &shared))?;
 
         Ok(stream)
     }
+}
+
+fn image_repeat(config: &Config) -> Option<Duration> {
+    let millis = config.network.cursor_image_repeat_ms;
+
+    (millis > 0).then(|| Duration::from_millis(u64::from(millis)))
 }
 
 fn send_options(config: &Config) -> SendOptions {
@@ -197,9 +257,20 @@ impl HostStream {
         stage: Stage,
         body: impl FnOnce() -> Result<(), HostError> + Send + 'static,
     ) -> Result<(), HostError> {
-        let spawned = thread::Builder::new()
-            .name(format!("rusplay-host-{stage}"))
-            .spawn(body);
+        self.spawn_on(stage, None, body)
+    }
+
+    fn spawn_on(
+        &mut self,
+        stage: Stage,
+        stack_bytes: Option<usize>,
+        body: impl FnOnce() -> Result<(), HostError> + Send + 'static,
+    ) -> Result<(), HostError> {
+        let mut builder = thread::Builder::new().name(format!("rusplay-host-{stage}"));
+        if let Some(bytes) = stack_bytes {
+            builder = builder.stack_size(bytes);
+        }
+        let spawned = builder.spawn(body);
 
         match spawned {
             Ok(handle) => {

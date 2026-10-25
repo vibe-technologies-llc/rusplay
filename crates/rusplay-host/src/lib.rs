@@ -1,6 +1,9 @@
 mod accept;
+mod audio;
 mod capture;
 mod control;
+mod cursor;
+mod datagrams;
 mod encode;
 mod error;
 mod gpu;
@@ -17,11 +20,12 @@ mod tests;
 mod upload;
 
 pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
-pub use rusplay_net::{NetError, PeerRecord, PeerStore, Pin};
+pub use rusplay_net::{DiscoveryResponder, NetError, PeerRecord, PeerStore, Pin};
 pub use rusplay_protocol::PeerId;
 
 pub use crate::{
     accept::{Admission, Client},
+    audio::{AudioSource, AudioSourceFactory},
     error::{HostError, Stage},
     gpu::Gpu,
     session::{HostSession, HostStream},

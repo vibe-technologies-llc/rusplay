@@ -36,6 +36,7 @@ pub struct NetworkConfig {
     pub peer_timeout_ms: u32,
     pub keepalive_interval_ms: u32,
     pub keyframe_request_interval_ms: u16,
+    pub cursor_image_repeat_ms: u16,
 }
 
 impl Default for NetworkConfig {
@@ -62,6 +63,7 @@ impl Default for NetworkConfig {
             peer_timeout_ms: 5_000,
             keepalive_interval_ms: 1_000,
             keyframe_request_interval_ms: 100,
+            cursor_image_repeat_ms: 1_000,
         }
     }
 }
@@ -322,5 +324,10 @@ mod tests {
             config.validate(),
             Err(ConfigError::ZeroReconnectTimeout)
         ));
+    }
+
+    #[test]
+    fn cursor_image_repeats_every_second_by_default() {
+        assert_eq!(NetworkConfig::default().cursor_image_repeat_ms, 1_000);
     }
 }
