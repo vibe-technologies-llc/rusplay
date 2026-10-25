@@ -39,9 +39,17 @@ paths:
   `SO_RCVTIMEO` first and returns 0 when nothing came). rustix has no `recvmmsg`, so that call
   is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
-  buffers and the client's socket from dropping packets.
-- The control channel (hello, keyframe requests, loss reports, bitrate hints) has its own small
-  acknowledgement and retransmit scheme on the same socket, kept off the media path.
+  buffers and the client's socket from dropping packets. The host spreads each frame over
+  `network.pacing_window_percent` (default 50) of the interval, so pacing never delays a frame by
+  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst.
+- `ControlMessage::Keepalive` (tag 5, no body) is sent by the host every
+  `network.keepalive_interval_ms` (default 1000, validated below `network.peer_timeout_ms`). Its
+  acknowledgement is the host's evidence that the client is alive, and its arrival keeps the
+  client's peer timeout quiet while a static screen produces no video. Receivers ignore it apart
+  from the acknowledgement.
+- The control channel (hello, keyframe requests, loss reports, bitrate hints, keepalives,
+  goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+  the media path.
 
 ## Control channel
 

@@ -1,3 +1,9 @@
+# Capture
+- [S] `capture-handoff-dead-code`: without the `pipewire` feature, `handoff::Publisher` and `latest` are unused, so `cargo clippy -p rusplay-capture -- -D warnings` fails; the workspace check only runs with `--all-features`
+
+# Host
+- [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
+
 # Video decode
 - [S] `decode-vaapi-driver-field-long-term`: after a field of a long-term frame is unmarked with MMCO 2 and a non-reference frame was decoded earlier, Mesa's VAAPI H.264 decode makes every macroblock of the next P field use reference entry 0 (software decode and the DPB state agree on the right lists, and ffmpeg's VAAPI path reproduces it); find a workaround or confirm a driver fix
 - [S] `decode-rav1d-render-size`: `Rav1dDecoder` reports the coded frame size instead of the AV1 render size, so a stream whose encoder pads the frame decodes wider than it was captured (radeonsi codes a 402-wide AV1 frame as 408 and signals 402 as the render size; the VAAPI decoder already honours it)

@@ -683,6 +683,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
+        "network.pacing_window_percent",
+        "Pacing window",
+        U8,
+    )
+    .unit("%"),
+    field(
+        Section::Network,
+        "Transport",
         "network.jitter_buffer_ms",
         "Jitter buffer",
         U16,
@@ -768,6 +776,14 @@ pub static FIELDS: &[Field] = &[
         "Session",
         "network.peer_timeout_ms",
         "Peer timeout",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.keepalive_interval_ms",
+        "Keepalive interval",
         U32,
     )
     .unit("ms"),

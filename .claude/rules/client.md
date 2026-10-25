@@ -17,6 +17,8 @@ paths:
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
+  The host's periodic `Keepalive` only needs the channel's acknowledgement, which every received
+  message gets; `rusplay-host` (`.claude/rules/host.md`) is the host side of this contract.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), each returning
   `Result<(), ClientError>`. Any stage that ends sets the shared stop flag; `ClientStream::wait`
   and `stop` join all three and return the first error. Dropping the stream stops it.

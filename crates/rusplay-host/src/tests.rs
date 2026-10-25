@@ -1,0 +1,612 @@
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+use rusplay_capture::{CaptureError, DrmFourcc, Frame, FrameBuffer};
+use rusplay_config::{Config, NetworkConfig};
+use rusplay_core::{Codec, EncodedFrame, Resolution, Timestamp};
+use rusplay_net::{
+    ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
+    Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport, TransportOptions,
+    pair_as_client, reconnect_as_client,
+};
+use rusplay_protocol::{ControlMessage, FecHeader, PacketHeader, ProtocolVersion, StreamKind};
+use tempfile::TempDir;
+
+use crate::{
+    Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream,
+    encode::PipelineFactory, pipeline::VideoPipeline,
+};
+
+const PIN: &str = "583014";
+const FRAME_SIZE: Resolution = Resolution::new(64, 32);
+const FRAME_BYTES: usize = 5_000;
+const SOURCE_INTERVAL: Duration = Duration::from_millis(10);
+const WAIT: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(2);
+const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+fn network() -> NetworkConfig {
+    NetworkConfig {
+        bind_address: LOCALHOST,
+        port: 0,
+        pairing_timeout_ms: 5_000,
+        handshake_timeout_ms: 500,
+        peer_timeout_ms: 800,
+        keepalive_interval_ms: 100,
+        ..NetworkConfig::default()
+    }
+}
+
+fn host_config() -> Config {
+    Config {
+        network: network(),
+        ..Config::default()
+    }
+}
+
+fn pin() -> Pin {
+    Pin::parse(PIN).unwrap()
+}
+
+struct CountingSource {
+    remaining: u32,
+    produced: u32,
+}
+
+impl FrameSource for CountingSource {
+    fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
+        if self.remaining == 0 {
+            thread::sleep(timeout);
+            return Ok(None);
+        }
+
+        thread::sleep(SOURCE_INTERVAL.min(timeout));
+        self.remaining -= 1;
+        self.produced += 1;
+        let stride = FRAME_SIZE.width * 4;
+        let fill = u8::try_from(self.produced % 256).unwrap();
+
+        Ok(Some(Frame {
+            resolution: FRAME_SIZE,
+            format: DrmFourcc::from_code(*b"XR24"),
+            timestamp: Timestamp::from_micros(u64::from(self.produced) * 10_000),
+            buffer: FrameBuffer::Shm {
+                data: vec![fill; (stride * FRAME_SIZE.height) as usize],
+                stride,
+            },
+        }))
+    }
+}
+
+fn feed(frames: u32) -> Arc<CaptureFeed> {
+    CaptureFeed::new(CountingSource {
+        remaining: frames,
+        produced: 0,
+    })
+}
+
+#[derive(Default)]
+struct FakePipeline {
+    last: Option<u8>,
+    encoded: u32,
+    bitrate: Arc<AtomicU32>,
+}
+
+impl FakePipeline {
+    fn emit(&mut self, fill: u8, keyframe: bool, timestamp: Timestamp) -> EncodedFrame {
+        let keyframe = keyframe || self.encoded == 0;
+        self.encoded += 1;
+
+        EncodedFrame {
+            codec: Codec::Av1,
+            timestamp,
+            keyframe,
+            data: vec![fill; FRAME_BYTES],
+        }
+    }
+}
+
+impl VideoPipeline for FakePipeline {
+    fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
+        let FrameBuffer::Shm { data, .. } = &frame.buffer else {
+            return Ok(None);
+        };
+        self.last = Some(data[0]);
+
+        Ok(Some(self.emit(data[0], keyframe, frame.timestamp)))
+    }
+
+    fn repeat(
+        &mut self,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        Ok(self.last.map(|fill| self.emit(fill, keyframe, timestamp)))
+    }
+
+    fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError> {
+        self.bitrate.store(kbps, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+fn fake_factory(bitrate: &Arc<AtomicU32>) -> PipelineFactory {
+    let bitrate = Arc::clone(bitrate);
+    Box::new(move || {
+        Ok(Box::new(FakePipeline {
+            bitrate,
+            ..FakePipeline::default()
+        }) as Box<dyn VideoPipeline>)
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivedFrame {
+    number: u32,
+    keyframe: bool,
+    fill: u8,
+}
+
+struct TestClient {
+    transport: Transport,
+    host: SocketAddr,
+    control: ControlChannel,
+    video: Reassembler,
+    frames: Vec<ReceivedFrame>,
+    messages: Vec<ControlMessage>,
+}
+
+impl TestClient {
+    fn bind(host: SocketAddr) -> Self {
+        let network = network();
+        let transport = Transport::bind(
+            SocketAddr::new(LOCALHOST, 0),
+            TransportOptions::from(&network),
+        )
+        .unwrap();
+
+        Self {
+            transport,
+            host,
+            control: ControlChannel::new(ControlConfig::from(&network)),
+            video: Reassembler::new(StreamKind::Video, ReassemblyLimits::from(&network)),
+            frames: Vec::new(),
+            messages: Vec::new(),
+        }
+    }
+
+    fn pair(host: SocketAddr) -> (Self, PeerRecord) {
+        let client = Self::bind(host);
+        let outcome = pair_as_client(
+            &client.transport,
+            host,
+            &pin(),
+            PairingTiming::from(&network()),
+        )
+        .unwrap();
+        client.transport.install_session(&outcome.keys);
+
+        (
+            client,
+            PeerRecord::new("test host", outcome.secret).unwrap(),
+        )
+    }
+
+    fn reconnect(host: SocketAddr, record: &PeerRecord) -> Self {
+        let client = Self::bind(host);
+        let keys = reconnect_as_client(
+            &client.transport,
+            host,
+            record,
+            ReconnectTiming::from(&network()),
+        )
+        .unwrap();
+        client.transport.install_session(&keys);
+
+        client
+    }
+
+    fn send(&mut self, message: ControlMessage) {
+        self.control.send(message, Instant::now()).unwrap();
+        self.control.flush(&self.transport, self.host).unwrap();
+    }
+
+    fn hello(&mut self) {
+        self.send(ControlMessage::Hello {
+            version: ProtocolVersion::CURRENT,
+        });
+    }
+
+    fn pump_until(&mut self, done: impl Fn(&Self) -> bool) -> bool {
+        self.pump(WAIT, done)
+    }
+
+    fn pump(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut buf = vec![0; usize::from(network().mtu)];
+        let mut events = Vec::new();
+        let mut control_events = Vec::new();
+
+        while !done(self) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+
+            if let Some((len, from)) = self.transport.recv_from_timeout(&mut buf, POLL).unwrap()
+                && from == self.host
+            {
+                self.route(&buf[..len], &mut events, &mut control_events);
+            }
+            self.control.poll(Instant::now(), &mut control_events);
+
+            for event in events.drain(..) {
+                if let ReassemblyEvent::Frame(frame) = event {
+                    self.frames.push(ReceivedFrame {
+                        number: frame.frame,
+                        keyframe: frame.keyframe,
+                        fill: frame.data[0],
+                    });
+                }
+            }
+            for event in control_events.drain(..) {
+                if let ControlEvent::Received(message) = event {
+                    self.messages.push(message);
+                }
+            }
+            self.control.flush(&self.transport, self.host).unwrap();
+        }
+
+        true
+    }
+
+    fn route(
+        &mut self,
+        datagram: &[u8],
+        events: &mut Vec<ReassemblyEvent>,
+        control_events: &mut Vec<ControlEvent>,
+    ) {
+        let Ok((header, payload)) = PacketHeader::parse(datagram) else {
+            return;
+        };
+
+        match header.stream {
+            StreamKind::Control => {
+                self.control.handle_datagram(datagram, control_events).ok();
+            }
+            StreamKind::Video => {
+                self.video.push(datagram, Instant::now(), events).ok();
+            }
+            StreamKind::Fec
+                if FecHeader::parse(payload)
+                    .is_ok_and(|(fec, _)| fec.protects == StreamKind::Video) =>
+            {
+                self.video.push(datagram, Instant::now(), events).ok();
+            }
+            _ => {}
+        }
+    }
+
+    fn has_hello(&self) -> bool {
+        self.messages
+            .iter()
+            .any(|message| matches!(message, ControlMessage::Hello { .. }))
+    }
+
+    fn has(&self, wanted: ControlMessage) -> bool {
+        self.messages.contains(&wanted)
+    }
+}
+
+struct Fixture {
+    _dir: TempDir,
+    host: Arc<HostSession>,
+    address: SocketAddr,
+}
+
+impl Fixture {
+    fn new(config: Config) -> Self {
+        let dir = TempDir::new().unwrap();
+        let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
+        let host = Arc::new(HostSession::bind(config, store).unwrap());
+        let address = host.local_addr().unwrap();
+
+        Self {
+            _dir: dir,
+            host,
+            address,
+        }
+    }
+
+    fn serve(
+        &self,
+        pin: Option<Pin>,
+        feed: Arc<CaptureFeed>,
+        factory: PipelineFactory,
+    ) -> thread::JoinHandle<Result<(Admission, HostStream), HostError>> {
+        let host = Arc::clone(&self.host);
+        thread::spawn(move || {
+            let client = host.accept(pin)?;
+            let stream = host.serve_with(&client, &feed, factory)?;
+            Ok((client.admission(), stream))
+        })
+    }
+}
+
+fn wait_for_end(stream: HostStream) -> Result<(), HostError> {
+    let deadline = Instant::now() + WAIT;
+    while !stream.is_finished() && Instant::now() < deadline {
+        thread::sleep(POLL);
+    }
+    stream.wait()
+}
+
+#[test]
+fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(6), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (admission, stream) = serving.join().unwrap().unwrap();
+    let complete = client.pump_until(|client| {
+        client.frames.len() >= 4 && client.has_hello() && stream.stats().frames_sent >= 4
+    });
+    let stats = stream.stats();
+
+    assert!(complete);
+    assert_eq!(admission, Admission::Paired);
+    assert_eq!(fixture.host.peers().read().len(), 1);
+    assert!(client.frames[0].keyframe);
+    assert!(client.frames[1..].iter().all(|frame| !frame.keyframe));
+    assert!(
+        client
+            .frames
+            .iter()
+            .zip(0..)
+            .all(|(frame, number)| frame.number == number)
+    );
+    assert!(stats.frames_sent >= 4);
+    assert_eq!(stats.keyframes_sent, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn nothing_streams_before_the_client_says_hello() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let early = client.pump(Duration::from_millis(300), |client| {
+        !client.frames.is_empty()
+    });
+    client.hello();
+    let streamed = client.pump_until(|client| !client.frames.is_empty());
+
+    assert!(!early);
+    assert!(streamed);
+    assert!(client.frames[0].keyframe);
+    assert_eq!(client.frames[0].fill, 3);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 3);
+    client.send(ControlMessage::RequestKeyframe { frame: 3 });
+    let repeated = client.pump_until(|client| client.frames.len() >= 4);
+    let stats = stream.stats();
+
+    assert!(repeated);
+    assert_eq!(
+        client.frames[3],
+        ReceivedFrame {
+            number: 3,
+            keyframe: true,
+            fill: client.frames[2].fill,
+        }
+    );
+    assert_eq!(stats.frames_repeated, 1);
+    assert_eq!(stats.keyframe_requests, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_request_older_than_the_last_keyframe_is_ignored() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 2);
+    client.send(ControlMessage::RequestKeyframe { frame: 1 });
+    client.pump_until(|client| client.frames.len() >= 3);
+    client.send(ControlMessage::RequestKeyframe { frame: 1 });
+    let settled = client.pump_until(|_| stream.stats().keyframe_requests >= 2);
+    client.pump(Duration::from_millis(100), |_| false);
+    let stats = stream.stats();
+
+    assert!(settled);
+    assert!(client.frames[2].keyframe);
+    assert_eq!(stats.frames_repeated, 1);
+    assert_eq!(stats.keyframe_requests_ignored, 1);
+    assert_eq!(client.frames.len(), 3);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_bitrate_hint_reaches_the_encoder() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::BitrateHint { kbps: 12_345 });
+    let applied = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 12_345);
+
+    assert!(applied);
+    assert_eq!(stream.stats().bitrate_changes, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_client_goodbye_ends_the_session_cleanly() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+    client.send(ControlMessage::Goodbye);
+
+    assert!(wait_for_end(stream).is_ok());
+}
+
+#[test]
+fn stopping_the_host_says_goodbye_and_keeps_the_last_frame_for_the_next_client() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let feed = feed(2);
+    let serving = fixture.serve(Some(pin()), Arc::clone(&feed), fake_factory(&bitrate));
+
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 2);
+    stream.stop().unwrap();
+    let farewell = client.pump_until(|client| client.has(ControlMessage::Goodbye));
+
+    let serving = fixture.serve(None, feed, fake_factory(&bitrate));
+    let mut returning = TestClient::reconnect(fixture.address, &record);
+    returning.hello();
+    let (admission, stream) = serving.join().unwrap().unwrap();
+    let resumed = returning.pump_until(|client| !client.frames.is_empty());
+
+    assert!(farewell);
+    assert_eq!(admission, Admission::Reconnected);
+    assert!(resumed);
+    assert_eq!(
+        returning.frames[0],
+        ReceivedFrame {
+            number: 0,
+            keyframe: true,
+            fill: 2,
+        }
+    );
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_silent_client_times_out() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+    drop(client);
+
+    assert!(matches!(
+        wait_for_end(stream),
+        Err(HostError::ClientSilent(_))
+    ));
+}
+
+#[test]
+fn keepalives_hold_a_static_session_open() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let alive = client.pump_until(|client| {
+        client
+            .messages
+            .iter()
+            .filter(|message| **message == ControlMessage::Keepalive)
+            .count()
+            >= 12
+    });
+
+    assert!(alive);
+    assert!(!stream.is_finished());
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_client_that_never_says_hello_times_out() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (_client, _) = TestClient::pair(fixture.address);
+    let (_, stream) = serving.join().unwrap().unwrap();
+
+    assert!(matches!(
+        wait_for_end(stream),
+        Err(HostError::HandshakeTimeout(_))
+    ));
+}
+
+#[test]
+fn an_unknown_client_cannot_reconnect() {
+    let mut config = host_config();
+    config.network.pairing_timeout_ms = 1_000;
+    let fixture = Fixture::new(config);
+    let host = Arc::clone(&fixture.host);
+    let accepting = thread::spawn(move || host.accept(None).map(|client| client.admission()));
+    let stranger =
+        PeerRecord::new("stranger", rusplay_net::PeerSecret::from_bytes([7; 32])).unwrap();
+
+    let client = TestClient::bind(fixture.address);
+    let result = reconnect_as_client(
+        &client.transport,
+        fixture.address,
+        &stranger,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(result.is_err());
+    assert!(matches!(
+        accepting.join().unwrap(),
+        Err(HostError::AcceptTimeout(_))
+    ));
+}
+
+#[test]
+fn accept_gives_up_after_the_pairing_timeout() {
+    let mut config = host_config();
+    config.network.pairing_timeout_ms = 50;
+    let fixture = Fixture::new(config);
+
+    assert!(matches!(
+        fixture.host.accept(Some(pin())),
+        Err(HostError::AcceptTimeout(_))
+    ));
+}

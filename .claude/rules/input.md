@@ -69,8 +69,7 @@ for screen and input in a single portal session and a single permission dialog:
 
 `LibeiInjector::open_standalone` runs steps 1, 3 and 4 for a host that wants input without a
 ScreenCast session of its own. `rusplay-capture` currently opens its own ScreenCast session, so a
-combined session needs `PortalSession` to accept an external one; that is part of wiring the host
-pipeline.
+combined session needs `PortalSession` to accept an external one; that is part of `host-input`.
 
 Live tests need a Wayland session with the portal and a person to confirm its dialog, so they are
 `#[ignore]`d.
