@@ -1,6 +1,7 @@
 mod error;
 #[cfg(feature = "flac")]
 mod flac;
+mod multistream;
 mod opus;
 
 #[cfg(feature = "flac")]

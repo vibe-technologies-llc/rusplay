@@ -3,8 +3,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AudioError {
-    #[error("opus cannot carry {0:?} without multistream support")]
-    OpusLayoutUnsupported(ChannelLayout),
+    #[error("{0:?} is not a multistream layout")]
+    OpusNotMultistream(ChannelLayout),
+    #[error("opus stream {stream} produced a packet that cannot be self-delimited")]
+    OpusSubPacketMalformed { stream: usize },
+    #[error("opus packet needs {needed} bytes but the buffer holds {capacity}")]
+    OpusPacketBufferTooSmall { needed: usize, capacity: usize },
     #[error("opus cannot run at {} Hz", .0.hz())]
     OpusSampleRateUnsupported(SampleRate),
     #[error("opus encoder setup failed: {0}")]
