@@ -23,6 +23,8 @@ paths:
   [SL SR]), so `mapping_table` is the family 1 table permuted to that order, not the Vorbis order.
 - opus-rs uses more than the default 2 MiB thread stack in unoptimised builds. Codec work runs on
   threads spawned with `CODEC_THREAD_STACK_BYTES`, and tests that touch the codec do the same.
-- Capture asks PipeWire for 48 kHz float. If resampling is ever needed (a 96 kHz FLAC stream, a
-  device that will not negotiate), it runs on the CPU with `rubato`, or with the resampler from
-  the author's Resonate project, never through a C library.
+- Capture asks PipeWire for 48 kHz float. When a device delivers another rate, `PcmResampler`
+  converts it on the CPU with `rubato`'s asynchronous sinc resampler (fixed ratio, linear
+  interpolation between oversampled sincs, 64-tap filter, 120-frame input chunks, so the delay is
+  a few milliseconds). `push` accepts any chunk length and appends whatever whole output chunks
+  are ready; equal rates copy straight through. Never a C resampler.

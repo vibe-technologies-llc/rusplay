@@ -28,7 +28,6 @@
 # Audio
 - [M] `audio-capture`: PipeWire audio capture of the default sink monitor at 48 kHz float
 - [M] `audio-playback`: PipeWire playback on the client with a minimal jitter buffer
-- [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
 # Networking
 - [M] `net-fec`: Reed-Solomon shard encode/decode for `FecScheme`

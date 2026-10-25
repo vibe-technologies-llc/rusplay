@@ -12,6 +12,7 @@ flac = ["dep:claxon", "dep:flacenc"]
 claxon = { workspace = true, optional = true }
 flacenc = { workspace = true, optional = true }
 opus-rs = { workspace = true, features = ["std"] }
+rubato.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
 thiserror.workspace = true

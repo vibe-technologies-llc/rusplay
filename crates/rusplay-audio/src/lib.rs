@@ -3,12 +3,14 @@ mod error;
 mod flac;
 mod multistream;
 mod opus;
+mod resample;
 
 #[cfg(feature = "flac")]
 pub use crate::flac::{FlacAudioDecoder, FlacAudioEncoder};
 pub use crate::{
     error::AudioError,
     opus::{OpusAudioDecoder, OpusAudioEncoder},
+    resample::PcmResampler,
 };
 
 pub const CODEC_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;

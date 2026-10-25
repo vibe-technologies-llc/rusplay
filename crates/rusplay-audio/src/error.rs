@@ -21,6 +21,14 @@ pub enum AudioError {
     OpusDecode(&'static str),
     #[error("expected {expected} interleaved samples, got {found}")]
     FrameLengthMismatch { expected: usize, found: usize },
+    #[error("resampler setup rejected")]
+    ResamplerInit(#[source] rubato::ResamplerConstructionError),
+    #[error("resampling failed")]
+    Resample(#[source] rubato::ResampleError),
+    #[error("resampler buffers have inconsistent sizes")]
+    ResampleBuffer(#[source] rubato::audioadapter_buffers::SizeError),
+    #[error("{samples} samples do not divide into {channels} channels")]
+    UnalignedSamples { channels: usize, samples: usize },
     #[cfg(feature = "flac")]
     #[error("flac encoder settings rejected")]
     FlacSettings(#[source] flacenc::error::VerifyError),

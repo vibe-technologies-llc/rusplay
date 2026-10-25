@@ -26,6 +26,7 @@ ashpd = { version = "0.13.13", default-features = false }
 claxon = "0.4.3"
 flacenc = { version = "0.5.1", default-features = false }
 opus-rs = { version = "0.1.40", default-features = false }
+rubato = { version = "5.0.1", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 thiserror = "2.0.21"
 toml = { version = "1.1.8", default-features = false }
