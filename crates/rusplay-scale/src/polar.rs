@@ -1,7 +1,10 @@
+use rusplay_core::ScaleFilter;
+
 use crate::{
     Kernel, ScaleSettings,
-    gpu::{self, ScalePipelines, buffer_group, storage_buffer, uniform_buffer},
+    gpu::{self, ScalePipelines, ShaderPass, buffer_group, storage_buffer, uniform_buffer},
     scaler::resolution_pair,
+    shaping::Shaping,
 };
 
 pub(crate) const RADIAL_LUT_SIZE: u32 = 1024;
@@ -13,6 +16,7 @@ pub(crate) struct PolarGeometry {
     pub ratio: (f32, f32),
     pub stretch: (f32, f32),
     pub radius: f32,
+    pub phase: (f32, f32),
 }
 
 impl PolarGeometry {
@@ -24,8 +28,18 @@ impl PolarGeometry {
             axis_ratio(source.1, target.1),
         );
 
+        Self::with_ratio(settings.filter, source, target, ratio, (0.0, 0.0))
+    }
+
+    pub(crate) fn with_ratio(
+        filter: ScaleFilter,
+        source: (u32, u32),
+        target: (u32, u32),
+        ratio: (f32, f32),
+        phase: (f32, f32),
+    ) -> Self {
         #[allow(clippy::cast_possible_truncation)]
-        let radius = Kernel::new(settings.filter).radius() as f32;
+        let radius = Kernel::new(filter).radius() as f32;
 
         Self {
             source,
@@ -33,6 +47,7 @@ impl PolarGeometry {
             ratio,
             stretch: (ratio.0.max(1.0), ratio.1.max(1.0)),
             radius,
+            phase,
         }
     }
 }
@@ -56,6 +71,7 @@ pub(crate) fn radial_lut(kernel: Kernel, size: u32) -> Vec<f32> {
 pub(crate) struct PolarPlan {
     lut: wgpu::Buffer,
     geometry: PolarGeometry,
+    pass: ShaderPass,
     group: wgpu::BindGroup,
 }
 
@@ -65,17 +81,58 @@ impl PolarPlan {
         device: &wgpu::Device,
         settings: &ScaleSettings,
     ) -> Self {
+        Self::build(
+            pipelines,
+            device,
+            pipelines.polar.clone(),
+            settings.filter,
+            PolarGeometry::new(settings),
+            &settings.polar_shaping(),
+        )
+    }
+
+    pub(crate) fn chroma(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        filter: ScaleFilter,
+        geometry: PolarGeometry,
+    ) -> Self {
+        let unshaped = Shaping {
+            antiringing: 0.0,
+            sigmoid: None,
+            sigmoidize_input: false,
+            unsigmoidize_output: false,
+        };
+
+        Self::build(
+            pipelines,
+            device,
+            pipelines.convert.polar_chroma.clone(),
+            filter,
+            geometry,
+            &unshaped,
+        )
+    }
+
+    fn build(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        pass: ShaderPass,
+        filter: ScaleFilter,
+        geometry: PolarGeometry,
+        shaping: &Shaping,
+    ) -> Self {
         let lut = storage_buffer(
             device,
             "rusplay-resample-radial-lut",
-            &radial_lut(Kernel::new(settings.filter), RADIAL_LUT_SIZE),
+            &radial_lut(Kernel::new(filter), RADIAL_LUT_SIZE),
         );
-        let geometry = PolarGeometry::new(settings);
-        let group = Self::group(pipelines, device, &lut, &geometry, settings);
+        let group = Self::group(pipelines, device, &lut, &geometry, shaping);
 
         Self {
             lut,
             geometry,
+            pass,
             group,
         }
     }
@@ -86,12 +143,17 @@ impl PolarPlan {
         device: &wgpu::Device,
         settings: &ScaleSettings,
     ) {
-        self.group = Self::group(pipelines, device, &self.lut, &self.geometry, settings);
+        self.group = Self::group(
+            pipelines,
+            device,
+            &self.lut,
+            &self.geometry,
+            &settings.polar_shaping(),
+        );
     }
 
     pub(crate) fn encode(
         &self,
-        pipelines: &ScalePipelines,
         encoder: &mut wgpu::CommandEncoder,
         source_group: &wgpu::BindGroup,
         target_group: &wgpu::BindGroup,
@@ -99,7 +161,7 @@ impl PolarPlan {
         gpu::dispatch(
             encoder,
             "rusplay-resample-polar",
-            &pipelines.polar,
+            &self.pass,
             &[source_group, target_group, &self.group],
             self.geometry.target,
         );
@@ -110,7 +172,7 @@ impl PolarPlan {
         device: &wgpu::Device,
         lut: &wgpu::Buffer,
         geometry: &PolarGeometry,
-        settings: &ScaleSettings,
+        shaping: &Shaping,
     ) -> wgpu::BindGroup {
         let pass = [
             geometry.source.0,
@@ -123,11 +185,10 @@ impl PolarPlan {
             geometry.stretch.1.to_bits(),
             geometry.radius.to_bits(),
             RADIAL_LUT_SIZE,
-            0,
-            0,
+            geometry.phase.0.to_bits(),
+            geometry.phase.1.to_bits(),
         ];
-        let bytes: Vec<u8> = settings
-            .polar_shaping()
+        let bytes: Vec<u8> = shaping
             .words()
             .iter()
             .chain(&pass)

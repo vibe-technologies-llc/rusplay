@@ -9,6 +9,7 @@ use crate::{
         self, CHROMA_FORMAT, ScalePipelines, buffer_group, storage_buffer, uniform_buffer,
         view_group,
     },
+    polar::{PolarGeometry, PolarPlan},
     scaler::{GroupCache, resolution_pair},
 };
 
@@ -17,6 +18,7 @@ pub const DEFAULT_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 const MIN_ROW_ALIGNMENT: u32 = 4;
 const WORD_BYTES: u64 = 4;
 const LEFT_SITING_PHASE: f64 = -0.5;
+const SUBSAMPLING_RATIO: f32 = 2.0;
 const TRANSFER_NONE: u32 = 0;
 const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
@@ -117,8 +119,11 @@ impl ConvertSettings {
         if self.resolution.pixel_count() == 0 {
             return Err(ScaleError::EmptySource(self.resolution));
         }
-        if Kernel::new(self.chroma_filter).geometry() != Geometry::Separable {
-            return Err(ScaleError::ChromaFilterNotSeparable(self.chroma_filter));
+        if self.polar_chroma() && self.format.chroma == ChromaSubsampling::Yuv422 {
+            return Err(ScaleError::PolarChromaFilterUnsupported {
+                filter: self.chroma_filter,
+                chroma: self.format.chroma,
+            });
         }
 
         self.transfer_code()?;
@@ -134,6 +139,31 @@ impl ConvertSettings {
                 Err(ScaleError::TransferUnsupported(transfer))
             }
         }
+    }
+
+    pub(crate) fn polar_chroma(&self) -> bool {
+        Kernel::new(self.chroma_filter).geometry() == Geometry::Polar
+            && self.format.chroma != ChromaSubsampling::Yuv444
+    }
+
+    fn siting_phase(&self) -> f64 {
+        match self.chroma_siting {
+            ChromaSiting::Left => LEFT_SITING_PHASE,
+            ChromaSiting::Center => 0.0,
+        }
+    }
+
+    pub(crate) fn polar_chroma_geometry(&self) -> PolarGeometry {
+        #[allow(clippy::cast_possible_truncation)]
+        let phase = self.siting_phase() as f32;
+
+        PolarGeometry::with_ratio(
+            self.chroma_filter,
+            resolution_pair(self.resolution),
+            self.chroma_size(),
+            (SUBSAMPLING_RATIO, SUBSAMPLING_RATIO),
+            (phase, 0.0),
+        )
     }
 
     pub fn chroma_size(&self) -> (u32, u32) {
@@ -170,10 +200,14 @@ impl ConvertSettings {
         let kernel = Kernel::new(self.chroma_filter);
         let (width, height) = resolution_pair(self.resolution);
         let (chroma_width, chroma_height) = self.chroma_size();
-        let phase = match self.chroma_siting {
-            ChromaSiting::Left => LEFT_SITING_PHASE,
-            ChromaSiting::Center => 0.0,
-        };
+        let phase = self.siting_phase();
+
+        if self.polar_chroma() {
+            return (
+                TapTable::identity(chroma_width),
+                TapTable::identity(chroma_height),
+            );
+        }
 
         let horizontal = match self.format.chroma {
             ChromaSubsampling::Yuv444 => TapTable::identity(width),
@@ -419,12 +453,83 @@ enum ChromaPath {
     },
     Rows {
         rows_group: wgpu::BindGroup,
-        pack_group: wgpu::BindGroup,
-        chroma_target: wgpu::BindGroup,
-        chroma_source: wgpu::BindGroup,
-        chroma_words: (u32, u32),
-        chroma_layers: u32,
+        pack: PackStage,
     },
+    Polar {
+        full_group: wgpu::BindGroup,
+        full_target: wgpu::BindGroup,
+        full_source: wgpu::BindGroup,
+        resample: PolarPlan,
+        pack: PackStage,
+    },
+}
+
+#[derive(Debug)]
+struct PackStage {
+    target: wgpu::BindGroup,
+    source: wgpu::BindGroup,
+    group: wgpu::BindGroup,
+    words: (u32, u32),
+    layers: u32,
+}
+
+impl PackStage {
+    fn new(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        layout: &FrameLayout,
+        params: &wgpu::Buffer,
+        vertical: &TapTable,
+        intermediate_size: (u32, u32),
+    ) -> Self {
+        let chroma = layout.planes[1];
+        let last = layout.planes[layout.planes.len() - 1];
+        let intermediate = gpu::storage_texture(
+            device,
+            "rusplay-convert-chroma",
+            intermediate_size,
+            CHROMA_FORMAT,
+        );
+        let firsts = storage_buffer(device, "rusplay-convert-firsts", &vertical.firsts);
+        let weights = storage_buffer(device, "rusplay-convert-weights", &vertical.weights);
+
+        Self {
+            target: view_group(
+                device,
+                &pipelines.convert.chroma_target_layout,
+                &intermediate,
+            ),
+            source: pipelines.source_group(device, &intermediate),
+            group: buffer_group(
+                device,
+                "rusplay-pack-chroma",
+                &pipelines.convert.table_layout,
+                &[params, &firsts, &weights],
+            ),
+            words: (chroma.stride / 4, chroma.height),
+            layers: if last.content == PlaneContent::Cr {
+                2
+            } else {
+                1
+            },
+        }
+    }
+
+    fn encode(
+        &self,
+        pipelines: &ScalePipelines,
+        encoder: &mut wgpu::CommandEncoder,
+        output_group: &wgpu::BindGroup,
+    ) {
+        gpu::dispatch_layers(
+            encoder,
+            "rusplay-pack-chroma",
+            &pipelines.convert.pack_chroma,
+            &[&self.source, output_group, &self.group],
+            self.words,
+            self.layers,
+        );
+    }
 }
 
 impl ConvertPlan {
@@ -451,6 +556,8 @@ impl ConvertPlan {
                     &[&params],
                 ),
             }
+        } else if settings.polar_chroma() {
+            Self::polar_path(pipelines, device, settings, layout, &params, &vertical)
         } else {
             Self::rows_path(
                 pipelines,
@@ -476,49 +583,66 @@ impl ConvertPlan {
         params: &wgpu::Buffer,
         (horizontal, vertical): (&TapTable, &TapTable),
     ) -> ChromaPath {
-        let height = settings.resolution.height;
         let chroma_width = settings.chroma_size().0;
-        let chroma = layout.planes[1];
-        let last = layout.planes[layout.planes.len() - 1];
-
-        let horizontal_firsts =
-            storage_buffer(device, "rusplay-convert-firsts", &horizontal.firsts);
-        let horizontal_weights =
-            storage_buffer(device, "rusplay-convert-weights", &horizontal.weights);
-        let vertical_firsts = storage_buffer(device, "rusplay-convert-firsts", &vertical.firsts);
-        let vertical_weights = storage_buffer(device, "rusplay-convert-weights", &vertical.weights);
-        let intermediate = gpu::storage_texture(
-            device,
-            "rusplay-convert-chroma",
-            (chroma_width, height),
-            CHROMA_FORMAT,
-        );
+        let firsts = storage_buffer(device, "rusplay-convert-firsts", &horizontal.firsts);
+        let weights = storage_buffer(device, "rusplay-convert-weights", &horizontal.weights);
 
         ChromaPath::Rows {
             rows_group: buffer_group(
                 device,
                 "rusplay-convert-rows",
                 &pipelines.convert.table_layout,
-                &[params, &horizontal_firsts, &horizontal_weights],
+                &[params, &firsts, &weights],
             ),
-            pack_group: buffer_group(
+            pack: PackStage::new(
+                pipelines,
                 device,
-                "rusplay-pack-chroma",
-                &pipelines.convert.table_layout,
-                &[params, &vertical_firsts, &vertical_weights],
+                layout,
+                params,
+                vertical,
+                (chroma_width, settings.resolution.height),
             ),
-            chroma_target: view_group(
+        }
+    }
+
+    fn polar_path(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        settings: &ConvertSettings,
+        layout: &FrameLayout,
+        params: &wgpu::Buffer,
+        vertical: &TapTable,
+    ) -> ChromaPath {
+        let full = gpu::storage_texture(
+            device,
+            "rusplay-convert-full-chroma",
+            resolution_pair(settings.resolution),
+            CHROMA_FORMAT,
+        );
+
+        ChromaPath::Polar {
+            full_group: buffer_group(
                 device,
-                &pipelines.convert.chroma_target_layout,
-                &intermediate,
+                "rusplay-convert-full",
+                &pipelines.convert.params_layout,
+                &[params],
             ),
-            chroma_source: pipelines.source_group(device, &intermediate),
-            chroma_words: (chroma.stride / 4, chroma.height),
-            chroma_layers: if last.content == PlaneContent::Cr {
-                2
-            } else {
-                1
-            },
+            full_target: view_group(device, &pipelines.convert.chroma_target_layout, &full),
+            full_source: pipelines.source_group(device, &full),
+            resample: PolarPlan::chroma(
+                pipelines,
+                device,
+                settings.chroma_filter,
+                settings.polar_chroma_geometry(),
+            ),
+            pack: PackStage::new(
+                pipelines,
+                device,
+                layout,
+                params,
+                vertical,
+                settings.chroma_size(),
+            ),
         }
     }
 
@@ -537,29 +661,32 @@ impl ConvertPlan {
                 &[source_group, output_group, group],
                 self.luma_words,
             ),
-            ChromaPath::Rows {
-                rows_group,
-                pack_group,
-                chroma_target,
-                chroma_source,
-                chroma_words,
-                chroma_layers,
-            } => {
+            ChromaPath::Rows { rows_group, pack } => {
                 gpu::dispatch(
                     encoder,
                     "rusplay-convert-rows",
                     &pipelines.convert.rows,
-                    &[source_group, output_group, rows_group, chroma_target],
+                    &[source_group, output_group, rows_group, &pack.target],
                     self.luma_words,
                 );
-                gpu::dispatch_layers(
+                pack.encode(pipelines, encoder, output_group);
+            }
+            ChromaPath::Polar {
+                full_group,
+                full_target,
+                full_source,
+                resample,
+                pack,
+            } => {
+                gpu::dispatch(
                     encoder,
-                    "rusplay-pack-chroma",
-                    &pipelines.convert.pack_chroma,
-                    &[chroma_source, output_group, pack_group],
-                    *chroma_words,
-                    *chroma_layers,
+                    "rusplay-convert-full",
+                    &pipelines.convert.full,
+                    &[source_group, output_group, full_group, full_target],
+                    self.luma_words,
                 );
+                resample.encode(encoder, full_source, &pack.target);
+                pack.encode(pipelines, encoder, output_group);
             }
         }
     }
@@ -774,6 +901,122 @@ mod tests {
     }
 
     #[test]
+    fn every_polar_chroma_filter_matches_reference() {
+        let polar_filters = [
+            ScaleFilter::EwaLanczos,
+            ScaleFilter::EwaLanczosSharp,
+            ScaleFilter::EwaGinseng,
+            ScaleFilter::EwaHann,
+            ScaleFilter::EwaRobidoux,
+            ScaleFilter::EwaRobidouxSharp,
+        ];
+
+        for (index, chroma_filter) in polar_filters.into_iter().enumerate() {
+            assert_matches_reference(ConvertSettings {
+                chroma_filter,
+                chroma_siting: if index % 2 == 0 {
+                    ChromaSiting::Left
+                } else {
+                    ChromaSiting::Center
+                },
+                ..settings(
+                    (37, 23),
+                    ChromaSubsampling::Yuv420,
+                    BitDepth::Ten,
+                    PlaneLayout::SemiPlanar,
+                )
+            });
+        }
+    }
+
+    #[test]
+    fn polar_chroma_matches_reference_across_depths_and_layouts() {
+        for (depth, layout) in [
+            (BitDepth::Eight, PlaneLayout::Planar),
+            (BitDepth::Twelve, PlaneLayout::Planar),
+            (BitDepth::Twelve, PlaneLayout::SemiPlanar),
+        ] {
+            assert_matches_reference(ConvertSettings {
+                chroma_filter: ScaleFilter::EwaLanczos,
+                row_alignment: 4,
+                ..settings((91, 30), ChromaSubsampling::Yuv420, depth, layout)
+            });
+        }
+    }
+
+    #[test]
+    fn polar_chroma_siting_follows_the_setting() {
+        let ramp = Image::from_fn(64, 8, |x, _| {
+            [f32::from(u8::try_from(x).unwrap()) / 63.0, 0.25, 0.25, 1.0]
+        });
+        let base = ConvertSettings {
+            input: InputLight::Encoded,
+            chroma_filter: ScaleFilter::EwaLanczos,
+            ..settings(
+                (64, 8),
+                ChromaSubsampling::Yuv420,
+                BitDepth::Ten,
+                PlaneLayout::Planar,
+            )
+        };
+        let full_chroma = ConvertSettings {
+            format: PixelFormat {
+                chroma: ChromaSubsampling::Yuv444,
+                depth: BitDepth::Ten,
+            },
+            ..base
+        };
+
+        let Some(full) = convert_on_gpu(&ramp, full_chroma) else {
+            return;
+        };
+
+        for (siting, offset) in [(ChromaSiting::Left, 0.0), (ChromaSiting::Center, 0.5)] {
+            let subsampled = convert_on_gpu(
+                &ramp,
+                ConvertSettings {
+                    chroma_siting: siting,
+                    ..base
+                },
+            )
+            .unwrap();
+
+            for (x, actual) in subsampled[2][1].iter().enumerate().take(28).skip(4) {
+                let at = |column: usize| f64::from(full[2][3][column]);
+                let expected = at(2 * x) + offset * (at(2 * x + 1) - at(2 * x));
+                let actual = f64::from(*actual);
+
+                assert!(
+                    (actual - expected).abs() <= 2.0,
+                    "{siting:?} x {x}: {actual} against {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polar_filter_on_full_chroma_is_ignored() {
+        let base = settings(
+            (29, 11),
+            ChromaSubsampling::Yuv444,
+            BitDepth::Ten,
+            PlaneLayout::Planar,
+        );
+        let image = Image::pattern(29, 11, 21);
+
+        let polar = convert_on_gpu(
+            &image,
+            ConvertSettings {
+                chroma_filter: ScaleFilter::EwaLanczos,
+                ..base
+            },
+        );
+        let separable = convert_on_gpu(&image, base);
+
+        assert_eq!(polar, separable);
+    }
+
+    #[test]
     fn wide_and_unaligned_frames_match_reference() {
         let wide = |chroma, depth, layout| ConvertSettings {
             chroma_filter: ScaleFilter::Lanczos3,
@@ -947,12 +1190,37 @@ mod tests {
         assert_eq!(
             ConvertSettings {
                 chroma_filter: ScaleFilter::EwaLanczos,
+                format: PixelFormat {
+                    chroma: ChromaSubsampling::Yuv422,
+                    depth: BitDepth::Eight,
+                },
                 ..base
             }
             .validate(),
-            Err(ScaleError::ChromaFilterNotSeparable(
-                ScaleFilter::EwaLanczos
-            ))
+            Err(ScaleError::PolarChromaFilterUnsupported {
+                filter: ScaleFilter::EwaLanczos,
+                chroma: ChromaSubsampling::Yuv422,
+            })
+        );
+        assert_eq!(
+            ConvertSettings {
+                chroma_filter: ScaleFilter::EwaLanczos,
+                ..base
+            }
+            .validate(),
+            Ok(())
+        );
+        assert_eq!(
+            ConvertSettings {
+                chroma_filter: ScaleFilter::EwaRobidoux,
+                format: PixelFormat {
+                    chroma: ChromaSubsampling::Yuv444,
+                    depth: BitDepth::Eight,
+                },
+                ..base
+            }
+            .validate(),
+            Ok(())
         );
         assert_eq!(
             ConvertSettings {

@@ -25,7 +25,19 @@ const PACK_CHROMA_SHADER: &str = concat!(
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
+    include_str!("destination_rgba16float.wgsl"),
     include_str!("polar.wgsl")
+);
+const POLAR_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("shaping.wgsl"),
+    include_str!("destination_rg32float.wgsl"),
+    include_str!("polar.wgsl")
+);
+const CONVERT_FULL_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("convert_common.wgsl"),
+    include_str!("convert_full.wgsl")
 );
 
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
@@ -63,11 +75,17 @@ pub(crate) struct ConvertPipelines {
     pub table_layout: wgpu::BindGroupLayout,
     pub direct: ShaderPass,
     pub rows: ShaderPass,
+    pub full: ShaderPass,
+    pub polar_chroma: ShaderPass,
     pub pack_chroma: ShaderPass,
 }
 
 impl ConvertPipelines {
-    fn new(device: &wgpu::Device, source_layout: &wgpu::BindGroupLayout) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        source_layout: &wgpu::BindGroupLayout,
+        polar_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         let output_layout = layout(
             device,
             "rusplay-convert-output",
@@ -111,6 +129,29 @@ impl ConvertPipelines {
             CONVERT_ROWS_WORKGROUP,
             &[("MAX_CHROMA_TAPS", f64::from(MAX_CHROMA_TAPS))],
         );
+        let full = compute_pipeline(
+            device,
+            "rusplay-convert-full",
+            &[
+                source_layout,
+                &output_layout,
+                &params_layout,
+                &chroma_target_layout,
+            ],
+            CONVERT_FULL_SHADER,
+            "convert_full",
+            CONVERT_WORKGROUP,
+            &[],
+        );
+        let polar_chroma = compute_pipeline(
+            device,
+            "rusplay-resample-polar-chroma",
+            &[source_layout, &chroma_target_layout, polar_layout],
+            POLAR_CHROMA_SHADER,
+            "resample_polar",
+            POLAR_WORKGROUP,
+            &[],
+        );
         let pack_chroma = compute_pipeline(
             device,
             "rusplay-pack-chroma",
@@ -128,6 +169,8 @@ impl ConvertPipelines {
             table_layout,
             direct,
             rows,
+            full,
+            polar_chroma,
             pack_chroma,
         }
     }
@@ -177,7 +220,7 @@ impl ScalePipelines {
             &[],
         );
 
-        let convert = ConvertPipelines::new(device, &source_layout);
+        let convert = ConvertPipelines::new(device, &source_layout, &polar_layout);
 
         Self {
             source_layout,

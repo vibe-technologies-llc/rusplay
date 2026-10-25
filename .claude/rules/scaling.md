@@ -75,15 +75,25 @@ paths:
   through `TapTable`s at an exact 2:1 ratio, so odd sizes round the chroma plane up and the
   edge clamps. Horizontal siting is `ChromaSiting::Left` by default (MPEG-2/H.264/HEVC type 0,
   co-sited with even luma columns, a phase of -0.5 source pixels) or `Center`; vertical 4:2:0
-  siting is always centred. Polar chroma filters are rejected with `ChromaFilterNotSeparable`.
+  siting is always centred. The chroma plane is built by one of three paths.
   4:4:4 is one dispatch (`convert_direct`): each invocation owns one output word of luma and
-  writes the matching words of both chroma planes, with no intermediate. 4:2:0 and 4:2:2 are two
-  (`convert_rows`, `pack_chroma`): `convert_rows` has each workgroup encode its row segment
-  plus the filter's halo into workgroup memory (`TILE_STRIDE` entries per row, so a filter may
-  have at most `MAX_CHROMA_TAPS` horizontal taps, checked by a test), packs luma and writes the
-  horizontally filtered CbCr into an `rg32float` intermediate, and `pack_chroma` applies the
-  vertical taps and packs. 4:4:4 and the 4:2:2 vertical direction use `TapTable::identity`,
+  writes the matching words of both chroma planes, with no intermediate, and the chroma filter
+  is not used. Separable filters on 4:2:0 and 4:2:2 take two (`convert_rows`, `pack_chroma`):
+  `convert_rows` has each workgroup encode its row segment plus the filter's halo into
+  workgroup memory (`TILE_STRIDE` entries per row, so a filter may have at most
+  `MAX_CHROMA_TAPS` horizontal taps, checked by a test), packs luma and writes the horizontally
+  filtered CbCr into an `rg32float` intermediate, and `pack_chroma` applies the vertical taps
+  and packs. 4:4:4 and the 4:2:2 vertical direction use `TapTable::identity`,
   never a kernel at 1:1 (Mitchell would blur).
+- Polar (EWA) chroma filters take three passes on 4:2:0: `convert_full` packs luma and writes the
+  full-resolution encoded CbCr into an `rg32float` texture, the polar pass (`polar.wgsl`
+  assembled with `destination_rg32float.wgsl`, run by `PolarPlan::chroma`) resamples it to the
+  chroma plane at an exact 2:1 ratio in both axes with no shaping, and `pack_chroma` quantises
+  with identity vertical taps. Siting enters as `PolarGeometry::phase`, a shift of the sample
+  centre in source pixels (-0.5 horizontally for `Left`). 4:2:2 rejects polar filters with
+  `PolarChromaFilterUnsupported`: its vertical axis is 1:1 and a 2D kernel there would blur it,
+  which the identity taps exist to avoid. EWA Lanczos chroma costs about 1.7 ms per 4K frame on an
+  RX 9070 against 0.3 ms for Hermite, so it is an opt-in quality choice.
 - The output is one storage buffer per `YuvFrame`, described by `FrameLayout`: planes
   `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms) or
   `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte
