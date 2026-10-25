@@ -1,6 +1,10 @@
 mod error;
+#[cfg(feature = "flac")]
+mod flac;
 mod opus;
 
+#[cfg(feature = "flac")]
+pub use crate::flac::{FlacAudioDecoder, FlacAudioEncoder};
 pub use crate::{
     error::AudioError,
     opus::{OpusAudioDecoder, OpusAudioEncoder},

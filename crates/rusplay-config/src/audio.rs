@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 
 const MAX_FLAC_COMPRESSION: u8 = 8;
+const FLAC_BLOCK_SIZES: std::ops::RangeInclusive<u16> = 32..=32767;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -25,6 +26,10 @@ impl AudioConfig {
             return Err(ConfigError::FlacCompressionOutOfRange(
                 self.flac.compression_level,
             ));
+        }
+
+        if !FLAC_BLOCK_SIZES.contains(&self.flac.block_size) {
+            return Err(ConfigError::FlacBlockSizeOutOfRange(self.flac.block_size));
         }
 
         Ok(())
@@ -86,6 +91,29 @@ impl Default for FlacConfig {
         Self {
             compression_level: 0,
             block_size: 240,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flac_block_size_outside_the_format_is_rejected() {
+        for block_size in [0, 31, 32768] {
+            let config = AudioConfig {
+                flac: FlacConfig {
+                    block_size,
+                    ..FlacConfig::default()
+                },
+                ..AudioConfig::default()
+            };
+
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::FlacBlockSizeOutOfRange(found)) if found == block_size
+            ));
         }
     }
 }

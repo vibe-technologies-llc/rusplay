@@ -17,4 +17,28 @@ pub enum AudioError {
     OpusDecode(&'static str),
     #[error("expected {expected} interleaved samples, got {found}")]
     FrameLengthMismatch { expected: usize, found: usize },
+    #[cfg(feature = "flac")]
+    #[error("flac encoder settings rejected")]
+    FlacSettings(#[source] flacenc::error::VerifyError),
+    #[cfg(feature = "flac")]
+    #[error("flac encoder could not read the samples")]
+    FlacSource(#[source] flacenc::error::SourceError),
+    #[cfg(feature = "flac")]
+    #[error("flac encode failed")]
+    FlacEncode(#[source] flacenc::error::EncodeError),
+    #[cfg(feature = "flac")]
+    #[error("flac frame could not be serialised")]
+    FlacWrite(#[source] flacenc::error::OutputError<flacenc::bitsink::ByteSink>),
+    #[cfg(feature = "flac")]
+    #[error("flac frame needs {needed} bytes but the packet buffer holds {capacity}")]
+    FlacPacketBufferTooSmall { needed: usize, capacity: usize },
+    #[cfg(feature = "flac")]
+    #[error("flac decode failed")]
+    FlacDecode(#[source] claxon::Error),
+    #[cfg(feature = "flac")]
+    #[error("flac packet holds no frame")]
+    FlacEmptyPacket,
+    #[cfg(feature = "flac")]
+    #[error("flac frame has {found} channels, expected {expected}")]
+    FlacChannelMismatch { expected: usize, found: usize },
 }

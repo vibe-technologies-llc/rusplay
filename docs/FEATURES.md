@@ -28,7 +28,6 @@
 # Audio
 - [M] `audio-capture`: PipeWire audio capture of the default sink monitor at 48 kHz float
 - [M] `audio-playback`: PipeWire playback on the client with a minimal jitter buffer
-- [M] `audio-flac`: FLAC encoder/decoder pair behind the `flac` feature
 - [M] `audio-surround`: 5.1/7.1 Opus through opus-rs multistream
 - [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
