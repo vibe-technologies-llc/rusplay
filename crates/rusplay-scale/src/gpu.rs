@@ -2,40 +2,60 @@ use std::borrow::Cow;
 
 use wgpu::util::DeviceExt;
 
-const RESAMPLE_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("resample.wgsl"));
+const RESAMPLE_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("shaping.wgsl"),
+    include_str!("resample.wgsl")
+);
 const CONVERT_LUMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
     include_str!("convert_common.wgsl"),
     include_str!("convert_luma.wgsl")
 );
 const CONVERT_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
     include_str!("convert_common.wgsl"),
     include_str!("convert_chroma.wgsl")
 );
 const PACK_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
     include_str!("convert_common.wgsl"),
     include_str!("convert_pack.wgsl")
 );
-const POLAR_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("polar.wgsl"));
+const POLAR_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("shaping.wgsl"),
+    include_str!("polar.wgsl")
+);
 
-pub(crate) const WORKGROUP_SIDE: u32 = 8;
+const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
+const POLAR_WORKGROUP: (u32, u32) = (64, 1);
+const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
+
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ShaderPass {
+    pub pipeline: wgpu::ComputePipeline,
+    pub workgroup: (u32, u32),
+}
 
 #[derive(Debug, Clone)]
 pub struct ScalePipelines {
     pub(crate) source_layout: wgpu::BindGroupLayout,
     pub(crate) destination_layout: wgpu::BindGroupLayout,
     pub(crate) separable_layout: wgpu::BindGroupLayout,
-    pub(crate) separable: wgpu::ComputePipeline,
+    pub(crate) separable: ShaderPass,
     pub(crate) polar_layout: wgpu::BindGroupLayout,
-    pub(crate) polar: wgpu::ComputePipeline,
+    pub(crate) polar: ShaderPass,
     pub(crate) output_layout: wgpu::BindGroupLayout,
     pub(crate) chroma_target_layout: wgpu::BindGroupLayout,
     pub(crate) convert_params_layout: wgpu::BindGroupLayout,
     pub(crate) convert_table_layout: wgpu::BindGroupLayout,
-    pub(crate) convert_luma: wgpu::ComputePipeline,
-    pub(crate) convert_chroma: wgpu::ComputePipeline,
-    pub(crate) pack_chroma: wgpu::ComputePipeline,
+    pub(crate) convert_luma: ShaderPass,
+    pub(crate) convert_chroma: ShaderPass,
+    pub(crate) pack_chroma: ShaderPass,
 }
 
 impl ScalePipelines {
@@ -63,6 +83,7 @@ impl ScalePipelines {
             &[&source_layout, &destination_layout, &separable_layout],
             RESAMPLE_SHADER,
             "resample",
+            SEPARABLE_WORKGROUP,
         );
 
         let polar_layout = layout(
@@ -76,6 +97,7 @@ impl ScalePipelines {
             &[&source_layout, &destination_layout, &polar_layout],
             POLAR_SHADER,
             "resample_polar",
+            POLAR_WORKGROUP,
         );
 
         let output_layout = layout(
@@ -104,6 +126,7 @@ impl ScalePipelines {
             &[&source_layout, &output_layout, &convert_params_layout],
             CONVERT_LUMA_SHADER,
             "convert_luma",
+            CONVERT_WORKGROUP,
         );
         let convert_chroma = compute_pipeline(
             device,
@@ -111,6 +134,7 @@ impl ScalePipelines {
             &[&source_layout, &chroma_target_layout, &convert_table_layout],
             CONVERT_CHROMA_SHADER,
             "convert_chroma",
+            CONVERT_WORKGROUP,
         );
         let pack_chroma = compute_pipeline(
             device,
@@ -118,6 +142,7 @@ impl ScalePipelines {
             &[&source_layout, &output_layout, &convert_table_layout],
             PACK_CHROMA_SHADER,
             "pack_chroma",
+            CONVERT_WORKGROUP,
         );
 
         Self {
@@ -171,7 +196,8 @@ pub(crate) fn compute_pipeline(
     layouts: &[&wgpu::BindGroupLayout],
     shader: &str,
     entry_point: &str,
-) -> wgpu::ComputePipeline {
+    workgroup: (u32, u32),
+) -> ShaderPass {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(shader)),
@@ -184,14 +210,27 @@ pub(crate) fn compute_pipeline(
         immediate_size: 0,
     });
 
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+    let constants = [
+        ("WORKGROUP_X", f64::from(workgroup.0)),
+        ("WORKGROUP_Y", f64::from(workgroup.1)),
+    ];
+
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some(label),
         layout: Some(&pipeline_layout),
         module: &module,
         entry_point: Some(entry_point),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants: &constants,
+            ..wgpu::PipelineCompilationOptions::default()
+        },
         cache: None,
-    })
+    });
+
+    ShaderPass {
+        pipeline,
+        workgroup,
+    }
 }
 
 pub(crate) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
@@ -369,17 +408,17 @@ pub(crate) fn storage_texture(
 pub(crate) fn dispatch(
     encoder: &mut wgpu::CommandEncoder,
     label: &str,
-    pipeline: &wgpu::ComputePipeline,
+    pass: &ShaderPass,
     groups: &[&wgpu::BindGroup],
     size: (u32, u32),
 ) {
-    dispatch_layers(encoder, label, pipeline, groups, size, 1);
+    dispatch_layers(encoder, label, pass, groups, size, 1);
 }
 
 pub(crate) fn dispatch_layers(
     encoder: &mut wgpu::CommandEncoder,
     label: &str,
-    pipeline: &wgpu::ComputePipeline,
+    pass: &ShaderPass,
     groups: &[&wgpu::BindGroup],
     size: (u32, u32),
     layers: u32,
@@ -388,13 +427,13 @@ pub(crate) fn dispatch_layers(
         label: Some(label),
         timestamp_writes: None,
     });
-    compute.set_pipeline(pipeline);
+    compute.set_pipeline(&pass.pipeline);
     for (index, group) in (0..).zip(groups) {
         compute.set_bind_group(index, *group, &[]);
     }
     compute.dispatch_workgroups(
-        size.0.div_ceil(WORKGROUP_SIDE),
-        size.1.div_ceil(WORKGROUP_SIDE),
+        size.0.div_ceil(pass.workgroup.0),
+        size.1.div_ceil(pass.workgroup.1),
         layers,
     );
 }

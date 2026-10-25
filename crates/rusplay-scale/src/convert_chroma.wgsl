@@ -4,7 +4,7 @@
 @group(2) @binding(1) var<storage, read> firsts: array<i32>;
 @group(2) @binding(2) var<storage, read> weights: array<f32>;
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn convert_chroma(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.chroma_size.x || id.y >= params.luma_size.y {
         return;

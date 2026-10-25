@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod bench;
 mod bessel;
 mod convert;
 mod error;

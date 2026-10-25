@@ -14,7 +14,7 @@ struct Params {
 @group(2) @binding(2) var<storage, read> weights: array<f32>;
 @group(2) @binding(3) var<uniform> params: Params;
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn resample(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.target_size.x || id.y >= params.target_size.y {
         return;

@@ -17,7 +17,7 @@ fn filtered_chroma(x: u32, y: u32) -> vec2<f32> {
     return sum;
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn pack_chroma(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.chroma_stride || id.y >= params.chroma_size.y {
         return;

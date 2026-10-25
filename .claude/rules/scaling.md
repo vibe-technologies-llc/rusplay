@@ -88,6 +88,20 @@ paths:
   wgpu's 256 so a plane can be copied straight into a texture). Shaders write whole `u32`
   words, one invocation per word, so no atomics are needed and row padding is zero.
   `ColorConverter::encode` refuses a frame created for another layout (`FrameLayoutMismatch`).
+- Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
+  shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
+  `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1
+  (17% faster than 8x8 for EWA Lanczos 1080p to 4K, 14% for EWA Robidoux 4K to 1080p); the
+  separable and conversion passes stay at 8x8, where every other shape was equal or slower.
+  Shared-memory tiles were tried and rejected: a tiled polar pass was 35% slower at any tile
+  size and shape (the inner loop is ALU-bound and the texture cache already captures the
+  reuse), and the separable passes already run at roughly 85% of memory bandwidth even for an
+  8K to 720p Hermite downscale, so a tile has nothing left to win.
+- `bench.rs` is an ignored test that prints per-frame GPU times for the representative
+  workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
+  --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's
+  clocks otherwise swing results by 30%. Rerun it before and after any shader performance
+  change.
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a

@@ -21,7 +21,7 @@ fn radial_weight(distance: f32) -> f32 {
     return mix(radial_lut[index], radial_lut[next], position - f32(index));
 }
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn resample_polar(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= params.target_size.x || id.y >= params.target_size.y {
         return;
