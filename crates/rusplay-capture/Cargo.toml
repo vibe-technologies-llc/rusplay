@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-ashpd = { workspace = true, features = ["tokio", "screencast"] }
+ashpd = { workspace = true, features = ["async-io", "screencast"] }
 parking_lot.workspace = true
 pipewire = { workspace = true, optional = true, features = ["v0_3_33"] }
 rusplay-config.workspace = true

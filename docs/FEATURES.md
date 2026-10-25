@@ -27,13 +27,12 @@
 # Input
 - [M] `input-libei`: host injection through the RemoteDesktop portal and libei
 - [M] `input-gamepad`: virtual gamepads on the host
-- [M, blocked by: app-ui-shell] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
+- [M] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
 - [L, blocked by: encode-vaapi, net-reassembly] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [L, blocked by: decode-vaapi, net-reassembly] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 
 # Desktop app
-- [M] `app-ui-shell`: gpui window on Wayland with the gpui git dependency pinned
-- [M, blocked by: app-ui-shell, client-pipeline] `app-stream-view`: present the stream through the shared wgpu device
-- [M, blocked by: app-ui-shell] `app-settings`: settings UI covering every `rusplay-config` option
+- [M, blocked by: client-pipeline] `app-stream-view`: present the stream through the shared wgpu device
+- [M] `app-settings`: settings UI covering every `rusplay-config` option

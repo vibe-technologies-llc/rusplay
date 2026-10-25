@@ -39,3 +39,14 @@ paths:
   `ashpd` over zbus (portals), `wgpu` (GPU scaling), `rav1d` for software AV1 decode, `rubato`
   for audio resampling when it is needed.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.
+  - Its Linux backend links C libraries through `xkbcommon` (system libxkbcommon) and
+    `zed-font-kit` (`freetype-sys`, `yeslogic-fontconfig-sys`). That is accepted for gpui and
+    confined to `rusplay-app`; no other crate may depend on them. It also dlopens
+    `libwayland-client` at runtime.
+  - `gpui` and `gpui_platform` share one `rev`, both with `default-features = false`. Only the
+    Wayland backend is enabled; X11 stays off.
+  - Zed's workspace `[patch.crates-io]` entries that gpui needs are copied into the root
+    `Cargo.toml` (`async-task`, `calloop`, `khronos-egl`).
+  - gpui's `gpui_wgpu` uses Zed's own git `wgpu`, not the crates.io `wgpu` the workspace declares,
+    so the two are separate crates in the tree.
+  - `unicode-segmentation` (pure Rust) gives the text field grapheme boundaries.

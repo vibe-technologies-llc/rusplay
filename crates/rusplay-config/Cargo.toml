@@ -9,7 +9,7 @@ publish.workspace = true
 rusplay-core.workspace = true
 serde = { workspace = true, features = ["std", "derive"] }
 thiserror.workspace = true
-toml = { workspace = true, features = ["std", "parse", "serde"] }
+toml = { workspace = true, features = ["std", "parse", "serde", "display"] }
 
 [lints]
 workspace = true

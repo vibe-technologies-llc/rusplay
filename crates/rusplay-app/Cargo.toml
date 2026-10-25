@@ -10,8 +10,12 @@ name = "rusplay"
 path = "src/main.rs"
 
 [dependencies]
+gpui.workspace = true
+gpui_platform = { workspace = true, features = ["wayland"] }
 rusplay-client.workspace = true
 rusplay-config.workspace = true
+thiserror.workspace = true
+unicode-segmentation.workspace = true
 
 [lints]
 workspace = true
