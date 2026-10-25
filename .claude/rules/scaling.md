@@ -95,15 +95,22 @@ paths:
   filtered CbCr into an `rg32float` intermediate, and `pack_chroma` applies the vertical taps
   and packs. 4:4:4 and the 4:2:2 vertical direction use `TapTable::identity`,
   never a kernel at 1:1 (Mitchell would blur).
-- Polar (EWA) chroma filters take three passes on 4:2:0: `convert_full` packs luma and writes the
-  full-resolution encoded CbCr into an `rg32float` texture, the polar pass (`polar.wgsl`
-  assembled with `destination_rg32float.wgsl`, run by `PolarPlan::chroma`) resamples it to the
-  chroma plane at an exact 2:1 ratio in both axes with no shaping, and `pack_chroma` quantises
-  with identity vertical taps. Siting enters as `PolarGeometry::phase`, a shift of the sample
-  centre in source pixels (-0.5 horizontally for `Left`). 4:2:2 rejects polar filters with
-  `PolarChromaFilterUnsupported`: its vertical axis is 1:1 and a 2D kernel there would blur it,
-  which the identity taps exist to avoid. EWA Lanczos chroma costs about 1.7 ms per 4K frame on an
-  RX 9070 against 0.3 ms for Hermite, so it is an opt-in quality choice.
+- Polar (EWA) chroma filters take three passes on 4:2:0 and 4:2:2: `convert_full` packs luma and
+  writes the full-resolution encoded CbCr into an `rg32float` texture, the polar pass
+  (`polar.wgsl` assembled with `destination_rg32float.wgsl`, run by `PolarPlan::chroma`)
+  resamples it to the chroma plane with no shaping, and `pack_chroma` quantises with identity
+  vertical taps. Siting enters as `PolarGeometry::phase`, a shift of the sample centre in source
+  pixels (-0.5 horizontally for `Left`). 4:2:0 is an exact 2:1 ratio in both axes. 4:2:2 is 2:1
+  horizontally and 1:1 vertically, and a radial kernel with a full footprint there would blur
+  the unsubsampled axis, because the weights at one row distance are not zero. So
+  `PolarGeometry::with_identity_vertical` shrinks the ellipse's vertical semi-axis to half a
+  source pixel (`stretch.y = 0.5 / radius`): the sample centre sits exactly on a source row
+  (ratio 1, no vertical phase), so only that row falls inside the footprint and the pass is the
+  radial profile applied as a 1D horizontal filter, widened 2x by the stretch, with the vertical
+  axis passed through untouched. The CPU reference shares the footprint code, and tests also
+  check the vertical axis against 4:4:4 chroma on a row-striped image. EWA Lanczos chroma costs
+  about 1.7 ms per 4K frame on 4:2:0 and 1.0 ms on 4:2:2 on an RX 9070 against 0.3 ms for
+  Hermite, so it is an opt-in quality choice.
 - The output is one storage buffer per `YuvFrame`, described by `FrameLayout`: planes
   `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms) or
   `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte

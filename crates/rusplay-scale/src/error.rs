@@ -1,4 +1,4 @@
-use rusplay_core::{ChromaSubsampling, Resolution, ScaleFilter, TransferFunction};
+use rusplay_core::{Resolution, ScaleFilter, TransferFunction};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -13,13 +13,6 @@ pub enum ScaleError {
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]
     SigmoidSlopeOutOfRange(f32),
-    #[error(
-        "chroma filter {filter} is polar and cannot downscale {chroma} chroma, which keeps full vertical resolution"
-    )]
-    PolarChromaFilterUnsupported {
-        filter: ScaleFilter,
-        chroma: ChromaSubsampling,
-    },
     #[error("chroma filter {0} is polar, chroma upsampling needs a separable filter")]
     UpsampleChromaFilterNotSeparable(ScaleFilter),
     #[error("decoding the {0:?} transfer function to linear light is not supported")]

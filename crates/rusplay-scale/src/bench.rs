@@ -201,6 +201,12 @@ fn scaling_frame_times() {
             ScaleFilter::EwaLanczos,
         ),
         (
+            ChromaSubsampling::Yuv422,
+            BitDepth::Ten,
+            PlaneLayout::SemiPlanar,
+            ScaleFilter::EwaLanczos,
+        ),
+        (
             ChromaSubsampling::Yuv444,
             BitDepth::Ten,
             PlaneLayout::Planar,
