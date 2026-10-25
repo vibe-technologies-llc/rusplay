@@ -10,6 +10,7 @@ use crate::ConfigError;
 const MTU_RANGE: RangeInclusive<u16> = 576..=9000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
+const PACING_WINDOW_RANGE: RangeInclusive<u8> = 1..=100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -19,6 +20,7 @@ pub struct NetworkConfig {
     pub mtu: u16,
     pub fec_overhead_percent: u8,
     pub pacing: bool,
+    pub pacing_window_percent: u8,
     pub jitter_buffer_ms: u16,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
@@ -32,6 +34,7 @@ pub struct NetworkConfig {
     pub reconnect_timeout_ms: u32,
     pub handshake_timeout_ms: u32,
     pub peer_timeout_ms: u32,
+    pub keepalive_interval_ms: u32,
     pub keyframe_request_interval_ms: u16,
 }
 
@@ -43,6 +46,7 @@ impl Default for NetworkConfig {
             mtu: 1_500,
             fec_overhead_percent: 10,
             pacing: true,
+            pacing_window_percent: 50,
             jitter_buffer_ms: 0,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
@@ -56,6 +60,7 @@ impl Default for NetworkConfig {
             reconnect_timeout_ms: 5_000,
             handshake_timeout_ms: 5_000,
             peer_timeout_ms: 5_000,
+            keepalive_interval_ms: 1_000,
             keyframe_request_interval_ms: 100,
         }
     }
@@ -70,6 +75,12 @@ impl NetworkConfig {
         if self.fec_overhead_percent > MAX_FEC_OVERHEAD_PERCENT {
             return Err(ConfigError::FecOverheadOutOfRange(
                 self.fec_overhead_percent,
+            ));
+        }
+
+        if !PACING_WINDOW_RANGE.contains(&self.pacing_window_percent) {
+            return Err(ConfigError::PacingWindowOutOfRange(
+                self.pacing_window_percent,
             ));
         }
 
@@ -115,6 +126,17 @@ impl NetworkConfig {
             return Err(ConfigError::ZeroPeerTimeout);
         }
 
+        if self.keepalive_interval_ms == 0 {
+            return Err(ConfigError::ZeroKeepaliveInterval);
+        }
+
+        if self.keepalive_interval_ms >= self.peer_timeout_ms {
+            return Err(ConfigError::KeepaliveNotBelowPeerTimeout {
+                keepalive_ms: self.keepalive_interval_ms,
+                peer_timeout_ms: self.peer_timeout_ms,
+            });
+        }
+
         if self.keyframe_request_interval_ms == 0 {
             return Err(ConfigError::ZeroKeyframeRequestInterval);
         }
@@ -151,6 +173,46 @@ mod tests {
             keyframe.validate(),
             Err(ConfigError::ZeroKeyframeRequestInterval)
         ));
+    }
+
+    #[test]
+    fn keepalive_must_fire_within_the_peer_timeout() {
+        let zero = NetworkConfig {
+            keepalive_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+        let too_slow = NetworkConfig {
+            keepalive_interval_ms: 5_000,
+            peer_timeout_ms: 5_000,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            zero.validate(),
+            Err(ConfigError::ZeroKeepaliveInterval)
+        ));
+        assert!(matches!(
+            too_slow.validate(),
+            Err(ConfigError::KeepaliveNotBelowPeerTimeout {
+                keepalive_ms: 5_000,
+                peer_timeout_ms: 5_000
+            })
+        ));
+    }
+
+    #[test]
+    fn pacing_window_must_be_a_percentage_of_the_frame_interval() {
+        for percent in [0, 101] {
+            let config = NetworkConfig {
+                pacing_window_percent: percent,
+                ..NetworkConfig::default()
+            };
+
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::PacingWindowOutOfRange(found)) if found == percent
+            ));
+        }
     }
 
     #[test]

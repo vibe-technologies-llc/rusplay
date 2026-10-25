@@ -5,6 +5,7 @@ const TAG_REQUEST_KEYFRAME: u8 = 1;
 const TAG_REPORT_LOSS: u8 = 2;
 const TAG_BITRATE_HINT: u8 = 3;
 const TAG_GOODBYE: u8 = 4;
+const TAG_KEEPALIVE: u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -13,6 +14,7 @@ pub enum ControlMessage {
     ReportLoss { first_sequence: u32, count: u16 },
     BitrateHint { kbps: u32 },
     Goodbye,
+    Keepalive,
 }
 
 impl ControlMessage {
@@ -23,7 +25,7 @@ impl ControlMessage {
             Self::Hello { .. } => 3,
             Self::RequestKeyframe { .. } | Self::BitrateHint { .. } => 5,
             Self::ReportLoss { .. } => 7,
-            Self::Goodbye => 1,
+            Self::Goodbye | Self::Keepalive => 1,
         }
     }
 
@@ -59,6 +61,7 @@ impl ControlMessage {
                 out[1..5].copy_from_slice(&kbps.to_be_bytes());
             }
             Self::Goodbye => out[0] = TAG_GOODBYE,
+            Self::Keepalive => out[0] = TAG_KEEPALIVE,
         }
 
         Ok(len)
@@ -76,7 +79,7 @@ impl ControlMessage {
             TAG_HELLO => 2,
             TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT => 4,
             TAG_REPORT_LOSS => 6,
-            TAG_GOODBYE => 0,
+            TAG_GOODBYE | TAG_KEEPALIVE => 0,
             unknown => return Err(ProtocolError::UnknownControlTag(unknown)),
         };
 
@@ -106,6 +109,7 @@ impl ControlMessage {
                 count: u16::from_be_bytes([body[4], body[5]]),
             },
             TAG_BITRATE_HINT => Self::BitrateHint { kbps: word(0) },
+            TAG_KEEPALIVE => Self::Keepalive,
             _ => Self::Goodbye,
         })
     }
@@ -189,7 +193,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 5] {
+    fn every_message() -> [ControlMessage; 6] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -201,6 +205,7 @@ mod tests {
             },
             ControlMessage::BitrateHint { kbps: 150_000 },
             ControlMessage::Goodbye,
+            ControlMessage::Keepalive,
         ]
     }
 

@@ -1,43 +1,29 @@
-use rusplay_audio::AudioError;
-use rusplay_capture::CaptureError;
-use rusplay_config::Config;
-use rusplay_encode::EncodeError;
-use rusplay_input::InputError;
-use rusplay_net::NetError;
-use thiserror::Error;
+mod accept;
+mod capture;
+mod control;
+mod encode;
+mod error;
+mod gpu;
+mod mailbox;
+mod pipeline;
+mod send;
+mod session;
+mod shared;
+mod source;
+mod stats;
+#[cfg(test)]
+mod tests;
+mod upload;
 
-#[derive(Debug, Error)]
-pub enum HostError {
-    #[error(transparent)]
-    Capture(#[from] CaptureError),
-    #[error(transparent)]
-    Encode(#[from] EncodeError),
-    #[error(transparent)]
-    Audio(#[from] AudioError),
-    #[error(transparent)]
-    Input(#[from] InputError),
-    #[error(transparent)]
-    Net(#[from] NetError),
-}
+pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
+pub use rusplay_net::{NetError, PeerRecord, PeerStore, Pin};
+pub use rusplay_protocol::PeerId;
 
-#[derive(Debug)]
-pub struct HostSession {
-    config: Config,
-}
-
-impl HostSession {
-    pub fn new(config: Config) -> Self {
-        Self { config }
-    }
-
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
-
-    pub fn run(&mut self) -> Result<(), HostError> {
-        let _encoder = rusplay_encode::open(&self.config.video)?;
-        let _audio = rusplay_audio::OpusAudioEncoder::new(&self.config.audio)?;
-
-        Ok(())
-    }
-}
+pub use crate::{
+    accept::{Admission, Client},
+    error::{HostError, Stage},
+    gpu::Gpu,
+    session::{HostSession, HostStream},
+    source::{CaptureFeed, FrameSource, open_portal_capture},
+    stats::HostStats,
+};

@@ -44,8 +44,8 @@ paths:
   afterwards. It is fused into the passes rather than run as its own: the horizontal pass
   sigmoidizes every texel it loads, the vertical pass unsigmoidizes what it stores, so the
   `rgba16float` intermediate holds sigmoid-space values. Offset and scale are computed on the
-  CPU and sit in the params uniform. The host never sets it, since libplacebo applies it to
-  upscaling only.
+  CPU and sit in the params uniform. It applies to upscaling only, as in libplacebo, so the host
+  sets it only in the rare case that its stream resolution is larger than the capture.
 - `shaping.wgsl` is the shared prelude (the `Shaping` uniform block, `shape_input`,
   `shape_output`, `antiring`) concatenated in front of each resampling shader at pipeline
   creation; `shaping.rs` writes the matching words and holds the CPU reference versions.

@@ -81,6 +81,17 @@ pub enum ConfigError {
     ZeroPeerTimeout,
     #[error("keyframe request interval must be greater than zero")]
     ZeroKeyframeRequestInterval,
+    #[error("pacing window {0}% is outside 1..=100%")]
+    PacingWindowOutOfRange(u8),
+    #[error("keepalive interval must be greater than zero")]
+    ZeroKeepaliveInterval,
+    #[error(
+        "keepalive interval {keepalive_ms} ms is not below the peer timeout {peer_timeout_ms} ms"
+    )]
+    KeepaliveNotBelowPeerTimeout {
+        keepalive_ms: u32,
+        peer_timeout_ms: u32,
+    },
     #[error("decode queue must hold at least one frame")]
     ZeroDecodeQueue,
     #[error("peers.host_file is set to an empty path")]
@@ -140,6 +151,10 @@ impl ConfigError {
             Self::ZeroHandshakeTimeout => Some("network.handshake_timeout_ms"),
             Self::ZeroPeerTimeout => Some("network.peer_timeout_ms"),
             Self::ZeroKeyframeRequestInterval => Some("network.keyframe_request_interval_ms"),
+            Self::PacingWindowOutOfRange(_) => Some("network.pacing_window_percent"),
+            Self::ZeroKeepaliveInterval | Self::KeepaliveNotBelowPeerTimeout { .. } => {
+                Some("network.keepalive_interval_ms")
+            }
             Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
             Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),

@@ -13,9 +13,15 @@
 - [M] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
 
 # Sessions
-- [L] `host-pipeline`: run capture → scale → encode → send in `HostSession`
 - [M] `session-stream-format`: carry codec, resolution, pixel format, `ColorSpace` and HDR metadata in the handshake; the client decodes with its own `video.codec` and labels frames with its own `video.color` today
 - [M, blocked by: scale-dmabuf-import] `client-dmabuf-present`: present VAAPI DMA-BUF frames (`NV12`/`P010`); the present stage returns `DmaBufPresentUnsupported` today, so only the software decoder streams
+
+- [M] `host-audio`: capture with `AudioCapture`, encode on a codec thread and send `StreamKind::Audio` from the host session
+- [M] `host-input`: receive input events on the control path and inject them through one combined RemoteDesktop + ScreenCast portal session (`LibeiInjector`, `UinputGamepads`)
+- [S] `host-cursor`: send the capture's `cursor_feed` as latest-wins `CursorMessage`s on `StreamKind::Cursor`
+- [M, blocked by: scale-dmabuf-import] `host-dmabuf-capture`: convert DMA-BUF capture frames on the GPU and let PipeWire negotiate them again; the host asks for shared memory and returns `DmaBufCaptureUnsupported` today
+- [M] `host-ten-bit-capture`: accept the 10-bit `XR30`/`XB30` capture formats, which have no sRGB texture view, by linearising them in a shader before scaling
+- [S] `hostd-discovery`: run `DiscoveryResponder` in `rusplay-hostd` so clients find the host without an address
 
 # Desktop app
 - [M] `app-stream-view`: present the stream through the shared wgpu device, enable the client's `pipewire` and `flac` features for audio, and draw `ClientStream::cursor` over the picture

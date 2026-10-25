@@ -15,13 +15,23 @@ x264 = ["rusplay-encode/x264"]
 x265 = ["rusplay-encode/x265"]
 
 [dependencies]
+parking_lot.workspace = true
+pollster.workspace = true
 rusplay-audio.workspace = true
 rusplay-capture.workspace = true
 rusplay-config.workspace = true
+rusplay-core.workspace = true
 rusplay-encode.workspace = true
 rusplay-input.workspace = true
 rusplay-net.workspace = true
+rusplay-protocol.workspace = true
+rusplay-scale.workspace = true
 thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+rusplay-client = { workspace = true, features = ["software"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

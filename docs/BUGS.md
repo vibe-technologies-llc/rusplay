@@ -1,3 +1,9 @@
+# Capture
+- [S] `capture-handoff-dead-code`: without the `pipewire` feature, `handoff::Publisher` and `latest` are unused, so `cargo clippy -p rusplay-capture -- -D warnings` fails; the workspace check only runs with `--all-features`
+
+# Host
+- [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
+
 # Video decode
 - [S] `decode-vaapi-driver-field-long-term`: after a field of a long-term frame is unmarked with MMCO 2 and a non-reference frame was decoded earlier, Mesa's VAAPI H.264 decode makes every macroblock of the next P field use reference entry 0 (software decode and the DPB state agree on the right lists, and ffmpeg's VAAPI path reproduces it); find a workaround or confirm a driver fix
 - [S] `decode-rav1d-cdef-overlap`: rav1d 1.1.0 (the latest release; the `re_rav1d`, `hiraku-rav1d` and `rav1d-safe` forks carry no fix for it) with many worker threads trips its `DisjointMut` overlap check in a debug build: a `cdef.rs:207` read of the `top` line backup (a 12-sample window starting 2 samples left of a block, so it ends up reading the tail of the neighbouring range) races a `&mut` write from `cdef_apply.rs:56` on another thread, which looks like a real scheduling race between CDEF superblock rows rather than a false positive, so release builds (where the check is compiled out) may be reading half-updated line buffers. It reproduces on radeonsi AV1 output (the 402x226 `sizes_off_the_block_grid_are_cropped` stream with 16 workers fails in 7 of 40 runs and in 0 of 60 with 2 or 4 workers) and not on the libaom fixtures; the encode tests decode with one thread until it is understood or fixed upstream
