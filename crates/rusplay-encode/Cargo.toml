@@ -9,9 +9,10 @@ build = "build.rs"
 [features]
 x264 = ["dep:bindgen", "dep:pkg-config"]
 x265 = ["dep:bindgen", "dep:pkg-config"]
-svt-av1 = ["dep:bindgen", "dep:pkg-config"]
+svt-av1 = ["dep:bindgen", "dep:parking_lot", "dep:pkg-config"]
 
 [dependencies]
+parking_lot = { workspace = true, optional = true }
 rusplay-capture.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true

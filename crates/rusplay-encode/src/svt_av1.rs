@@ -32,6 +32,8 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/svt_av1.rs"));
 }
 
+mod log;
+
 const BACKEND: Backend = Backend::SvtAv1;
 const VALIDATION_RESOLUTION: Resolution = Resolution::new(64, 64);
 const MIN_BUFFER_MS: u64 = 40;
@@ -127,6 +129,7 @@ unsafe impl Send for Handle {}
 impl Drop for Handle {
     fn drop(&mut self) {
         if self.initialised {
+            self.finish();
             unsafe { sys::svt_av1_enc_deinit(self.raw.as_ptr()) };
         }
         unsafe { sys::svt_av1_enc_deinit_handle(self.raw.as_ptr()) };
@@ -134,6 +137,40 @@ impl Drop for Handle {
 }
 
 impl Handle {
+    fn finish(&self) {
+        let mut header = sys::EbBufferHeaderType {
+            size: u32::try_from(mem::size_of::<sys::EbBufferHeaderType>()).unwrap_or(0),
+            flags: u32::try_from(sys::EB_BUFFERFLAG_EOS).unwrap_or(0),
+            ..sys::EbBufferHeaderType::default()
+        };
+
+        let status = unsafe { sys::svt_av1_enc_send_picture(self.raw.as_ptr(), &raw mut header) };
+        if status != sys::EbErrorType_EB_ErrorNone {
+            return;
+        }
+
+        loop {
+            let mut packet: *mut sys::EbBufferHeaderType = ptr::null_mut();
+            let status =
+                unsafe { sys::svt_av1_enc_get_packet(self.raw.as_ptr(), &raw mut packet, 1) };
+
+            let Some(header) =
+                NonNull::new(packet).filter(|_| status == sys::EbErrorType_EB_ErrorNone)
+            else {
+                return;
+            };
+
+            let last = unsafe { header.as_ref() }.flags
+                & u32::try_from(sys::EB_BUFFERFLAG_EOS).unwrap_or(0)
+                != 0;
+            unsafe { sys::svt_av1_enc_release_out_buffer(&raw mut packet) };
+
+            if last {
+                return;
+            }
+        }
+    }
+
     fn create(
         resolution: Resolution,
     ) -> Result<(Self, sys::EbSvtAv1EncConfiguration), EncodeError> {
@@ -248,7 +285,7 @@ impl Settings {
                 parse(config, key, value)?;
             }
         }
-        config.force_key_frames = true;
+        config.force_key_frames = !self.config.low_latency;
 
         for (key, value) in &self.config.params {
             parse(config, key, value)?;
@@ -421,6 +458,7 @@ pub struct SvtAv1Encoder {
 
 impl SvtAv1Encoder {
     pub fn new(video: &VideoConfig, config: &SvtAv1Config) -> Result<Self, EncodeError> {
+        log::install(config.log_level);
         let settings = Settings::new(video, config)?;
 
         let session = video
@@ -477,7 +515,7 @@ impl VideoEncoder for SvtAv1Encoder {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::VideoEncoderConfig;
+    use rusplay_config::{SvtAv1LogLevel, VideoEncoderConfig};
 
     use super::*;
     use crate::testing::{self, pixel, video};
@@ -529,6 +567,29 @@ mod tests {
                 ..SvtAv1Config::default()
             },
         )
+    }
+
+    #[test]
+    fn every_log_level_opens_and_encodes() {
+        for log_level in [
+            SvtAv1LogLevel::Off,
+            SvtAv1LogLevel::Fatal,
+            SvtAv1LogLevel::Error,
+            SvtAv1LogLevel::Warn,
+            SvtAv1LogLevel::Info,
+            SvtAv1LogLevel::Debug,
+        ] {
+            testing::check_stream_starts_on_a_keyframe(
+                &config(
+                    pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+                    SvtAv1Config {
+                        log_level,
+                        ..SvtAv1Config::default()
+                    },
+                ),
+                contains_sequence_header,
+            );
+        }
     }
 
     #[test]

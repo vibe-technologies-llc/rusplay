@@ -21,8 +21,8 @@ pub use crate::{
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
         EncoderParams, NvencConfig, NvencPreset, NvencTuning, RateControl, SoftwarePreset,
-        SvtAv1Config, VaapiConfig, VideoConfig, VideoEncoderConfig, X264Config, X264Tune,
-        X265Config, X265Tune,
+        SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig, VideoEncoderConfig, X264Config,
+        X264Tune, X265Config, X265Tune,
     },
 };
 
@@ -148,6 +148,24 @@ mod tests {
             client.validate(),
             Err(ConfigError::EmptyClientPeersFile)
         ));
+    }
+
+    #[test]
+    fn svt_av1_log_level_defaults_to_warn_and_parses() {
+        let defaults: Config = toml::from_str("[video.encoder]\nbackend = \"svt-av1\"").unwrap();
+        let quiet: Config =
+            toml::from_str("[video.encoder]\nbackend = \"svt-av1\"\nlog_level = \"off\"").unwrap();
+
+        let VideoEncoderConfig::SvtAv1(defaults) = defaults.video.encoder else {
+            panic!("expected the svt-av1 backend");
+        };
+        let VideoEncoderConfig::SvtAv1(quiet) = quiet.video.encoder else {
+            panic!("expected the svt-av1 backend");
+        };
+
+        assert_eq!(defaults.log_level, SvtAv1LogLevel::Warn);
+        assert_eq!(quiet.log_level, SvtAv1LogLevel::Off);
+        assert!(SvtAv1LogLevel::Off < SvtAv1LogLevel::Debug);
     }
 
     #[test]

@@ -1545,6 +1545,7 @@ name = "rusplay-encode"
 version = "0.1.0"
 dependencies = [
  "bindgen 0.73.2",
+ "parking_lot 0.13.0",
  "pkg-config",
  "rusplay-capture",
  "rusplay-config",
