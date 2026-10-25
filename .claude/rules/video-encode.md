@@ -20,6 +20,13 @@ paths:
 
   Hardware chroma support is probed at runtime and reported as `ChromaUnsupported`, never
   silently downgraded.
+- `rusplay_encode::capabilities(&VideoEncoderConfig)` answers, before any encoder is opened, which
+  `(Codec, PixelFormat)` pairs the configured backend can produce, so a session can negotiate the
+  stream format with the client. It walks every codec, chroma and depth: VAAPI opens
+  `encoder.device` and runs the same profile, entry point and RT format queries as `open`
+  (`select` in `src/vaapi/mod.rs`); x265 asks `x265_api_query` for each depth; x264 and SVT-AV1
+  answer from the same `supports` predicates their `open` checks. A backend whose feature is off
+  is `BackendNotCompiled`. Tests hold `capabilities` and `open` to the same answer for every pair.
 - Defaults are low latency: no B-frames, no lookahead, one frame in flight, infinite GOP with
   intra refresh, and IDR only on explicit request (`request_keyframe`, driven by loss reports).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.

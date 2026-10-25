@@ -24,7 +24,7 @@ use rusplay_core::{
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
 use crate::{
-    EncodeError, VideoEncoder,
+    EncodeError, VideoEncoder, capabilities,
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
     vaapi::{
@@ -850,6 +850,45 @@ fn unsupported_formats_are_reported_not_downgraded() {
             )),
         }
     }
+}
+
+#[test]
+fn capabilities_match_what_opens() {
+    if !device_present() {
+        return;
+    }
+    let found = capabilities(&VideoEncoderConfig::Vaapi(VaapiConfig::default())).unwrap();
+
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        for chroma in [
+            ChromaSubsampling::Yuv420,
+            ChromaSubsampling::Yuv422,
+            ChromaSubsampling::Yuv444,
+        ] {
+            for depth in [BitDepth::Eight, BitDepth::Ten, BitDepth::Twelve] {
+                let format = pixel(chroma, depth);
+                let opened = open(&video(codec, format, RESOLUTION));
+
+                assert_eq!(
+                    opened.is_ok(),
+                    found.supports(codec, format),
+                    "{codec} {chroma} {}-bit: {:?}",
+                    depth.bits(),
+                    opened.err()
+                );
+            }
+        }
+    }
+    assert!(
+        found
+            .formats(Codec::H264)
+            .all(|format| format == yuv420(BitDepth::Eight))
+    );
+    assert!(
+        found
+            .formats(Codec::Av1)
+            .all(|format| format.chroma != ChromaSubsampling::Yuv422)
+    );
 }
 
 #[test]

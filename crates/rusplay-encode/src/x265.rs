@@ -115,6 +115,10 @@ struct Api {
     encoder_close: unsafe extern "C" fn(*mut sys::x265_encoder),
 }
 
+pub(crate) fn supports(format: PixelFormat) -> bool {
+    Api::load(format.depth).is_ok()
+}
+
 impl Api {
     fn load(depth: BitDepth) -> Result<Self, EncodeError> {
         let incompatible = EncodeError::LibraryIncompatible { backend: BACKEND };

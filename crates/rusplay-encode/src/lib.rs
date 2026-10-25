@@ -1,4 +1,5 @@
 mod backend;
+mod capabilities;
 mod error;
 pub mod input;
 #[cfg(any(
@@ -29,6 +30,7 @@ use rusplay_core::EncodedFrame;
 
 pub use crate::{
     backend::Backend,
+    capabilities::{Capabilities, capabilities},
     error::{EncodeError, VaCall, VaStatus},
 };
 

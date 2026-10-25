@@ -48,6 +48,10 @@ const LOW_LATENCY_DEFAULTS: [(&str, &str); 9] = [
     ("aud", "0"),
 ];
 
+pub(crate) fn supports(format: PixelFormat) -> bool {
+    format.depth != BitDepth::Twelve
+}
+
 const fn tune_name(tune: X264Tune) -> &'static str {
     match tune {
         X264Tune::Zerolatency => "zerolatency",
@@ -119,7 +123,7 @@ struct Settings {
 
 impl Settings {
     fn new(video: &VideoConfig, config: &X264Config) -> Result<Self, EncodeError> {
-        if video.pixel_format.depth == BitDepth::Twelve {
+        if !supports(video.pixel_format) {
             return Err(EncodeError::BitDepthUnsupported {
                 backend: BACKEND,
                 depth: video.pixel_format.depth,

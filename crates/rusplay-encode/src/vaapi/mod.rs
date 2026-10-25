@@ -25,7 +25,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    Backend, EncodeError, VideoEncoder,
+    Backend, Capabilities, EncodeError, VideoEncoder,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
     vaapi::{
@@ -257,6 +257,14 @@ fn select(
     }
 
     Ok(None)
+}
+
+pub(crate) fn capabilities(vaapi: &VaapiConfig) -> Result<Capabilities, EncodeError> {
+    let display = Display::open(&vaapi.device)?;
+
+    Capabilities::probe(BACKEND, |codec, format| {
+        Ok(select(&display, codec, format, vaapi.low_power)?.is_some())
+    })
 }
 
 const fn rate_control_mode(rate_control: RateControl) -> u32 {
