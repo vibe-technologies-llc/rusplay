@@ -6,12 +6,19 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+chacha20poly1305 = { workspace = true, features = ["alloc"] }
+hkdf.workspace = true
 libc.workspace = true
+parking_lot.workspace = true
 reed-solomon-simd = { workspace = true, features = ["std"] }
 rusplay-config.workspace = true
 rusplay-protocol.workspace = true
-rustix = { workspace = true, features = ["net", "std", "time"] }
+rustix = { workspace = true, features = ["net", "rand", "std", "time"] }
+sha2.workspace = true
+spake2 = { workspace = true, features = ["getrandom", "std"] }
+subtle.workspace = true
 thiserror.workspace = true
+zeroize = { workspace = true, features = ["alloc"] }
 
 [lints]
 workspace = true

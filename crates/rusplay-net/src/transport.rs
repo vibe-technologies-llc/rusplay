@@ -1,12 +1,23 @@
 use std::{
+    borrow::Cow,
     io,
     net::{SocketAddr, UdpSocket},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
+use parking_lot::RwLock;
 use rusplay_config::NetworkConfig;
+use rusplay_protocol::PacketHeader;
 use rustix::net::sockopt;
 
-use crate::NetError;
+use crate::{
+    NetError,
+    session::{SEALED_OVERHEAD, SessionCipher, SessionKeys, requires_sealing},
+};
 
 const IPV4_UDP_OVERHEAD: usize = 28;
 const IPV6_UDP_OVERHEAD: usize = 48;
@@ -52,6 +63,8 @@ pub struct SocketBuffers {
 pub struct Transport {
     socket: UdpSocket,
     mtu: u16,
+    session: RwLock<Option<Arc<SessionCipher>>>,
+    rejected: AtomicU64,
 }
 
 impl Transport {
@@ -78,6 +91,8 @@ impl Transport {
         Ok(Self {
             socket,
             mtu: options.mtu,
+            session: RwLock::new(None),
+            rejected: AtomicU64::new(0),
         })
     }
 
@@ -102,8 +117,57 @@ impl Transport {
         &self.socket
     }
 
+    pub fn install_session(&self, keys: &SessionKeys) {
+        *self.session.write() = Some(Arc::new(SessionCipher::new(keys)));
+    }
+
+    pub fn has_session(&self) -> bool {
+        self.session.read().is_some()
+    }
+
+    pub fn rejected_datagrams(&self) -> u64 {
+        self.rejected.load(Ordering::Relaxed)
+    }
+
     pub fn max_datagram_len(&self, peer: &SocketAddr) -> usize {
-        max_datagram_len(self.mtu, peer)
+        let overhead = if self.has_session() {
+            SEALED_OVERHEAD
+        } else {
+            0
+        };
+
+        max_datagram_len(self.mtu, peer).saturating_sub(overhead)
+    }
+
+    pub(crate) fn seal<'a>(&self, datagram: &'a [u8]) -> Result<Cow<'a, [u8]>, NetError> {
+        let Some(cipher) = self.session.read().clone() else {
+            return Ok(Cow::Borrowed(datagram));
+        };
+
+        let header = PacketHeader::read(datagram)?;
+        if !requires_sealing(header.stream) {
+            return Ok(Cow::Borrowed(datagram));
+        }
+
+        cipher.seal(datagram).map(Cow::Owned)
+    }
+
+    pub(crate) fn unseal(&self, buf: &mut [u8], len: usize) -> Option<usize> {
+        let Some(cipher) = self.session.read().clone() else {
+            return Some(len);
+        };
+
+        let datagram = &mut buf[..len];
+        let opened = match PacketHeader::read(datagram) {
+            Ok(header) if !requires_sealing(header.stream) => Some(len),
+            Ok(_) => cipher.open_in_place(datagram).ok(),
+            Err(_) => None,
+        };
+
+        if opened.is_none() {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+        }
+        opened
     }
 
     pub fn send_to(&self, datagram: &[u8], peer: SocketAddr) -> Result<(), NetError> {
@@ -115,7 +179,7 @@ impl Transport {
         }
 
         self.socket
-            .send_to(datagram, peer)
+            .send_to(&self.seal(datagram)?, peer)
             .map(drop)
             .map_err(|source| NetError::Send { peer, source })
     }
@@ -136,15 +200,63 @@ impl Transport {
     }
 
     pub fn try_recv_from(&self, buf: &mut [u8]) -> Result<Option<(usize, SocketAddr)>, NetError> {
-        match self.socket.recv_from(buf) {
-            Ok(received) => Ok(Some(received)),
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(NetError::Receive(error)),
+        loop {
+            match self.socket.recv_from(buf) {
+                Ok((len, from)) => {
+                    if let Some(len) = self.unseal(buf, len) {
+                        return Ok(Some((len, from)));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(NetError::Receive(error)),
+            }
         }
     }
 
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), NetError> {
-        self.socket.recv_from(buf).map_err(NetError::Receive)
+        loop {
+            let (len, from) = self.socket.recv_from(buf).map_err(NetError::Receive)?;
+
+            if let Some(len) = self.unseal(buf, len) {
+                return Ok((len, from));
+            }
+        }
+    }
+
+    pub fn recv_from_timeout(
+        &self,
+        buf: &mut [u8],
+        timeout: Duration,
+    ) -> Result<Option<(usize, SocketAddr)>, NetError> {
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+
+            self.socket
+                .set_read_timeout(Some(remaining))
+                .map_err(NetError::ReadTimeout)?;
+
+            match self.socket.recv_from(buf) {
+                Ok((len, from)) => {
+                    if let Some(len) = self.unseal(buf, len) {
+                        return Ok(Some((len, from)));
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(NetError::Receive(error)),
+            }
+        }
     }
 }
 

@@ -3,6 +3,7 @@ mod discovery;
 mod error;
 mod fec;
 mod header;
+mod pairing;
 
 pub use crate::{
     control::{ControlMessage, ControlPacket},
@@ -10,4 +11,5 @@ pub use crate::{
     error::ProtocolError,
     fec::FecHeader,
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},
+    pairing::{PairingMessage, PairingRejection},
 };

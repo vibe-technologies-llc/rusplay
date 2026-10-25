@@ -74,6 +74,42 @@ paths:
   the multicast group has TTL 1, so a host on another VLAN or a second interface is not found;
   entering an address by hand always works.
 
+## Pairing and encryption
+
+- Trust comes from a PIN the host shows and the user types on the client. The PIN runs through
+  SPAKE2 (`spake2`, Ed25519 group, identities `rusplay client`/`rusplay host`), so a short
+  PIN is never exposed to offline guessing. `PairingMessage` on `StreamKind::Pairing` carries
+  `Start` (client key share), `Reply` (host share plus key confirmation), `Confirm` (client key
+  confirmation), `Done` and `Rejected`, all tagged with a random per-attempt id.
+- The SPAKE2 secret feeds HKDF-SHA256 (salted with the attempt id) into two confirmation keys and
+  two ChaCha20-Poly1305 session keys, one per direction. Each side proves it derived the same
+  secret (HKDF-based tags over the label, attempt and both key shares, compared in constant time);
+  a wrong PIN fails on the client at `Reply` and on the host at `Confirm`.
+- Online guessing is bounded by `network.pairing_max_attempts`: every fresh `Start` that gets a
+  `Reply` costs one attempt, because the host's confirmation already lets a hostile client test one
+  PIN. A retransmitted `Start` (same attempt id) is answered from cache for free. Once the budget
+  is spent the host answers `Rejected(Locked)` and `pair_as_host` returns `PairingLocked`; a
+  completed pairing consumes the PIN. The PIN has `network.pairing_pin_digits` digits and
+  `Pin::generate` draws it from the OS random source without modulo bias.
+- `PairingInitiator`/`PairingResponder` are sans-IO; `pair_as_client`/`pair_as_host` drive them over
+  a blocking `Transport` with retransmits every `network.control_retransmit_ms` until
+  `network.pairing_timeout_ms`, and the host lingers a few retransmit intervals after success to
+  repeat `Done` to a client that missed it. Pairing is not on the media path.
+- `Transport::install_session` switches a transport to encrypted mode. Every datagram except
+  `Pairing` and `Discovery` is sealed as `PacketHeader` (authenticated as associated data), a
+  big-endian 64-bit counter, the ciphertext and a 16-byte tag, 24 bytes of overhead that
+  `max_datagram_len` already subtracts, so create packetizers after installing the session. The
+  counter is the AEAD nonce and feeds a 64-entry replay window per direction. Unsealed, replayed or
+  forged datagrams are dropped inside `recv_from`, `try_recv_from`, `recv_from_timeout` and
+  `recv_batch` and only counted (`rejected_datagrams`), so an attacker cannot make the receive
+  loops fail. Control, FEC and media all ride the sealed path unchanged.
+- Without a session the transport stays plaintext, which is what tests and unpaired development
+  use; refusing to stream before pairing is the session layer's policy. Key material is zeroized on
+  drop and never printed by `Debug`.
+- Known limits: pairing is per session (the PIN is single use and nothing is remembered between
+  runs), and a LAN attacker can burn the attempt budget with garbage `Start`s, which only denies
+  pairing and never grants access.
+
 ## Fragmentation and reassembly
 
 - `Packetizer` (one per stream, owns the sequence counter) splits a frame into data fragments of

@@ -64,14 +64,18 @@ impl Transport {
             });
         }
 
+        let sealed = datagrams
+            .iter()
+            .map(|datagram| self.seal(datagram))
+            .collect::<Result<Vec<_>, _>>()?;
         let address = peer.as_any();
         let mut sent = 0;
 
-        while sent < datagrams.len() {
-            let chunk = &datagrams[sent..datagrams.len().min(sent + MAX_MESSAGES_PER_CALL)];
+        while sent < sealed.len() {
+            let chunk = &sealed[sent..sealed.len().min(sent + MAX_MESSAGES_PER_CALL)];
             let slices: Vec<[IoSlice<'_>; 1]> = chunk
                 .iter()
-                .map(|datagram| [IoSlice::new(datagram)])
+                .map(|datagram| [IoSlice::new(datagram.as_ref())])
                 .collect();
             let mut controls: Vec<SendAncillaryBuffer<'_, '_, '_>> = chunk
                 .iter()
@@ -156,17 +160,18 @@ impl Transport {
             let truncated = header.msg_hdr.msg_flags & libc::MSG_TRUNC != 0;
             let source = parse_sockaddr(&names[index][..]);
 
-            match (truncated, source) {
+            let length = match (truncated, source) {
                 (false, Some(source)) => {
-                    batch.lengths[index] = header.msg_len as usize;
                     batch.sources[index] = source;
+                    self.unseal(&mut batch.buffers[index], header.msg_len as usize)
                 }
-                _ => batch.lengths[index] = 0,
-            }
+                _ => None,
+            };
+            batch.lengths[index] = length.unwrap_or(0);
         }
         batch.filled = received;
 
-        Ok(received)
+        Ok(batch.iter().count())
     }
 }
 
@@ -385,5 +390,49 @@ mod tests {
             events.as_slice(),
             [ReassemblyEvent::Frame(frame)] if frame.data == data
         ));
+    }
+
+    #[test]
+    fn sealed_batches_are_opened_by_the_receiver_and_forgeries_are_dropped() {
+        use rusplay_protocol::StreamKind;
+
+        use crate::{SessionKeys, requires_sealing};
+
+        let sender = bind(LOOPBACK_V4);
+        let receiver = bind(LOOPBACK_V4);
+        let peer = receiver.local_addr().unwrap();
+        sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
+        receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+        assert!(requires_sealing(StreamKind::Video));
+        let outgoing: Vec<Vec<u8>> = (0..6u8)
+            .map(|index| {
+                let mut tx = crate::Packetizer::new(
+                    StreamKind::Video,
+                    sender.max_datagram_len(&peer),
+                    crate::FecScheme::None,
+                )
+                .unwrap();
+                tx.packetize(u32::from(index), false, &[index; 200])
+                    .unwrap()
+                    .remove(0)
+            })
+            .collect();
+
+        sender.send_batch(&outgoing, peer).unwrap();
+
+        let mut batch = RecvBatch::new(16, 2048);
+        let mut collected = Vec::new();
+        while collected.len() < outgoing.len() {
+            receiver.recv_batch(&mut batch).unwrap();
+            collected.extend(collect(&batch));
+        }
+        assert_eq!(collected, outgoing);
+        assert_eq!(receiver.rejected_datagrams(), 0);
+
+        sender.socket().send_to(&outgoing[0], peer).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        receiver.recv_batch(&mut batch).unwrap();
+        assert_eq!(batch.iter().count(), 0);
+        assert_eq!(receiver.rejected_datagrams(), 1);
     }
 }

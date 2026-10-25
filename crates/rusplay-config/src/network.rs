@@ -9,6 +9,7 @@ use crate::ConfigError;
 
 const MTU_RANGE: RangeInclusive<u16> = 576..=9000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
+const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -25,6 +26,9 @@ pub struct NetworkConfig {
     pub control_max_retransmits: u8,
     pub discovery_port: u16,
     pub discovery_group: Ipv4Addr,
+    pub pairing_pin_digits: u8,
+    pub pairing_max_attempts: u8,
+    pub pairing_timeout_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -42,6 +46,9 @@ impl Default for NetworkConfig {
             control_max_retransmits: 8,
             discovery_port: 47_801,
             discovery_group: Ipv4Addr::new(239, 255, 47, 80),
+            pairing_pin_digits: 6,
+            pairing_max_attempts: 3,
+            pairing_timeout_ms: 120_000,
         }
     }
 }
@@ -74,6 +81,18 @@ impl NetworkConfig {
             return Err(ConfigError::DiscoveryGroupNotMulticast(
                 self.discovery_group,
             ));
+        }
+
+        if !PIN_DIGITS_RANGE.contains(&self.pairing_pin_digits) {
+            return Err(ConfigError::PinDigitsOutOfRange(self.pairing_pin_digits));
+        }
+
+        if self.pairing_max_attempts == 0 {
+            return Err(ConfigError::ZeroPairingAttempts);
+        }
+
+        if self.pairing_timeout_ms == 0 {
+            return Err(ConfigError::ZeroPairingTimeout);
         }
 
         Ok(())
@@ -149,5 +168,34 @@ mod tests {
         assert_eq!(parsed.discovery_port, 5000);
         assert_eq!(parsed.discovery_group, Ipv4Addr::new(239, 1, 2, 3));
         assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn pairing_limits_are_validated() {
+        let digits = NetworkConfig {
+            pairing_pin_digits: 3,
+            ..NetworkConfig::default()
+        };
+        let attempts = NetworkConfig {
+            pairing_max_attempts: 0,
+            ..NetworkConfig::default()
+        };
+        let timeout = NetworkConfig {
+            pairing_timeout_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            digits.validate(),
+            Err(ConfigError::PinDigitsOutOfRange(3))
+        ));
+        assert!(matches!(
+            attempts.validate(),
+            Err(ConfigError::ZeroPairingAttempts)
+        ));
+        assert!(matches!(
+            timeout.validate(),
+            Err(ConfigError::ZeroPairingTimeout)
+        ));
     }
 }

@@ -33,7 +33,7 @@
 - [S] `audio-resample`: CPU resampling with rubato (or the Resonate resampler) when PipeWire cannot deliver 48 kHz
 
 # Networking
-- [M] `net-pairing`: authenticated pairing and encrypted session keys
+- [M] `net-remembered-peers`: persist a pairing secret so a paired client reconnects without a new PIN
 
 # Input
 - [M] `input-libei`: host injection through the RemoteDesktop portal and libei

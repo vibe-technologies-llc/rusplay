@@ -36,6 +36,10 @@ pub enum ProtocolError {
     DiscoveryNameTooLong { len: usize, max: usize },
     #[error("host name is not valid utf-8")]
     InvalidDiscoveryName,
+    #[error("unknown pairing message tag {0}")]
+    UnknownPairingTag(u8),
+    #[error("unknown pairing rejection reason {0}")]
+    UnknownPairingRejection(u8),
     #[error("unknown stream kind {0}")]
     UnknownStreamKind(u8),
 }

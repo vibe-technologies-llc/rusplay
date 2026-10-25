@@ -3,7 +3,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
 };
 
-use rusplay_protocol::{ProtocolError, StreamKind};
+use rusplay_protocol::{PairingRejection, ProtocolError, StreamKind};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -34,6 +34,30 @@ pub enum NetError {
     Broadcast(#[source] io::Error),
     #[error("failed to set the multicast ttl")]
     MulticastTtl(#[source] io::Error),
+    #[error("sealed datagram of {len} bytes is shorter than the {min} byte minimum")]
+    SessionDatagramTooShort { len: usize, min: usize },
+    #[error("failed to seal a datagram")]
+    SessionSeal(#[source] chacha20poly1305::Error),
+    #[error("datagram failed authentication")]
+    SessionAuthentication,
+    #[error("datagram counter {counter} was already seen or is too old")]
+    SessionReplay { counter: u64 },
+    #[error("the system random source failed")]
+    RandomUnavailable(#[source] io::Error),
+    #[error("pin must be {min} to {max} ascii digits, found {len} characters")]
+    InvalidPin { len: usize, min: u8, max: u8 },
+    #[error("pairing key exchange failed")]
+    PairingKeyExchange(#[source] spake2::Error),
+    #[error("pairing key derivation failed")]
+    PairingKeyDerivation(#[source] hkdf::InvalidLength),
+    #[error("peer proved it does not know the pin")]
+    PairingAuthentication,
+    #[error("peer rejected the pairing: {reason:?}")]
+    PairingRejected { reason: PairingRejection },
+    #[error("pairing is locked after too many attempts")]
+    PairingLocked,
+    #[error("pairing did not finish in time")]
+    PairingTimeout,
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]
