@@ -10,7 +10,6 @@
 
 # Video decode
 - [L] `decode-nvdec`: NVDEC decoder
-- [S] `decode-vaapi-interlaced`: field-coded H.264 pictures in the VAAPI backend (returns `InterlacedUnsupported` today)
 
 # Input
 - [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad

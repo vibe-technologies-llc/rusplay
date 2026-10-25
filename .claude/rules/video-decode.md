@@ -71,8 +71,8 @@ paths:
   stateless decoders finish a picture only when the next one starts and output H.264 only once
   the DPB is full, which is a frame or more of latency, and their VAAPI backend cannot be built
   here (see `.claude/rules/dependencies.md`):
-  - `h264.rs`: frame pictures only (field pictures are `InterlacedUnsupported`), picture order
-    count types 0/1/2, sliding-window and MMCO 1-6 reference marking, P/B list initialisation and
+  - `h264.rs` with `h264/dpb.rs`: frame, field (PAFF) and MBAFF pictures, picture order count
+    types 0/1/2, sliding-window and MMCO 1-6 reference marking, P/B list initialisation and
     `ref_pic_list_modification`, explicit weighted prediction, scaling matrices (zig-zag to
     raster). A picture is submitted at the end of its packet. The reorder depth is the VUI's
     `max_num_reorder_frames` (capped by `max_dec_frame_buffering`); without
@@ -81,6 +81,20 @@ paths:
     arrives after a later one was already released is dropped and raises the depth by one, up to
     the level's DPB size. The spec's inference (`MaxDpbFrames`) is deliberately not used, since a
     VUI-less encoder without B-frames would then cost a DPB of latency.
+    Field pictures: the DPB keeps a `Reference` per frame with a marking (unused, short-term,
+    long-term) and a picture order count per field, so a frame can have one reference field.
+    Both fields of a frame decode into one surface: a field pairs with the open first field when
+    it has the opposite parity, the same `frame_num` and is not an IDR, and the frame is output
+    (through the reorder queue) once the second field is decoded, whether the fields arrive in
+    one packet or two. A first field followed by anything else is output alone, with the other
+    field's lines undefined, and `flush` outputs a trailing one. Field reference lists follow
+    8.2.4.2.5 (alternating parity starting with the current field's, missing fields skipped),
+    field `PicNum`/`LongTermPicNum` arithmetic drives `ref_pic_list_modification` and MMCO 1-3,
+    and the second field of a reference frame skips the sliding window. `ReferenceFrames` carries
+    `TOP_FIELD`/`BOTTOM_FIELD` flags for frames with one marked field and the list entries carry
+    the field they name. MBAFF frames are frame pictures to the decoder; the driver handles the
+    field macroblock pairs. Mesa's VCN builds the reference lists itself from this DPB state, so
+    the field tests double as a check of the driver against the spec.
   - `hevc.rs`: POC from the previous TemporalId-0 picture, the short- and long-term RPS (from the
     SPS or the slice), RefPicList construction with `list_entry` modification, dependent slice
     segments, RASL skipping after a random-access IRAP, range-extension buffers
@@ -114,13 +128,25 @@ paths:
 - `tests/data/` holds 256x144 clips made by `tests/data/generate.sh` with ffmpeg: 8 frames of
   AV1 in IVF (8-bit and 10-bit 4:2:0, 8-bit 4:4:4), H.264 and HEVC as Annex B with access unit
   delimiters (8-bit 4:2:0, HEVC 10-bit and 4:2:2), plus 12-frame stress clips: H.264 and HEVC
-  with B-pyramids, four slices, several references and weighted prediction, and AV1 with hidden
-  frames, `show_existing_frame` and 2x2 tiles. `tests/common` has the IVF and Annex B splitters.
+  with B-pyramids, four slices, several references and weighted prediction, H.264 MBAFF with
+  B-frames, and AV1 with hidden frames, `show_existing_frame` and 2x2 tiles. `tests/common` has
+  the IVF and Annex B splitters.
 - `tests/vaapi.rs` checks the public contract on the GPU (one frame per packet, `NV12`/`P010`
-  DMA-BUF layout, surfaces of held frames never reused, the 4:2:2 error path). The unit tests
-  in `src/vaapi/tests.rs` re-import each exported DMA-BUF as a VA surface, read it back with
-  `vaGetImage` and compare a 64-bit FNV-1a of the cropped `NV12`/`P010` planes with ffmpeg's
-  decode of the same fixture (`ffmpeg -i <fixture> -f rawvideo -pix_fmt nv12|p010le -`, hashed
-  per frame; the stress clips compare the full display-order sequence, with the decoder's
-  expected hold count and `flush` completing it). Regenerated fixtures need new hashes. Every VAAPI test returns early when the render node,
-  the codec or the profile is missing.
+  DMA-BUF layout, surfaces of held frames never reused, the 4:2:2 error path, `flush` after
+  reordering). The unit tests in `src/vaapi/tests.rs` re-import each exported DMA-BUF as a VA
+  surface, read it back with `vaGetImage` and compare a 64-bit FNV-1a of the cropped
+  `NV12`/`P010` planes with ffmpeg's decode of the same fixture (`ffmpeg -i <fixture> -f rawvideo
+  -pix_fmt nv12|p010le -`, hashed per frame; the stress clips compare the full display-order
+  sequence, with the decoder's expected hold count and `flush` completing it). Regenerated
+  fixtures need new hashes. Every VAAPI test returns early when the render node, the codec or the
+  profile is missing.
+- No available encoder writes field pictures (x264 only does MBAFF), so
+  `src/vaapi/tests/fields.rs` is a tiny H.264 writer for PAFF streams: 128x64 frames of 16
+  macroblocks per field, CAVLC, Main profile. Intra fields are I_PCM with a luma pattern and
+  chroma planes unique to a seed. A probe field is a P or B field whose macroblock `i` is
+  `P_L0_16x16` (or `B_L0_16x16`/`B_L1_16x16`) with reference index `i % active` and a zero motion
+  vector, so one decoded field shows its whole reference list as the seed of each macroblock.
+  The tests state the expected lists from the spec (alternating parity, sliding window, MMCO,
+  `ref_pic_list_modification`, B ordering, pairing, unpaired fields) and every stream runs with
+  one packet per field and one per frame. The marking scenarios were also checked against
+  ffmpeg's software decode.

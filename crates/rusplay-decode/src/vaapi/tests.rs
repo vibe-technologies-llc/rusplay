@@ -1,15 +1,20 @@
 #[path = "../../tests/common/mod.rs"]
 mod common;
+mod fields;
 
 use std::{path::Path, rc::Rc};
 
 use cros_codecs::codec::h264::parser::{Level, Profile, Sps, SpsBuilder};
 use rusplay_config::VaapiDecoderConfig;
-use rusplay_core::{Codec, EncodedFrame};
+use rusplay_core::{Codec, EncodedFrame, Timestamp};
 
 use crate::{
     DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
-    vaapi::{VaapiDecoder, h264, reorder::Depth},
+    vaapi::{
+        VaapiDecoder, h264,
+        reorder::Depth,
+        tests::fields::{Field, FieldPicture, Mmco, Modification},
+    },
 };
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -39,6 +44,21 @@ const H264_420_8BIT_BFRAMES: [u64; 12] = [
     0x7597_2c6a_e6fa_f7d4,
     0x51b6_1e19_2bf6_972d,
     0xc76b_c017_a03d_eff8,
+];
+
+const H264_420_8BIT_MBAFF: [u64; 12] = [
+    0x813b_c8d4_18fe_df72,
+    0xe7c4_d7a2_710d_a20d,
+    0x5064_4368_fb72_5366,
+    0x42b9_78cf_1614_cc20,
+    0xbd5f_9f08_5618_8a2d,
+    0x1bce_63dd_d73a_de52,
+    0x38f9_2f29_168c_2a3c,
+    0x2c4e_9947_3ab3_a8cd,
+    0xca75_9c61_42f6_e31c,
+    0xa318_ce14_2922_7e5c,
+    0xe0ee_71c1_b6ed_f702,
+    0xa9fd_36ad_e3e6_86d7,
 ];
 
 const HEVC_420_8BIT: [u64; 8] = [
@@ -202,6 +222,16 @@ fn h264_with_b_frames_slices_and_weights_matches_the_reference_decode() {
 }
 
 #[test]
+fn h264_mbaff_matches_the_reference_decode() {
+    assert_pixels(
+        Codec::H264,
+        &common::annexb_access_units(Codec::H264, &common::fixture("h264-420-8bit-mbaff.h264")),
+        &H264_420_8BIT_MBAFF,
+        2,
+    );
+}
+
+#[test]
 fn hevc_matches_the_reference_decode() {
     assert_pixels(
         Codec::Hevc,
@@ -302,4 +332,358 @@ fn h264_follows_the_bitstream_restrictions() {
     restricted.vui_parameters.max_num_reorder_frames = 0;
 
     assert_eq!(h264::reorder_depth(&restricted), Depth::Fixed(0));
+}
+
+fn field_packets(
+    max_num_ref_frames: u32,
+    reorder_frames: u32,
+    pictures: &[FieldPicture],
+    per_frame: bool,
+) -> Vec<EncodedFrame> {
+    let mut units: Vec<Vec<u8>> = pictures.iter().map(FieldPicture::encode).collect();
+    units[0].splice(
+        0..0,
+        fields::parameter_sets(max_num_ref_frames, reorder_frames),
+    );
+
+    if per_frame {
+        units = units.chunks(2).map(<[Vec<u8>]>::concat).collect();
+    }
+
+    units
+        .into_iter()
+        .enumerate()
+        .map(|(index, data)| EncodedFrame {
+            codec: Codec::H264,
+            timestamp: Timestamp::from_micros(u64::try_from(index).unwrap() * 16_666),
+            keyframe: index == 0,
+            data,
+        })
+        .collect()
+}
+
+fn assert_field_stream(
+    max_num_ref_frames: u32,
+    pictures: &[FieldPicture],
+    expected: &[(Field, Field)],
+) {
+    assert_reordered_field_stream(max_num_ref_frames, 0, pictures, expected);
+}
+
+fn assert_reordered_field_stream(
+    max_num_ref_frames: u32,
+    reorder_frames: u32,
+    pictures: &[FieldPicture],
+    expected: &[(Field, Field)],
+) {
+    let config = VaapiDecoderConfig::default();
+    if !Path::new(&config.device).exists() {
+        return;
+    }
+
+    for per_frame in [false, true] {
+        let mut decoder = match VaapiDecoder::new(Codec::H264, &config) {
+            Ok(decoder) => decoder,
+            Err(DecodeError::CodecUnsupported { .. }) => return,
+            Err(error) => panic!("opening the h264 vaapi decoder: {error}"),
+        };
+
+        let mut outputs = Vec::new();
+        for packet in field_packets(max_num_ref_frames, reorder_frames, pictures, per_frame) {
+            outputs.extend(decoder.decode(&packet).unwrap());
+        }
+        outputs.extend(decoder.flush().unwrap());
+
+        assert_eq!(outputs.len(), expected.len(), "per_frame {per_frame}");
+        for (index, (output, (top, bottom))) in outputs.iter().zip(expected).enumerate() {
+            assert_eq!(output.resolution, fields::resolution());
+
+            let DecodedBuffer::DmaBuf(dma_buf) = &output.buffer else {
+                panic!("frame {index} is not a DMA-BUF");
+            };
+            let planes = decoder
+                .display()
+                .read_back(
+                    dma_buf.image(),
+                    output.resolution.width,
+                    output.resolution.height,
+                )
+                .unwrap();
+
+            assert!(
+                planes == fields::nv12(top, bottom),
+                "frame {index} differs, per_frame {per_frame}\n got {}\n want {}",
+                fields::describe(&planes),
+                fields::describe(&fields::nv12(top, bottom))
+            );
+        }
+    }
+}
+
+fn intra_frame(frame: u32, frame_num: u32, top: u8, bottom: u8) -> [FieldPicture; 2] {
+    [
+        FieldPicture::intra(frame, frame_num, false, top),
+        FieldPicture::intra(frame, frame_num, true, bottom),
+    ]
+}
+
+fn probe_frame(
+    frame: u32,
+    frame_num: u32,
+    top: (usize, Vec<Modification>),
+    bottom: (usize, Vec<Modification>),
+) -> [FieldPicture; 2] {
+    [
+        FieldPicture::probe(frame, frame_num, false, top.0).with_modifications(top.1),
+        FieldPicture::probe(frame, frame_num, true, bottom.0).with_modifications(bottom.1),
+    ]
+}
+
+#[test]
+fn field_pairs_decode_into_one_frame_each() {
+    let pictures: Vec<FieldPicture> = [intra_frame(0, 0, 1, 2), intra_frame(1, 1, 3, 4)].concat();
+
+    assert_field_stream(
+        2,
+        &pictures,
+        &[
+            (Field::intra(1), Field::intra(2)),
+            (Field::intra(3), Field::intra(4)),
+        ],
+    );
+}
+
+#[test]
+fn field_reference_lists_alternate_parity_and_follow_the_sliding_window() {
+    let pictures: Vec<FieldPicture> = [
+        intra_frame(0, 0, 1, 2),
+        intra_frame(1, 1, 3, 4),
+        intra_frame(2, 2, 5, 6),
+        probe_frame(3, 3, (6, Vec::new()), (6, Vec::new())),
+        [
+            FieldPicture::intra(4, 3, false, 7),
+            FieldPicture::reference_probe(4, 3, true, 5),
+        ],
+    ]
+    .concat();
+
+    assert_field_stream(
+        3,
+        &pictures,
+        &[
+            (Field::intra(1), Field::intra(2)),
+            (Field::intra(3), Field::intra(4)),
+            (Field::intra(5), Field::intra(6)),
+            (
+                Field::probe(&[5, 6, 3, 4, 1, 2]),
+                Field::probe(&[6, 5, 4, 3, 2, 1]),
+            ),
+            (Field::intra(7), Field::probe(&[6, 7, 4, 5, 3])),
+        ],
+    );
+}
+
+#[test]
+fn field_reference_list_modification_counts_in_field_pic_nums() {
+    let pictures: Vec<FieldPicture> = [
+        intra_frame(0, 0, 1, 2),
+        intra_frame(1, 1, 3, 4),
+        probe_frame(
+            2,
+            2,
+            (
+                4,
+                vec![
+                    Modification { idc: 0, value: 4 },
+                    Modification { idc: 1, value: 1 },
+                ],
+            ),
+            (4, vec![Modification { idc: 0, value: 2 }]),
+        ),
+    ]
+    .concat();
+
+    assert_field_stream(
+        2,
+        &pictures,
+        &[
+            (Field::intra(1), Field::intra(2)),
+            (Field::intra(3), Field::intra(4)),
+            (Field::probe(&[2, 4, 3, 1]), Field::probe(&[3, 4, 2, 1])),
+        ],
+    );
+}
+
+fn long_term_setup(with_probe: bool) -> Vec<FieldPicture> {
+    let long_term_f1 = vec![
+        Mmco::MaxLongTermIndexPlus1(1),
+        Mmco::ShortToLongTerm {
+            difference_minus1: 1,
+            index: 0,
+        },
+        Mmco::ShortToLongTerm {
+            difference_minus1: 2,
+            index: 0,
+        },
+    ];
+
+    let mut pictures: Vec<FieldPicture> = [
+        intra_frame(0, 0, 1, 2),
+        intra_frame(1, 1, 3, 4),
+        [
+            FieldPicture::intra(2, 2, false, 5).with_marking(long_term_f1),
+            FieldPicture::intra(2, 2, true, 6),
+        ],
+    ]
+    .concat();
+    if with_probe {
+        pictures.extend(probe_frame(3, 3, (6, Vec::new()), (6, Vec::new())));
+    }
+    pictures
+}
+
+fn frame_after_setup(with_probe: bool, operations: Vec<Mmco>) -> Vec<FieldPicture> {
+    let mut pictures = long_term_setup(with_probe);
+    pictures.extend([
+        FieldPicture::intra(4, 3, false, 7).with_marking(operations),
+        FieldPicture::intra(4, 3, true, 8),
+    ]);
+    pictures.extend(probe_frame(5, 4, (6, Vec::new()), (6, Vec::new())));
+    pictures
+}
+
+fn setup_frames(with_probe: bool) -> Vec<(Field, Field)> {
+    let mut frames = vec![
+        (Field::intra(1), Field::intra(2)),
+        (Field::intra(3), Field::intra(4)),
+        (Field::intra(5), Field::intra(6)),
+    ];
+    if with_probe {
+        frames.push((
+            Field::probe(&[5, 6, 1, 2, 3, 4]),
+            Field::probe(&[6, 5, 2, 1, 4, 3]),
+        ));
+    }
+    frames.push((Field::intra(7), Field::intra(8)));
+    frames
+}
+
+#[test]
+fn field_marking_orders_long_term_pairs_after_short_term_ones() {
+    let mut expected = setup_frames(true);
+    expected.push((
+        Field::probe(&[7, 8, 1, 6, 2, 3]),
+        Field::probe(&[8, 7, 6, 1, 2, 4]),
+    ));
+    let unmark_short_term_field = vec![Mmco::UnmarkShortTerm {
+        difference_minus1: 1,
+    }];
+
+    assert_field_stream(
+        4,
+        &frame_after_setup(true, unmark_short_term_field),
+        &expected,
+    );
+}
+
+#[test]
+fn field_marking_unmarks_a_single_long_term_field() {
+    let mut expected = setup_frames(false);
+    expected.push((
+        Field::probe(&[7, 8, 5, 6, 1, 2]),
+        Field::probe(&[8, 7, 6, 5, 2, 1]),
+    ));
+    let unmark_long_term_field = vec![Mmco::UnmarkLongTerm {
+        long_term_pic_num: 1,
+    }];
+
+    assert_field_stream(
+        4,
+        &frame_after_setup(false, unmark_long_term_field),
+        &expected,
+    );
+}
+
+#[test]
+fn an_unpaired_field_is_output_as_its_own_frame() {
+    let config = VaapiDecoderConfig::default();
+    if !Path::new(&config.device).exists() {
+        return;
+    }
+    let Ok(mut decoder) = VaapiDecoder::new(Codec::H264, &config) else {
+        return;
+    };
+
+    let pictures = [
+        FieldPicture::intra(0, 0, false, 1),
+        FieldPicture::intra(0, 0, true, 2),
+        FieldPicture::intra(1, 1, false, 3),
+        FieldPicture::intra(2, 2, false, 5),
+        FieldPicture::intra(2, 2, true, 6),
+        FieldPicture::intra(3, 3, false, 7),
+    ];
+
+    let mut outputs = Vec::new();
+    for packet in field_packets(2, 0, &pictures, false) {
+        outputs.extend(decoder.decode(&packet).unwrap());
+    }
+    outputs.extend(decoder.flush().unwrap());
+
+    assert_eq!(outputs.len(), 4);
+
+    let top_rows = |output: &DecodedFrame| -> Vec<u8> {
+        let DecodedBuffer::DmaBuf(dma_buf) = &output.buffer else {
+            panic!("the frame is not a DMA-BUF");
+        };
+        let planes = decoder
+            .display()
+            .read_back(dma_buf.image(), 128, 64)
+            .unwrap();
+        planes[0]
+            .chunks(128)
+            .step_by(2)
+            .flatten()
+            .copied()
+            .collect()
+    };
+    let expected = |seed: u8| -> Vec<u8> {
+        fields::nv12(&Field::intra(seed), &Field::intra(seed))[0]
+            .chunks(128)
+            .step_by(2)
+            .flatten()
+            .copied()
+            .collect()
+    };
+
+    assert_eq!(top_rows(&outputs[0]), expected(1));
+    assert_eq!(top_rows(&outputs[1]), expected(3));
+    assert_eq!(top_rows(&outputs[2]), expected(5));
+    assert_eq!(top_rows(&outputs[3]), expected(7));
+}
+
+#[test]
+fn field_b_pictures_build_both_lists_around_the_current_order_count() {
+    let pictures = [
+        intra_frame(0, 0, 1, 2),
+        intra_frame(4, 1, 3, 4),
+        [
+            FieldPicture::bidirectional_probe(2, 2, false, 4, 4),
+            FieldPicture::bidirectional_probe(2, 2, true, 4, 4),
+        ],
+    ]
+    .concat();
+
+    assert_reordered_field_stream(
+        2,
+        1,
+        &pictures,
+        &[
+            (Field::intra(1), Field::intra(2)),
+            (
+                Field::bidirectional_probe(&[1, 2, 3, 4], &[3, 4, 1, 2]),
+                Field::bidirectional_probe(&[2, 1, 4, 3], &[4, 3, 2, 1]),
+            ),
+            (Field::intra(3), Field::intra(4)),
+        ],
+    );
 }

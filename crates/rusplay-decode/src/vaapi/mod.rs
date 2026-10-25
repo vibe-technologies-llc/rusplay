@@ -106,7 +106,7 @@ impl VideoDecoder for VaapiDecoder {
 
     fn flush(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
         Ok(match &mut self.state {
-            CodecState::H264(decoder) => decoder.drain(),
+            CodecState::H264(decoder) => decoder.drain()?,
             CodecState::Hevc(decoder) => decoder.drain(),
             CodecState::Av1(_) => Vec::new(),
         })

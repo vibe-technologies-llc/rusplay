@@ -47,8 +47,6 @@ pub enum DecodeError {
     Va { call: VaCall, status: VaStatus },
     #[error("the vaapi driver has no decoder for {codec} profile {profile}")]
     ProfileUnsupported { codec: Codec, profile: u8 },
-    #[error("interlaced {codec} is not supported")]
-    InterlacedUnsupported { codec: Codec },
     #[error("malformed {codec} {unit}: {reason}")]
     Malformed {
         codec: Codec,
