@@ -2,6 +2,8 @@ mod error;
 mod frame;
 #[cfg(feature = "software")]
 mod software;
+#[cfg(feature = "vaapi")]
+mod vaapi;
 
 use std::fmt;
 
@@ -9,8 +11,10 @@ use rusplay_core::EncodedFrame;
 
 #[cfg(feature = "software")]
 pub use crate::software::Rav1dDecoder;
+#[cfg(feature = "vaapi")]
+pub use crate::vaapi::VaapiDecoder;
 pub use crate::{
-    error::DecodeError,
+    error::{BitstreamUnit, DecodeError, VaCall, VaStatus},
     frame::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
         DmaBufPlane, DrmFourcc,

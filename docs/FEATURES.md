@@ -13,8 +13,9 @@
 - [S, blocked by: encode-vaapi] `encode-chroma-probe`: runtime probing of 4:2:2/4:4:4 support per device
 
 # Video decode
-- [L] `decode-vaapi`: VAAPI decoder that exports DMA-BUF frames
 - [L] `decode-nvdec`: NVDEC decoder
+- [S] `decode-reorder`: hold frames for display order when a stream signals reordering (B-frames); the VAAPI backend outputs in decode order, which is display order for Rusplay's own encoders
+- [S] `decode-vaapi-interlaced`: field-coded H.264 pictures in the VAAPI backend (returns `InterlacedUnsupported` today)
 
 # Networking
 - [M] `net-remembered-peers`: persist a pairing secret so a paired client reconnects without a new PIN
@@ -26,7 +27,7 @@
 
 # Sessions
 - [L, blocked by: encode-vaapi] `host-pipeline`: run capture → scale → encode → send in `HostSession`
-- [L, blocked by: decode-vaapi] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
+- [L] `client-pipeline`: run receive → decode → scale → present in `ClientSession`
 
 # Desktop app
 - [M] `app-ui-shell`: gpui window on Wayland with the gpui git dependency pinned
