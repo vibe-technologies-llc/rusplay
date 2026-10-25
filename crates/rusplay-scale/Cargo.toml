@@ -10,5 +10,9 @@ rusplay-core.workspace = true
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["std", "parking_lot", "vulkan", "wgsl"] }
 
+[dev-dependencies]
+half.workspace = true
+pollster.workspace = true
+
 [lints]
 workspace = true

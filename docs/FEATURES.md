@@ -5,7 +5,6 @@
 - [S] `capture-restore-token`: persist the portal restore token between host runs
 
 # Scaling
-- [M] `scale-gpu-tests`: headless wgpu tests comparing GPU output with a CPU reference of the kernels
 - [M] `scale-polar-pass`: single-pass 2D EWA shader for the polar filters
 - [S] `scale-antiringing`: clamp upscaled output to the local min/max by `antiringing` strength
 - [S] `scale-sigmoid`: sigmoidal light transform around the upscale pass

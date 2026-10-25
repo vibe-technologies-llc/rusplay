@@ -164,3 +164,136 @@ fn params_bytes(pass: &ScalePass<'_>) -> Vec<u8> {
         0,
     ])
 }
+
+#[cfg(test)]
+mod tests {
+    use rusplay_core::ScaleFilter;
+
+    use super::*;
+    use crate::{
+        Kernel,
+        reference::resample_separable,
+        testing::{self, Image},
+    };
+
+    const RGBA16F_TOLERANCE: f32 = 4.0 / 1024.0;
+
+    fn run_separable(filter: ScaleFilter, source: (u32, u32), target: (u32, u32)) {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let kernel = Kernel::new(filter);
+        let horizontal = TapTable::build(kernel, source.0, target.0);
+        let vertical = TapTable::build(kernel, source.1, target.1);
+        let image = Image::pattern(source.0, source.1, 7);
+
+        let source_texture = testing::upload(gpu, &image);
+        let intermediate = testing::storage_target(gpu, target.0, source.1);
+        let output = testing::storage_target(gpu, target.0, target.1);
+        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let intermediate_view = intermediate.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let scaler = GpuScaler::new(&gpu.device);
+        testing::submit(gpu, |encoder| {
+            scaler.encode(
+                &gpu.device,
+                encoder,
+                &ScalePass {
+                    axis: Axis::Horizontal,
+                    table: &horizontal,
+                    source: &source_view,
+                    source_size: source,
+                    target: &intermediate_view,
+                    target_size: (target.0, source.1),
+                },
+            );
+            scaler.encode(
+                &gpu.device,
+                encoder,
+                &ScalePass {
+                    axis: Axis::Vertical,
+                    table: &vertical,
+                    source: &intermediate_view,
+                    source_size: (target.0, source.1),
+                    target: &output_view,
+                    target_size: target,
+                },
+            );
+        });
+
+        let actual = testing::download(gpu, &output);
+        let expected = resample_separable(
+            &resample_separable(&image, &horizontal, Axis::Horizontal),
+            &vertical,
+            Axis::Vertical,
+        );
+
+        let difference = actual.max_difference(&expected);
+        assert!(
+            difference <= RGBA16F_TOLERANCE,
+            "{filter} {source:?} -> {target:?}: max difference {difference}"
+        );
+    }
+
+    #[test]
+    fn hermite_downscale_matches_reference() {
+        run_separable(ScaleFilter::Hermite, (97, 61), (40, 27));
+    }
+
+    #[test]
+    fn lanczos3_upscale_matches_reference() {
+        run_separable(ScaleFilter::Lanczos3, (37, 29), (91, 70));
+    }
+
+    #[test]
+    fn every_separable_filter_matches_reference_both_ways() {
+        for filter in [
+            ScaleFilter::Bilinear,
+            ScaleFilter::Hermite,
+            ScaleFilter::CatmullRom,
+            ScaleFilter::Mitchell,
+            ScaleFilter::Lanczos2,
+            ScaleFilter::Lanczos3,
+            ScaleFilter::Lanczos4,
+        ] {
+            run_separable(filter, (64, 48), (23, 17));
+            run_separable(filter, (23, 17), (64, 48));
+        }
+    }
+
+    #[test]
+    fn identity_scale_reproduces_the_source() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let kernel = Kernel::new(ScaleFilter::Lanczos3);
+        let table = TapTable::build(kernel, 33, 33);
+        let image = Image::pattern(33, 21, 3);
+
+        let source = testing::upload(gpu, &image);
+        let output = testing::storage_target(gpu, 33, 21);
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let scaler = GpuScaler::new(&gpu.device);
+        testing::submit(gpu, |encoder| {
+            scaler.encode(
+                &gpu.device,
+                encoder,
+                &ScalePass {
+                    axis: Axis::Horizontal,
+                    table: &table,
+                    source: &source_view,
+                    source_size: (33, 21),
+                    target: &output_view,
+                    target_size: (33, 21),
+                },
+            );
+        });
+
+        assert!(testing::download(gpu, &output).max_difference(&image) <= 1.0 / 1024.0);
+    }
+}
