@@ -5,11 +5,19 @@ use std::{
 
 use rusplay_net::{
     FecScheme, Packetizer, Reassembler, ReassemblyEvent, ReassemblyLimits, Transport,
+    TransportOptions,
 };
 use rusplay_protocol::StreamKind;
 
 const LOOPBACK: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-const MTU: u16 = 1500;
+const BUFFER_BYTES: u32 = 4 * 1024 * 1024;
+
+fn options() -> TransportOptions {
+    TransportOptions {
+        mtu: 1500,
+        socket_buffer_bytes: BUFFER_BYTES,
+    }
+}
 
 fn frame_data(len: usize) -> Vec<u8> {
     (0..len)
@@ -18,8 +26,8 @@ fn frame_data(len: usize) -> Vec<u8> {
 }
 
 fn pair() -> (Transport, Transport) {
-    let sender = Transport::bind(LOOPBACK, MTU).unwrap();
-    let receiver = Transport::bind(LOOPBACK, MTU).unwrap();
+    let sender = Transport::bind(LOOPBACK, options()).unwrap();
+    let receiver = Transport::bind(LOOPBACK, options()).unwrap();
     (sender, receiver)
 }
 

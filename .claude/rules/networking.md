@@ -24,6 +24,10 @@ paths:
   balanced blocks of at most `data_shards` fragments (`FecScheme::blocks`), each block with its
   own parity shards (`parity_shards` scaled to the block size, at least one), so a large keyframe
   never exceeds the codec's shard limits. Shard lengths must be even and equal within a block.
+- `Transport::bind` applies `network.socket_buffer_bytes` (through `TransportOptions`) to both
+  `SO_SNDBUF` and `SO_RCVBUF` with `rustix` before any traffic flows; `0` leaves the kernel
+  default. Linux clamps the request to `net.core.wmem_max`/`rmem_max` without an error, so
+  `Transport::socket_buffers` reports the sizes actually in force for the caller to log or warn on.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets.
 - The control channel (hello, keyframe requests, loss reports, bitrate hints) has its own small

@@ -13,5 +13,5 @@ pub use crate::{
     reassembly::{
         ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReassemblyStats,
     },
-    transport::{Transport, max_datagram_len},
+    transport::{SocketBuffers, Transport, TransportOptions, max_datagram_len},
 };

@@ -9,6 +9,7 @@ publish.workspace = true
 reed-solomon-simd = { workspace = true, features = ["std"] }
 rusplay-config.workspace = true
 rusplay-protocol.workspace = true
+rustix = { workspace = true, features = ["net", "std", "time"] }
 thiserror.workspace = true
 
 [lints]

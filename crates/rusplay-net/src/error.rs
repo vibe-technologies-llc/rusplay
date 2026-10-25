@@ -13,6 +13,12 @@ pub enum NetError {
     LocalAddr(#[source] io::Error),
     #[error("failed to receive datagram")]
     Receive(#[source] io::Error),
+    #[error("failed to set the send buffer to {requested} bytes")]
+    SendBufferSize { requested: usize, source: io::Error },
+    #[error("failed to set the receive buffer to {requested} bytes")]
+    ReceiveBufferSize { requested: usize, source: io::Error },
+    #[error("failed to query the socket buffer sizes")]
+    BufferSizeQuery(#[source] io::Error),
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]

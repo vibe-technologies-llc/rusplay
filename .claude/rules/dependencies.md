@@ -28,6 +28,7 @@ paths:
   | SVT-AV1 | `svt-av1-enc` or own bindings | `rusplay-encode/svt-av1` |
 
   Pure-Rust choices already made: `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
-  `ashpd` over zbus (portals), `wgpu` (GPU scaling), `rav1d` for software AV1 decode, `rubato`
-  for audio resampling when it is needed.
+  `ashpd` over zbus (portals), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
+  its `net` feature needs `time` to compile), `wgpu` (GPU scaling), `rav1d` for software AV1
+  decode, `rubato` for audio resampling when it is needed.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.

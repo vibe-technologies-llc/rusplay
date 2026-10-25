@@ -996,6 +996,7 @@ dependencies = [
  "reed-solomon-simd",
  "rusplay-config",
  "rusplay-protocol",
+ "rustix",
  "thiserror",
 ]
 
