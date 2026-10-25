@@ -15,7 +15,11 @@ gpui_platform = { workspace = true, features = ["wayland"] }
 rusplay-client.workspace = true
 rusplay-config.workspace = true
 thiserror.workspace = true
+toml = { workspace = true, features = ["std", "parse", "serde"] }
 unicode-segmentation.workspace = true
+
+[dev-dependencies]
+rusplay-core.workspace = true
 
 [lints]
 workspace = true

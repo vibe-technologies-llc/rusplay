@@ -35,4 +35,3 @@
 
 # Desktop app
 - [M, blocked by: client-pipeline] `app-stream-view`: present the stream through the shared wgpu device
-- [M] `app-settings`: settings UI covering every `rusplay-config` option

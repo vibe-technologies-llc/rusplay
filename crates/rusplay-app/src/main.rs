@@ -2,6 +2,7 @@ mod app;
 mod hosts;
 mod notice;
 mod session;
+mod settings;
 mod theme;
 mod widgets;
 
