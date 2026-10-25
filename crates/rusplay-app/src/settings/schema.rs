@@ -81,8 +81,16 @@ const POSITIVE_U32: Kind = Kind::Integer {
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
 const CHROMA: &[&str] = &["4:2:0", "4:2:2", "4:4:4"];
 const BIT_DEPTHS: &[&str] = &["eight", "ten", "twelve"];
-const PRIMARIES: &[&str] = &["bt709", "bt2020"];
-const TRANSFERS: &[&str] = &["bt709", "srgb", "pq", "hlg"];
+const PRIMARIES: &[&str] = &[
+    "bt709",
+    "display-p3",
+    "dci-p3",
+    "bt2020",
+    "bt601-525",
+    "bt601-625",
+];
+const TRANSFERS: &[&str] = &["bt709", "srgb", "gamma22", "pq", "hlg", "linear"];
+const MATRICES: &[&str] = &["bt709", "bt601", "bt2020-ncl"];
 const RANGES: &[&str] = &["limited", "full"];
 const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
 const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
@@ -312,6 +320,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Video,
         "Colour",
+        "video.color.matrix",
+        "Y'CbCr matrix",
+        Kind::Choice(MATRICES),
+    )
+    .optional(),
+    field(
+        Section::Video,
+        "Colour",
         "video.color.range",
         "Range",
         Kind::Choice(RANGES),
@@ -332,6 +348,50 @@ pub static FIELDS: &[Field] = &[
         HDR_NITS,
     )
     .unit("nits"),
+    field(
+        Section::Video,
+        "HDR metadata",
+        "video.color.hdr.mastering.primaries",
+        "Mastering display primaries",
+        Kind::Choice(PRIMARIES),
+    )
+    .optional(),
+    field(
+        Section::Video,
+        "HDR metadata",
+        "video.color.hdr.mastering.max_nits",
+        "Mastering display peak",
+        Kind::Decimal,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Video,
+        "HDR metadata",
+        "video.color.hdr.mastering.min_nits",
+        "Mastering display black",
+        Kind::Decimal,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Video,
+        "HDR metadata",
+        "video.color.hdr.content_light.max_cll_nits",
+        "MaxCLL",
+        U16,
+    )
+    .unit("nits")
+    .optional(),
+    field(
+        Section::Video,
+        "HDR metadata",
+        "video.color.hdr.content_light.max_fall_nits",
+        "MaxFALL",
+        U16,
+    )
+    .unit("nits")
+    .optional(),
     field(
         Section::Video,
         "Encoder",

@@ -334,8 +334,14 @@ impl Settings {
             param.parse("pools", &threads.get().to_string())?;
         }
 
-        param.parse("colorprim", colour_primaries_name(self.color.primaries))?;
-        param.parse("colormatrix", colour_matrix_name(self.color.primaries))?;
+        param.parse(
+            "colorprim",
+            colour_primaries_name(BACKEND, self.color.primaries)?,
+        )?;
+        param.parse(
+            "colormatrix",
+            colour_matrix_name(self.color.matrix_coefficients()),
+        )?;
         param.parse("transfer", transfer_name(self.color.transfer))?;
         param.parse("range", range_name(self.color.range))
     }

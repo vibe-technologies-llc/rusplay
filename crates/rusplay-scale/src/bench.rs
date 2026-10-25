@@ -1,13 +1,13 @@
 use std::time::{Duration, Instant};
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, PixelFormat, Resolution, ScaleFilter,
-    TransferFunction,
+    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, MatrixCoefficients, PixelFormat,
+    Resolution, ScaleFilter, TransferFunction,
 };
 
 use crate::{
     ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, InputLight, PlaneLayout,
-    ScalePipelines, ScaleSettings, Scaler, YuvMatrix,
+    ScalePipelines, ScaleSettings, Scaler,
     testing::{self, Gpu, Image},
 };
 
@@ -129,7 +129,7 @@ fn scaling_frame_times() {
             resolution: Resolution::new(3840, 2160),
             format: PixelFormat { chroma, depth },
             layout,
-            matrix: YuvMatrix::Bt709,
+            matrix: MatrixCoefficients::Bt709,
             range: ColorRange::Limited,
             transfer: TransferFunction::Srgb,
             hdr: HdrLevels::default(),

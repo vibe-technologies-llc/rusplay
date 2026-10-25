@@ -1,6 +1,7 @@
 ---
 paths:
-  - "crates/rusplay-core/src/video.rs"
+  - "crates/rusplay-core/src/color.rs"
+  - "crates/rusplay-core/src/color/**"
   - "crates/rusplay-scale/**"
   - "crates/rusplay-client/**"
   - "crates/rusplay-host/**"
@@ -42,15 +43,39 @@ clips per channel.
 
 ## Model (`rusplay-core`)
 
-- Primaries are a closed enum with CIE xy chromaticities and a white point: BT.709/sRGB,
-  Display P3 (D65), DCI-P3 (DCI white), BT.2020/BT.2100, BT.601 525/625, plus `Custom` with
-  explicit chromaticities for displays that report their own. RGB↔XYZ matrices are derived from
-  the chromaticities in f64. Chromatic adaptation between white points is Bradford. Matrices are
-  never hard-coded tables.
-- Transfers: sRGB, BT.709/BT.1886, gamma 2.2, PQ (ST 2084), HLG (ARIB STD-B67/BT.2100), linear.
-- Y'CbCr matrix and range are separate fields from primaries, following H.273 code points.
-- HDR metadata: ST 2086 mastering display (primaries, white point, min/max luminance) and
-  CTA-861.3 MaxCLL/MaxFALL, each optional.
+The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from the crate root.
+
+- `ColorPrimaries` is a closed enum: `Bt709` (sRGB), `DisplayP3` (D65), `DciP3` (DCI white),
+  `Bt2020` (BT.2100), `Bt601_525` (SMPTE 170M), `Bt601_625` (BT.470 B/G), and
+  `Custom(Chromaticities)` for displays that report their own. Serde names are kebab-case
+  (`display-p3`, `bt601-525`); custom primaries are a table
+  `primaries.custom = { red = [x, y], green, blue, white }`.
+- A `Chromaticity` stores CIE x and y as `u16` fixed point in the H.273 / ST 2086 step of
+  0.00002 (`UNITS_PER_ONE = 50_000`), so `ColorSpace` keeps `Eq` and `Hash` and a value read
+  from SEI or a Wayland image description round-trips exactly. `Chromaticities::new` rejects
+  collinear primaries and a white point outside the triangle (`ColorError::DegenerateGamut`),
+  and serde goes through it, so every value in hand is invertible.
+- `Matrix3` (f64) carries the derived matrices: `Chromaticities::rgb_to_xyz` and `xyz_to_rgb`
+  come from the chromaticities and the white point, `rgb_to_rgb(target, WhiteAdaptation)`
+  composes them with Bradford adaptation (`bradford_adaptation`) or none (absolute
+  colorimetric). No matrix is a hard-coded table; tests check the derived ones against the
+  published BT.709 and BT.2087 values.
+- `TransferFunction`: `Bt709` (BT.709/BT.1886), `Srgb`, `Gamma22`, `Pq` (ST 2084), `Hlg`,
+  `Linear`, each with its H.273 code (gamma 2.2 is code 4, BT.470 M). `pq_from_nits` and
+  `pq_to_nits` are the f64 PQ pair the CPU side of every stage uses.
+- `MatrixCoefficients` (`Bt709`, `Bt601`, `Bt2020Ncl`, H.273 codes 1, 6 and 9, code 5 also
+  reading as `Bt601`) is separate from the primaries. `ColorSpace::matrix` is optional and
+  `matrix_coefficients()` falls back to the conventional matrix for the primaries, so a config
+  that names only `bt2020` still gets BT.2020 NCL. Range stays its own field.
+- `HdrLevels` is the one place for luminance levels: `reference_white_nits` (BT.2408 203),
+  `peak_nits`, and the optional ST 2086 `mastering: MasteringDisplay` (primaries, `max_nits`,
+  `min_nits` as `Luminance` in 0.0001 cd/m² steps, serialised as nits) and CTA-861.3
+  `content_light: ContentLightLevel` (`max_cll_nits`, `max_fall_nits`, 0 meaning unknown).
+  `content_peak_nits()` is the source peak for tone mapping: MaxCLL, then the mastering
+  maximum, then `peak_nits`. The config validates mastering min below max
+  (`MasteringLuminanceInverted`).
+- An encoder that cannot signal a description fails with a specific error: custom primaries
+  have no H.273 code, so the software encoders return `ColorPrimariesUnsignalable`.
 
 ## Client conversion pipeline
 

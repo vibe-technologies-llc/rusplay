@@ -20,7 +20,6 @@ pub use crate::{
     convert::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,
         InputLight, Plane, PlaneContent, PlaneLayout, Quantization, SampleAlignment, YuvFrame,
-        YuvMatrix,
     },
     error::ScaleError,
     gpu::ScalePipelines,

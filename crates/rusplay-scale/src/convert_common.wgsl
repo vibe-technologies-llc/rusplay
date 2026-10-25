@@ -24,6 +24,7 @@ const TRANSFER_SRGB: u32 = 1u;
 const TRANSFER_BT709: u32 = 2u;
 const TRANSFER_PQ: u32 = 3u;
 const TRANSFER_HLG: u32 = 4u;
+const TRANSFER_GAMMA22: u32 = 5u;
 
 const PQ_M1: f32 = 0.1593017578125;
 const PQ_M2: f32 = 78.84375;
@@ -62,6 +63,9 @@ fn encode_transfer(linear: vec3<f32>) -> vec3<f32> {
         }
         case TRANSFER_BT709: {
             return select(1.099 * pow(x, vec3<f32>(0.45)) - 0.099, 4.5 * x, x < vec3<f32>(0.018));
+        }
+        case TRANSFER_GAMMA22: {
+            return pow(x, vec3<f32>(1.0 / 2.2));
         }
         case TRANSFER_PQ: {
             return pq_oetf(clamp(linear * params.hdr.x, vec3<f32>(0.0), vec3<f32>(1.0)));

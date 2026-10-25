@@ -75,8 +75,9 @@ paths:
   then the HLG OETF. Both levels are validated into `1..=10000` (`ReferenceWhiteOutOfRange`,
   `PeakLuminanceOutOfRange`) and sit in the params uniform's `hdr` vector. The other
   transfers ignore them.
-  The matrix is `YuvMatrix` (BT.709 or BT.2020 non-constant luminance, `for_primaries` maps
-  `ColorPrimaries`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
+  Gamma 2.2 encodes as `x^(1/2.2)` and `Linear` passes values through clamped. The matrix is
+  `rusplay_core::MatrixCoefficients` (BT.709, BT.601 or BT.2020 non-constant luminance, the
+  caller resolving it with `ColorSpace::matrix_coefficients`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
   `2^(n-1) + (2^n - 1) * C`, limited are `219/224 * 2^(n-8)` around `16/128 * 2^(n-8)`.
 - Every source pixel is loaded and run through the OETF exactly once, in the first pass, which
   computes Y'CbCr there and packs luma straight into the output buffer. Chroma is then

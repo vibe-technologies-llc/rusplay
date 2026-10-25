@@ -180,7 +180,8 @@ fn encode_texel(settings: &ConvertSettings, texel: [f32; 4]) -> [f64; 3] {
             (InputLight::Linear, TransferFunction::Bt709) => 4.5 * linear,
             (InputLight::Linear, TransferFunction::Pq) => pq_oetf(display[channel]),
             (InputLight::Linear, TransferFunction::Hlg) => hlg_oetf(hlg_scene[channel]),
-            (InputLight::Encoded, _) => linear,
+            (InputLight::Linear, TransferFunction::Gamma22) => linear.powf(1.0 / 2.2),
+            (InputLight::Linear, TransferFunction::Linear) | (InputLight::Encoded, _) => linear,
         }
     })
 }
