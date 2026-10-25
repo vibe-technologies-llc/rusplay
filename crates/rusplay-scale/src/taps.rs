@@ -9,12 +9,22 @@ pub struct Taps {
 
 impl Taps {
     pub fn separable(kernel: Kernel, source_len: u32, target_len: u32, target_index: u32) -> Self {
+        Self::separable_with_phase(kernel, source_len, target_len, target_index, 0.0)
+    }
+
+    pub fn separable_with_phase(
+        kernel: Kernel,
+        source_len: u32,
+        target_len: u32,
+        target_index: u32,
+        phase: f64,
+    ) -> Self {
         debug_assert_eq!(kernel.geometry(), Geometry::Separable);
 
         let ratio = f64::from(source_len) / f64::from(target_len);
         let stretch = ratio.max(1.0);
         let support = kernel.radius() * stretch;
-        let center = (f64::from(target_index) + 0.5) * ratio - 0.5;
+        let center = (f64::from(target_index) + 0.5) * ratio - 0.5 + phase;
 
         #[allow(clippy::cast_possible_truncation)]
         let first = (center - support).floor() as i64 + 1;
@@ -66,5 +76,16 @@ mod tests {
 
         assert_eq!(taps.weights.len(), 6);
         assert_eq!(taps.anchor - taps.first, 2);
+    }
+
+    #[test]
+    fn left_phase_centres_the_tap_on_the_even_source_pixel() {
+        let kernel = Kernel::new(ScaleFilter::Bilinear);
+
+        let taps = Taps::separable_with_phase(kernel, 64, 32, 5, -0.5);
+
+        assert_eq!(taps.anchor, 10);
+        assert_eq!(taps.first, 9);
+        assert_eq!(taps.weights, vec![0.25, 0.5, 0.25]);
     }
 }

@@ -11,7 +11,7 @@ use crate::{
     shaping::Shaping,
 };
 
-const CACHED_VIEW_GROUPS: usize = 4;
+pub(crate) const CACHED_FRAME_GROUPS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Axis {
@@ -99,8 +99,8 @@ pub struct Scaler {
     pipelines: ScalePipelines,
     settings: ScaleSettings,
     plan: Plan,
-    sources: ViewGroups,
-    destinations: ViewGroups,
+    sources: GroupCache<wgpu::TextureView>,
+    destinations: GroupCache<wgpu::TextureView>,
 }
 
 impl Scaler {
@@ -115,8 +115,8 @@ impl Scaler {
             pipelines: pipelines.clone(),
             settings,
             plan: Plan::new(pipelines, device, &settings),
-            sources: ViewGroups::default(),
-            destinations: ViewGroups::default(),
+            sources: GroupCache::default(),
+            destinations: GroupCache::default(),
         })
     }
 
@@ -375,26 +375,34 @@ pub(crate) const fn resolution_pair(resolution: Resolution) -> (u32, u32) {
     (resolution.width, resolution.height)
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct ViewGroups {
-    entries: VecDeque<(wgpu::TextureView, wgpu::BindGroup)>,
+#[derive(Debug)]
+pub(crate) struct GroupCache<K> {
+    entries: VecDeque<(K, wgpu::BindGroup)>,
 }
 
-impl ViewGroups {
+impl<K> Default for GroupCache<K> {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::with_capacity(CACHED_FRAME_GROUPS),
+        }
+    }
+}
+
+impl<K: PartialEq + Clone> GroupCache<K> {
     pub(crate) fn get_or_create(
         &mut self,
-        view: &wgpu::TextureView,
+        key: &K,
         create: impl FnOnce() -> wgpu::BindGroup,
     ) -> wgpu::BindGroup {
-        if let Some((_, group)) = self.entries.iter().find(|(cached, _)| cached == view) {
+        if let Some((_, group)) = self.entries.iter().find(|(cached, _)| cached == key) {
             return group.clone();
         }
 
         let group = create();
-        if self.entries.len() == CACHED_VIEW_GROUPS {
+        if self.entries.len() == CACHED_FRAME_GROUPS {
             self.entries.pop_front();
         }
-        self.entries.push_back((view.clone(), group.clone()));
+        self.entries.push_back((key.clone(), group.clone()));
         group
     }
 
@@ -712,14 +720,14 @@ mod tests {
         };
 
         let pipelines = ScalePipelines::new(&gpu.device);
-        let mut groups = ViewGroups::default();
+        let mut groups = GroupCache::<wgpu::TextureView>::default();
 
-        for _ in 0..CACHED_VIEW_GROUPS + 3 {
+        for _ in 0..CACHED_FRAME_GROUPS + 3 {
             let view = testing::view(&testing::upload(gpu, &Image::pattern(4, 4, 0)));
             groups.get_or_create(&view, || pipelines.source_group(&gpu.device, &view));
         }
 
-        assert_eq!(groups.len(), CACHED_VIEW_GROUPS);
+        assert_eq!(groups.len(), CACHED_FRAME_GROUPS);
     }
 
     #[test]

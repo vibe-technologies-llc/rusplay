@@ -194,6 +194,18 @@ pub(crate) fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Image {
     }
 }
 
+pub(crate) fn download_buffer(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
+    let staging = readback_buffer(gpu, buffer.size());
+
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
+    gpu.queue.submit([encoder.finish()]);
+
+    map_read(gpu, &staging)
+}
+
 pub(crate) fn submit(gpu: &Gpu, record: impl FnOnce(&mut wgpu::CommandEncoder)) {
     let mut encoder = gpu
         .device

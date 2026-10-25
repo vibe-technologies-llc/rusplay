@@ -3,10 +3,23 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 const RESAMPLE_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("resample.wgsl"));
+const CONVERT_LUMA_SHADER: &str = concat!(
+    include_str!("convert_common.wgsl"),
+    include_str!("convert_luma.wgsl")
+);
+const CONVERT_CHROMA_SHADER: &str = concat!(
+    include_str!("convert_common.wgsl"),
+    include_str!("convert_chroma.wgsl")
+);
+const PACK_CHROMA_SHADER: &str = concat!(
+    include_str!("convert_common.wgsl"),
+    include_str!("convert_pack.wgsl")
+);
 const POLAR_SHADER: &str = concat!(include_str!("shaping.wgsl"), include_str!("polar.wgsl"));
 
 pub(crate) const WORKGROUP_SIDE: u32 = 8;
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 
 #[derive(Debug, Clone)]
 pub struct ScalePipelines {
@@ -16,6 +29,13 @@ pub struct ScalePipelines {
     pub(crate) separable: wgpu::ComputePipeline,
     pub(crate) polar_layout: wgpu::BindGroupLayout,
     pub(crate) polar: wgpu::ComputePipeline,
+    pub(crate) output_layout: wgpu::BindGroupLayout,
+    pub(crate) chroma_target_layout: wgpu::BindGroupLayout,
+    pub(crate) convert_params_layout: wgpu::BindGroupLayout,
+    pub(crate) convert_table_layout: wgpu::BindGroupLayout,
+    pub(crate) convert_luma: wgpu::ComputePipeline,
+    pub(crate) convert_chroma: wgpu::ComputePipeline,
+    pub(crate) pack_chroma: wgpu::ComputePipeline,
 }
 
 impl ScalePipelines {
@@ -58,6 +78,48 @@ impl ScalePipelines {
             "resample_polar",
         );
 
+        let output_layout = layout(
+            device,
+            "rusplay-convert-output",
+            &[writable_storage_buffer_entry(0)],
+        );
+        let chroma_target_layout = layout(
+            device,
+            "rusplay-convert-chroma-target",
+            &[storage_texture_entry(0, CHROMA_FORMAT)],
+        );
+        let convert_params_layout = layout(device, "rusplay-convert-params", &[uniform_entry(0)]);
+        let convert_table_layout = layout(
+            device,
+            "rusplay-convert-table",
+            &[
+                uniform_entry(0),
+                storage_buffer_entry(1),
+                storage_buffer_entry(2),
+            ],
+        );
+        let convert_luma = compute_pipeline(
+            device,
+            "rusplay-convert-luma",
+            &[&source_layout, &output_layout, &convert_params_layout],
+            CONVERT_LUMA_SHADER,
+            "convert_luma",
+        );
+        let convert_chroma = compute_pipeline(
+            device,
+            "rusplay-convert-chroma",
+            &[&source_layout, &chroma_target_layout, &convert_table_layout],
+            CONVERT_CHROMA_SHADER,
+            "convert_chroma",
+        );
+        let pack_chroma = compute_pipeline(
+            device,
+            "rusplay-pack-chroma",
+            &[&source_layout, &output_layout, &convert_table_layout],
+            PACK_CHROMA_SHADER,
+            "pack_chroma",
+        );
+
         Self {
             source_layout,
             destination_layout,
@@ -65,6 +127,13 @@ impl ScalePipelines {
             separable,
             polar_layout,
             polar,
+            output_layout,
+            chroma_target_layout,
+            convert_params_layout,
+            convert_table_layout,
+            convert_luma,
+            convert_chroma,
+            pack_chroma,
         }
     }
 
@@ -157,6 +226,13 @@ pub(crate) fn storage_buffer_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     )
 }
 
+pub(crate) fn writable_storage_buffer_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    buffer_entry(
+        binding,
+        wgpu::BufferBindingType::Storage { read_only: false },
+    )
+}
+
 pub(crate) fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     buffer_entry(binding, wgpu::BufferBindingType::Uniform)
 }
@@ -181,7 +257,7 @@ fn compute_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEn
     }
 }
 
-fn view_group(
+pub(crate) fn view_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     view: &wgpu::TextureView,
@@ -297,6 +373,17 @@ pub(crate) fn dispatch(
     groups: &[&wgpu::BindGroup],
     size: (u32, u32),
 ) {
+    dispatch_layers(encoder, label, pipeline, groups, size, 1);
+}
+
+pub(crate) fn dispatch_layers(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    pipeline: &wgpu::ComputePipeline,
+    groups: &[&wgpu::BindGroup],
+    size: (u32, u32),
+    layers: u32,
+) {
     let mut compute = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: Some(label),
         timestamp_writes: None,
@@ -308,6 +395,6 @@ pub(crate) fn dispatch(
     compute.dispatch_workgroups(
         size.0.div_ceil(WORKGROUP_SIDE),
         size.1.div_ceil(WORKGROUP_SIDE),
-        1,
+        layers,
     );
 }

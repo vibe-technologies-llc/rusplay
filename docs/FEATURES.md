@@ -6,10 +6,11 @@
 
 # Scaling
 - [M, blocked by: capture-dmabuf] `scale-dmabuf-import`: import capture DMA-BUFs into wgpu without a copy
-- [M] `scale-color-convert`: RGB to YUV 4:2:0/4:2:2/4:4:4 conversion on the GPU with the chroma downscale filter
+- [S] `scale-polar-chroma`: polar (EWA) filters for the chroma downscale in `ColorConverter`, which rejects them today
+- [M] `scale-hdr-transfer`: PQ and HLG encoding in `ColorConverter` for linear-light HDR input
 
 # Video encode
-- [L, blocked by: scale-color-convert] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
+- [L] `encode-vaapi`: VAAPI encoder for H.264, HEVC and AV1 with DMA-BUF input
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
 - [M] `encode-x264`: x264 backend with typed settings and `params` passthrough
 - [M] `encode-x265`: x265 backend with typed settings and `params` passthrough

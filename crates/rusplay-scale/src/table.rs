@@ -10,8 +10,12 @@ pub struct TapTable {
 
 impl TapTable {
     pub fn build(kernel: Kernel, source_len: u32, target_len: u32) -> Self {
+        Self::build_with_phase(kernel, source_len, target_len, 0.0)
+    }
+
+    pub fn build_with_phase(kernel: Kernel, source_len: u32, target_len: u32, phase: f64) -> Self {
         let rows: Vec<Taps> = (0..target_len)
-            .map(|index| Taps::separable(kernel, source_len, target_len, index))
+            .map(|index| Taps::separable_with_phase(kernel, source_len, target_len, index, phase))
             .collect();
         let width = rows
             .iter()
@@ -41,6 +45,19 @@ impl TapTable {
     }
 }
 
+impl TapTable {
+    pub fn identity(len: u32) -> Self {
+        let positions: Vec<i32> = (0..len).map(|index| saturate(i64::from(index))).collect();
+
+        Self {
+            taps_per_pixel: 1,
+            firsts: positions.clone(),
+            anchors: positions,
+            weights: vec![1.0; len as usize],
+        }
+    }
+}
+
 fn saturate(position: i64) -> i32 {
     i32::try_from(position).unwrap_or(if position < 0 { i32::MIN } else { i32::MAX })
 }
@@ -58,5 +75,14 @@ mod tests {
         assert_eq!(table.firsts.len(), 1920);
         assert_eq!(table.anchors.len(), 1920);
         assert_eq!(table.weights.len(), 1920 * table.taps_per_pixel as usize);
+    }
+
+    #[test]
+    fn identity_table_passes_every_pixel_through() {
+        let table = TapTable::identity(3);
+
+        assert_eq!(table.taps_per_pixel, 1);
+        assert_eq!(table.firsts, vec![0, 1, 2]);
+        assert_eq!(table.weights, vec![1.0; 3]);
     }
 }

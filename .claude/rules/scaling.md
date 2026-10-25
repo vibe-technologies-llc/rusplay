@@ -8,8 +8,8 @@ paths:
 
 - All resampling runs on the GPU through wgpu compute shaders (`resample.wgsl`). The CPU only
   builds the tap tables (`TapTable`) from the kernel functions in `kernel.rs`, once per
-  resolution or filter change, and uploads them. Hardware scalers (VAAPI VPP, NVENC's internal resize,
-  compositor scaling) are never used, because they are bilinear-grade.
+  resolution or filter change, and uploads them. Hardware scalers (VAAPI VPP, NVENC's internal
+  resize, compositor scaling) are never used, because they are bilinear-grade.
 - Host downscale (capture resolution above stream resolution) defaults to **Hermite** in linear
   light: a non-ringing weighted average with the kernel stretched by the scale ratio, so every
   source pixel contributes.
@@ -31,7 +31,8 @@ paths:
   output. `Scaler` picks the plan from `Kernel::geometry`.
 - Linear light comes from sampling an sRGB view of the source, so `textureLoad` returns
   linearised values. Do not add manual transfer functions where a texture view format does the
-  job.
+  job. The one manual transfer is the OETF in colour conversion: storage writes cannot target an
+  sRGB format, BT.709 has no view format, and the output is a buffer anyway.
 - Anti-ringing follows mpv/libplacebo: each separable pass tracks the min/max of the two source
   texels bracketing the sample centre (`TapTable::anchors` holds the left one,
   `floor(centre)`), and the result is `mix(sum, clamp(sum, low, high), strength)`. The strength
@@ -58,9 +59,35 @@ paths:
   is allocated on the per-frame path except a bind group for a frame view not seen recently.
 - Bind groups are split by lifetime: group 0 is the source texture, group 1 the storage
   destination, group 2 the pass's tables and params. Frame views get groups 0 and 1 from a small
-  per-scaler cache keyed by `TextureView` (`CACHED_VIEW_GROUPS`), sized for a capture or decode
-  swapchain cycling a few buffers. Sources are bound as non-filterable float textures, so any
+  per-scaler `GroupCache` keyed by `TextureView` (`CACHED_FRAME_GROUPS` entries), sized for a
+  capture or decode swapchain cycling a few buffers. Sources are bound as non-filterable float textures, so any
   float format can be the input; destinations are `rgba16float`.
+- RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
+  before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's
+  linear-light output) the `TransferFunction` OETF is applied first (sRGB or BT.709; PQ and HLG
+  return `TransferUnsupported`), with `InputLight::Encoded` the values are used as they are.
+  The matrix is `YuvMatrix` (BT.709 or BT.2020 non-constant luminance, `for_primaries` maps
+  `ColorPrimaries`), range and depth follow H.273: full range codes are `(2^n - 1) * E` and
+  `2^(n-1) + (2^n - 1) * C`, limited are `219/224 * 2^(n-8)` around `16/128 * 2^(n-8)`.
+- Chroma is computed per pixel from the encoded RGB, then downscaled in gamma space (as every
+  encoder expects) with `scaling.downscale.chroma_filter` through `TapTable`s at an exact 2:1
+  ratio, so odd sizes round the chroma plane up and the edge clamps. Horizontal siting is
+  `ChromaSiting::Left` by default (MPEG-2/H.264/HEVC type 0, co-sited with even luma columns,
+  a phase of -0.5 source pixels) or `Center`; vertical 4:2:0 siting is always centred. Polar
+  chroma filters are rejected with `ChromaFilterNotSeparable`. Three dispatches: `convert_luma`
+  packs Y straight from the source, `convert_chroma` writes horizontally filtered CbCr into an
+  `rg32float` intermediate, `pack_chroma` applies the vertical taps and packs. 4:4:4 and the
+  4:2:2 vertical direction use `TapTable::identity`, never a kernel at 1:1 (Mitchell would
+  blur).
+- The output is one storage buffer per `YuvFrame`, described by `FrameLayout`: planes
+  `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms) or
+  `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte
+  at 8 bits and two little-endian bytes above, `SampleAlignment::High` (MSB, the P010 family)
+  for semi-planar and `Low` (LSB) for planar. Every row stride and so every plane offset is a
+  multiple of `row_alignment` (a power of two of at least 4, `DEFAULT_ROW_ALIGNMENT` is
+  wgpu's 256 so a plane can be copied straight into a texture). Shaders write whole `u32`
+  words, one invocation per word, so no atomics are needed and row padding is zero.
+  `ColorConverter::encode` refuses a frame created for another layout (`FrameLayoutMismatch`).
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a
@@ -68,4 +95,6 @@ paths:
   compared with a CPU reference in `reference.rs` built from the same `TapTable`s and kernels,
   with clamp-to-edge addressing and `f16` rounding of every stored texel, to within a few
   `rgba16float` ulps (`4/1024`). Test images are quantised to `f16` before upload so the
-  reference and the GPU see identical inputs.
+  reference and the GPU see identical inputs. Colour conversion is compared code by code with
+  `reference::convert` (f64) after `reference::unpack` reads the frame back through its
+  `FrameLayout`, within one code value.
