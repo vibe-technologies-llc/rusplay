@@ -6,7 +6,8 @@ paths:
 # Video decode
 
 - `VideoDecoder` is the backend-neutral trait: one `EncodedFrame` (a whole access unit / temporal
-  unit) in, at most one `DecodedFrame` out. Backends are VAAPI, NVDEC and software, each behind
+  unit) in, at most one `DecodedFrame` out, plus `flush` for the frames a reordering stream
+  still holds. Backends are VAAPI, NVDEC and software, each behind
   its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
   config's backend and returns `BackendNotCompiled` when that feature is off (always for NVDEC,
   which has no backend yet) and `CodecUnsupported` when the backend cannot decode the codec.
@@ -31,8 +32,14 @@ paths:
   `ChromaSubsampling`.
 - No decoder-side frame buffering beyond what the codec requires: a decoded frame is presented
   as soon as it exists. When one packet yields several pictures, the newest one wins. Frames
-  come out in decode order, which is display order for Rusplay's encoders (no B-frames);
-  honouring reordering for foreign streams is `decode-reorder` in `docs/FEATURES.md`.
+  come out in display order. A stream that signals reordering (B-frames) is held for exactly
+  its reorder depth, so `decode` returns `None` for the first packets and then one frame per
+  packet; a stream without reordering, which is what Rusplay's encoders produce, comes out
+  one-in-one-out with no added delay. `VideoDecoder::flush` returns the frames still held,
+  oldest in display order, for the end of a stream; an IDR or an `mmco5` picture (H.264), an
+  IRAP with `NoRaslOutputFlag` (HEVC) releases the previous sequence's held frames ahead of
+  itself, and they leave over the following calls while the new sequence refills its own
+  delay, so the depth never grows.
 
 ## Software (`software` feature)
 
@@ -67,14 +74,28 @@ paths:
   - `h264.rs`: frame pictures only (field pictures are `InterlacedUnsupported`), picture order
     count types 0/1/2, sliding-window and MMCO 1-6 reference marking, P/B list initialisation and
     `ref_pic_list_modification`, explicit weighted prediction, scaling matrices (zig-zag to
-    raster). A picture is submitted at the end of its packet.
+    raster). A picture is submitted at the end of its packet. The reorder depth is the VUI's
+    `max_num_reorder_frames` (capped by `max_dec_frame_buffering`); without
+    `bitstream_restriction` it is 0 for Baseline and picture order count type 2, and otherwise
+    learned: it starts at 0 so streams that never reorder pay nothing, and each picture that
+    arrives after a later one was already released is dropped and raises the depth by one, up to
+    the level's DPB size. The spec's inference (`MaxDpbFrames`) is deliberately not used, since a
+    VUI-less encoder without B-frames would then cost a DPB of latency.
   - `hevc.rs`: POC from the previous TemporalId-0 picture, the short- and long-term RPS (from the
     SPS or the slice), RefPicList construction with `list_entry` modification, dependent slice
     segments, RASL skipping after a random-access IRAP, range-extension buffers
-    (`VAPictureParameterBufferHEVCExtension`) for the 4:2:2/4:4:4/12-bit profiles.
+    (`VAPictureParameterBufferHEVCExtension`) for the 4:2:2/4:4:4/12-bit profiles. The reorder
+    depth is `sps_max_num_reorder_pics` of the highest sub-layer, always present in an SPS;
+    `sps_max_latency_increase` is not applied, so a stream relying on it for earlier output waits
+    for the reorder depth instead. Pictures with `pic_output_flag` 0 are decoded but not held.
   - `av1.rs`: OBUs from the packet, the eight reference slots, `show_existing_frame`, tile
     groups (a frame is submitted as soon as its last tile arrives, so the parser sees the updated
-    reference state for the next header), film grain into a separate display surface.
+    reference state for the next header), film grain into a separate display surface. AV1 output
+    order is the order frames are shown, so nothing is held: a hidden frame produces no output
+    and `show_existing_frame` outputs the referenced slot when it is shown.
+  - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
+    and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
+    `StreamFormat`), since held frames keep their surfaces busy.
 - The stream format (VA profile, chroma, bit depth, coded size) is read from the SPS / sequence
   header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
@@ -100,6 +121,6 @@ paths:
   in `src/vaapi/tests.rs` re-import each exported DMA-BUF as a VA surface, read it back with
   `vaGetImage` and compare a 64-bit FNV-1a of the cropped `NV12`/`P010` planes with ffmpeg's
   decode of the same fixture (`ffmpeg -i <fixture> -f rawvideo -pix_fmt nv12|p010le -`, hashed
-  per frame; the stress clips compare sorted hashes since B-frames come out in decode order).
-  Regenerated fixtures need new hashes. Every VAAPI test returns early when the render node,
+  per frame; the stress clips compare the full display-order sequence, with the decoder's
+  expected hold count and `flush` completing it). Regenerated fixtures need new hashes. Every VAAPI test returns early when the render node,
   the codec or the profile is missing.

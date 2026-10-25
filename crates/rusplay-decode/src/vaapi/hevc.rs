@@ -12,6 +12,7 @@ use crate::{
     Backend, BitstreamUnit, DecodeError, DecodedFrame,
     vaapi::{
         Stream, StreamFormat, annexb, ffi,
+        reorder::{Depth, Reorder},
         va::{Display, INVALID_SURFACE, PoolSurface, Profile},
     },
 };
@@ -85,6 +86,7 @@ pub(super) struct HevcDecoder {
     awaiting_random_access: bool,
     skip_leading_pictures: bool,
     last_independent_header: Option<SliceHeader>,
+    reorder: Reorder<DecodedFrame>,
 }
 
 impl HevcDecoder {
@@ -97,7 +99,12 @@ impl HevcDecoder {
             awaiting_random_access: true,
             skip_leading_pictures: false,
             last_independent_header: None,
+            reorder: Reorder::new(),
         }
+    }
+
+    pub(super) fn drain(&mut self) -> Vec<DecodedFrame> {
+        self.reorder.drain()
     }
 
     pub(super) fn decode(
@@ -107,7 +114,6 @@ impl HevcDecoder {
     ) -> Result<Option<DecodedFrame>, DecodeError> {
         let mut cursor = Cursor::new(frame.data.as_slice());
         let mut slices: Vec<Slice<'_>> = Vec::new();
-        let mut output = None;
 
         while let Some(nalu) = annexb::next_nalu::<NaluHeader>(&mut cursor, CODEC)? {
             match nalu.header.type_ {
@@ -169,11 +175,7 @@ impl HevcDecoder {
                     }
 
                     if slice.header.first_slice_segment_in_pic_flag && !slices.is_empty() {
-                        if let Some(picture) =
-                            self.decode_picture(display, &slices, frame.timestamp)?
-                        {
-                            output = Some(picture);
-                        }
+                        self.decode_picture(display, &slices, frame.timestamp)?;
                         slices.clear();
                     }
 
@@ -183,13 +185,11 @@ impl HevcDecoder {
             }
         }
 
-        if !slices.is_empty()
-            && let Some(picture) = self.decode_picture(display, &slices, frame.timestamp)?
-        {
-            output = Some(picture);
+        if !slices.is_empty() {
+            self.decode_picture(display, &slices, frame.timestamp)?;
         }
 
-        Ok(output)
+        Ok(self.reorder.pop())
     }
 
     fn decode_picture(
@@ -197,7 +197,7 @@ impl HevcDecoder {
         display: &Rc<Display>,
         slices: &[Slice<'_>],
         timestamp: Timestamp,
-    ) -> Result<Option<DecodedFrame>, DecodeError> {
+    ) -> Result<(), DecodeError> {
         let first = &slices[0];
         let header = &first.header;
         let nalu_type = first.nalu.header.type_;
@@ -216,6 +216,7 @@ impl HevcDecoder {
         if reopened {
             self.references.clear();
         }
+        self.reorder.configure(reorder_depth(&sps));
 
         let irap = nalu_type.is_irap();
         let no_rasl_output =
@@ -224,11 +225,11 @@ impl HevcDecoder {
             self.skip_leading_pictures = no_rasl_output;
             self.awaiting_random_access = false;
         } else if self.awaiting_random_access {
-            return Ok(None);
+            return Ok(());
         }
 
         if nalu_type.is_rasl() && self.skip_leading_pictures {
-            return Ok(None);
+            return Ok(());
         }
 
         let max_lsb = 1_i32 << (sps.log2_max_pic_order_cnt_lsb_minus4 + 4);
@@ -275,6 +276,13 @@ impl HevcDecoder {
             None
         };
 
+        if no_rasl_output {
+            self.reorder.flush();
+        }
+        if let Some(output) = output {
+            self.reorder.push(poc, output);
+        }
+
         if self.references.len() >= MAX_REFERENCE_FRAMES {
             self.references.remove(0);
         }
@@ -284,8 +292,18 @@ impl HevcDecoder {
             long_term: false,
         });
 
-        Ok(output)
+        Ok(())
     }
+}
+
+fn reorder_depth(sps: &Sps) -> Depth {
+    let highest_layer = usize::from(sps.max_sub_layers_minus1);
+    let reorder = sps
+        .max_num_reorder_pics
+        .get(highest_layer)
+        .map_or(0, |&pictures| usize::from(pictures));
+
+    Depth::Fixed(reorder.min(MAX_REFERENCE_FRAMES))
 }
 
 fn following_order_count(previous: i32, pic_order_cnt_lsb: u16, max_lsb: i32) -> i32 {
@@ -614,6 +632,7 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         reference_frames: buffering
             .max(sps.max_dpb_size())
             .min(MAX_REFERENCE_FRAMES + 1),
+        reorder_frames: reorder_depth(sps).capacity(),
     })
 }
 

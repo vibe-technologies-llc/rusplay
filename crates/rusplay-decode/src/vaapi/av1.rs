@@ -337,6 +337,7 @@ fn stream_format(sequence: &SequenceHeaderObu) -> Result<StreamFormat, DecodeErr
         coded,
         visible: coded,
         reference_frames: NUM_REF_FRAMES + GRAIN_SURFACES,
+        reorder_frames: 0,
     })
 }
 

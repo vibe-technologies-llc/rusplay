@@ -12,6 +12,7 @@ use crate::{
     BitstreamUnit, DecodeError, DecodedFrame,
     vaapi::{
         Stream, StreamFormat, annexb, ffi,
+        reorder::{Depth, Reorder},
         va::{Display, INVALID_SURFACE, PoolSurface, Profile},
     },
 };
@@ -20,6 +21,7 @@ const CODEC: Codec = Codec::H264;
 const MAX_REFERENCE_FRAMES: usize = 16;
 const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
+const BASELINE_PROFILE_IDC: u8 = 66;
 const ZIGZAG_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 const ZIGZAG_8X8: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
@@ -106,6 +108,7 @@ pub(super) struct H264Decoder {
     parser: Parser,
     stream: Option<Stream>,
     dpb: Dpb,
+    reorder: Reorder<DecodedFrame>,
 }
 
 impl H264Decoder {
@@ -114,7 +117,12 @@ impl H264Decoder {
             parser: Parser::default(),
             stream: None,
             dpb: Dpb::default(),
+            reorder: Reorder::new(),
         }
+    }
+
+    pub(super) fn drain(&mut self) -> Vec<DecodedFrame> {
+        self.reorder.drain()
     }
 
     pub(super) fn decode(
@@ -124,7 +132,6 @@ impl H264Decoder {
     ) -> Result<Option<DecodedFrame>, DecodeError> {
         let mut cursor = Cursor::new(frame.data.as_slice());
         let mut slices: Vec<Slice<'_>> = Vec::new();
-        let mut output = None;
 
         while let Some(nalu) = annexb::next_nalu::<NaluHeader>(&mut cursor, CODEC)? {
             match nalu.header.type_ {
@@ -145,7 +152,7 @@ impl H264Decoder {
                         .map_err(malformed(BitstreamUnit::SliceHeader))?;
 
                     if slice.header.first_mb_in_slice == 0 && !slices.is_empty() {
-                        output = Some(self.decode_picture(display, &slices, frame.timestamp)?);
+                        self.decode_picture(display, &slices, frame.timestamp)?;
                         slices.clear();
                     }
 
@@ -156,10 +163,10 @@ impl H264Decoder {
         }
 
         if !slices.is_empty() {
-            output = Some(self.decode_picture(display, &slices, frame.timestamp)?);
+            self.decode_picture(display, &slices, frame.timestamp)?;
         }
 
-        Ok(output)
+        Ok(self.reorder.pop())
     }
 
     fn decode_picture(
@@ -167,7 +174,7 @@ impl H264Decoder {
         display: &Rc<Display>,
         slices: &[Slice<'_>],
         timestamp: Timestamp,
-    ) -> Result<DecodedFrame, DecodeError> {
+    ) -> Result<(), DecodeError> {
         let first = &slices[0];
         let header = &first.header;
 
@@ -190,6 +197,7 @@ impl H264Decoder {
             self.dpb.references.clear();
             self.dpb.max_long_term_frame_idx = None;
         }
+        self.reorder.configure(reorder_depth(&sps));
 
         let idr = first.nalu.header.idr_pic_flag;
         let nal_ref_idc = first.nalu.header.ref_idc;
@@ -267,7 +275,18 @@ impl H264Decoder {
             order,
         });
 
-        Ok(output)
+        let restarted = idr || self.dpb.previous.had_mmco5;
+        if restarted {
+            self.reorder.flush();
+        }
+        let key = if self.dpb.previous.had_mmco5 {
+            0
+        } else {
+            order.poc()
+        };
+        self.reorder.push(key, output);
+
+        Ok(())
     }
 }
 
@@ -720,6 +739,22 @@ enum Marked {
     CurrentLongTerm(u32),
 }
 
+pub(super) fn reorder_depth(sps: &Sps) -> Depth {
+    let vui = &sps.vui_parameters;
+
+    if sps.vui_parameters_present_flag && vui.bitstream_restriction_flag {
+        let buffering = usize::try_from(vui.max_dec_frame_buffering).unwrap_or(usize::MAX);
+        let reorder = usize::try_from(vui.max_num_reorder_frames).unwrap_or(usize::MAX);
+        Depth::Fixed(reorder.min(buffering).min(MAX_REFERENCE_FRAMES))
+    } else if sps.pic_order_cnt_type == 2 || sps.profile_idc == BASELINE_PROFILE_IDC {
+        Depth::Fixed(0)
+    } else {
+        Depth::Learned {
+            ceiling: sps.max_dpb_frames().min(MAX_REFERENCE_FRAMES),
+        }
+    }
+}
+
 fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
     let chroma = match sps.chroma_format_idc {
         1 => ChromaSubsampling::Yuv420,
@@ -765,6 +800,7 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         reference_frames: sps
             .max_dpb_frames()
             .max(usize::from(sps.max_num_ref_frames)),
+        reorder_frames: reorder_depth(sps).capacity(),
     })
 }
 

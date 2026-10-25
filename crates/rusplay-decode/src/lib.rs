@@ -51,6 +51,10 @@ impl fmt::Display for Backend {
 
 pub trait VideoDecoder {
     fn decode(&mut self, frame: &EncodedFrame) -> Result<Option<DecodedFrame>, DecodeError>;
+
+    fn flush(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
+        Ok(Vec::new())
+    }
 }
 
 pub fn open(
