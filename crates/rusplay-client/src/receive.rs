@@ -10,6 +10,7 @@ use std::{
 
 use rusplay_config::NetworkConfig;
 use rusplay_core::{Codec, EncodedFrame, Timestamp};
+use rusplay_input::RumbleCommand;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
     ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
@@ -95,6 +96,7 @@ struct AudioIngress {
 pub(crate) struct Links {
     pub decode_queue: SyncSender<EncodedVideo>,
     pub audio_queue: Option<SyncSender<EncodedAudio>>,
+    pub rumble: Option<Sender<RumbleCommand>>,
     pub cursor: LatestCursor,
     pub feedback: Receiver<Feedback>,
     pub handshake: Sender<()>,
@@ -104,7 +106,7 @@ pub(crate) struct Links {
 
 #[derive(Debug)]
 pub(crate) struct ReceiveStage {
-    transport: Transport,
+    transport: Arc<Transport>,
     host: SocketAddr,
     codec: Codec,
     timing: Timing,
@@ -121,7 +123,7 @@ pub(crate) struct ReceiveStage {
 
 impl ReceiveStage {
     pub(crate) fn new(
-        transport: Transport,
+        transport: Arc<Transport>,
         host: SocketAddr,
         codec: Codec,
         network: &NetworkConfig,
@@ -419,6 +421,25 @@ impl ReceiveStage {
                     }
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
+                ControlEvent::Received(ControlMessage::Rumble {
+                    slot,
+                    strong,
+                    weak,
+                    delay_ms,
+                    duration_ms,
+                }) => {
+                    if let Some(rumble) = &self.links.rumble {
+                        rumble
+                            .send(RumbleCommand {
+                                slot,
+                                strong,
+                                weak,
+                                delay_ms,
+                                duration_ms,
+                            })
+                            .ok();
+                    }
+                }
                 ControlEvent::Undeliverable {
                     message: ControlMessage::Hello { .. },
                     ..
@@ -521,7 +542,7 @@ mod tests {
     };
 
     use rusplay_net::{FecScheme, Packetizer, TransportOptions};
-    use rusplay_protocol::CursorImage;
+    use rusplay_protocol::{ControlPacket, CursorImage};
 
     use super::*;
 
@@ -533,6 +554,7 @@ mod tests {
         client: SocketAddr,
         audio: Option<mpsc::Receiver<EncodedAudio>>,
         cursor: LatestCursor,
+        rumble: mpsc::Receiver<RumbleCommand>,
         counters: Arc<Counters>,
         stop: Arc<AtomicBool>,
         stage: Option<JoinHandle<Result<(), ClientError>>>,
@@ -560,19 +582,27 @@ mod tests {
                 None => (None, None),
             };
             let cursor = LatestCursor::new();
+            let (rumble_sender, rumble) = mpsc::channel();
             let counters = Arc::new(Counters::default());
             let stop = Arc::new(AtomicBool::new(false));
 
             let links = Links {
                 decode_queue,
                 audio_queue,
+                rumble: Some(rumble_sender),
                 cursor: cursor.clone(),
                 feedback,
                 handshake,
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };
-            let stage = ReceiveStage::new(transport, host_address, Codec::Av1, &network, links);
+            let stage = ReceiveStage::new(
+                Arc::new(transport),
+                host_address,
+                Codec::Av1,
+                &network,
+                links,
+            );
             let stage = thread::spawn(move || stage.run());
 
             Self {
@@ -580,6 +610,7 @@ mod tests {
                 client,
                 audio,
                 cursor,
+                rumble,
                 counters,
                 stop,
                 stage: Some(stage),
@@ -861,6 +892,57 @@ mod tests {
 
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 2));
         assert_eq!(rig.cursor.latest().unwrap().x, 60);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn rumble_messages_are_forwarded_in_order_and_acknowledged() {
+        let rig = Rig::start(None);
+        let messages = [
+            ControlMessage::Rumble {
+                slot: 1,
+                strong: 0xFFFF,
+                weak: 0x4000,
+                delay_ms: 3,
+                duration_ms: 250,
+            },
+            ControlMessage::Rumble {
+                slot: 1,
+                strong: 0,
+                weak: 0,
+                delay_ms: 0,
+                duration_ms: 0,
+            },
+        ];
+
+        for (id, message) in messages.into_iter().enumerate() {
+            let packet = ControlPacket::Message {
+                id: u32::try_from(id).unwrap(),
+                message,
+            };
+            rig.send(&[packet.to_datagram().unwrap()]);
+        }
+
+        let commands: Vec<_> = (0..2)
+            .map(|_| {
+                rig.rumble
+                    .recv_timeout(WAIT)
+                    .expect("a rumble command arrives")
+            })
+            .collect();
+        assert_eq!(
+            commands,
+            vec![
+                RumbleCommand {
+                    slot: 1,
+                    strong: 0xFFFF,
+                    weak: 0x4000,
+                    delay_ms: 3,
+                    duration_ms: 250,
+                },
+                RumbleCommand::stop(1),
+            ]
+        );
         assert!(rig.finish().is_ok());
     }
 }

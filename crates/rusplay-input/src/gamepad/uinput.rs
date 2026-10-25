@@ -1,11 +1,18 @@
+use std::io;
+
 use evdev::{
-    AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, EventType, InputEvent as EvdevEvent, InputId,
-    UinputAbsSetup, uinput::VirtualDevice,
+    AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, EventSummary, EventType, FFEffectCode,
+    FFEffectData, FFEffectKind, InputEvent as EvdevEvent, InputId, UInputCode, UinputAbsSetup,
+    uinput::VirtualDevice,
 };
 use rusplay_config::InputConfig;
+use rustix::{
+    fs::{OFlags, fcntl_getfl, fcntl_setfl},
+    io::Errno,
+};
 
 use crate::{
-    InputError,
+    InputError, MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker,
     gamepad::{
         pool::{GamepadDevice, GamepadFactory, GamepadPool},
         xbox360::{HAT_MAX, KEYS, Report, STICK_MAX, STICK_MIN, TRIGGER_MAX},
@@ -22,6 +29,7 @@ const STICK_FLAT: i32 = 128;
 pub struct UinputGamepad {
     slot: u8,
     device: VirtualDevice,
+    rumble: RumbleTracker,
 }
 
 impl UinputGamepad {
@@ -47,6 +55,9 @@ impl UinputGamepad {
             (AbsoluteAxisCode::ABS_HAT0Y, hat),
         ];
 
+        let mut effects = AttributeSet::<FFEffectCode>::new();
+        effects.insert(FFEffectCode::FF_RUMBLE);
+
         let mut builder = VirtualDevice::builder()
             .map_err(create)?
             .name(NAME)
@@ -57,17 +68,63 @@ impl UinputGamepad {
                 VERSION_XBOX_360,
             ))
             .with_keys(&keys)
-            .map_err(create)?;
+            .map_err(create)?
+            .with_ff(&effects)
+            .map_err(create)?
+            .with_ff_effects_max(u32::from(MAX_RUMBLE_EFFECTS));
         for (code, info) in axes {
             builder = builder
                 .with_absolute_axis(&UinputAbsSetup::new(code, info))
                 .map_err(create)?;
         }
 
+        let device = builder.build().map_err(create)?;
+        let flags = fcntl_getfl(&device)
+            .map_err(io::Error::from)
+            .map_err(create)?;
+        fcntl_setfl(&device, flags | OFlags::NONBLOCK)
+            .map_err(io::Error::from)
+            .map_err(create)?;
+
         Ok(Self {
             slot,
-            device: builder.build().map_err(create)?,
+            device,
+            rumble: RumbleTracker::new(slot),
         })
+    }
+
+    fn handle_feedback(
+        &mut self,
+        event: EvdevEvent,
+        out: &mut Vec<RumbleCommand>,
+    ) -> Result<(), InputError> {
+        let slot = self.slot;
+        let feedback = |source| InputError::UinputFeedback { slot, source };
+
+        match event.destructure() {
+            EventSummary::UInput(request, UInputCode::UI_FF_UPLOAD, _) => {
+                let mut upload = self.device.process_ff_upload(request).map_err(feedback)?;
+                let accepted = rumble_effect(&upload.effect())
+                    .and_then(|effect| self.rumble.upload(upload.effect_id(), effect).ok());
+                match accepted {
+                    Some(restart) => {
+                        out.extend(restart);
+                        upload.set_retval(0);
+                    }
+                    None => upload.set_retval(-Errno::INVAL.raw_os_error()),
+                }
+            }
+            EventSummary::UInput(request, UInputCode::UI_FF_ERASE, _) => {
+                let erase = self.device.process_ff_erase(request).map_err(feedback)?;
+                out.extend(self.rumble.erase(erase.effect_id()).ok().flatten());
+            }
+            EventSummary::ForceFeedback(_, code, count) => {
+                out.extend(self.rumble.play(u32::from(code.0), count).ok().flatten());
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 
     pub fn device_mut(&mut self) -> &mut VirtualDevice {
@@ -88,6 +145,44 @@ impl GamepadDevice for UinputGamepad {
                 slot: self.slot,
                 source,
             })
+    }
+
+    fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        loop {
+            let events: Vec<EvdevEvent> = match self.device.fetch_events() {
+                Ok(events) => events.collect(),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(source) => {
+                    return Err(InputError::UinputFeedback {
+                        slot: self.slot,
+                        source,
+                    });
+                }
+            };
+
+            if events.is_empty() {
+                return Ok(());
+            }
+
+            for event in events {
+                self.handle_feedback(event, out)?;
+            }
+        }
+    }
+}
+
+fn rumble_effect(data: &FFEffectData) -> Option<RumbleEffect> {
+    match data.kind {
+        FFEffectKind::Rumble {
+            strong_magnitude,
+            weak_magnitude,
+        } => Some(RumbleEffect {
+            strong: strong_magnitude,
+            weak: weak_magnitude,
+            length_ms: data.replay.length,
+            delay_ms: data.replay.delay,
+        }),
+        _ => None,
     }
 }
 
@@ -119,7 +214,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use evdev::{Device, KeyCode};
+    use evdev::{Device, FFReplay, FFTrigger, KeyCode};
 
     use super::*;
     use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, InputSink};
@@ -165,6 +260,64 @@ mod tests {
         assert!(keys.contains(KeyCode::BTN_SOUTH) && keys.contains(KeyCode::BTN_THUMBR));
         assert!(
             axes.contains(AbsoluteAxisCode::ABS_HAT0Y) && axes.contains(AbsoluteAxisCode::ABS_RZ)
+        );
+    }
+
+    #[test]
+    #[ignore = "needs write access to /dev/uinput"]
+    fn live_rumble_requests_reach_the_tracker() {
+        let mut gamepad = UinputGamepad::create(0).unwrap();
+        let node = gamepad
+            .device_mut()
+            .enumerate_dev_nodes_blocking()
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("event"))
+            })
+            .unwrap();
+        let mut observed = open_when_permitted(&node);
+        let game = thread::spawn(move || {
+            let mut effect = observed
+                .upload_ff_effect(FFEffectData {
+                    direction: 0,
+                    trigger: FFTrigger::default(),
+                    replay: FFReplay {
+                        length: 300,
+                        delay: 0,
+                    },
+                    kind: FFEffectKind::Rumble {
+                        strong_magnitude: 0xC000,
+                        weak_magnitude: 0x2000,
+                    },
+                })
+                .unwrap();
+            effect.play(1).unwrap();
+            thread::sleep(Duration::from_millis(50));
+            effect.stop().unwrap();
+        });
+
+        let mut commands = Vec::new();
+        while !game.is_finished() {
+            gamepad.poll_rumble(&mut commands).unwrap();
+            thread::sleep(Duration::from_millis(2));
+        }
+        game.join().unwrap();
+        gamepad.poll_rumble(&mut commands).unwrap();
+
+        assert_eq!(
+            commands,
+            vec![
+                RumbleCommand {
+                    slot: 0,
+                    strong: 0xC000,
+                    weak: 0x2000,
+                    delay_ms: 0,
+                    duration_ms: 300,
+                },
+                RumbleCommand::stop(0),
+            ]
         );
     }
 

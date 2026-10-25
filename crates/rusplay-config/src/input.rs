@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 
 const GAMEPAD_SLOT_RANGE: RangeInclusive<u8> = 1..=16;
+const SENSITIVITY_RANGE: RangeInclusive<f32> = 0.05..=20.0;
+const DEADZONE_RANGE: RangeInclusive<f32> = 0.0..=0.9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -14,7 +16,17 @@ pub enum PointerMode {
     Relative,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleaseChord {
+    CtrlAlt,
+    CtrlShift,
+    AltShift,
+    #[default]
+    CtrlAltShift,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct InputConfig {
     pub keyboard: bool,
@@ -22,6 +34,11 @@ pub struct InputConfig {
     pub gamepads: bool,
     pub max_gamepads: u8,
     pub pointer_mode: PointerMode,
+    pub pointer_sensitivity: f32,
+    pub gamepad_deadzone: f32,
+    pub release_chord: ReleaseChord,
+    pub rumble_max_ms: u16,
+    pub resend_delay_ms: u16,
 }
 
 impl Default for InputConfig {
@@ -32,6 +49,11 @@ impl Default for InputConfig {
             gamepads: true,
             max_gamepads: 4,
             pointer_mode: PointerMode::default(),
+            pointer_sensitivity: 1.0,
+            gamepad_deadzone: 0.05,
+            release_chord: ReleaseChord::default(),
+            rumble_max_ms: 5000,
+            resend_delay_ms: 8,
         }
     }
 }
@@ -40,6 +62,18 @@ impl InputConfig {
     pub(crate) fn validate(self) -> Result<(), ConfigError> {
         if !GAMEPAD_SLOT_RANGE.contains(&self.max_gamepads) {
             return Err(ConfigError::GamepadSlotsOutOfRange(self.max_gamepads));
+        }
+
+        if !SENSITIVITY_RANGE.contains(&self.pointer_sensitivity) {
+            return Err(ConfigError::PointerSensitivityOutOfRange(
+                self.pointer_sensitivity,
+            ));
+        }
+
+        if !DEADZONE_RANGE.contains(&self.gamepad_deadzone) {
+            return Err(ConfigError::GamepadDeadzoneOutOfRange(
+                self.gamepad_deadzone,
+            ));
         }
 
         Ok(())
@@ -70,5 +104,45 @@ mod tests {
             Err(ConfigError::GamepadSlotsOutOfRange(17))
         ));
         assert!(InputConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn pointer_and_gamepad_tuning_must_be_in_range() {
+        let slow = InputConfig {
+            pointer_sensitivity: 0.0,
+            ..InputConfig::default()
+        };
+        let not_a_number = InputConfig {
+            pointer_sensitivity: f32::NAN,
+            ..InputConfig::default()
+        };
+        let dead = InputConfig {
+            gamepad_deadzone: 1.0,
+            ..InputConfig::default()
+        };
+
+        assert!(matches!(
+            slow.validate(),
+            Err(ConfigError::PointerSensitivityOutOfRange(_))
+        ));
+        assert!(matches!(
+            not_a_number.validate(),
+            Err(ConfigError::PointerSensitivityOutOfRange(_))
+        ));
+        assert!(matches!(
+            dead.validate(),
+            Err(ConfigError::GamepadDeadzoneOutOfRange(_))
+        ));
+    }
+
+    #[test]
+    fn release_chord_uses_kebab_case_names() {
+        let config: InputConfig = toml::from_str("release_chord = \"ctrl-alt\"").unwrap();
+
+        assert_eq!(config.release_chord, ReleaseChord::CtrlAlt);
+        assert_eq!(
+            InputConfig::default().release_chord,
+            ReleaseChord::CtrlAltShift
+        );
     }
 }

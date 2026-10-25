@@ -50,4 +50,8 @@ pub enum ProtocolError {
     UnknownCursorFlags(u8),
     #[error("cursor image holds {found} pixel bytes, its size needs {expected}")]
     CursorImageSizeMismatch { expected: usize, found: usize },
+    #[error("input record of {len} bytes exceeds the limit of {max}")]
+    InputRecordTooLong { len: usize, max: usize },
+    #[error("input section of {len} bytes exceeds the 65535 byte limit")]
+    InputSectionTooLong { len: usize },
 }

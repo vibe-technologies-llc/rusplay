@@ -1,10 +1,14 @@
 use crate::{
-    GamepadEvent, InputError, InputEvent, InputSink,
+    GamepadEvent, InputError, InputEvent, InputSink, RumbleCommand,
     gamepad::xbox360::{Report, Xbox360Mapper},
 };
 
 pub trait GamepadDevice {
     fn emit(&mut self, report: Report) -> Result<(), InputError>;
+
+    fn poll_rumble(&mut self, _out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        Ok(())
+    }
 }
 
 pub trait GamepadFactory {
@@ -39,6 +43,13 @@ impl<F: GamepadFactory> GamepadPool<F> {
         self.slots
             .get(usize::from(slot))
             .is_some_and(Option::is_some)
+    }
+
+    pub fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        self.slots
+            .iter_mut()
+            .flatten()
+            .try_for_each(|connected| connected.device.poll_rumble(out))
     }
 
     pub fn handle(&mut self, slot: u8, event: GamepadEvent) -> Result<(), InputError> {
@@ -99,6 +110,14 @@ mod tests {
     impl GamepadDevice for FakeDevice {
         fn emit(&mut self, report: Report) -> Result<(), InputError> {
             self.log.borrow_mut().push((self.slot, report));
+            Ok(())
+        }
+
+        fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            out.push(RumbleCommand {
+                strong: 1,
+                ..RumbleCommand::stop(self.slot)
+            });
             Ok(())
         }
     }
@@ -209,6 +228,22 @@ mod tests {
         pool.handle(0, GamepadEvent::Connected).unwrap();
 
         assert_eq!(pool.factory.created, vec![0, 0]);
+    }
+
+    #[test]
+    fn rumble_is_collected_from_connected_slots_only() {
+        let (mut pool, _) = pool(4);
+        pool.handle(1, GamepadEvent::Connected).unwrap();
+        pool.handle(3, GamepadEvent::Connected).unwrap();
+        pool.handle(1, GamepadEvent::Disconnected).unwrap();
+        let mut out = Vec::new();
+
+        pool.poll_rumble(&mut out).unwrap();
+
+        assert_eq!(
+            out.iter().map(|command| command.slot).collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]

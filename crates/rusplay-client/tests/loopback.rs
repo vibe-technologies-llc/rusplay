@@ -11,6 +11,7 @@ use rusplay_client::{
     PresentedFrame,
 };
 use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution};
+use rusplay_input::InputEvent;
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
 
@@ -346,6 +347,49 @@ fn cursor_position_and_image_reach_the_app() {
     assert_eq!((cursor_now.x, cursor_now.y), (90, 45));
     assert_eq!(*cursor_now.image.unwrap(), image);
     assert_eq!(stats.cursor_updates, 10);
+}
+
+#[test]
+fn input_events_reach_the_host_in_order() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    let input = stream.input();
+    let key = |pressed| InputEvent::Key {
+        keycode: 30,
+        pressed,
+    };
+
+    input.send(key(true));
+    input.send(InputEvent::PointerMotion { dx: 3.0, dy: -2.0 });
+    input.send(key(false));
+    let delivered = host.wait_for_input(STREAM_TIMEOUT, 3);
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert!(delivered);
+    assert_eq!(
+        host.input_events(),
+        vec![
+            key(true),
+            InputEvent::PointerMotion { dx: 3.0, dy: -2.0 },
+            key(false)
+        ]
+    );
+    assert!(stats.input_packets_sent >= 1);
 }
 
 fn wait_for_end(stream: rusplay_client::ClientStream) -> rusplay_client::ClientStats {

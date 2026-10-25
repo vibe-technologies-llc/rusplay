@@ -20,6 +20,13 @@ paths:
 - The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, a
   flags byte (visible, has image) and, only when the shape changed, a `CursorImage` (u16 size and
   hotspot, then tightly packed RGBA8). It is latest-wins like video, never queued behind frames.
+- Input travels on `StreamKind::Input` as `InputPacket`: the header `sequence` counts datagrams
+  and the payload is a big-endian `u16` length of the `current` section, the `current` section and
+  the `previous` section (the preceding datagram's `current`), each a run of `[len u8][record]`.
+  The records are opaque to the protocol crate (`rusplay-input`'s `InputEvent` bytes).
+  `InputSequence::admit` tells the receiver whether to drop a datagram, apply `current`, or apply
+  `previous` and `current`, in serial-number arithmetic. Input is unreliable on purpose, with
+  that one-datagram redundancy as its only loss repair. See `input.md` for the full contract.
 - Loss is handled per frame: Reed-Solomon FEC shards (`FecScheme`, overhead from
   `network.fec_overhead_percent`) recover small losses, and an unrecoverable frame triggers a
   `RequestKeyframe`/intra-refresh request instead of retransmission.
@@ -68,6 +75,9 @@ paths:
   deduplicate with a 64-id window; the sender allows at most `CONTROL_WINDOW` (64) ids between its
   oldest unacknowledged message and the next id (`ControlWindowFull`), so a retransmit can never
   fall outside the receiver's window and be mistaken for a duplicate.
+- `ControlMessage::Rumble { slot, strong, weak, delay_ms, duration_ms }` (tag 6, host to client, 10
+  bytes) carries gamepad force feedback; reliable delivery keeps a stop from being lost, and the
+  client caps every effect length so reordering cannot leave a motor running.
 - Both ends start at id 0. A peer that restarts its session must `reset` its channel and the other
   end must `reset` too, otherwise the new ids look like old duplicates.
 

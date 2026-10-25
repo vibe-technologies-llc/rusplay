@@ -4,6 +4,7 @@ mod cursor;
 mod decode;
 mod display;
 mod error;
+mod input;
 mod present;
 mod receive;
 mod session;
@@ -24,6 +25,7 @@ pub use crate::{
         query_target, resolve_target,
     },
     error::{ClientError, Stage},
+    input::InputHandle,
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},
     stats::ClientStats,

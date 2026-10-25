@@ -23,7 +23,7 @@ pub use crate::{
     color::{ColorConfig, DisplayTargetConfig, GamutMappingConfig, ToneMappingConfig},
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
-    input::{InputConfig, PointerMode},
+    input::{InputConfig, PointerMode, ReleaseChord},
     network::NetworkConfig,
     paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,

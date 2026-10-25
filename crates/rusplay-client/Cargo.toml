@@ -18,7 +18,7 @@ rusplay-audio.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
 rusplay-decode.workspace = true
-rusplay-input.workspace = true
+rusplay-input = { workspace = true, features = ["gamepad"] }
 rusplay-net.workspace = true
 rusplay-protocol.workspace = true
 rusplay-scale.workspace = true

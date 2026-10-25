@@ -1,4 +1,4 @@
-#[cfg(any(feature = "libei", feature = "gamepad"))]
+#[cfg(any(feature = "libei", feature = "gamepad", feature = "wayland"))]
 use std::io;
 
 use thiserror::Error;
@@ -12,6 +12,8 @@ pub enum InputError {
     SinkClosed,
     #[error("gamepad slot {0} is outside the supported range")]
     GamepadSlotOutOfRange(u8),
+    #[error("gamepad slot {slot} has no rumble effect {id}")]
+    RumbleEffectUnknown { slot: u8, id: i64 },
     #[error("a pointer value is not a finite number")]
     NonFiniteValue,
     #[error("an encoded input event is missing {missing} bytes")]
@@ -49,6 +51,34 @@ pub enum InputError {
     #[cfg(feature = "libei")]
     #[error("gamepad events are not handled by the libei sink")]
     GamepadUnsupported,
+    #[cfg(feature = "wayland")]
+    #[error("the {object} handle does not name a live wayland object")]
+    WaylandObjectInvalid { object: &'static str },
+    #[cfg(feature = "wayland")]
+    #[error("listing the wayland globals failed")]
+    WaylandGlobals(#[source] Box<wayland_client::globals::GlobalError>),
+    #[cfg(feature = "wayland")]
+    #[error("the compositor does not offer {interface}")]
+    WaylandGlobalMissing {
+        interface: &'static str,
+        #[source]
+        source: Box<wayland_client::globals::BindError>,
+    },
+    #[cfg(feature = "wayland")]
+    #[error("dispatching wayland events failed")]
+    WaylandDispatch(#[source] Box<wayland_client::DispatchError>),
+    #[cfg(feature = "wayland")]
+    #[error("reading from or flushing to the wayland socket failed")]
+    WaylandRead(#[source] Box<wayland_client::backend::WaylandError>),
+    #[cfg(feature = "wayland")]
+    #[error("waiting on the wayland socket failed")]
+    WaylandPoll(#[source] io::Error),
+    #[cfg(feature = "wayland")]
+    #[error("starting the wayland input thread failed")]
+    WaylandSpawn(#[source] io::Error),
+    #[cfg(feature = "wayland")]
+    #[error("the wayland input thread panicked")]
+    WaylandThreadPanicked,
     #[cfg(feature = "gamepad")]
     #[error("gamepad slot {0} has no connected device")]
     GamepadNotConnected(u8),
@@ -64,6 +94,23 @@ pub enum InputError {
     #[cfg(feature = "gamepad")]
     #[error("creating the uinput device for gamepad slot {slot} failed")]
     UinputCreate {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("reading force feedback requests from the uinput device of gamepad slot {slot} failed")]
+    UinputFeedback {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("waiting for physical gamepad events failed")]
+    PhysicalGamepadPoll(#[source] io::Error),
+    #[cfg(feature = "gamepad")]
+    #[error("playing rumble on the physical gamepad in slot {slot} failed")]
+    PhysicalGamepadRumble {
         slot: u8,
         #[source]
         source: io::Error,

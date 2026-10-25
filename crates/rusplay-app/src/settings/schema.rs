@@ -145,6 +145,7 @@ const CHANNEL_LAYOUTS: &[&str] = &["mono", "stereo", "5.1", "7.1"];
 const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
 const POINTER_MODES: &[&str] = &["absolute", "relative"];
+const RELEASE_CHORDS: &[&str] = &["ctrl-alt", "ctrl-shift", "alt-shift", "ctrl-alt-shift"];
 const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
 const SCALE_FILTERS: &[&str] = &[
@@ -862,6 +863,43 @@ pub static FIELDS: &[Field] = &[
         "Pointer mode",
         Kind::Choice(POINTER_MODES),
     ),
+    field(
+        Section::Input,
+        "Forwarding",
+        "input.release_chord",
+        "Release chord",
+        Kind::Choice(RELEASE_CHORDS),
+    ),
+    field(
+        Section::Input,
+        "Tuning",
+        "input.pointer_sensitivity",
+        "Pointer sensitivity",
+        Kind::Decimal,
+    ),
+    field(
+        Section::Input,
+        "Tuning",
+        "input.gamepad_deadzone",
+        "Gamepad deadzone",
+        Kind::Decimal,
+    ),
+    field(
+        Section::Input,
+        "Rumble",
+        "input.rumble_max_ms",
+        "Longest rumble (0 = off)",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Input,
+        "Tuning",
+        "input.resend_delay_ms",
+        "Resend delay",
+        U16,
+    )
+    .unit("ms"),
     field(
         Section::Capture,
         "Source",

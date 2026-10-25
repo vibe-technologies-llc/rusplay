@@ -211,7 +211,10 @@ impl ControlStage {
                 ControlEvent::Undeliverable { .. } => {
                     shared.counters.control_undeliverable.increment();
                 }
-                ControlEvent::Received(ControlMessage::Keepalive) | ControlEvent::Acked { .. } => {}
+                ControlEvent::Received(
+                    ControlMessage::Keepalive | ControlMessage::Rumble { .. },
+                )
+                | ControlEvent::Acked { .. } => {}
             }
         }
 
