@@ -49,6 +49,17 @@ paths:
   and a struct-size mismatch with the headers reports `LibraryIncompatible`. The capture
   timestamp in microseconds is the picture pts. Frame threads are pinned to one so each picture
   comes out of the call that submitted it. Only IDR slices count as `keyframe`.
+- SVT-AV1 is 4:2:0 only (other chroma is `ChromaUnsupported`) at 8 or 10 bits. `low_latency`
+  selects CBR, the low-delay prediction structure (`pred-struct=1`), no lookahead, no scene-cut
+  keyframes, IDR-only random access and `rtc`; with it off the library defaults apply and frames
+  may come out several calls late. In low-delay mode `svt_av1_enc_get_packet` blocks until the
+  frame just sent is out, which is what keeps one frame in flight; outside it the call is polled
+  and any queued packets are returned one per `encode`. Forced keyframes use the library's
+  `force_key_frames` plus a key picture type on the input. `set_bitrate` attaches a
+  `RATE_CHANGE_EVENT` to the next input picture. `threads` maps to `level_of_parallelism`
+  (1 to 6, not a thread count). `svt_av1_enc_parse_parameter` does not tell an unknown key from
+  a bad value, so both are `InvalidParameterValue` naming the key and value. The library prints
+  its banner to stderr (`encode-svt-av1-log` tracks routing it).
 - Bindings are generated at build time from the system headers (see
   `.claude/rules/dependencies.md`). Each library handle lives in a safe wrapper with a `Drop`
   that closes it, and the only `unsafe` blocks are the FFI calls inside those wrappers.

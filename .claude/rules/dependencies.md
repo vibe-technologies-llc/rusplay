@@ -25,7 +25,7 @@ paths:
   | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
-  | SVT-AV1 | `svt-av1-enc` or own bindings | `rusplay-encode/svt-av1` |
+  | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
   ancient headers, so the software encoders generate their bindings in

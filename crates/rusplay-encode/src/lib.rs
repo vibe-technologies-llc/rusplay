@@ -3,12 +3,16 @@ mod error;
 pub mod input;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod software;
+#[cfg(feature = "svt-av1")]
+mod svt_av1;
 #[cfg(all(test, any(feature = "x264", feature = "x265", feature = "svt-av1")))]
 mod testing;
 #[cfg(feature = "x264")]
 mod x264;
 #[cfg(feature = "x265")]
 mod x265;
+#[cfg(any(feature = "x264", feature = "x265"))]
+mod x26x;
 
 use rusplay_capture::Frame;
 use rusplay_config::VideoConfig;
@@ -37,6 +41,10 @@ pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> 
         #[cfg(feature = "x265")]
         rusplay_config::VideoEncoderConfig::X265(x265) => {
             Ok(Box::new(x265::X265Encoder::new(config, x265)?))
+        }
+        #[cfg(feature = "svt-av1")]
+        rusplay_config::VideoEncoderConfig::SvtAv1(svt) => {
+            Ok(Box::new(svt_av1::SvtAv1Encoder::new(config, svt)?))
         }
         _ => Err(EncodeError::BackendNotCompiled { backend }),
     }

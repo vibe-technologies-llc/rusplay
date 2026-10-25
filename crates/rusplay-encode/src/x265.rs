@@ -15,9 +15,9 @@ use rusplay_core::{
 use crate::{
     Backend, EncodeError, VideoEncoder,
     input::YuvFrame,
-    software::{
-        CParam, colour_matrix_name, colour_primaries_name, preset_name, transfer_name,
-        vbv_buffer_kbit,
+    software::CParam,
+    x26x::{
+        colour_matrix_name, colour_primaries_name, preset_name, transfer_name, vbv_buffer_kbit,
     },
 };
 
