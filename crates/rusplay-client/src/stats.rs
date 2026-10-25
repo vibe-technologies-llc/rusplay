@@ -30,6 +30,11 @@ pub struct ClientStats {
     pub audio_trims: u64,
     pub audio_overflows: u64,
     pub cursor_updates: u64,
+    pub input_packets_sent: u64,
+    pub input_events_sent: u64,
+    pub rumble_commands: u64,
+    pub rumble_failures: u64,
+    pub gamepad_failures: u64,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +88,11 @@ pub(crate) struct Counters {
     pub audio_trims: Counter,
     pub audio_overflows: Counter,
     pub cursor_updates: Counter,
+    pub input_packets_sent: Counter,
+    pub input_events_sent: Counter,
+    pub rumble_commands: Counter,
+    pub rumble_failures: Counter,
+    pub gamepad_failures: Counter,
 }
 
 impl Counters {
@@ -116,6 +126,11 @@ impl Counters {
             audio_trims: self.audio_trims.get(),
             audio_overflows: self.audio_overflows.get(),
             cursor_updates: self.cursor_updates.get(),
+            input_packets_sent: self.input_packets_sent.get(),
+            input_events_sent: self.input_events_sent.get(),
+            rumble_commands: self.rumble_commands.get(),
+            rumble_failures: self.rumble_failures.get(),
+            gamepad_failures: self.gamepad_failures.get(),
         }
     }
 }

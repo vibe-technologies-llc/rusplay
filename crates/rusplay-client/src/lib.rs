@@ -3,6 +3,7 @@ mod color;
 mod cursor;
 mod decode;
 mod error;
+mod input;
 mod present;
 mod receive;
 mod session;
@@ -19,6 +20,7 @@ pub use crate::{
     color::FrameColor,
     cursor::{CursorState, LatestCursor},
     error::{ClientError, Stage},
+    input::InputHandle,
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},
     stats::ClientStats,

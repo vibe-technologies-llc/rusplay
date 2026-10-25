@@ -11,8 +11,9 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_audio::CODEC_THREAD_STACK_BYTES;
-use rusplay_config::{AudioConfig, Config, NetworkConfig};
+use rusplay_config::{AudioConfig, Config, InputConfig, NetworkConfig};
 use rusplay_core::Resolution;
+use rusplay_input::{InputEvent, RumbleCommand, gamepad::PhysicalOptions};
 use rusplay_net::{
     PairingTiming, PeerRecord, PeerSecret, Pin, ReconnectTiming, Transport, TransportOptions,
     pair_as_client, reconnect_as_client,
@@ -22,6 +23,7 @@ use crate::{
     AudioOutput, ClientError, ClientStats, FrameSink, LatestCursor, Stage,
     audio::{self, AudioLinks, EncodedAudio},
     decode::{self, DecodeLinks},
+    input::{self, GamepadLinks, InputHandle, InputLinks, InputStage},
     present::{self, PresentLinks, PresentOptions, SharedTarget},
     receive::{Links, ReceiveStage},
     slot::Slot,
@@ -104,6 +106,8 @@ impl ClientSession {
             TransportOptions::from(network),
         )?;
         let paired = authenticate(&transport, host, credentials, network)?;
+        let transport = Arc::new(transport);
+        let (input_sender, input_events) = mpsc::channel();
 
         let mut stream = ClientStream {
             stages: Vec::new(),
@@ -111,6 +115,8 @@ impl ClientSession {
             counters: Arc::new(Counters::default()),
             target: Arc::new(Mutex::new(None)),
             cursor: LatestCursor::new(),
+            input: InputHandle::new(input_sender),
+            gamepads_done: Arc::new(AtomicBool::new(true)),
             paired,
         };
         let decoded = Arc::new(Slot::new());
@@ -123,22 +129,37 @@ impl ClientSession {
             None => None,
         };
 
+        let (rumble, rumble_commands) = mpsc::channel();
+
         let (handshake, handshake_done) = mpsc::channel();
         let links = Links {
             decode_queue: queue,
             audio_queue,
+            rumble: self.config.input.gamepads.then_some(rumble),
             cursor: stream.cursor.clone(),
             feedback,
             handshake,
             stop: Arc::clone(&stream.stop),
             counters: Arc::clone(&stream.counters),
         };
-        let receive = ReceiveStage::new(transport, host, self.config.video.codec, network, links);
+        let receive = ReceiveStage::new(
+            Arc::clone(&transport),
+            host,
+            self.config.video.codec,
+            network,
+            links,
+        );
         stream.spawn(Stage::Receive, None, move || receive.run())?;
 
         let timeout = Duration::from_millis(u64::from(network.handshake_timeout_ms));
         match handshake_done.recv_timeout(timeout) {
-            Ok(()) => Ok(stream),
+            Ok(()) => {
+                if self.config.input.gamepads {
+                    stream.spawn_gamepads(&self.config.input, rumble_commands)?;
+                }
+                stream.spawn_input(&self.config.input, transport, host, input_events)?;
+                Ok(stream)
+            }
             Err(RecvTimeoutError::Timeout) => {
                 stream.stop().ok();
                 Err(ClientError::HandshakeTimeout(timeout))
@@ -186,6 +207,8 @@ pub struct ClientStream {
     counters: Arc<Counters>,
     target: SharedTarget,
     cursor: LatestCursor,
+    input: InputHandle,
+    gamepads_done: Arc<AtomicBool>,
     paired: Option<PeerSecret>,
 }
 
@@ -204,6 +227,10 @@ impl ClientStream {
 
     pub fn cursor(&self) -> LatestCursor {
         self.cursor.clone()
+    }
+
+    pub fn input(&self) -> InputHandle {
+        self.input.clone()
     }
 
     pub fn paired_secret(&self) -> Option<&PeerSecret> {
@@ -326,6 +353,46 @@ impl ClientStream {
                 }))
             }
         }
+    }
+
+    fn spawn_gamepads(
+        &mut self,
+        config: &InputConfig,
+        commands: mpsc::Receiver<RumbleCommand>,
+    ) -> Result<(), ClientError> {
+        let options = PhysicalOptions::from(config);
+        let links = GamepadLinks {
+            rumble: commands,
+            input: self.input.clone(),
+            done: Arc::clone(&self.gamepads_done),
+            stop: Arc::clone(&self.stop),
+            counters: Arc::clone(&self.counters),
+        };
+        self.gamepads_done.store(false, Ordering::Relaxed);
+
+        self.spawn(Stage::Gamepad, None, move || {
+            input::run_gamepads(options, &links);
+            Ok(())
+        })
+    }
+
+    fn spawn_input(
+        &mut self,
+        config: &InputConfig,
+        transport: Arc<Transport>,
+        host: SocketAddr,
+        events: mpsc::Receiver<InputEvent>,
+    ) -> Result<(), ClientError> {
+        let links = InputLinks {
+            events,
+            gamepads_done: Arc::clone(&self.gamepads_done),
+            stop: Arc::clone(&self.stop),
+            counters: Arc::clone(&self.counters),
+        };
+        let resend = Duration::from_millis(u64::from(config.resend_delay_ms));
+        let stage = InputStage::new(transport, host, resend, links);
+
+        self.spawn(Stage::Input, None, move || stage.run())
     }
 
     fn spawn_audio(

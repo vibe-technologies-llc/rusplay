@@ -20,11 +20,15 @@ use rusplay_client::{
 };
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::Codec;
+use rusplay_input::InputEvent;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
     PairingTiming, Transport, TransportOptions, pair_as_host,
 };
-use rusplay_protocol::{ControlMessage, CursorMessage, PacketHeader, ProtocolVersion, StreamKind};
+use rusplay_protocol::{
+    ControlMessage, CursorMessage, InputAdmission, InputPacket, InputSequence, PacketHeader,
+    ProtocolVersion, StreamKind,
+};
 
 pub const PIN: &str = "482916";
 pub const FIXTURE_WIDTH: u32 = 256;
@@ -71,6 +75,7 @@ pub fn client_config() -> Config {
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = TEST_DECODE_QUEUE_FRAMES;
     config.network.bind_address = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    config.input.gamepads = false;
 
     config
 }
@@ -133,6 +138,7 @@ impl Default for HostOptions {
 pub struct TestHost {
     pub address: SocketAddr,
     pub received: Arc<Mutex<Vec<ControlMessage>>>,
+    pub input: Arc<Mutex<Vec<InputEvent>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -150,17 +156,22 @@ impl TestHost {
         .unwrap();
         let address = transport.local_addr().unwrap();
         let received = Arc::new(Mutex::new(Vec::new()));
+        let input = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
         let thread = {
             let received = Arc::clone(&received);
+            let input = Arc::clone(&input);
             let stop = Arc::clone(&stop);
-            thread::spawn(move || serve(&transport, &network, &options, &received, &stop))
+            thread::spawn(move || {
+                serve(&transport, &network, &options, &received, &input, &stop);
+            })
         };
 
         Self {
             address,
             received,
+            input,
             stop,
             thread: Some(thread),
         }
@@ -168,6 +179,21 @@ impl TestHost {
 
     pub fn messages(&self) -> Vec<ControlMessage> {
         self.received.lock().clone()
+    }
+
+    pub fn input_events(&self) -> Vec<InputEvent> {
+        self.input.lock().clone()
+    }
+
+    pub fn wait_for_input(&self, timeout: Duration, count: usize) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.input.lock().len() >= count {
+                return true;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        false
     }
 
     pub fn wait_for(&self, timeout: Duration, matches: impl Fn(&ControlMessage) -> bool) -> bool {
@@ -253,11 +279,31 @@ impl Extras {
     }
 }
 
+fn record_input(datagram: &[u8], sequence: &mut InputSequence, input: &Mutex<Vec<InputEvent>>) {
+    let packet = InputPacket::read(datagram).unwrap();
+    let decode = |records: rusplay_protocol::InputRecords<'_>| {
+        records
+            .map(|record| InputEvent::decode(record.unwrap()).unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    let mut input = input.lock();
+    match sequence.admit(packet.sequence) {
+        InputAdmission::Stale => {}
+        InputAdmission::Current => input.extend(decode(packet.current_records())),
+        InputAdmission::PreviousAndCurrent => {
+            input.extend(decode(packet.previous_records()));
+            input.extend(decode(packet.current_records()));
+        }
+    }
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
     options: &HostOptions,
     received: &Mutex<Vec<ControlMessage>>,
+    input: &Mutex<Vec<InputEvent>>,
     stop: &AtomicBool,
 ) {
     let mut responder = PairingResponder::new(pin(), network.pairing_max_attempts);
@@ -277,6 +323,7 @@ fn serve(
     )
     .unwrap();
     let mut extras = Extras::new(transport, &client);
+    let mut input_sequence = InputSequence::new();
     let mut events = Vec::new();
     let mut buf = vec![0; usize::from(network.mtu)];
     let mut streaming = false;
@@ -288,10 +335,14 @@ fn serve(
     while !stop.load(Ordering::Relaxed) {
         if let Ok(Some((len, from))) = transport.recv_from_timeout(&mut buf, POLL_INTERVAL)
             && from == client
-            && PacketHeader::read(&buf[..len])
-                .is_ok_and(|header| header.stream == StreamKind::Control)
         {
-            control.handle_datagram(&buf[..len], &mut events).ok();
+            match PacketHeader::read(&buf[..len]).map(|header| header.stream) {
+                Ok(StreamKind::Control) => {
+                    control.handle_datagram(&buf[..len], &mut events).ok();
+                }
+                Ok(StreamKind::Input) => record_input(&buf[..len], &mut input_sequence, input),
+                _ => {}
+            }
         }
         control.poll(Instant::now(), &mut events);
 

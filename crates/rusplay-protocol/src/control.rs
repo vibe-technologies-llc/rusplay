@@ -5,18 +5,35 @@ const TAG_REQUEST_KEYFRAME: u8 = 1;
 const TAG_REPORT_LOSS: u8 = 2;
 const TAG_BITRATE_HINT: u8 = 3;
 const TAG_GOODBYE: u8 = 4;
+const TAG_RUMBLE: u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
-    Hello { version: ProtocolVersion },
-    RequestKeyframe { frame: u32 },
-    ReportLoss { first_sequence: u32, count: u16 },
-    BitrateHint { kbps: u32 },
+    Hello {
+        version: ProtocolVersion,
+    },
+    RequestKeyframe {
+        frame: u32,
+    },
+    ReportLoss {
+        first_sequence: u32,
+        count: u16,
+    },
+    BitrateHint {
+        kbps: u32,
+    },
     Goodbye,
+    Rumble {
+        slot: u8,
+        strong: u16,
+        weak: u16,
+        delay_ms: u16,
+        duration_ms: u16,
+    },
 }
 
 impl ControlMessage {
-    pub const MAX_ENCODED_LEN: usize = 7;
+    pub const MAX_ENCODED_LEN: usize = 10;
 
     pub const fn encoded_len(&self) -> usize {
         match self {
@@ -24,6 +41,7 @@ impl ControlMessage {
             Self::RequestKeyframe { .. } | Self::BitrateHint { .. } => 5,
             Self::ReportLoss { .. } => 7,
             Self::Goodbye => 1,
+            Self::Rumble { .. } => 10,
         }
     }
 
@@ -59,6 +77,20 @@ impl ControlMessage {
                 out[1..5].copy_from_slice(&kbps.to_be_bytes());
             }
             Self::Goodbye => out[0] = TAG_GOODBYE,
+            Self::Rumble {
+                slot,
+                strong,
+                weak,
+                delay_ms,
+                duration_ms,
+            } => {
+                out[0] = TAG_RUMBLE;
+                out[1] = *slot;
+                out[2..4].copy_from_slice(&strong.to_be_bytes());
+                out[4..6].copy_from_slice(&weak.to_be_bytes());
+                out[6..8].copy_from_slice(&delay_ms.to_be_bytes());
+                out[8..10].copy_from_slice(&duration_ms.to_be_bytes());
+            }
         }
 
         Ok(len)
@@ -77,6 +109,7 @@ impl ControlMessage {
             TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT => 4,
             TAG_REPORT_LOSS => 6,
             TAG_GOODBYE => 0,
+            TAG_RUMBLE => 9,
             unknown => return Err(ProtocolError::UnknownControlTag(unknown)),
         };
 
@@ -106,6 +139,16 @@ impl ControlMessage {
                 count: u16::from_be_bytes([body[4], body[5]]),
             },
             TAG_BITRATE_HINT => Self::BitrateHint { kbps: word(0) },
+            TAG_RUMBLE => {
+                let half = |at: usize| u16::from_be_bytes([body[at], body[at + 1]]);
+                Self::Rumble {
+                    slot: body[0],
+                    strong: half(1),
+                    weak: half(3),
+                    delay_ms: half(5),
+                    duration_ms: half(7),
+                }
+            }
             _ => Self::Goodbye,
         })
     }
@@ -189,7 +232,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 5] {
+    fn every_message() -> [ControlMessage; 6] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -201,6 +244,13 @@ mod tests {
             },
             ControlMessage::BitrateHint { kbps: 150_000 },
             ControlMessage::Goodbye,
+            ControlMessage::Rumble {
+                slot: 3,
+                strong: 0xFFFF,
+                weak: 0x1234,
+                delay_ms: 20,
+                duration_ms: 0,
+            },
         ]
     }
 
@@ -239,6 +289,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(&buf[..len], [2, 1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn rumble_encoding_is_big_endian_after_the_slot() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let len = ControlMessage::Rumble {
+            slot: 2,
+            strong: 0x0102,
+            weak: 0x0304,
+            delay_ms: 0x0506,
+            duration_ms: 0x0708,
+        }
+        .encode(&mut buf)
+        .unwrap();
+
+        assert_eq!(&buf[..len], [5, 2, 1, 2, 3, 4, 5, 6, 7, 8]);
     }
 
     #[test]

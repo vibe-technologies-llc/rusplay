@@ -9,8 +9,8 @@
 - [L] `decode-nvdec`: NVDEC decoder
 
 # Input
-- [M] `input-gamepad-rumble`: carry uinput force-feedback effects from the host's virtual pads to the client's physical gamepad
-- [M] `input-client-capture`: capture keyboard, pointer (locked/relative) and gamepads in the client window
+- [M, blocked by: host-pipeline] `input-host-wiring`: in `HostSession`, read `StreamKind::Input` datagrams (`InputPacket`, `InputSequence`, `InputEvent::decode`) into a `SplitSink` of `LibeiInjector` and `UinputGamepads`, call `UinputGamepads::poll_rumble` from the input loop and send each `RumbleCommand` as `ControlMessage::Rumble`; the contract is in `.claude/rules/input.md`
+- [M, blocked by: app-stream-view] `input-app-attach`: attach `rusplay_input::wayland::WaylandCapture` to the stream window (display and surface pointers from gpui's raw window handles), feed it `ClientStream::input()`, call `set_region` with the letterboxed picture rectangle on every resize, hide the local cursor while engaged, show the release chord and engaged state in the UI, and call `release` when the window loses focus or the stream ends
 
 # Sessions
 - [L] `host-pipeline`: run capture → scale → encode → send in `HostSession`

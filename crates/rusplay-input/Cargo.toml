@@ -6,8 +6,15 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-gamepad = ["dep:evdev"]
+gamepad = ["dep:evdev", "dep:rustix"]
 libei = ["dep:ashpd", "dep:reis", "dep:rustix"]
+wayland = [
+    "dep:parking_lot",
+    "dep:rustix",
+    "dep:wayland-backend",
+    "dep:wayland-client",
+    "dep:wayland-protocols"
+]
 
 [dependencies]
 evdev = { workspace = true, optional = true }
@@ -16,12 +23,17 @@ ashpd = {
     features = ["async-io", "remote_desktop", "screencast"],
     optional = true
 }
+parking_lot = { workspace = true, optional = true }
 reis = { workspace = true, optional = true }
 rusplay-config.workspace = true
-rustix = { workspace = true, features = ["event", "time"], optional = true }
+rustix = { workspace = true, features = ["event", "fs", "time"], optional = true }
 thiserror.workspace = true
+wayland-backend = { workspace = true, features = ["client_system", "dlopen"], optional = true }
+wayland-client = { workspace = true, features = ["dlopen", "system"], optional = true }
+wayland-protocols = { workspace = true, features = ["client", "unstable"], optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

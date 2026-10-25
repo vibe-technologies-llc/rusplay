@@ -18,7 +18,8 @@ paths:
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
-  audio output exists, each returning `Result<(), ClientError>`. Any stage that ends sets the
+  audio output exists and, after the handshake, `-input` and, when `input.gamepads` is on,
+  `-gamepad`, each returning `Result<(), ClientError>`. Any stage that ends sets the
   shared stop flag; `ClientStream::wait` and `stop` join them all and return the first error.
   Dropping the stream stops it.
 - Receive owns the transport, the `ControlChannel` and one `Reassembler` per media stream (video,
@@ -93,6 +94,24 @@ paths:
   wrap transparent. Smoothing against network jitter is the output's own buffer
   (`audio.jitter_buffer_ms` in `AudioPlayback`); the pipeline submits each frame as soon as it is
   decoded.
+- Input (`input.rs`): `ClientStream::input()` returns a cloneable `InputHandle` whose `send`
+  queues an `InputEvent` for the input stage. The stage, started once the host answered the
+  hello (so gamepad `Connected` events are not lost), owns a clone of the `Arc<Transport>` that
+  the receive stage also uses (`send_to` takes `&self`), coalesces what has queued up
+  (`EventCoalescer`), packs it with `InputPacketer` into `StreamKind::Input` datagrams within
+  `Transport::max_datagram_len` and sends them straight away. `InputPacketer` is pure: it splits
+  a batch into sections of at most half the datagram budget, repeats the previous section in
+  every datagram and emits the empty repeat datagram after state changes
+  (`input.resend_delay_ms`). A send error ends the input stage and with it the stream; the gamepad stage never
+  returns an error.
+- The gamepad stage drives `PhysicalGamepads` (5 ms poll, which also bounds how long a rumble
+  command or a stop waits), sends its events through the same `InputHandle`, and applies
+  `RumbleCommand`s from a channel. The receive stage fills that channel from
+  `ControlMessage::Rumble`. Failures are counted (`rumble_failures`, `gamepad_failures`), never
+  fatal to the stream. On the way out it sends `Disconnected` for every pad, and the input stage
+  waits for it (`gamepads_done`) before its final drain so the host's virtual pads go away.
+  `ClientStats` gains `input_packets_sent`, `input_events_sent`, `rumble_commands`,
+  `rumble_failures` and `gamepad_failures`.
 - `ClientStats` copies the output's `underruns`, `trims` and `overflows` after every packet.
 - Cursor (`cursor.rs`): `StreamKind::Cursor` has its own `Reassembler` (a shape image is larger
   than a datagram) and each completed frame is decoded as a `CursorMessage` on the receive
@@ -107,6 +126,9 @@ paths:
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation and queue overflow;
   `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
+- The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
+  record decoding a real host uses; the test client config turns `input.gamepads` off so the
+  tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange, the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per

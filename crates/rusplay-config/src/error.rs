@@ -73,6 +73,10 @@ pub enum ConfigError {
     SigmoidSlopeOutOfRange(f32),
     #[error("gamepad slot count {0} is outside 1..=16")]
     GamepadSlotsOutOfRange(u8),
+    #[error("pointer sensitivity {0} is outside 0.05..=20.0")]
+    PointerSensitivityOutOfRange(f32),
+    #[error("gamepad deadzone {0} is outside 0.0..=0.9")]
+    GamepadDeadzoneOutOfRange(f32),
     #[error("reconnect timeout must be greater than zero")]
     ZeroReconnectTimeout,
     #[error("handshake timeout must be greater than zero")]
@@ -144,6 +148,8 @@ impl ConfigError {
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
             Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),
+            Self::PointerSensitivityOutOfRange(_) => Some("input.pointer_sensitivity"),
+            Self::GamepadDeadzoneOutOfRange(_) => Some("input.gamepad_deadzone"),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
             Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),

@@ -4811,11 +4811,16 @@ version = "0.1.0"
 dependencies = [
  "ashpd",
  "evdev",
+ "parking_lot 0.13.0",
  "reis",
  "rusplay-config",
  "rustix",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

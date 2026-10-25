@@ -5,6 +5,7 @@ use rusplay_core::AudioCodec;
 use rusplay_decode::{DecodeError, DrmFourcc};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
+use rusplay_protocol::ProtocolError;
 use rusplay_scale::ScaleError;
 use thiserror::Error;
 
@@ -14,6 +15,8 @@ pub enum Stage {
     Decode,
     Present,
     Audio,
+    Input,
+    Gamepad,
 }
 
 impl Stage {
@@ -23,6 +26,8 @@ impl Stage {
             Self::Decode => "decode",
             Self::Present => "present",
             Self::Audio => "audio",
+            Self::Input => "input",
+            Self::Gamepad => "gamepad",
         }
     }
 }
@@ -43,6 +48,8 @@ pub enum ClientError {
     Input(#[from] InputError),
     #[error(transparent)]
     Net(#[from] NetError),
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
     #[error(transparent)]
     Scale(#[from] ScaleError),
     #[error("failed to spawn the {stage} thread")]

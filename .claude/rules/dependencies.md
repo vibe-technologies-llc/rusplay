@@ -28,6 +28,7 @@ paths:
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
+  | Wayland input capture on gpui's connection | `wayland-client` and `wayland-backend` (`system` and `dlopen`: libwayland-client is loaded at run time, as gpui does) | `rusplay-input/wayland` |
   | rav1d SIMD | rav1d's hand-written x86/ARM assembly (`nasm` at build time on x86_64, the C compiler's assembler on aarch64) | `rusplay-decode/software-asm`, `rusplay-client/software-asm` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
@@ -56,7 +57,9 @@ paths:
   `ashpd` over zbus (portals), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
-  gamepads, `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wgpu`
+  gamepads on the host and physical gamepads with force feedback on the client,
+  `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wayland-protocols`
+  (pointer constraints and relative pointer bindings, `rusplay-input/wayland`), `wgpu`
   (GPU scaling), `rav1d` for software AV1 decode (default features off; its `asm` feature is only
   enabled by `software-asm`, which needs `nasm` on x86_64), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
   needed. Pairing and transport encryption use RustCrypto only: `spake2` (pinned to 0.4.0, the
