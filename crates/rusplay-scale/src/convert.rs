@@ -91,12 +91,6 @@ impl ConvertSettings {
         if self.resolution.pixel_count() == 0 {
             return Err(ScaleError::EmptySource(self.resolution));
         }
-        if self.polar_chroma() && self.format.chroma == ChromaSubsampling::Yuv422 {
-            return Err(ScaleError::PolarChromaFilterUnsupported {
-                filter: self.chroma_filter,
-                chroma: self.format.chroma,
-            });
-        }
 
         if !self.hdr.reference_white_in_range() {
             return Err(ScaleError::ReferenceWhiteOutOfRange(
@@ -155,13 +149,24 @@ impl ConvertSettings {
         #[allow(clippy::cast_possible_truncation)]
         let phase = self.siting_phase() as f32;
 
-        PolarGeometry::with_ratio(
+        let vertical_ratio = match self.format.chroma {
+            ChromaSubsampling::Yuv420 => SUBSAMPLING_RATIO,
+            ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444 => 1.0,
+        };
+        let geometry = PolarGeometry::with_ratio(
             self.chroma_filter,
             resolution_pair(self.resolution),
             self.chroma_size(),
-            (SUBSAMPLING_RATIO, SUBSAMPLING_RATIO),
+            (SUBSAMPLING_RATIO, vertical_ratio),
             (phase, 0.0),
-        )
+        );
+
+        match self.format.chroma {
+            ChromaSubsampling::Yuv420 => geometry,
+            ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444 => {
+                geometry.with_identity_vertical()
+            }
+        }
     }
 
     pub fn chroma_size(&self) -> (u32, u32) {
@@ -1036,6 +1041,149 @@ mod tests {
     }
 
     #[test]
+    fn every_polar_chroma_filter_matches_reference_on_422() {
+        let polar_filters = [
+            ScaleFilter::EwaLanczos,
+            ScaleFilter::EwaLanczosSharp,
+            ScaleFilter::EwaGinseng,
+            ScaleFilter::EwaHann,
+            ScaleFilter::EwaRobidoux,
+            ScaleFilter::EwaRobidouxSharp,
+        ];
+
+        for (index, chroma_filter) in polar_filters.into_iter().enumerate() {
+            assert_matches_reference(ConvertSettings {
+                chroma_filter,
+                chroma_siting: if index % 2 == 0 {
+                    ChromaSiting::Left
+                } else {
+                    ChromaSiting::Center
+                },
+                ..settings(
+                    (37, 23),
+                    ChromaSubsampling::Yuv422,
+                    BitDepth::Ten,
+                    PlaneLayout::SemiPlanar,
+                )
+            });
+        }
+    }
+
+    #[test]
+    fn polar_chroma_422_matches_reference_across_depths_and_layouts() {
+        for (depth, layout) in [
+            (BitDepth::Eight, PlaneLayout::Planar),
+            (BitDepth::Twelve, PlaneLayout::Planar),
+            (BitDepth::Twelve, PlaneLayout::SemiPlanar),
+        ] {
+            assert_matches_reference(ConvertSettings {
+                chroma_filter: ScaleFilter::EwaRobidoux,
+                row_alignment: 4,
+                ..settings((91, 30), ChromaSubsampling::Yuv422, depth, layout)
+            });
+        }
+    }
+
+    #[test]
+    fn polar_chroma_422_keeps_the_vertical_axis_unfiltered() {
+        let stripes = Image::from_fn(32, 16, |_, y| {
+            if y % 2 == 0 {
+                [0.9, 0.1, 0.1, 1.0]
+            } else {
+                [0.1, 0.1, 0.9, 1.0]
+            }
+        });
+        let base = ConvertSettings {
+            input: InputLight::Encoded,
+            chroma_filter: ScaleFilter::EwaLanczos,
+            ..settings(
+                (32, 16),
+                ChromaSubsampling::Yuv422,
+                BitDepth::Ten,
+                PlaneLayout::Planar,
+            )
+        };
+        let full_chroma = ConvertSettings {
+            format: PixelFormat {
+                chroma: ChromaSubsampling::Yuv444,
+                depth: BitDepth::Ten,
+            },
+            ..base
+        };
+
+        let Some(full) = convert_on_gpu(&stripes, full_chroma) else {
+            return;
+        };
+        let subsampled = convert_on_gpu(&stripes, base).unwrap();
+
+        for plane in 1..=2 {
+            for (y, row) in subsampled[plane].iter().enumerate() {
+                for (x, actual) in row.iter().enumerate() {
+                    let expected = full[plane][y][2 * x];
+
+                    assert!(
+                        actual.abs_diff(expected) <= 1,
+                        "plane {plane} ({x}, {y}): {actual} against {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn polar_chroma_422_filters_the_horizontal_axis() {
+        let columns = Image::from_fn(32, 4, |x, _| {
+            if x % 2 == 0 {
+                [0.9, 0.1, 0.1, 1.0]
+            } else {
+                [0.1, 0.1, 0.9, 1.0]
+            }
+        });
+        let base = ConvertSettings {
+            input: InputLight::Encoded,
+            chroma_filter: ScaleFilter::EwaLanczos,
+            chroma_siting: ChromaSiting::Center,
+            ..settings(
+                (32, 4),
+                ChromaSubsampling::Yuv422,
+                BitDepth::Ten,
+                PlaneLayout::Planar,
+            )
+        };
+        let full_chroma = ConvertSettings {
+            format: PixelFormat {
+                chroma: ChromaSubsampling::Yuv444,
+                depth: BitDepth::Ten,
+            },
+            ..base
+        };
+
+        let Some(full) = convert_on_gpu(&columns, full_chroma) else {
+            return;
+        };
+        let subsampled = convert_on_gpu(&columns, base).unwrap();
+
+        for plane in 1..=2 {
+            let pair_mean = |x: usize| {
+                i64::midpoint(
+                    i64::from(full[plane][1][2 * x]),
+                    i64::from(full[plane][1][2 * x + 1]),
+                )
+            };
+
+            for (x, &code) in subsampled[plane][1].iter().enumerate().take(12).skip(4) {
+                let actual = i64::from(code);
+
+                assert!(
+                    (actual - pair_mean(x)).abs() <= 24,
+                    "plane {plane} x {x}: {actual} against {}",
+                    pair_mean(x)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn polar_filter_on_full_chroma_is_ignored() {
         let base = settings(
             (29, 11),
@@ -1345,10 +1493,7 @@ mod tests {
                 ..base
             }
             .validate(),
-            Err(ScaleError::PolarChromaFilterUnsupported {
-                filter: ScaleFilter::EwaLanczos,
-                chroma: ChromaSubsampling::Yuv422,
-            })
+            Ok(())
         );
         assert_eq!(
             ConvertSettings {

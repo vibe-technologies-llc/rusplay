@@ -8,6 +8,7 @@ use crate::{
 };
 
 pub(crate) const RADIAL_LUT_SIZE: u32 = 1024;
+const IDENTITY_AXIS_EXTENT: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PolarGeometry {
@@ -49,6 +50,13 @@ impl PolarGeometry {
             radius,
             phase,
         }
+    }
+}
+
+impl PolarGeometry {
+    pub(crate) fn with_identity_vertical(mut self) -> Self {
+        self.stretch.1 = IDENTITY_AXIS_EXTENT / self.radius;
+        self
     }
 }
 
@@ -207,6 +215,8 @@ impl PolarPlan {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use rusplay_core::{Resolution, ScaleFilter};
 
     use super::*;
@@ -335,6 +345,27 @@ mod tests {
             result.unwrap_err(),
             ScaleError::EmptySource(Resolution::new(0, 4))
         );
+    }
+
+    #[test]
+    fn identity_vertical_keeps_only_the_centre_row() {
+        let geometry = PolarGeometry::with_ratio(
+            ScaleFilter::EwaLanczos,
+            (40, 12),
+            (20, 12),
+            (2.0, 1.0),
+            (-0.5, 0.0),
+        )
+        .with_identity_vertical();
+        let kernel = Kernel::new(ScaleFilter::EwaLanczos);
+
+        for y in 0..12 {
+            let footprint = crate::reference::polar_footprint(&geometry, kernel, 7, y);
+
+            let rows: BTreeSet<i64> = footprint.taps.iter().map(|&(_, row, _)| row).collect();
+
+            assert_eq!(rows, BTreeSet::from([i64::from(y)]));
+        }
     }
 
     #[test]
