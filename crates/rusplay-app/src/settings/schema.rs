@@ -947,6 +947,13 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Capture,
+        "Source",
+        "capture.dmabuf_fence_timeout_ms",
+        "DMA-BUF fence timeout",
+        U32,
+    ),
+    field(
+        Section::Capture,
         "Session",
         "capture.persist_session",
         "Persist session",

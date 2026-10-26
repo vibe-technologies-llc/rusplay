@@ -4,6 +4,7 @@ mod tests;
 use std::{
     os::fd::{AsFd, BorrowedFd},
     sync::mpsc,
+    time::Duration,
 };
 
 use rusplay_capture::{Frame, FrameBuffer, Plane, ShmFallback};
@@ -14,7 +15,7 @@ use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
     DmaBufImporter, DmaBufPlane, InputLight, LineariseSettings, Lineariser, PlaneLayout,
-    ScalePipelines, ScaleSettings, Scaler, YuvFrame,
+    ScalePipelines, ScaleSettings, Scaler, YuvFrame, wait_for_writes,
 };
 
 use crate::{
@@ -200,6 +201,10 @@ impl GpuPipeline {
         modifier: u64,
         planes: &[Plane],
     ) -> Result<Source, HostError> {
+        let fence_timeout =
+            Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms));
+        wait_for_writes(fd, fence_timeout)?;
+
         let importer = match &mut self.importer {
             Some(importer) => importer,
             None => self.importer.insert(DmaBufImporter::new(&self.gpu.device)?),

@@ -203,7 +203,12 @@ paths:
   `Frame`) until the GPU work reading it completes: `release_after_submission(&queue, lease)`
   after `Queue::submit` drops it from `on_submitted_work_done`. A PipeWire capture frame stays
   valid while its `BufferLease` lives, so holding the `Frame` until the work is done is enough.
-  Implicit fences are not waited on (`scale-dmabuf-sync`).
+  Before reading a producer's buffer, `wait_for_writes(fd, timeout)` (`dmabuf/fence.rs`) polls the
+  dma-buf fd for `POLLIN`, which the kernel signals once every write fence on it (the implicit
+  sync a PipeWire producer relies on when no explicit sync is negotiated) has signalled, and
+  reports `Signalled` or `TimedOut`. It is a CPU wait on the frame path, one syscall when
+  the producer has finished; moving it onto the GPU is `scale-dmabuf-gpu-fence-wait` in
+  `docs/PERFORMANCE.md`. Decoder surfaces need none of this, `vaSyncSurface` already waited.
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1

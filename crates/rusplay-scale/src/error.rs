@@ -86,6 +86,8 @@ pub enum ScaleError {
     DmaBufFdDup(#[source] Errno),
     #[error("failed to stat a dma-buf file descriptor")]
     DmaBufFdStat(#[source] Errno),
+    #[error("waiting for a dma-buf's write fences failed")]
+    DmaBufFencePoll(#[source] Errno),
     #[error("vkCreateImage failed for a dma-buf import")]
     DmaBufImageCreate(#[source] vk::Result),
     #[error("vkGetMemoryFdPropertiesKHR failed for a dma-buf")]

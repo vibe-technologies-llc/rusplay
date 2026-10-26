@@ -1,3 +1,4 @@
+mod fence;
 #[cfg(test)]
 mod tests;
 mod vulkan;
@@ -7,6 +8,7 @@ use std::{collections::VecDeque, os::fd::BorrowedFd};
 use ash::vk;
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
+pub use self::fence::{WriteFence, wait_for_writes};
 use self::vulkan::{ImageRequest, MemoryPlane, ModifierProperties, VulkanImporter};
 use crate::{ChannelOrder, ScaleError, SourceChannels};
 

@@ -1,6 +1,3 @@
-# Scaling
-- [S] `scale-dmabuf-sync`: wait for a capture DMA-BUF's implicit fence (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` imported as a Vulkan semaphore) or PipeWire's explicit sync timeline before reading it; only VAAPI frames are synchronised today (`vaSyncSurface`); wgpu 30 does not enable `VK_KHR_external_semaphore_fd`, so the device must be opened through `wgpu::hal::vulkan::Adapter::open_with_callback` adding it (replacing `device_descriptor` for every caller) before `hal::vulkan::Queue::add_wait_semaphore` can gate the next submit on the imported sync file
-
 # Video encode
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
 - [S] `encode-vaapi-rext-hardware`: run the VAAPI 4:2:2/4:4:4 paths (HEVC RExt profiles, AV1 Profile 1, the packed `YUYV`/`Y210`/`AYUV`/`Y410`/`Y412` uploads in `vaapi/format.rs`) and the AV1 packed frame header on a driver that consumes them verbatim (Intel iHD); radeonsi exposes none of the formats and rewrites the frame header

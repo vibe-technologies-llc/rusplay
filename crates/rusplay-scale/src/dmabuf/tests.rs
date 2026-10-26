@@ -440,3 +440,23 @@ fn devices_without_dmabuf_features_cannot_import() {
 
     assert_eq!(without.unwrap_err(), ScaleError::DmaBufImportUnavailable);
 }
+
+#[test]
+fn an_unfenced_dmabuf_is_ready_to_read() {
+    let Some(fd) = udmabuf(&[0; 64]) else {
+        return;
+    };
+
+    let fence = wait_for_writes(fd.as_fd(), std::time::Duration::ZERO).unwrap();
+
+    assert_eq!(fence, WriteFence::Signalled);
+}
+
+#[test]
+fn a_fence_that_never_signals_times_out() {
+    let (unready, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+
+    let fence = wait_for_writes(unready.as_fd(), std::time::Duration::from_millis(5)).unwrap();
+
+    assert_eq!(fence, WriteFence::TimedOut);
+}

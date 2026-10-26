@@ -106,6 +106,10 @@ paths:
     makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
     `PipeWireCapture` forwards) and skip the frame, so PipeWire renegotiates to shared memory and
     the session keeps going; a source without a fallback returns the import error.
+  - Before importing, the pipeline waits for the buffer's write fences with
+    `rusplay_scale::wait_for_writes` for up to `capture.dmabuf_fence_timeout_ms` (default 100,
+    0 only checks); a timeout reads the buffer as it is rather than dropping the frame, so a
+    producer whose fences never signal still streams, as it did before the wait existed.
   - The frame, and so its PipeWire buffer lease, is held until the readback wait has seen the GPU
     finish, and then as the feed's retained frame; the encode stage drops the previous retained
     frame before encoding the next, so a session holds at most three capture buffers.
