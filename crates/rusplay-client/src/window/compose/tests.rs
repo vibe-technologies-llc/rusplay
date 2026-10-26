@@ -4,7 +4,7 @@ use rusplay_scale::{ColorVolume, ScalePipelines};
 use super::*;
 use crate::{
     FrameColor, Gpu,
-    present::{ColorStage, MappingOptions},
+    present::{ColorStage, MappingOptions, Processing},
     testing,
     window::{
         dither::{bayer_rank, blue_noise_thresholds},
@@ -419,7 +419,10 @@ fn an_identity_chain_reproduces_the_source_codes() {
     let pipelines = ScalePipelines::new(&gpu.device);
     let mut stage = ColorStage::new(
         &pipelines,
-        MappingOptions::from(&rusplay_config::ColorConfig::default()),
+        MappingOptions {
+            processing: Processing::Separate,
+            ..MappingOptions::from(&rusplay_config::ColorConfig::default())
+        },
     );
     let pq = FrameColor::of_stream(
         ColorSpace {

@@ -1,3 +1,4 @@
+mod chain;
 mod lut;
 mod spaces;
 mod tone;
@@ -18,6 +19,7 @@ use rusplay_core::{
 use wgpu::util::DeviceExt;
 
 pub use crate::color::{
+    chain::{ColorChain, ColorChainSettings},
     lut::{ColorLut, ColorLutSettings, DEFAULT_LUT_SIZE, LUT_SIZES},
     spaces::WorkingSpace,
     tone::{DynamicPeak, ToneCurve, ToneMapping},
@@ -525,6 +527,8 @@ pub(crate) fn boundary_erosion_columns() -> u32 {
 
 #[derive(Debug)]
 struct MapperBuffers {
+    params: wgpu::Buffer,
+    boundary: wgpu::TextureView,
     map_group: wgpu::BindGroup,
     analysis_group: wgpu::BindGroup,
     boundary_bake: Option<BoundaryBake>,
@@ -667,6 +671,8 @@ impl MapperBuffers {
             boundary_bake: (plan.path == MappingPath::Perceptual)
                 .then(|| BoundaryBake::new(pipelines, device, &params, &boundary, boundary_size)),
             tone_state,
+            params,
+            boundary,
         }
     }
 

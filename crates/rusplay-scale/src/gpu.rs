@@ -75,6 +75,30 @@ const UNPACK_PLANES_RGB_LUT_SHADER: &str = concat!(
     include_str!("unpack_output_lut.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
+const UNPACK_RGB_CHAIN_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("unpack_output_chain.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_PLANES_RGB_CHAIN_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("unpack_output_chain.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
@@ -249,9 +273,56 @@ pub(crate) struct UnpackPasses {
     pub planes_layout: wgpu::BindGroupLayout,
     pub planes_chroma: ShaderPass,
     pub planes_rgb: ShaderPass,
-    pub lut_target_layout: wgpu::BindGroupLayout,
-    pub rgb_lut: ShaderPass,
-    pub planes_rgb_lut: ShaderPass,
+    pub lut: FusedUnpack,
+    pub chain: FusedUnpack,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FusedUnpack {
+    pub target_layout: wgpu::BindGroupLayout,
+    pub rgb: ShaderPass,
+    pub planes_rgb: ShaderPass,
+}
+
+struct FusedUnpackDescriptor<'a> {
+    label: &'a str,
+    target_entries: &'a [wgpu::BindGroupLayoutEntry],
+    shaders: [&'a str; 2],
+    constants: &'a [(&'a str, f64)],
+}
+
+impl FusedUnpack {
+    fn new(
+        device: &wgpu::Device,
+        inputs: [&wgpu::BindGroupLayout; 2],
+        layouts: [&wgpu::BindGroupLayout; 4],
+        descriptor: &FusedUnpackDescriptor<'_>,
+    ) -> Self {
+        let [source_layout, _, _, convert_table_layout] = layouts;
+        let target_layout = layout(device, descriptor.label, descriptor.target_entries);
+        let [rgb, planes_rgb] = [0, 1].map(|index| {
+            compute_pipeline(
+                device,
+                descriptor.label,
+                &[
+                    inputs[index],
+                    source_layout,
+                    &target_layout,
+                    convert_table_layout,
+                ],
+                descriptor.shaders[index],
+                "unpack_rgb",
+                CONVERT_WORKGROUP,
+                descriptor.constants,
+            )
+        });
+
+        Self {
+            target_layout,
+            rgb,
+            planes_rgb,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -638,41 +709,38 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         layouts,
         [UNPACK_PLANES_CHROMA_SHADER, UNPACK_PLANES_RGB_SHADER],
     );
-    let lut_target_layout = layout(
+    let inputs = [&input_layout, &planes_layout];
+    let lut = FusedUnpack::new(
         device,
-        "rusplay-unpack-lut-target",
-        &[
-            storage_texture_entry(0, INTERMEDIATE_FORMAT),
-            texture_3d_entry(1),
-            uniform_entry(2),
-        ],
-    );
-    let [source_layout, _, _, convert_table_layout] = layouts;
-    let lut_pass = |label: &str, input_layout: &wgpu::BindGroupLayout, shader: &str| {
-        compute_pipeline(
-            device,
-            label,
-            &[
-                input_layout,
-                source_layout,
-                &lut_target_layout,
-                convert_table_layout,
+        inputs,
+        layouts,
+        &FusedUnpackDescriptor {
+            label: "rusplay-unpack-lut",
+            target_entries: &[
+                storage_texture_entry(0, INTERMEDIATE_FORMAT),
+                texture_3d_entry(1),
+                uniform_entry(2),
             ],
-            shader,
-            "unpack_rgb",
-            CONVERT_WORKGROUP,
-            &[],
-        )
-    };
-    let rgb_lut = lut_pass(
-        "rusplay-unpack-rgb-lut",
-        &input_layout,
-        UNPACK_RGB_LUT_SHADER,
+            shaders: [UNPACK_RGB_LUT_SHADER, UNPACK_PLANES_RGB_LUT_SHADER],
+            constants: &[],
+        },
     );
-    let planes_rgb_lut = lut_pass(
-        "rusplay-unpack-planes-rgb-lut",
-        &planes_layout,
-        UNPACK_PLANES_RGB_LUT_SHADER,
+    let chain = FusedUnpack::new(
+        device,
+        inputs,
+        layouts,
+        &FusedUnpackDescriptor {
+            label: "rusplay-unpack-chain",
+            target_entries: &[
+                storage_texture_entry(0, INTERMEDIATE_FORMAT),
+                uniform_entry(1),
+                storage_buffer_entry(2),
+                texture_entry(3),
+                uniform_entry(4),
+            ],
+            shaders: [UNPACK_RGB_CHAIN_SHADER, UNPACK_PLANES_RGB_CHAIN_SHADER],
+            constants: &gamut_constants(),
+        },
     );
 
     UnpackPasses {
@@ -682,9 +750,8 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         planes_layout,
         planes_chroma,
         planes_rgb,
-        lut_target_layout,
-        rgb_lut,
-        planes_rgb_lut,
+        lut,
+        chain,
     }
 }
 

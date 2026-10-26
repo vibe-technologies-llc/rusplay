@@ -1,9 +1,9 @@
 use rusplay_config::{ColorConfig, ColorMethod};
 use rusplay_core::{ColorSpace, HdrLevels, TransferFunction};
 use rusplay_scale::{
-    ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, DynamicPeak,
-    GamutMapping, LineariseSettings, Lineariser, MappingPath, OutputLight, ScalePipelines,
-    SourceChannels, ToneMapping,
+    ColorChain, ColorChainSettings, ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper,
+    ColorPlan, ColorVolume, DynamicPeak, GamutMapping, LineariseSettings, Lineariser, MappingPath,
+    OutputLight, ScalePipelines, SourceChannels, ToneMapping,
 };
 
 use crate::{ClientError, FrameColor};
@@ -12,7 +12,15 @@ use crate::{ClientError, FrameColor};
 pub(crate) struct MappingOptions {
     pub tone: ToneMapping,
     pub gamut: GamutMapping,
-    pub lut_size: Option<u32>,
+    pub processing: Processing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Processing {
+    #[cfg(test)]
+    Separate,
+    Fused,
+    Lut(u32),
 }
 
 impl From<&ColorConfig> for MappingOptions {
@@ -33,8 +41,10 @@ impl From<&ColorConfig> for MappingOptions {
                 mode: gamut.mode,
                 knee: f64::from(gamut.knee),
             },
-            lut_size: (color.processing.method == ColorMethod::Lut)
-                .then_some(color.processing.lut_size),
+            processing: match color.processing.method {
+                ColorMethod::Analytic => Processing::Fused,
+                ColorMethod::Lut => Processing::Lut(color.processing.lut_size),
+            },
         }
     }
 }
@@ -43,6 +53,7 @@ impl From<&ColorConfig> for MappingOptions {
 pub(crate) struct ColorRoute {
     pub linearise: Option<LineariseSettings>,
     pub map: Option<ColorMapSettings>,
+    pub chain: Option<ColorChainSettings>,
     pub lut: Option<ColorLutSettings>,
     pub unpack: OutputLight,
     pub output: FrameColor,
@@ -71,31 +82,47 @@ impl ColorRoute {
         let plan = ColorPlan::new(&settings)?;
         let map = (!plan.is_identity()).then_some(settings);
         let output = source.mapped_to(&target);
-        let bakeable = plan.path() != MappingPath::Highlight
-            && plan.tone().is_none_or(|stage| stage.dynamic_peak.is_none());
+        let fusable = plan.tone().is_none_or(|stage| stage.dynamic_peak.is_none());
+        let bakeable = fusable && plan.path() != MappingPath::Highlight;
+        let colour_passes = linearise.is_some() || map.is_some();
+        let chain = ColorChainSettings {
+            transfer: space.transfer,
+            hdr: space.hdr,
+            matrix: source.matrix,
+            map,
+        };
+        let separate = Self {
+            linearise,
+            map,
+            chain: None,
+            lut: None,
+            unpack: source.light,
+            output,
+        };
+        let fused = Self {
+            linearise: None,
+            map: None,
+            unpack: OutputLight::Encoded,
+            ..separate
+        };
 
-        match options.lut_size {
-            Some(size) if bakeable && (linearise.is_some() || map.is_some()) => Ok(Self {
-                linearise: None,
-                map: None,
+        Ok(match options.processing {
+            Processing::Lut(size) if bakeable && colour_passes => Self {
                 lut: Some(ColorLutSettings {
-                    transfer: space.transfer,
-                    hdr: space.hdr,
-                    matrix: source.matrix,
-                    map,
+                    transfer: chain.transfer,
+                    hdr: chain.hdr,
+                    matrix: chain.matrix,
+                    map: chain.map,
                     size,
                 }),
-                unpack: OutputLight::Encoded,
-                output,
-            }),
-            _ => Ok(Self {
-                linearise,
-                map,
-                lut: None,
-                unpack: source.light,
-                output,
-            }),
-        }
+                ..fused
+            },
+            Processing::Fused if fusable && colour_passes => Self {
+                chain: Some(chain),
+                ..fused
+            },
+            _ => separate,
+        })
     }
 
     pub(crate) fn passes(&self) -> usize {
@@ -124,7 +151,13 @@ pub(crate) struct ColorStage {
     planned: Option<(FrameColor, ColorVolume, ColorRoute)>,
     lineariser: Option<Lineariser>,
     mapper: Option<ColorMapper>,
+    chain: Option<ColorChain>,
     lut: Option<ColorLut>,
+}
+
+pub(crate) enum FusedColor<'a> {
+    Chain(&'a mut ColorChain),
+    Lut(&'a mut ColorLut),
 }
 
 impl ColorStage {
@@ -135,6 +168,7 @@ impl ColorStage {
             planned: None,
             lineariser: None,
             mapper: None,
+            chain: None,
             lut: None,
         }
     }
@@ -169,6 +203,14 @@ impl ColorStage {
                     mapper.configure(device, settings)?;
                 }
                 None => self.mapper = Some(ColorMapper::new(&self.pipelines, device, settings)?),
+            }
+        }
+        if let Some(settings) = route.chain {
+            match &mut self.chain {
+                Some(chain) => {
+                    chain.configure(device, settings)?;
+                }
+                None => self.chain = Some(ColorChain::new(&self.pipelines, device, settings)?),
             }
         }
         if let Some(settings) = route.lut {
@@ -209,8 +251,11 @@ impl ColorStage {
         }
     }
 
-    pub(crate) fn lut(&mut self, route: &ColorRoute) -> Option<&mut ColorLut> {
-        route.lut.and(self.lut.as_mut())
+    pub(crate) fn fused(&mut self, route: &ColorRoute) -> Option<FusedColor<'_>> {
+        if route.chain.is_some() {
+            return self.chain.as_mut().map(FusedColor::Chain);
+        }
+        route.lut.and(self.lut.as_mut()).map(FusedColor::Lut)
     }
 
     #[cfg(test)]

@@ -127,7 +127,10 @@ fn run(
 fn stage(gpu: &Gpu) -> ColorStage {
     ColorStage::new(
         &ScalePipelines::new(&gpu.device),
-        MappingOptions::from(&ColorConfig::default()),
+        MappingOptions {
+            processing: Processing::Separate,
+            ..MappingOptions::from(&ColorConfig::default())
+        },
     )
 }
 
@@ -338,18 +341,22 @@ fn the_lut_method_fuses_every_colour_pass_it_can_bake() {
     let highlight = lut_options(|config| {
         config.gamut_mapping.mode = rusplay_core::GamutMapMode::Highlight;
     });
+    let separate = MappingOptions {
+        processing: Processing::Separate,
+        ..options
+    };
 
     let hdr = ColorRoute::plan(pq, display, &options).unwrap();
     let sdr = ColorRoute::plan(wide_sdr, display, &options).unwrap();
     let untouched = ColorRoute::plan(srgb, display, &options).unwrap();
-    let analytic =
-        ColorRoute::plan(pq, display, &MappingOptions::from(&ColorConfig::default())).unwrap();
+    let analytic = ColorRoute::plan(pq, display, &separate).unwrap();
     let measured = ColorRoute::plan(pq, display, &dynamic).unwrap();
     let flagged = ColorRoute::plan(pq, display, &highlight).unwrap();
 
     assert_eq!(hdr.passes(), 0);
     assert_eq!(hdr.unpack, OutputLight::Encoded);
     assert_eq!(hdr.output, analytic.output);
+    assert!(hdr.chain.is_none());
     assert!(hdr.lut.is_some_and(|lut| lut.map == analytic.map
         && lut.transfer == TransferFunction::Pq
         && lut.size == rusplay_scale::DEFAULT_LUT_SIZE));
@@ -366,6 +373,50 @@ fn the_lut_method_fuses_every_colour_pass_it_can_bake() {
 }
 
 #[test]
+fn the_default_fuses_the_analytic_chain_into_the_unpack() {
+    let pq = frame_color(ColorPrimaries::Bt2020, TransferFunction::Pq);
+    let wide_sdr = frame_color(ColorPrimaries::Bt2020, TransferFunction::Srgb);
+    let srgb = frame_color(ColorPrimaries::Bt709, TransferFunction::Srgb);
+    let display = ColorVolume::srgb_display();
+    let options = MappingOptions::from(&ColorConfig::default());
+    let separate = MappingOptions {
+        processing: Processing::Separate,
+        ..options
+    };
+    let mut dynamic_config = ColorConfig::default();
+    dynamic_config.tone_mapping.dynamic_peak = true;
+    let mut highlight_config = ColorConfig::default();
+    highlight_config.gamut_mapping.mode = rusplay_core::GamutMapMode::Highlight;
+
+    let hdr = ColorRoute::plan(pq, display, &options).unwrap();
+    let sdr = ColorRoute::plan(wide_sdr, display, &options).unwrap();
+    let untouched = ColorRoute::plan(srgb, display, &options).unwrap();
+    let analytic = ColorRoute::plan(pq, display, &separate).unwrap();
+    let measured = ColorRoute::plan(pq, display, &MappingOptions::from(&dynamic_config)).unwrap();
+    let flagged = ColorRoute::plan(pq, display, &MappingOptions::from(&highlight_config)).unwrap();
+
+    assert_eq!(options.processing, Processing::Fused);
+    assert_eq!(hdr.passes(), 0);
+    assert_eq!(hdr.unpack, OutputLight::Encoded);
+    assert_eq!(hdr.output, analytic.output);
+    assert!(hdr.lut.is_none());
+    assert!(
+        hdr.chain.is_some_and(
+            |chain| chain.map == analytic.map && chain.transfer == TransferFunction::Pq
+        )
+    );
+    assert_eq!(sdr.passes(), 0);
+    assert_eq!(sdr.unpack, OutputLight::Encoded);
+    assert!(sdr.chain.is_some());
+    assert!(untouched.chain.is_none());
+    assert_eq!(untouched.passes(), 0);
+    assert_eq!(untouched.unpack, OutputLight::Linear);
+    assert!(measured.chain.is_none());
+    assert_eq!(measured.passes(), 2);
+    assert!(flagged.chain.is_some());
+}
+
+#[test]
 fn the_stage_bakes_a_lut_only_for_a_lut_route() {
     let Some(gpu) = testing::gpu() else {
         return;
@@ -377,12 +428,43 @@ fn the_stage_bakes_a_lut_only_for_a_lut_route() {
     let fused = stage
         .route(&gpu.device, pq, ColorVolume::srgb_display())
         .unwrap();
-    let baked = stage.lut(&fused).map(|lut| lut.settings());
+    let baked = match stage.fused(&fused) {
+        Some(FusedColor::Lut(lut)) => Some(lut.settings()),
+        _ => None,
+    };
     let plain = stage
         .route(&gpu.device, srgb, ColorVolume::srgb_display())
         .unwrap();
 
     assert_eq!(baked, fused.lut);
-    assert!(stage.lut(&plain).is_none());
+    assert!(stage.fused(&plain).is_none());
+    assert!(stage.mapper().is_none());
+}
+
+#[test]
+fn the_stage_builds_a_chain_only_for_a_fused_route() {
+    let Some(gpu) = testing::gpu() else {
+        return;
+    };
+    let mut stage = ColorStage::new(
+        &ScalePipelines::new(&gpu.device),
+        MappingOptions::from(&ColorConfig::default()),
+    );
+    let pq = frame_color(ColorPrimaries::Bt2020, TransferFunction::Pq);
+    let srgb = frame_color(ColorPrimaries::Bt709, TransferFunction::Srgb);
+
+    let fused = stage
+        .route(&gpu.device, pq, ColorVolume::srgb_display())
+        .unwrap();
+    let built = match stage.fused(&fused) {
+        Some(FusedColor::Chain(chain)) => Some(chain.settings()),
+        _ => None,
+    };
+    let plain = stage
+        .route(&gpu.device, srgb, ColorVolume::srgb_display())
+        .unwrap();
+
+    assert_eq!(built, fused.chain);
+    assert!(stage.fused(&plain).is_none());
     assert!(stage.mapper().is_none());
 }

@@ -13,15 +13,20 @@ use rusplay_config::ScalingConfig;
 use rusplay_core::Resolution;
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ChromaSiting, ColorLut, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture,
-    FrameLayout, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines,
-    ScaleSettings, Scaler, Sigmoid, YuvFrame,
+    ChromaSiting, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
+    OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings,
+    Scaler, Sigmoid, YuvFrame,
 };
 
+#[cfg(test)]
+pub(crate) use crate::present::mapping::Processing;
 pub(crate) use crate::present::mapping::{ColorStage, MappingOptions, whole_nits};
 use crate::{
-    ClientError, FrameColor, FrameSink, Gpu, PresentedFrame, decode::DecodedVideo,
-    present::mapping::ColorRoute, slot::Slot, stats::Counters,
+    ClientError, FrameColor, FrameSink, Gpu, PresentedFrame,
+    decode::DecodedVideo,
+    present::mapping::{ColorRoute, FusedColor},
+    slot::Slot,
+    stats::Counters,
 };
 
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -198,7 +203,7 @@ impl PresentStage {
             device,
             &mut encoder,
             &input,
-            self.color.lut(&route),
+            self.color.fused(&route),
             chain.destination(pass),
         )?;
         pass += 1;
@@ -295,23 +300,29 @@ fn unpack(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     input: &UnpackInput,
-    lut: Option<&mut ColorLut>,
+    fused: Option<FusedColor<'_>>,
     target: &wgpu::TextureView,
 ) -> Result<(), ClientError> {
     let converter = &mut unpacker.converter;
 
-    match (input, &unpacker.upload, lut) {
+    match (input, &unpacker.upload, fused) {
         (UnpackInput::Upload, None, _) => Ok(()),
         (UnpackInput::Upload, Some(upload), None) => {
             converter.encode(device, encoder, upload, target)
         }
-        (UnpackInput::Upload, Some(upload), Some(lut)) => {
+        (UnpackInput::Upload, Some(upload), Some(FusedColor::Chain(chain))) => {
+            converter.encode_with_chain(device, encoder, upload, chain, target)
+        }
+        (UnpackInput::Upload, Some(upload), Some(FusedColor::Lut(lut))) => {
             converter.encode_with_lut(device, encoder, upload, lut, target)
         }
         (UnpackInput::Planes(planes), _, None) => {
             converter.encode_planes(device, encoder, planes, target)
         }
-        (UnpackInput::Planes(planes), _, Some(lut)) => {
+        (UnpackInput::Planes(planes), _, Some(FusedColor::Chain(chain))) => {
+            converter.encode_planes_with_chain(device, encoder, planes, chain, target)
+        }
+        (UnpackInput::Planes(planes), _, Some(FusedColor::Lut(lut))) => {
             converter.encode_planes_with_lut(device, encoder, planes, lut, target)
         }
     }

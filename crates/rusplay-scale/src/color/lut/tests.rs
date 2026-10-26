@@ -5,27 +5,28 @@ use rusplay_core::{
 
 use super::*;
 use crate::{
-    ChromaSiting, ColorMapper, ColorVolume, GamutMapping, Lineariser, PlaneLayout, Quantization,
-    RgbConvertSettings, RgbConverter, ToneMapping, YuvFrame,
+    ChromaSiting, ColorMapper, ColorVolume, GamutMapping, LineariseSettings, Lineariser,
+    OutputLight, PlaneLayout, Quantization, RgbConvertSettings, RgbConverter, SourceChannels,
+    ToneMapping, YuvFrame,
     testing::{self, Gpu, Image},
 };
 
 const WIDTH: u32 = 256;
-const RANDOM_CODES: usize = 1 << 17;
+pub(in crate::color) const RANDOM_CODES: usize = 1 << 17;
 const RANDOM_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
 const GREY_STEPS: u32 = 1023;
 const LIT_CODE: f64 = 0.03;
 const TIGHT_DELTA_E: f64 = 1.0;
 const MEAN_DELTA_E: f64 = 0.3;
 const P99_DELTA_E: f64 = 3.0;
-const MATRIX: MatrixCoefficients = MatrixCoefficients::Bt2020Ncl;
+pub(in crate::color) const MATRIX: MatrixCoefficients = MatrixCoefficients::Bt2020Ncl;
 
-struct Case {
-    name: &'static str,
-    transfer: TransferFunction,
-    hdr: HdrLevels,
-    map: Option<ColorMapSettings>,
-    smooth: bool,
+pub(in crate::color) struct Case {
+    pub name: &'static str,
+    pub transfer: TransferFunction,
+    pub hdr: HdrLevels,
+    pub map: Option<ColorMapSettings>,
+    pub smooth: bool,
 }
 
 impl Case {
@@ -43,7 +44,11 @@ impl Case {
     }
 }
 
-fn volume(primaries: ColorPrimaries, transfer: TransferFunction, peak_nits: f64) -> ColorVolume {
+pub(in crate::color) fn volume(
+    primaries: ColorPrimaries,
+    transfer: TransferFunction,
+    peak_nits: f64,
+) -> ColorVolume {
     ColorVolume {
         primaries,
         transfer,
@@ -52,7 +57,11 @@ fn volume(primaries: ColorPrimaries, transfer: TransferFunction, peak_nits: f64)
     }
 }
 
-fn mapping(source: ColorVolume, target: ColorVolume, mode: GamutMapMode) -> ColorMapSettings {
+pub(in crate::color) fn mapping(
+    source: ColorVolume,
+    target: ColorVolume,
+    mode: GamutMapMode,
+) -> ColorMapSettings {
     ColorMapSettings {
         source,
         target,
@@ -64,14 +73,14 @@ fn mapping(source: ColorVolume, target: ColorVolume, mode: GamutMapMode) -> Colo
     }
 }
 
-fn hdr_levels(peak_nits: u32) -> HdrLevels {
+pub(in crate::color) fn hdr_levels(peak_nits: u32) -> HdrLevels {
     HdrLevels {
         peak_nits,
         ..HdrLevels::default()
     }
 }
 
-fn cases() -> Vec<Case> {
+pub(in crate::color) fn cases() -> Vec<Case> {
     let pq = |peak| volume(ColorPrimaries::Bt2020, TransferFunction::Pq, peak);
     let hlg = volume(ColorPrimaries::Bt2020, TransferFunction::Hlg, 1000.0);
     let srgb = ColorVolume::srgb_display();
@@ -160,7 +169,7 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-fn saturated_codes(transfer: TransferFunction) -> Vec<[f64; 3]> {
+pub(in crate::color) fn saturated_codes(transfer: TransferFunction) -> Vec<[f64; 3]> {
     let encode = |nits: f64| match transfer {
         TransferFunction::Pq => pq_from_nits(nits),
         _ => (nits / 1000.0).powf(1.0 / 2.4),
@@ -188,7 +197,7 @@ fn saturated_codes(transfer: TransferFunction) -> Vec<[f64; 3]> {
         .collect()
 }
 
-fn random_codes(count: usize) -> Vec<[f64; 3]> {
+pub(in crate::color) fn random_codes(count: usize) -> Vec<[f64; 3]> {
     let mut state = RANDOM_SEED;
     let mut next = move || {
         state ^= state << 13;
@@ -200,13 +209,16 @@ fn random_codes(count: usize) -> Vec<[f64; 3]> {
     (0..count).map(|_| [next(), next(), next()]).collect()
 }
 
-fn grey_codes() -> Vec<[f64; 3]> {
+pub(in crate::color) fn grey_codes() -> Vec<[f64; 3]> {
     (0..=GREY_STEPS)
         .map(|step| [f64::from(step) / f64::from(GREY_STEPS); 3])
         .collect()
 }
 
-fn unpack_settings(rows: u32, transfer: TransferFunction) -> RgbConvertSettings {
+pub(in crate::color) fn unpack_settings(
+    rows: u32,
+    transfer: TransferFunction,
+) -> RgbConvertSettings {
     RgbConvertSettings {
         resolution: Resolution::new(WIDTH, rows),
         format: PixelFormat {
@@ -351,11 +363,11 @@ fn delta_e_itp(target: &ColorVolume, expected: [f32; 4], found: [f32; 4]) -> f64
             .sqrt()
 }
 
-struct Accuracy {
-    mean: f64,
-    p99: f64,
-    max: f64,
-    worst: [f64; 3],
+pub(in crate::color) struct Accuracy {
+    pub mean: f64,
+    pub p99: f64,
+    pub max: f64,
+    pub worst: [f64; 3],
 }
 
 impl Accuracy {
@@ -380,7 +392,12 @@ impl Accuracy {
     }
 }
 
-fn measure(gpu: &Gpu, case: &Case, size: u32, codes: &[[f64; 3]]) -> Accuracy {
+pub(in crate::color) fn measure_against_analytic(
+    gpu: &Gpu,
+    case: &Case,
+    codes: &[[f64; 3]],
+    candidate: impl FnOnce(&mut RgbConverter, &YuvFrame) -> Image,
+) -> Accuracy {
     let pipelines = ScalePipelines::new(&gpu.device);
     let rows = u32::try_from(codes.len().div_ceil(WIDTH as usize)).unwrap();
     let mut converter = RgbConverter::new(
@@ -394,7 +411,7 @@ fn measure(gpu: &Gpu, case: &Case, size: u32, codes: &[[f64; 3]]) -> Accuracy {
     gpu.queue
         .write_buffer(frame.buffer(), 0, &frame_bytes(&converter, codes));
     let expected = analytic(gpu, case, &mut converter, &frame);
-    let found = fused(gpu, case, size, &mut converter, &frame);
+    let found = candidate(&mut converter, &frame);
     let errors: Vec<f64> = expected
         .pixels
         .iter()
@@ -406,7 +423,13 @@ fn measure(gpu: &Gpu, case: &Case, size: u32, codes: &[[f64; 3]]) -> Accuracy {
     Accuracy::of(&errors, codes)
 }
 
-fn lit(codes: impl IntoIterator<Item = [f64; 3]>) -> Vec<[f64; 3]> {
+fn measure(gpu: &Gpu, case: &Case, size: u32, codes: &[[f64; 3]]) -> Accuracy {
+    measure_against_analytic(gpu, case, codes, |converter, frame| {
+        fused(gpu, case, size, converter, frame)
+    })
+}
+
+pub(in crate::color) fn lit(codes: impl IntoIterator<Item = [f64; 3]>) -> Vec<[f64; 3]> {
     codes
         .into_iter()
         .filter(|code| code.iter().any(|channel| *channel >= LIT_CODE))

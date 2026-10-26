@@ -4,7 +4,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    ChromaSiting, ColorLut, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent,
+    ChromaSiting, ColorChain, ColorLut, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent,
     PlaneLayout, Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
     gpu::{
@@ -129,6 +129,7 @@ pub struct RgbConverter {
     planes: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
     targets: GroupCache<wgpu::TextureView>,
     lut_targets: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
+    chain_targets: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
 }
 
 impl RgbConverter {
@@ -149,6 +150,7 @@ impl RgbConverter {
             planes: GroupCache::default(),
             targets: GroupCache::default(),
             lut_targets: GroupCache::default(),
+            chain_targets: GroupCache::default(),
         })
     }
 
@@ -195,7 +197,7 @@ impl RgbConverter {
         frame: &YuvFrame,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
-        self.encode_frame(device, encoder, frame, None, target)
+        self.encode_frame(device, encoder, frame, Fused::None, target)
     }
 
     pub fn encode_with_lut(
@@ -206,7 +208,18 @@ impl RgbConverter {
         lut: &mut ColorLut,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
-        self.encode_frame(device, encoder, frame, Some(lut), target)
+        self.encode_frame(device, encoder, frame, Fused::Lut(lut), target)
+    }
+
+    pub fn encode_with_chain(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &YuvFrame,
+        chain: &mut ColorChain,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        self.encode_frame(device, encoder, frame, Fused::Chain(chain), target)
     }
 
     pub fn encode_planes(
@@ -216,7 +229,7 @@ impl RgbConverter {
         source: &DmaBufTexture,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
-        self.encode_dmabuf(device, encoder, source, None, target)
+        self.encode_dmabuf(device, encoder, source, Fused::None, target)
     }
 
     pub fn encode_planes_with_lut(
@@ -227,7 +240,18 @@ impl RgbConverter {
         lut: &mut ColorLut,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
-        self.encode_dmabuf(device, encoder, source, Some(lut), target)
+        self.encode_dmabuf(device, encoder, source, Fused::Lut(lut), target)
+    }
+
+    pub fn encode_planes_with_chain(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &DmaBufTexture,
+        chain: &mut ColorChain,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        self.encode_dmabuf(device, encoder, source, Fused::Chain(chain), target)
     }
 
     fn encode_frame(
@@ -235,14 +259,14 @@ impl RgbConverter {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         frame: &YuvFrame,
-        lut: Option<&mut ColorLut>,
+        fused: Fused,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
         if *frame.layout() != self.layout {
             return Err(ScaleError::FrameLayoutMismatch);
         }
 
-        let output = self.output(device, encoder, lut, target)?;
+        let output = self.output(device, encoder, fused, target)?;
         let pipelines = &self.pipelines;
         let input_group = self.inputs.get_or_create(frame.buffer(), || {
             buffer_group(
@@ -254,7 +278,8 @@ impl RgbConverter {
         });
         let rgb = match output {
             Output::Transfer(_) => &pipelines.unpack.rgb,
-            Output::Lut(_) => &pipelines.unpack.rgb_lut,
+            Output::Lut(_) => &pipelines.unpack.lut.rgb,
+            Output::Chain(_) => &pipelines.unpack.chain.rgb,
         };
 
         self.plan.encode(
@@ -271,7 +296,7 @@ impl RgbConverter {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source: &DmaBufTexture,
-        lut: Option<&mut ColorLut>,
+        fused: Fused,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
         let mismatch = ScaleError::DmaBufFormatMismatch {
@@ -294,7 +319,7 @@ impl RgbConverter {
             return Err(ScaleError::DmaBufTooSmall { found, needed });
         }
 
-        let output = self.output(device, encoder, lut, target)?;
+        let output = self.output(device, encoder, fused, target)?;
         let pipelines = &self.pipelines;
         let input_group = self
             .planes
@@ -303,7 +328,8 @@ impl RgbConverter {
             });
         let rgb = match output {
             Output::Transfer(_) => &pipelines.unpack.planes_rgb,
-            Output::Lut(_) => &pipelines.unpack.planes_rgb_lut,
+            Output::Lut(_) => &pipelines.unpack.lut.planes_rgb,
+            Output::Chain(_) => &pipelines.unpack.chain.planes_rgb,
         };
 
         self.plan.encode(
@@ -319,44 +345,74 @@ impl RgbConverter {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        lut: Option<&mut ColorLut>,
+        fused: Fused,
         target: &wgpu::TextureView,
     ) -> Result<Output, ScaleError> {
         let pipelines = &self.pipelines;
-        let Some(lut) = lut else {
-            return Ok(Output::Transfer(self.targets.get_or_create(target, || {
-                pipelines.destination_group(device, target)
-            })));
-        };
+        match fused {
+            Fused::None => {
+                Ok(Output::Transfer(self.targets.get_or_create(target, || {
+                    pipelines.destination_group(device, target)
+                })))
+            }
+            Fused::Lut(lut) => {
+                if self.settings.output != OutputLight::Encoded {
+                    return Err(ScaleError::LutInputNotEncoded);
+                }
+                let baked_for = lut.settings().transfer;
+                if baked_for != self.settings.transfer {
+                    return Err(ScaleError::LutTransferMismatch {
+                        lut: baked_for,
+                        frame: self.settings.transfer,
+                    });
+                }
 
-        if self.settings.output != OutputLight::Encoded {
-            return Err(ScaleError::LutInputNotEncoded);
-        }
-        let baked_for = lut.settings().transfer;
-        if baked_for != self.settings.transfer {
-            return Err(ScaleError::LutTransferMismatch {
-                lut: baked_for,
-                frame: self.settings.transfer,
-            });
-        }
+                lut.encode_bake(encoder);
+                let key = (target.clone(), lut.view().clone());
+                Ok(Output::Lut(self.lut_targets.get_or_create(&key, || {
+                    lut_target_group(device, &pipelines.unpack.lut.target_layout, target, lut)
+                })))
+            }
+            Fused::Chain(chain) => {
+                if self.settings.output != OutputLight::Encoded {
+                    return Err(ScaleError::ChainInputNotEncoded);
+                }
+                let decodes = chain.settings().transfer;
+                if decodes != self.settings.transfer {
+                    return Err(ScaleError::ChainTransferMismatch {
+                        chain: decodes,
+                        frame: self.settings.transfer,
+                    });
+                }
 
-        lut.encode_bake(encoder);
-        let key = (target.clone(), lut.view().clone());
-        Ok(Output::Lut(self.lut_targets.get_or_create(&key, || {
-            lut_target_group(device, &pipelines.unpack.lut_target_layout, target, lut)
-        })))
+                chain.encode_tables(encoder);
+                let key = (target.clone(), chain.identity().clone());
+                Ok(Output::Chain(
+                    self.chain_targets.get_or_create(&key, || {
+                        chain.target_group(device, &pipelines.unpack.chain.target_layout, target)
+                    }),
+                ))
+            }
+        }
     }
+}
+
+enum Fused<'a> {
+    None,
+    Lut(&'a mut ColorLut),
+    Chain(&'a mut ColorChain),
 }
 
 enum Output {
     Transfer(wgpu::BindGroup),
     Lut(wgpu::BindGroup),
+    Chain(wgpu::BindGroup),
 }
 
 impl Output {
     const fn group(&self) -> &wgpu::BindGroup {
         match self {
-            Self::Transfer(group) | Self::Lut(group) => group,
+            Self::Transfer(group) | Self::Lut(group) | Self::Chain(group) => group,
         }
     }
 }

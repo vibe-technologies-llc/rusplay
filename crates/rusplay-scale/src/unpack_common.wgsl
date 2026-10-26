@@ -25,7 +25,7 @@ const TRANSFER_GAMMA22: u32 = 3u;
 
 fn decode_transfer(encoded: vec3<f32>) -> vec3<f32> {
     let x = clamp(encoded, vec3<f32>(0.0), vec3<f32>(1.0));
-    switch params.transfer {
+    switch unpacking.transfer {
         case TRANSFER_SRGB: {
             return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045));
         }
@@ -46,10 +46,10 @@ fn dequantize(code: u32, quant: vec2<f32>) -> f32 {
 }
 
 fn luma_at(x: u32, y: u32) -> f32 {
-    return dequantize(luma_code(x, y), params.luma_quant);
+    return dequantize(luma_code(x, y), unpacking.luma_quant);
 }
 
 fn chroma_at(x: u32, y: u32) -> vec2<f32> {
     let codes = chroma_codes(x, y);
-    return vec2<f32>(dequantize(codes.x, params.chroma_quant), dequantize(codes.y, params.chroma_quant));
+    return vec2<f32>(dequantize(codes.x, unpacking.chroma_quant), dequantize(codes.y, unpacking.chroma_quant));
 }
