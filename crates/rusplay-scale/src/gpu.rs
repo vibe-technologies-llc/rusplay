@@ -2,7 +2,11 @@ use std::borrow::Cow;
 
 use wgpu::util::DeviceExt;
 
-use crate::color::{BOUNDARY_STEPS, COMPRESSION_POWER, HISTOGRAM_BINS};
+use crate::color::{
+    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
+    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_UPPER_TOLERANCE,
+    BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, HISTOGRAM_BINS,
+};
 
 const RESAMPLE_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
@@ -266,6 +270,22 @@ impl ColorPipelines {
                 writable_storage_buffer_entry(2),
             ],
         );
+        let gamut_constants = [
+            ("BOUNDARY_COARSE_STEPS", f64::from(BOUNDARY_COARSE_STEPS)),
+            (
+                "BOUNDARY_APPROACH_STEPS",
+                f64::from(BOUNDARY_APPROACH_STEPS),
+            ),
+            ("BOUNDARY_WINDOW_STEPS", f64::from(BOUNDARY_WINDOW_STEPS)),
+            ("BOUNDARY_WINDOW_START", BOUNDARY_WINDOW_START),
+            ("BOUNDARY_SUBSTEPS", f64::from(BOUNDARY_SUBSTEPS)),
+            ("BOUNDARY_LOWER_TOLERANCE", BOUNDARY_LOWER_TOLERANCE),
+            ("BOUNDARY_UPPER_TOLERANCE", BOUNDARY_UPPER_TOLERANCE),
+            ("BOUNDARY_RAMP_CENTRE", BOUNDARY_RAMP_CENTRE),
+            ("BOUNDARY_REACH", BOUNDARY_REACH),
+            ("BOUNDARY_HEADROOM", BOUNDARY_HEADROOM),
+            ("COMPRESSION_POWER", COMPRESSION_POWER),
+        ];
         let map = compute_pipeline(
             device,
             "rusplay-color-map",
@@ -273,10 +293,7 @@ impl ColorPipelines {
             COLOR_MAP_SHADER,
             "map_color",
             COLOR_WORKGROUP,
-            &[
-                ("BOUNDARY_STEPS", f64::from(BOUNDARY_STEPS)),
-                ("COMPRESSION_POWER", COMPRESSION_POWER),
-            ],
+            &gamut_constants,
         );
         let lut_store_layout = layout(
             device,
@@ -291,10 +308,7 @@ impl ColorPipelines {
             COLOR_LUT_BAKE_SHADER,
             "bake_lut",
             LUT_BAKE_WORKGROUP,
-            &[
-                ("BOUNDARY_STEPS", f64::from(BOUNDARY_STEPS)),
-                ("COMPRESSION_POWER", COMPRESSION_POWER),
-            ],
+            &gamut_constants,
         );
         let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
         let histogram = compute_pipeline(

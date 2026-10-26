@@ -3,6 +3,8 @@ mod spaces;
 mod tone;
 
 #[cfg(test)]
+mod boundary_tests;
+#[cfg(test)]
 pub(crate) mod reference;
 #[cfg(test)]
 mod tests;
@@ -26,7 +28,18 @@ use crate::{
     scaler::GroupCache,
 };
 
-pub(crate) const BOUNDARY_STEPS: u32 = 16;
+pub(crate) const BOUNDARY_COARSE_STEPS: u32 = 4;
+pub(crate) const BOUNDARY_APPROACH_STEPS: u32 = 2;
+pub(crate) const BOUNDARY_WINDOW_STEPS: u32 = 4;
+pub(crate) const BOUNDARY_WINDOW_START: f64 = 0.75;
+pub(crate) const BOUNDARY_SUBSTEPS: u32 = 4;
+pub(crate) const BOUNDARY_LOWER_TOLERANCE: f64 = 0.02;
+pub(crate) const BOUNDARY_UPPER_TOLERANCE: f64 = 0.002;
+pub(crate) const BOUNDARY_RAMP_CENTRE: f64 = 0.5;
+pub(crate) const BOUNDARY_REACH: f64 = 3.0;
+pub(crate) const BOUNDARY_HEADROOM: f64 = 1.25;
+const CHROMA_LIMIT_SAMPLES: u32 = 32;
+const CHROMA_LIMIT_HEADROOM: f64 = 1.2;
 pub(crate) const COMPRESSION_POWER: f64 = 1.2;
 pub(crate) const CONTAINMENT_TOLERANCE: f64 = 1e-6;
 pub(crate) const HISTOGRAM_BINS: u32 = 256;
@@ -222,6 +235,8 @@ pub struct ColorPlan {
     pub(crate) tone_lms_to_xyz: Matrix3,
     pub(crate) tone_lms_to_itp: Matrix3,
     pub(crate) tone_itp_to_lms: Matrix3,
+    pub(crate) target_chroma_limit: f64,
+    pub(crate) source_chroma_limit: f64,
 }
 
 impl ColorPlan {
@@ -301,7 +316,7 @@ impl ColorPlan {
             dynamic_peak: tone.dynamic_peak,
         });
 
-        Ok(Self {
+        let mut plan = Self {
             path,
             space,
             gain: source_white / target_white,
@@ -324,7 +339,45 @@ impl ColorPlan {
             tone_lms_to_xyz: inverse(tone_xyz_to_lms)?,
             tone_lms_to_itp,
             tone_itp_to_lms: inverse(tone_lms_to_itp)?,
-        })
+            target_chroma_limit: 0.0,
+            source_chroma_limit: 0.0,
+        };
+        plan.target_chroma_limit = plan.chroma_limit(inverse(work_to_target)?);
+        plan.source_chroma_limit = plan.chroma_limit(source_to_work);
+
+        Ok(plan)
+    }
+
+    pub(crate) fn lab(&self, xyz: [f64; 3]) -> [f64; 3] {
+        let lms = self.xyz_to_lms.apply(xyz);
+
+        self.lms_to_lab.apply(self.space.shape(lms, self.pq_scale))
+    }
+
+    fn chroma_limit(&self, rgb_to_work: Matrix3) -> f64 {
+        let peak = self.target_peak;
+        let steps = f64::from(CHROMA_LIMIT_SAMPLES);
+        let mut widest = 0.0_f64;
+
+        for face in 0..6 {
+            let fixed = if face < 3 { 0.0 } else { peak };
+            for row in 0..=CHROMA_LIMIT_SAMPLES {
+                for column in 0..=CHROMA_LIMIT_SAMPLES {
+                    let (u, v) = (
+                        peak * f64::from(row) / steps,
+                        peak * f64::from(column) / steps,
+                    );
+                    let rgb = match face % 3 {
+                        0 => [fixed, u, v],
+                        1 => [u, fixed, v],
+                        _ => [u, v, fixed],
+                    };
+                    let [_, a, b] = self.lab(rgb_to_work.apply(rgb));
+                    widest = widest.max(a.hypot(b));
+                }
+            }
+        }
+        CHROMA_LIMIT_HEADROOM * widest
     }
 
     pub const fn tone(&self) -> Option<ToneStage> {
@@ -404,6 +457,12 @@ impl ColorPlan {
             0,
         ]);
         words.extend([
+            float(self.target_chroma_limit),
+            float(self.source_chroma_limit),
+            0,
+            0,
+        ]);
+        words.extend([
             self.path.code(),
             self.space.code(),
             self.tone.map_or(0, |stage| stage.operator_code()),
@@ -422,7 +481,7 @@ impl ColorPlan {
     }
 }
 
-const PARAMS_WORDS: usize = 12 * 12 + 4 * 4 + 4;
+const PARAMS_WORDS: usize = 12 * 12 + 6 * 4 + 4;
 
 fn inverse(matrix: Matrix3) -> Result<Matrix3, ScaleError> {
     matrix.inverse().ok_or(ScaleError::SingularColorMatrix)

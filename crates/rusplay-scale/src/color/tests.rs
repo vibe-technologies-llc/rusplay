@@ -28,7 +28,11 @@ pub(super) fn hdr(primaries: ColorPrimaries, peak_nits: f64) -> ColorVolume {
     }
 }
 
-fn settings(source: ColorVolume, target: ColorVolume, mode: GamutMapMode) -> ColorMapSettings {
+pub(super) fn settings(
+    source: ColorVolume,
+    target: ColorVolume,
+    mode: GamutMapMode,
+) -> ColorMapSettings {
     ColorMapSettings {
         source,
         target,
@@ -227,8 +231,13 @@ fn colours_well_inside_the_target_are_unchanged() {
             let [lightness, a, b] = reference::source_lab(&plan, source);
             let chroma = a.hypot(b);
             let hue = [a / chroma, b / chroma];
-            let target_limit =
-                reference::chroma_boundary(&plan, lightness, hue, &plan.work_to_target, 1.0);
+            let target_limit = reference::chroma_boundary(
+                &plan,
+                lightness,
+                hue,
+                &plan.work_to_target,
+                plan.target_chroma_limit,
+            );
             if chroma >= plan.knee * target_limit {
                 continue;
             }
@@ -311,10 +320,20 @@ fn chroma_compression_is_monotonic() {
                 } else {
                     reference::source_lab(&plan, [f64::from(lightness_step) / 3.0; 3])[0]
                 };
-                let source_limit =
-                    reference::chroma_boundary(&plan, lightness, hue, &source_to_rgb, 1.0);
-                let target_limit =
-                    reference::chroma_boundary(&plan, lightness, hue, &plan.work_to_target, 1.0);
+                let source_limit = reference::chroma_boundary(
+                    &plan,
+                    lightness,
+                    hue,
+                    &source_to_rgb,
+                    plan.source_chroma_limit,
+                );
+                let target_limit = reference::chroma_boundary(
+                    &plan,
+                    lightness,
+                    hue,
+                    &plan.work_to_target,
+                    plan.target_chroma_limit,
+                );
 
                 let mut previous = 0.0;
                 for step in 0..=100 {

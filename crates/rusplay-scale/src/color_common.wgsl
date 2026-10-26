@@ -22,6 +22,7 @@ struct ColorParams {
     tone_levels: vec4<f32>,
     peak_limits: vec4<f32>,
     dynamic: vec4<f32>,
+    chroma_limits: vec4<f32>,
     path: u32,
     space: u32,
     tone: u32,

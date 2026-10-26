@@ -1,6 +1,7 @@
-use rusplay_core::{Chromaticities, Matrix3};
+use rusplay_core::{Chromaticities, HdrLevels, Matrix3, pq_from_nits};
 
 const ICTCP_SCALE: f64 = 4096.0;
+const MAX_NITS: f64 = HdrLevels::MAX_NITS as f64;
 
 const OKLAB_XYZ_TO_LMS: Matrix3 = Matrix3([
     [0.818_933_010_1, 0.361_866_742_4, -0.128_859_713_7],
@@ -44,6 +45,15 @@ impl WorkingSpace {
                 Matrix3::diagonal(white.map(f64::recip)) * OKLAB_XYZ_TO_LMS
             }
             Self::Ictcp => scaled(ICTCP_RGB_TO_LMS) * Chromaticities::BT2020.xyz_to_rgb(),
+        }
+    }
+
+    pub(crate) fn shape(self, lms: [f64; 3], pq_scale: f64) -> [f64; 3] {
+        match self {
+            Self::Ictcp => {
+                lms.map(|value| value.signum() * pq_from_nits((value * pq_scale).abs() * MAX_NITS))
+            }
+            Self::Oklab => lms.map(f64::cbrt),
         }
     }
 

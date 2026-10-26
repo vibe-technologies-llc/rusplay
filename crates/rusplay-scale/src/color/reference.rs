@@ -1,12 +1,19 @@
 use rusplay_core::{HdrLevels, Matrix3, pq_from_nits, pq_to_nits};
 
 use crate::color::{
-    BOUNDARY_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS, MappingPath, ToneCurve,
-    ToneStage, WorkingSpace,
+    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
+    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_UPPER_TOLERANCE,
+    BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS,
+    MappingPath, ToneCurve, ToneStage, WorkingSpace,
 };
 
 const GAMUT_EPSILON: f64 = 1.0e-5;
-const MIN_SEARCH_CHROMA: f64 = 1.0;
+const MIN_BOUND_DISTANCE: f64 = 1.0e-6;
+const PQ_M1: f64 = 2610.0 / 16384.0;
+const PQ_M2: f64 = 2523.0 / 4096.0 * 128.0;
+const PQ_C1: f64 = 3424.0 / 4096.0;
+const PQ_C2: f64 = 2413.0 / 4096.0 * 32.0;
+const PQ_C3: f64 = 2392.0 / 4096.0 * 32.0;
 const ACHROMATIC_CHROMA: f64 = 1.0e-6;
 const MIN_COMPRESSION_LIMIT: f64 = 1.0001;
 const MAX_NITS: f64 = HdrLevels::MAX_NITS as f64;
@@ -17,15 +24,7 @@ fn signed(value: f64, curve: impl Fn(f64) -> f64) -> f64 {
 }
 
 pub(crate) fn xyz_to_lab(plan: &ColorPlan, xyz: [f64; 3]) -> [f64; 3] {
-    let lms = plan.xyz_to_lms.apply(xyz);
-    let shaped = match plan.space {
-        WorkingSpace::Ictcp => {
-            lms.map(|value| signed(value * plan.pq_scale, |v| pq_from_nits(v * MAX_NITS)))
-        }
-        WorkingSpace::Oklab => lms.map(f64::cbrt),
-    };
-
-    plan.lms_to_lab.apply(shaped)
+    plan.lab(xyz)
 }
 
 pub(crate) fn lab_to_xyz(plan: &ColorPlan, lab: [f64; 3]) -> [f64; 3] {
@@ -65,33 +64,255 @@ fn at_chroma(plan: &ColorPlan, lightness: f64, hue: [f64; 2], chroma: f64) -> [f
     lab_to_xyz(plan, [lightness, hue[0] * chroma, hue[1] * chroma])
 }
 
+fn pq_decode_slope(code: f64) -> f64 {
+    let clamped = code.clamp(0.0, 1.0);
+    let power = clamped.powf(1.0 / PQ_M2);
+    let numerator = power - PQ_C1;
+    let denominator = PQ_C2 - PQ_C3 * power;
+    if numerator <= 0.0 || code >= 1.0 {
+        return 0.0;
+    }
+    let decoded = (numerator / denominator).powf(1.0 / PQ_M1);
+
+    decoded * (PQ_C2 - PQ_C3 * PQ_C1) * power / (PQ_M1 * PQ_M2 * numerator * denominator * clamped)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RaySample {
+    value: [f64; 3],
+    slope: [f64; 3],
+}
+
+struct Ray<'a> {
+    plan: &'a ColorPlan,
+    to_rgb: &'a Matrix3,
+    origin: [f64; 3],
+    direction: [f64; 3],
+}
+
+impl Ray<'_> {
+    fn sample(&self, chroma: f64) -> RaySample {
+        let plan = self.plan;
+        let shaped = [0, 1, 2].map(|axis| self.origin[axis] + chroma * self.direction[axis]);
+        let lms = shaped.map(|code| match plan.space {
+            WorkingSpace::Ictcp => {
+                signed(code, |code| pq_to_nits(code.min(1.0)) / MAX_NITS) / plan.pq_scale
+            }
+            WorkingSpace::Oklab => code * code * code,
+        });
+        let slope = [0, 1, 2].map(|axis| {
+            let code = shaped[axis];
+            let rate = match plan.space {
+                WorkingSpace::Ictcp => pq_decode_slope(code.abs()) / plan.pq_scale,
+                WorkingSpace::Oklab => 3.0 * code * code,
+            };
+            rate * self.direction[axis]
+        });
+        let to_rgb = |lms: [f64; 3]| self.to_rgb.apply(plan.lms_to_xyz.apply(lms));
+
+        RaySample {
+            value: to_rgb(lms),
+            slope: to_rgb(slope),
+        }
+    }
+}
+
+struct Bounds {
+    peak: f64,
+    lower: [f64; 3],
+    upper: [f64; 3],
+}
+
+impl Bounds {
+    fn excess(&self, rgb: [f64; 3]) -> f64 {
+        let worst = (0..3)
+            .map(|channel| {
+                let below = -rgb[channel] / self.lower[channel];
+                let above = (rgb[channel] - self.peak) / self.upper[channel];
+                below.max(above)
+            })
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        worst + BOUNDARY_RAMP_CENTRE
+    }
+
+    fn reach(&self, grey: RaySample) -> f64 {
+        (0..3)
+            .map(|channel| {
+                let slope = grey.slope[channel];
+                if slope < 0.0 {
+                    grey.value[channel] / -slope
+                } else if slope > 0.0 {
+                    (self.peak - grey.value[channel]) / slope
+                } else {
+                    f64::INFINITY
+                }
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+fn weight(level: f64) -> f64 {
+    1.0 - level.min(1.0)
+}
+
+fn share(previous: f64, excess: f64, level: f64) -> f64 {
+    if excess <= level {
+        return weight(level);
+    }
+
+    let crossing = if previous >= level {
+        0.0
+    } else {
+        (level - previous) / (excess - previous)
+    };
+    let (low, high) = (level.min(1.0), excess.min(1.0));
+    let soft = (high - low) * (1.0 - f64::midpoint(low, high)) / (excess - level);
+
+    crossing * weight(level) + (1.0 - crossing) * soft
+}
+
+fn hermite(near: RaySample, far: RaySample, width: f64, fraction: f64) -> [f64; 3] {
+    let squared = fraction * fraction;
+    let cubed = squared * fraction;
+    let weights = [
+        2.0 * cubed - 3.0 * squared + 1.0,
+        (cubed - 2.0 * squared + fraction) * width,
+        -2.0 * cubed + 3.0 * squared,
+        (cubed - squared) * width,
+    ];
+
+    [0, 1, 2].map(|channel| {
+        weights[0] * near.value[channel]
+            + weights[1] * near.slope[channel]
+            + weights[2] * far.value[channel]
+            + weights[3] * far.slope[channel]
+    })
+}
+
+fn hull_excess(bounds: &Bounds, near: RaySample, far: RaySample, width: f64) -> f64 {
+    let leaving = [0, 1, 2].map(|channel| near.value[channel] + width * near.slope[channel] / 3.0);
+    let arriving = [0, 1, 2].map(|channel| far.value[channel] - width * far.slope[channel] / 3.0);
+
+    bounds
+        .excess(leaving)
+        .max(bounds.excess(arriving))
+        .max(bounds.excess(far.value))
+}
+
+struct Breakpoints {
+    approach_end: f64,
+    approach_steps: u32,
+    window_end: f64,
+    window_steps: u32,
+}
+
+impl Breakpoints {
+    fn at(&self, step: u32) -> f64 {
+        if step <= self.approach_steps {
+            self.approach_end * f64::from(step) / f64::from(self.approach_steps)
+        } else {
+            let into = f64::from(step - self.approach_steps) / f64::from(self.window_steps);
+            self.approach_end + into * (self.window_end - self.approach_end)
+        }
+    }
+}
+
+fn soft_exit(ray: &Ray, bounds: &Bounds, grey: RaySample, breakpoints: &Breakpoints) -> f64 {
+    let mut previous = bounds.excess(grey.value);
+    let mut level = 0.0_f64;
+    let mut near = grey;
+    let mut start = 0.0;
+    let mut total = 0.0;
+
+    for step in 1..=breakpoints.approach_steps + breakpoints.window_steps {
+        let end = breakpoints.at(step);
+        let width = end - start;
+        let far = ray.sample(end);
+        if level <= 0.0 && hull_excess(bounds, near, far, width) <= 0.0 {
+            total += width;
+            previous = bounds.excess(far.value);
+        } else {
+            let substep = width / f64::from(BOUNDARY_SUBSTEPS);
+            for index in 1..=BOUNDARY_SUBSTEPS {
+                let rgb = if index == BOUNDARY_SUBSTEPS {
+                    far.value
+                } else {
+                    hermite(
+                        near,
+                        far,
+                        width,
+                        f64::from(index) / f64::from(BOUNDARY_SUBSTEPS),
+                    )
+                };
+                let excess = bounds.excess(rgb);
+                total += substep * share(previous, excess, level);
+                level = level.max(excess);
+                previous = excess;
+                if level >= 1.0 {
+                    return total;
+                }
+            }
+        }
+        near = far;
+        start = end;
+    }
+    total
+}
+
 pub(crate) fn chroma_boundary(
     plan: &ColorPlan,
     lightness: f64,
     hue: [f64; 2],
     to_rgb: &Matrix3,
-    ceiling: f64,
+    limit: f64,
 ) -> f64 {
     let peak = plan.target_peak;
-    let fits = |chroma: f64| inside(to_rgb.apply(at_chroma(plan, lightness, hue, chroma)), peak);
-
-    if !fits(0.0) {
+    let ray = Ray {
+        plan,
+        to_rgb,
+        origin: plan.lab_to_lms.apply([lightness, 0.0, 0.0]),
+        direction: plan.lab_to_lms.apply([0.0, hue[0], hue[1]]),
+    };
+    let grey = ray.sample(0.0);
+    if !inside(grey.value, peak) {
         return 0.0;
     }
-    if fits(ceiling) {
-        return ceiling;
-    }
 
-    let (mut low, mut high) = (0.0, ceiling);
-    for _ in 0..BOUNDARY_STEPS {
-        let middle = f64::midpoint(low, high);
-        if fits(middle) {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    low
+    let floor = MIN_BOUND_DISTANCE * peak;
+    let bounds = Bounds {
+        peak,
+        lower: grey
+            .value
+            .map(|value| BOUNDARY_LOWER_TOLERANCE * value.max(floor)),
+        upper: grey
+            .value
+            .map(|value| BOUNDARY_UPPER_TOLERANCE * (peak - value).max(floor)),
+    };
+    let coarse_range = (BOUNDARY_REACH * bounds.reach(grey)).min(limit);
+    let coarse = soft_exit(
+        &ray,
+        &bounds,
+        grey,
+        &Breakpoints {
+            approach_end: coarse_range,
+            approach_steps: BOUNDARY_COARSE_STEPS,
+            window_end: coarse_range,
+            window_steps: 0,
+        },
+    );
+
+    soft_exit(
+        &ray,
+        &bounds,
+        grey,
+        &Breakpoints {
+            approach_end: BOUNDARY_WINDOW_START * coarse,
+            approach_steps: BOUNDARY_APPROACH_STEPS,
+            window_end: BOUNDARY_HEADROOM * coarse,
+            window_steps: BOUNDARY_WINDOW_STEPS,
+        },
+    )
 }
 
 pub(crate) fn compress_chroma(chroma: f64, target_limit: f64, source_limit: f64, knee: f64) -> f64 {
@@ -127,12 +348,23 @@ fn perceptual(plan: &ColorPlan, work: [f64; 3]) -> [f64; 3] {
     }
 
     let hue = [a / chroma, b / chroma];
-    let ceiling = MIN_SEARCH_CHROMA.max(chroma);
-    let target_limit = chroma_boundary(plan, lightness, hue, &plan.work_to_target, ceiling);
+    let target_limit = chroma_boundary(
+        plan,
+        lightness,
+        hue,
+        &plan.work_to_target,
+        plan.target_chroma_limit,
+    );
     if chroma <= plan.knee * target_limit {
         return clamp(plan.work_to_target.apply(work), peak);
     }
-    let source_limit = chroma_boundary(plan, lightness, hue, &plan.work_to_source, ceiling);
+    let source_limit = chroma_boundary(
+        plan,
+        lightness,
+        hue,
+        &plan.work_to_source,
+        plan.source_chroma_limit,
+    );
     let mapped = compress_chroma(chroma, target_limit, source_limit, plan.knee);
 
     clamp(
