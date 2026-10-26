@@ -94,6 +94,228 @@ pub enum EncodeError {
     DmaBufInspect(#[source] io::Error),
     #[error("the encoded frame did not fit the {capacity} byte coded buffer")]
     CodedBufferOverflow { capacity: usize },
+    #[cfg(feature = "nvenc")]
+    #[error("could not load {library}")]
+    LibraryNotFound {
+        library: &'static str,
+        #[source]
+        source: libloading::Error,
+    },
+    #[cfg(feature = "nvenc")]
+    #[error("{library} has no symbol {symbol}")]
+    SymbolMissing {
+        library: &'static str,
+        symbol: &'static str,
+        #[source]
+        source: libloading::Error,
+    },
+    #[error("the {backend} driver supports API {supported}, rusplay needs {required}")]
+    DriverTooOld {
+        backend: Backend,
+        required: ApiVersion,
+        supported: ApiVersion,
+    },
+    #[error("the {backend} driver left {function} out of its function table")]
+    DriverFunctionMissing {
+        backend: Backend,
+        function: &'static str,
+    },
+    #[error("gpu index {index} is out of range, {count} gpus are present")]
+    GpuIndexOutOfRange { index: u32, count: u32 },
+    #[error("{call} failed with {status}")]
+    Cuda { call: CudaCall, status: CudaStatus },
+    #[error("{call} failed with {status}")]
+    Nvenc {
+        call: NvencCall,
+        status: NvencStatus,
+    },
+    #[error("the {backend} encoder takes only linear DMA-BUFs, got modifier {modifier:#x}")]
+    DmaBufModifierUnsupported { backend: Backend, modifier: u64 },
+    #[error(
+        "plane {plane} of the DMA-BUF has stride {actual}, the {backend} encoder needs {expected}"
+    )]
+    DmaBufPlaneStride {
+        backend: Backend,
+        plane: usize,
+        expected: u32,
+        actual: u32,
+    },
+    #[error(
+        "plane {plane} of the DMA-BUF starts at {actual}, the {backend} encoder needs {expected}"
+    )]
+    DmaBufPlaneOffset {
+        backend: Backend,
+        plane: usize,
+        expected: u64,
+        actual: u32,
+    },
+    #[error("the DMA-BUF stride {stride} is not a multiple of {alignment}")]
+    DmaBufStrideUnaligned { stride: u32, alignment: u32 },
+    #[error("the DMA-BUF holds {actual} bytes but its planes need {needed}")]
+    DmaBufTooShort { needed: u64, actual: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ApiVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl fmt::Display for ApiVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.major, self.minor)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CudaCall {
+    Init,
+    DeviceGetCount,
+    DeviceGet,
+    CtxCreate,
+    CtxPushCurrent,
+    CtxPopCurrent,
+    ImportExternalMemory,
+    ExternalMemoryGetMappedBuffer,
+}
+
+impl fmt::Display for CudaCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Init => "cuInit",
+            Self::DeviceGetCount => "cuDeviceGetCount",
+            Self::DeviceGet => "cuDeviceGet",
+            Self::CtxCreate => "cuCtxCreate",
+            Self::CtxPushCurrent => "cuCtxPushCurrent",
+            Self::CtxPopCurrent => "cuCtxPopCurrent",
+            Self::ImportExternalMemory => "cuImportExternalMemory",
+            Self::ExternalMemoryGetMappedBuffer => "cuExternalMemoryGetMappedBuffer",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaStatus(pub i32);
+
+impl CudaStatus {
+    const NAMES: [(i32, &'static str); 17] = [
+        (1, "invalid value"),
+        (2, "out of memory"),
+        (3, "not initialized"),
+        (4, "deinitialized"),
+        (34, "stub library"),
+        (35, "insufficient driver"),
+        (46, "devices unavailable"),
+        (100, "no device"),
+        (101, "invalid device"),
+        (201, "invalid context"),
+        (205, "map failed"),
+        (216, "context already in use"),
+        (304, "operating system call failed"),
+        (400, "invalid handle"),
+        (801, "not supported"),
+        (802, "system not ready"),
+        (999, "unknown error"),
+    ];
+}
+
+impl fmt::Display for CudaStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match Self::NAMES.iter().find(|(code, _)| *code == self.0) {
+            Some((_, name)) => write!(f, "{name} ({})", self.0),
+            None => write!(f, "cuda error {}", self.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvencCall {
+    CreateInstance,
+    GetMaxSupportedVersion,
+    OpenEncodeSessionEx,
+    GetEncodeGuids,
+    GetInputFormats,
+    GetEncodeCaps,
+    GetEncodePresetConfigEx,
+    InitializeEncoder,
+    ReconfigureEncoder,
+    CreateInputBuffer,
+    LockInputBuffer,
+    CreateBitstreamBuffer,
+    LockBitstream,
+    RegisterResource,
+    MapInputResource,
+    EncodePicture,
+}
+
+impl fmt::Display for NvencCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::CreateInstance => "NvEncodeAPICreateInstance",
+            Self::GetMaxSupportedVersion => "NvEncodeAPIGetMaxSupportedVersion",
+            Self::OpenEncodeSessionEx => "nvEncOpenEncodeSessionEx",
+            Self::GetEncodeGuids => "nvEncGetEncodeGUIDs",
+            Self::GetInputFormats => "nvEncGetInputFormats",
+            Self::GetEncodeCaps => "nvEncGetEncodeCaps",
+            Self::GetEncodePresetConfigEx => "nvEncGetEncodePresetConfigEx",
+            Self::InitializeEncoder => "nvEncInitializeEncoder",
+            Self::ReconfigureEncoder => "nvEncReconfigureEncoder",
+            Self::CreateInputBuffer => "nvEncCreateInputBuffer",
+            Self::LockInputBuffer => "nvEncLockInputBuffer",
+            Self::CreateBitstreamBuffer => "nvEncCreateBitstreamBuffer",
+            Self::LockBitstream => "nvEncLockBitstream",
+            Self::RegisterResource => "nvEncRegisterResource",
+            Self::MapInputResource => "nvEncMapInputResource",
+            Self::EncodePicture => "nvEncEncodePicture",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvencStatus(pub i32);
+
+impl NvencStatus {
+    const NAMES: [&'static str; 27] = [
+        "success",
+        "no encode device",
+        "unsupported device",
+        "invalid encoder device",
+        "invalid device",
+        "device does not exist",
+        "invalid pointer",
+        "invalid event",
+        "invalid parameter",
+        "invalid call",
+        "out of memory",
+        "encoder not initialized",
+        "unsupported parameter",
+        "lock busy",
+        "not enough buffer",
+        "invalid version",
+        "map failed",
+        "need more input",
+        "encoder busy",
+        "event not registered",
+        "generic error",
+        "incompatible client key",
+        "unimplemented",
+        "resource register failed",
+        "resource not registered",
+        "resource not mapped",
+        "need more output",
+    ];
+}
+
+impl fmt::Display for NvencStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = usize::try_from(self.0)
+            .ok()
+            .and_then(|index| Self::NAMES.get(index));
+        match name {
+            Some(name) => write!(f, "{name} ({})", self.0),
+            None => write!(f, "nvenc status {}", self.0),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

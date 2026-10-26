@@ -28,6 +28,7 @@ use rusplay_core::{
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
     input::YuvFrame,
+    obu,
     rate::vbv_buffer_kbit,
     vaapi::{
         av1::{Av1Profile, Av1Stream},
@@ -934,10 +935,8 @@ impl VideoEncoder for VaapiEncoder {
         let mut data = session.coded.read()?;
         drop(buffers);
 
-        if settings.codec == Codec::Av1 && !av1::starts_with_temporal_delimiter(&data) {
-            let mut delimited = av1::temporal_delimiter();
-            delimited.append(&mut data);
-            data = delimited;
+        if settings.codec == Codec::Av1 {
+            data = obu::delimited(data);
         }
 
         session.needs_keyframe = false;

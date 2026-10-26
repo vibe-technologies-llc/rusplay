@@ -15,7 +15,6 @@ use crate::{
 };
 
 const OBU_SEQUENCE_HEADER: u8 = 1;
-const OBU_TEMPORAL_DELIMITER: u8 = 2;
 const OBU_FRAME_HEADER: u8 = 3;
 const FRAME_TYPE_KEY: u8 = 0;
 const FRAME_TYPE_INTER: u8 = 1;
@@ -203,15 +202,6 @@ pub(super) fn obu(kind: u8, payload: Vec<u8>, size_field_bytes: usize) -> Vec<u8
     bytes.extend(leb128(payload.len(), size_field_bytes));
     bytes.extend(payload);
     bytes
-}
-
-pub(super) fn temporal_delimiter() -> Vec<u8> {
-    obu(OBU_TEMPORAL_DELIMITER, Vec::new(), 1)
-}
-
-pub(super) fn starts_with_temporal_delimiter(data: &[u8]) -> bool {
-    data.first()
-        .is_some_and(|&byte| (byte >> 3) & 0x0f == OBU_TEMPORAL_DELIMITER)
 }
 
 #[derive(Debug, Clone, Copy)]

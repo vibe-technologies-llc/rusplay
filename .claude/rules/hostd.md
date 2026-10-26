@@ -24,13 +24,13 @@ paths:
   cause, a later receive error is printed and retried after a second. `rusplay-net` is a
   dev-dependency only, for the browser in its test.
 - Cargo features are pure forwarding, none on by default so the default build stays pure Rust and
-  needs no system library: `vaapi`, `x264`, `x265`, `svt-av1` (each enables `rusplay-encode/<name>`
-  through `rusplay-host`), `software-encoders` (the three software ones), `pipewire`
+  needs no system library: `vaapi`, `nvenc`, `x264`, `x265`, `svt-av1` (each enables
+  `rusplay-encode/<name>` through `rusplay-host`), `software-encoders` (the three software ones), `pipewire`
   (`rusplay-capture/pipewire` and `rusplay-audio/pipewire`), `input` (`rusplay-input/libei` and
   `rusplay-input/gamepad`, the host-side injection) and `flac` (`rusplay-audio/flac`).
   `rusplay-host` carries the same names and `rusplay-hostd` forwards to them. A config selecting an
-  encoder whose feature is off fails at start with `BackendNotCompiled`. The encode crate has no
-  `nvenc` feature yet; it joins this list when that backend lands.
+  encoder whose feature is off fails at start with `BackendNotCompiled`. `nvenc` links nothing at
+  build time (the NVIDIA libraries are loaded when an encoder opens), so it is safe in any build.
 - `main.rs` opens the paired-client store (`PeerStore::open_host`), the GPU (`Gpu::open`, first,
   because the capture offers the DMA-BUF modifiers that device imports), the portal
   (`open_portal(&config, &gpu)`: the capture and, with `input.accept_remote`, the input injector
@@ -42,7 +42,7 @@ paths:
   locked PIN just issues a new PIN; an error for which `HostError::is_session_failure` holds is
   printed and the loop goes on; any other error ends the daemon.
 - A useful daemon today is built with
-  `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,input,flac`,
+  `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the
   system. `vaapi,pipewire,input` covers the default config, whose encoder backend is VAAPI;
   without `pipewire` the daemon stops at start with `CaptureNotCompiled`, and without `input` with

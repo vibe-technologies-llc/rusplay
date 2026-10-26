@@ -1,2 +1,5 @@
 # Colour
 - [S] `client-color-lut-boundary`: decide whether the opt-in colour LUT (`color.processing.method = "lut"`) should become the default now that the analytic passes read a baked boundary table: a 4K HDR frame is 0.83 ms analytic against 0.57 ms through the 65³ LUT and 0.63 ms at 129³. At 65³ perceptual mapping is p99 0.9 to 2.5 ΔE_ITP against the analytic passes; at 129³ it is p99 0.42 to 0.93, within one JND, but keeps isolated maxima of 10 to 20 at the gamut cusps, and the texture is 17 MB with a 0.59 ms bake. A polar (lightness, chroma, hue) lattice measured no better (p99 1.3 to 2.1 at 65x65x256 in a CPU emulation); the other candidate is fusing the table-based analytic map into the unpack, one pass without a lattice
+
+# Video encode
+- [L] `host-encoder-gpu-handoff`: hand the host pipeline's converted YUV frame to hardware encoders on the GPU instead of reading it back: allocate the `ColorConverter` output as exportable memory (Vulkan `VK_KHR_external_memory_fd`), give VAAPI the DMA-BUF and NVENC the opaque fd as CUDA external memory, in the NVENC-native layouts `nvenc/layout.rs` checks; today both read back to shared memory and upload again

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 flac = ["rusplay-audio/flac"]
+nvenc = ["rusplay-encode/nvenc"]
 input = ["rusplay-input/gamepad", "rusplay-input/libei"]
 pipewire = ["rusplay-audio/pipewire", "rusplay-capture/pipewire"]
 software-encoders = ["svt-av1", "x264", "x265"]

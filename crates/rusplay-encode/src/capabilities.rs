@@ -66,6 +66,8 @@ pub fn capabilities(config: &VideoEncoderConfig) -> Result<Capabilities, EncodeE
     match config {
         #[cfg(feature = "vaapi")]
         VideoEncoderConfig::Vaapi(vaapi) => crate::vaapi::capabilities(vaapi),
+        #[cfg(feature = "nvenc")]
+        VideoEncoderConfig::Nvenc(nvenc) => crate::nvenc::capabilities(nvenc),
         #[cfg(feature = "x264")]
         VideoEncoderConfig::X264(_) => Capabilities::probe(backend, |codec, format| {
             Ok(codec == Codec::H264 && crate::x264::supports(format))
@@ -78,14 +80,19 @@ pub fn capabilities(config: &VideoEncoderConfig) -> Result<Capabilities, EncodeE
         VideoEncoderConfig::SvtAv1(_) => Capabilities::probe(backend, |codec, format| {
             Ok(codec == Codec::Av1 && crate::svt_av1::supports(format))
         }),
+        #[cfg(not(all(
+            feature = "vaapi",
+            feature = "nvenc",
+            feature = "x264",
+            feature = "x265",
+            feature = "svt-av1"
+        )))]
         _ => Err(EncodeError::BackendNotCompiled { backend }),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::NvencConfig;
-
     use super::*;
 
     #[test]
@@ -169,9 +176,13 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "nvenc"))]
     #[test]
     fn backends_without_a_build_report_it() {
-        let error = capabilities(&VideoEncoderConfig::Nvenc(NvencConfig::default())).unwrap_err();
+        let error = capabilities(&VideoEncoderConfig::Nvenc(
+            rusplay_config::NvencConfig::default(),
+        ))
+        .unwrap_err();
 
         assert!(matches!(
             error,

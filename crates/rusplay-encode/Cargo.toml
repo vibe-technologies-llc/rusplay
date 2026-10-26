@@ -11,8 +11,10 @@ x264 = ["dep:bindgen", "dep:pkg-config"]
 x265 = ["dep:bindgen", "dep:pkg-config"]
 svt-av1 = ["dep:bindgen", "dep:parking_lot", "dep:pkg-config"]
 vaapi = ["dep:bindgen", "dep:pkg-config"]
+nvenc = ["dep:libloading"]
 
 [dependencies]
+libloading = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 rusplay-capture.workspace = true
 rusplay-config.workspace = true

@@ -1,6 +1,11 @@
 pub const VBV_BUFFER_FRAMES: u64 = 2;
 
-#[cfg(any(feature = "x264", feature = "x265", feature = "vaapi"))]
+#[cfg(any(
+    feature = "x264",
+    feature = "x265",
+    feature = "vaapi",
+    feature = "nvenc"
+))]
 pub fn vbv_buffer_kbit(bitrate_kbps: u32, frame_rate: rusplay_core::FrameRate) -> u32 {
     let numerator = u64::from(frame_rate.numerator).max(1);
     let kbit =
