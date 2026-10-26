@@ -189,6 +189,10 @@ impl LibeiInjector {
         }
     }
 
+    pub fn service(&mut self) -> Result<(), InputError> {
+        self.pump()
+    }
+
     pub fn is_ready(&self) -> bool {
         !self.closed && self.devices.iter().any(|slot| slot.resumed)
     }

@@ -13,16 +13,18 @@ use std::{
 use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
 use parking_lot::Mutex;
 use rusplay_client::{
-    ClientError, ClientSession, Credentials, FrameColor, LatestFrame, OutputLight, Pin,
-    PresentedFrame,
+    ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame, OutputLight,
+    Pin, PresentedFrame,
 };
-use rusplay_core::{ColorRange, ColorSpace, Resolution};
-use rusplay_input::InputEvent;
+use rusplay_core::{ColorPrimaries, ColorRange, ColorSpace, Resolution};
+use rusplay_input::{InputEvent, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
 
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const LOST_FRAME: u32 = 5;
+const HELD_KEY: u32 = 30;
+const SNAPSHOT_INTERVAL_MS: u16 = 30;
 const AUDIO_PACKETS: u32 = 40;
 const LOST_AUDIO_PACKET: u32 = 12;
 const SAMPLES_PER_PACKET: usize = 240 * 2;
@@ -98,8 +100,10 @@ fn frames_arrive_decoded_at_the_source_resolution() {
             },
             described.format,
         )
+        .mapped_to(&ColorVolume::srgb_display())
     );
     assert_eq!(seen[0].color.light, OutputLight::Linear);
+    assert_eq!(seen[0].color.space.primaries, ColorPrimaries::Bt709);
     assert!(
         !host
             .messages()
@@ -327,6 +331,7 @@ fn cursor_position_and_image_reach_the_app() {
         .map(|step| CursorMessage {
             x: step * 10,
             y: step * 5,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: None,
         })
@@ -405,6 +410,42 @@ fn input_events_reach_the_host_in_order() {
         ]
     );
     assert!(stats.input_packets_sent >= 1);
+}
+
+#[test]
+fn held_state_snapshots_reach_the_host() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
+    let session = ClientSession::new(config);
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+
+    stream.input().send(InputEvent::Key {
+        keycode: HELD_KEY,
+        pressed: true,
+    });
+    let held = host.wait_for_state(
+        STREAM_TIMEOUT,
+        |record| matches!(record, StateRecord::Keys(keys) if keys.contains(HELD_KEY)),
+    );
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert!(held);
+    assert!(stats.input_snapshots_sent >= 1);
 }
 
 fn settle(

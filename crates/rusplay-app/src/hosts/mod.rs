@@ -1,4 +1,5 @@
 mod model;
 mod view;
 
-pub use view::HostsView;
+pub use model::HostEntry;
+pub use view::{ConnectRequested, HostsView};

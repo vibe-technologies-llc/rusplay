@@ -1,3 +1,4 @@
+mod input;
 mod media;
 
 use std::{
@@ -132,6 +133,20 @@ fn resizing_feed(frames: u32, after: u32) -> Arc<CaptureFeed> {
     })
 }
 
+fn resizing_feed_with_cursor(
+    frames: u32,
+    after: u32,
+    cursor: Subscriber<CursorUpdate>,
+) -> Arc<CaptureFeed> {
+    CaptureFeed::new(CountingSource {
+        remaining: frames,
+        produced: 0,
+        resize_after: Some(after),
+        cursor: Some(cursor),
+        started: stream_started(),
+    })
+}
+
 fn feed_with_cursor(frames: u32, cursor: Subscriber<CursorUpdate>) -> Arc<CaptureFeed> {
     CaptureFeed::new(CountingSource {
         remaining: frames,
@@ -147,6 +162,7 @@ struct FakePipeline {
     last: Option<u8>,
     encoded: u32,
     resolution: Option<Resolution>,
+    stream: Option<Resolution>,
     bitrate: Arc<AtomicU32>,
 }
 
@@ -196,7 +212,7 @@ impl VideoPipeline for FakePipeline {
     fn stream_format(&self) -> Option<StreamFormat> {
         self.resolution.map(|resolution| StreamFormat {
             codec: Codec::Av1,
-            resolution,
+            resolution: self.stream.unwrap_or(resolution),
             format: PixelFormat::default(),
             color: ColorSpace::default(),
         })
@@ -208,6 +224,17 @@ fn fake_factory(bitrate: &Arc<AtomicU32>) -> PipelineFactory {
     Box::new(move || {
         Ok(Box::new(FakePipeline {
             bitrate,
+            ..FakePipeline::default()
+        }) as Box<dyn VideoPipeline>)
+    })
+}
+
+fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> PipelineFactory {
+    let bitrate = Arc::clone(bitrate);
+    Box::new(move || {
+        Ok(Box::new(FakePipeline {
+            bitrate,
+            stream: Some(stream),
             ..FakePipeline::default()
         }) as Box<dyn VideoPipeline>)
     })
@@ -294,6 +321,10 @@ impl TestClient {
     fn send(&mut self, message: ControlMessage) {
         self.control.send(message, Instant::now()).unwrap();
         self.control.flush(&self.transport, self.host).unwrap();
+    }
+
+    fn send_datagram(&self, datagram: &[u8]) {
+        self.transport.send_to(datagram, self.host).unwrap();
     }
 
     fn hello(&mut self) {
@@ -464,7 +495,7 @@ fn wait_for_end(stream: HostStream) -> Result<(), HostError> {
 fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
-    let serving = fixture.serve(Some(pin()), feed(6), fake_factory(&bitrate));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
@@ -473,12 +504,16 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
         client.frames.len() >= 4 && client.has_hello() && stream.stats().frames_sent >= 4
     });
     let stats = stream.stats();
+    let later_keyframes = client.frames[1..]
+        .iter()
+        .filter(|frame| frame.keyframe)
+        .count() as u64;
 
     assert!(complete);
     assert_eq!(admission, Admission::Paired);
     assert_eq!(fixture.host.peers().read().len(), 1);
     assert!(client.frames[0].keyframe);
-    assert!(client.frames[1..].iter().all(|frame| !frame.keyframe));
+    assert!(later_keyframes <= stats.frames_dropped);
     assert!(
         client
             .frames
@@ -487,7 +522,7 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
             .all(|(frame, number)| frame.number == number)
     );
     assert!(stats.frames_sent >= 4);
-    assert_eq!(stats.keyframes_sent, 1);
+    assert!(stats.keyframes_sent <= 1 + stats.frames_dropped);
     stream.stop().unwrap();
 }
 

@@ -11,11 +11,17 @@ mod session;
 mod sink;
 mod slot;
 mod stats;
+#[cfg(test)]
+mod testing;
+#[cfg(feature = "window")]
+mod window;
 
 pub use rusplay_net::{PeerRecord, PeerSecret, Pin};
 pub use rusplay_protocol::{CursorImage, StreamDescription};
-pub use rusplay_scale::OutputLight;
+pub use rusplay_scale::{ColorVolume, OutputLight};
 
+#[cfg(feature = "window")]
+pub use crate::window::{LogicalArea, StreamWindow, WaylandTarget, WindowLayout, WindowSink};
 pub use crate::{
     audio::{AudioOutput, AudioOutputStats, default_audio_output},
     color::FrameColor,

@@ -69,7 +69,7 @@ impl InputEvent {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, InputError> {
-        let mut reader = Reader { rest: bytes };
+        let mut reader = Reader::new(bytes);
 
         let event = match reader.u8()? {
             TAG_KEY => Self::Key {
@@ -99,10 +99,9 @@ impl InputEvent {
             tag => return Err(InputError::WireUnknownTag(tag)),
         };
 
-        match reader.rest.len() {
-            0 => Ok(event),
-            extra => Err(InputError::WireTrailingBytes(extra)),
-        }
+        reader.finish()?;
+
+        Ok(event)
     }
 }
 
@@ -147,11 +146,22 @@ fn decode_gamepad(reader: &mut Reader) -> Result<GamepadEvent, InputError> {
     }
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     rest: &'a [u8],
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
+    pub(crate) fn new(rest: &'a [u8]) -> Self {
+        Self { rest }
+    }
+
+    pub(crate) fn finish(&self) -> Result<(), InputError> {
+        match self.rest.len() {
+            0 => Ok(()),
+            extra => Err(InputError::WireTrailingBytes(extra)),
+        }
+    }
+
     fn take<const N: usize>(&mut self) -> Result<[u8; N], InputError> {
         let Some((head, rest)) = self.rest.split_first_chunk::<N>() else {
             return Err(InputError::WireTruncated {
@@ -163,27 +173,31 @@ impl Reader<'_> {
         Ok(*head)
     }
 
-    fn u8(&mut self) -> Result<u8, InputError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, InputError> {
         self.take::<1>().map(|[byte]| byte)
     }
 
-    fn u16(&mut self) -> Result<u16, InputError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, InputError> {
         self.take().map(u16::from_le_bytes)
     }
 
-    fn u32(&mut self) -> Result<u32, InputError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, InputError> {
         self.take().map(u32::from_le_bytes)
     }
 
-    fn f32(&mut self) -> Result<f32, InputError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, InputError> {
+        self.take().map(u64::from_le_bytes)
+    }
+
+    pub(crate) fn f32(&mut self) -> Result<f32, InputError> {
         self.take().map(f32::from_le_bytes)
     }
 
-    fn f64(&mut self) -> Result<f64, InputError> {
+    pub(crate) fn f64(&mut self) -> Result<f64, InputError> {
         self.take().map(f64::from_le_bytes)
     }
 
-    fn bool(&mut self) -> Result<bool, InputError> {
+    pub(crate) fn bool(&mut self) -> Result<bool, InputError> {
         match self.u8()? {
             0 => Ok(false),
             1 => Ok(true),

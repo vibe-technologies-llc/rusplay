@@ -6,8 +6,7 @@ use std::{env, error::Error, path::Path, process::ExitCode, sync::Arc};
 
 use rusplay_config::{Config, ConfigError};
 use rusplay_host::{
-    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin,
-    open_portal_capture,
+    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin, open_portal,
 };
 use thiserror::Error;
 
@@ -69,8 +68,12 @@ fn run() -> Result<(), HostdError> {
 fn serve(config: Config) -> Result<(), HostdError> {
     let peers = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
     let gpu = Gpu::open()?;
-    let feed = open_portal_capture(&config, &gpu)?;
-    let host = HostSession::bind(config, peers)?;
+    let portal = open_portal(&config, &gpu)?;
+    let feed = portal.feed;
+    let mut host = HostSession::bind(config, peers)?;
+    if let Some(input) = portal.input {
+        host = host.with_input(input);
+    }
     let address = host.local_addr()?;
     eprintln!("rusplay-hostd: listening on {address}");
     let _responder = Responder::start(

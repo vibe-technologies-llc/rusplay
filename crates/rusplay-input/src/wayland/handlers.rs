@@ -14,6 +14,10 @@ use wayland_client::{
     },
 };
 use wayland_protocols::wp::{
+    cursor_shape::v1::client::{
+        wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+        wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+    },
     pointer_constraints::zv1::client::{
         zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
         zwp_pointer_constraints_v1::{Lifetime, ZwpPointerConstraintsV1},
@@ -31,6 +35,7 @@ use crate::{
 
 const SEAT_VERSIONS: std::ops::RangeInclusive<u32> = 1..=8;
 const CONSTRAINT_VERSIONS: std::ops::RangeInclusive<u32> = 1..=1;
+const CURSOR_SHAPE_VERSIONS: std::ops::RangeInclusive<u32> = 1..=2;
 const WHEEL_UNITS_PER_NOTCH: f64 = 10.0;
 const VALUE120_PER_NOTCH: f64 = 120.0;
 
@@ -57,6 +62,9 @@ pub(super) struct State {
     relative_manager: Option<ZwpRelativePointerManagerV1>,
     relative: Option<ZwpRelativePointerV1>,
     locked: Option<ZwpLockedPointerV1>,
+    shape_manager: Option<WpCursorShapeManagerV1>,
+    shape_device: Option<WpCursorShapeDeviceV1>,
+    enter_serial: Option<u32>,
     pointer_focused: bool,
     keyboard_focused: bool,
     scroll: ScrollFrame,
@@ -85,6 +93,9 @@ impl State {
             globals.bind::<ZwpPointerConstraintsV1, _, _>(handle, CONSTRAINT_VERSIONS, ());
         let relative_manager =
             globals.bind::<ZwpRelativePointerManagerV1, _, _>(handle, CONSTRAINT_VERSIONS, ());
+        let shape_manager = globals
+            .bind::<WpCursorShapeManagerV1, _, _>(handle, CURSOR_SHAPE_VERSIONS, ())
+            .ok();
 
         let (constraints, relative_manager) = if relative_mode {
             (
@@ -106,6 +117,9 @@ impl State {
             relative_manager,
             relative: None,
             locked: None,
+            shape_manager,
+            shape_device: None,
+            enter_serial: None,
             pointer_focused: false,
             keyboard_focused: false,
             scroll: ScrollFrame::default(),
@@ -136,6 +150,12 @@ impl State {
         if let Some(relative) = self.relative.take() {
             relative.destroy();
         }
+        if let Some(device) = self.shape_device.take() {
+            device.destroy();
+        }
+        if let Some(manager) = self.shape_manager.take() {
+            manager.destroy();
+        }
         if let Some(pointer) = self.pointer.take().filter(|pointer| pointer.version() >= 3) {
             pointer.release();
         }
@@ -164,8 +184,14 @@ impl State {
 
     fn apply(&mut self, transition: Transition) {
         match transition {
-            Transition::Engaged => self.lock_pointer(),
-            Transition::Released => self.unlock_pointer(),
+            Transition::Engaged => {
+                self.lock_pointer();
+                self.hide_cursor();
+            }
+            Transition::Released => {
+                self.unlock_pointer();
+                self.restore_cursor();
+            }
             Transition::Unchanged => {}
         }
     }
@@ -194,6 +220,22 @@ impl State {
         }
     }
 
+    fn hide_cursor(&self) {
+        if let (Some(pointer), Some(serial), true) =
+            (&self.pointer, self.enter_serial, self.pointer_focused)
+        {
+            pointer.set_cursor(serial, None, 0, 0);
+        }
+    }
+
+    fn restore_cursor(&self) {
+        if let (Some(device), Some(serial), true) =
+            (&self.shape_device, self.enter_serial, self.pointer_focused)
+        {
+            device.set_shape(serial, Shape::Default);
+        }
+    }
+
     fn flush_scroll(&mut self) {
         let frame = std::mem::take(&mut self.scroll);
         let (dx, dy) = if frame.discrete == (0.0, 0.0) {
@@ -218,6 +260,9 @@ impl State {
     fn create_pointer_objects(&mut self, pointer: &WlPointer) {
         if let Some(manager) = &self.relative_manager {
             self.relative = Some(manager.get_relative_pointer(pointer, &self.handle, ()));
+        }
+        if let Some(manager) = &self.shape_manager {
+            self.shape_device = Some(manager.get_pointer(pointer, &self.handle, ()));
         }
     }
 }
@@ -273,12 +318,16 @@ impl Dispatch<WlPointer, ()> for State {
     ) {
         match event {
             wl_pointer::Event::Enter {
+                serial,
                 surface,
                 surface_x,
                 surface_y,
-                ..
             } if surface == state.surface => {
                 state.pointer_focused = true;
+                state.enter_serial = Some(serial);
+                if state.core.lock().is_engaged() {
+                    state.hide_cursor();
+                }
                 state.with_core(|core, out| core.pointer_position(surface_x, surface_y, out));
             }
             wl_pointer::Event::Leave { surface, .. } if surface == state.surface => {
@@ -384,6 +433,30 @@ impl Dispatch<ZwpLockedPointerV1, ()> for State {
         _: &mut Self,
         _: &ZwpLockedPointerV1,
         _: zwp_locked_pointer_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpCursorShapeManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WpCursorShapeManagerV1,
+        _: <WpCursorShapeManagerV1 as Proxy>::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpCursorShapeDeviceV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WpCursorShapeDeviceV1,
+        _: <WpCursorShapeDeviceV1 as Proxy>::Event,
         (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,

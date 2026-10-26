@@ -26,19 +26,25 @@ paths:
 - Cargo features are pure forwarding, none on by default so the default build stays pure Rust and
   needs no system library: `vaapi`, `x264`, `x265`, `svt-av1` (each enables `rusplay-encode/<name>`
   through `rusplay-host`), `software-encoders` (the three software ones), `pipewire`
-  (`rusplay-capture/pipewire` and `rusplay-audio/pipewire`) and `flac` (`rusplay-audio/flac`).
+  (`rusplay-capture/pipewire` and `rusplay-audio/pipewire`), `input` (`rusplay-input/libei` and
+  `rusplay-input/gamepad`, the host-side injection) and `flac` (`rusplay-audio/flac`).
   `rusplay-host` carries the same names and `rusplay-hostd` forwards to them. A config selecting an
   encoder whose feature is off fails at start with `BackendNotCompiled`. The encode crate has no
   `nvenc` feature yet; it joins this list when that backend lands.
-- `main.rs` opens the paired-client store (`PeerStore::open_host`), the portal capture
-  (`open_portal_capture`, so the picker shows once at start), the GPU and the `HostSession`,
+- `main.rs` opens the paired-client store (`PeerStore::open_host`), the GPU (`Gpu::open`, first,
+  because the capture offers the DMA-BUF modifiers that device imports), the portal
+  (`open_portal(&config, &gpu)`: the capture and, with `input.accept_remote`, the input injector
+  from one session, so the permission dialog shows once at start) and the `HostSession` (given
+  the input feed with `with_input`),
   then loops: a fresh PIN from `Pin::generate(network.pairing_pin_digits)` is printed for each
   `network.pairing_timeout_ms` window, `accept` takes a PIN pairing or a remembered client's
   reconnect, and `serve(..).wait()` streams until the client leaves. An accept timeout or a
   locked PIN just issues a new PIN; an error for which `HostError::is_session_failure` holds is
   printed and the loop goes on; any other error ends the daemon.
 - A useful daemon today is built with
-  `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,flac`, which
-  needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the system.
-  `vaapi,pipewire` covers the default config, whose encoder backend is VAAPI; without `pipewire`
-  the daemon stops at start with `CaptureNotCompiled`.
+  `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,input,flac`,
+  which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the
+  system. `vaapi,pipewire,input` covers the default config, whose encoder backend is VAAPI;
+  without `pipewire` the daemon stops at start with `CaptureNotCompiled`, and without `input` with
+  `InputNotCompiled` unless `input.accept_remote` is off. Virtual gamepads need access to
+  `/dev/uinput` (`input.md`).

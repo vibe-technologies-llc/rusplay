@@ -899,6 +899,7 @@ mod tests {
         let position = CursorMessage {
             x: 1,
             y: 2,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: None,
         };
@@ -922,12 +923,14 @@ mod tests {
         let with_image = CursorMessage {
             x: 10,
             y: 20,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: Some(cursor_image(2, 5)),
         };
         let moved = CursorMessage {
             x: 30,
             y: 40,
+            space: Resolution::new(1920, 1080),
             visible: false,
             image: None,
         };
@@ -958,6 +961,7 @@ mod tests {
         let message = CursorMessage {
             x: 1,
             y: 1,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: Some(cursor_image(48, 7)),
         };
@@ -992,6 +996,7 @@ mod tests {
         let at = |x| CursorMessage {
             x,
             y: 0,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: None,
         };

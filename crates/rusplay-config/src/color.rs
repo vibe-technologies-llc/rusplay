@@ -16,6 +16,7 @@ pub struct ColorConfig {
     pub target: DisplayTargetConfig,
     pub tone_mapping: ToneMappingConfig,
     pub gamut_mapping: GamutMappingConfig,
+    pub output: DisplayOutputConfig,
 }
 
 impl ColorConfig {
@@ -56,6 +57,56 @@ impl DisplayTargetConfig {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputColorSpace {
+    #[default]
+    Auto,
+    Srgb,
+    DisplayP3,
+    ExtendedLinear,
+    Pq,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    #[default]
+    Auto,
+    Rgba8,
+    Rgb10a2,
+    Rgba16Float,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DitherMode {
+    #[default]
+    BlueNoise,
+    Ordered,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DisplayOutputConfig {
+    pub color_space: OutputColorSpace,
+    pub format: OutputFormat,
+    pub dither: DitherMode,
+    pub query_display: bool,
+}
+
+impl Default for DisplayOutputConfig {
+    fn default() -> Self {
+        Self {
+            color_space: OutputColorSpace::Auto,
+            format: OutputFormat::Auto,
+            dither: DitherMode::BlueNoise,
+            query_display: true,
+        }
     }
 }
 
@@ -240,6 +291,35 @@ mod tests {
             invalid[2].validate(),
             Err(ConfigError::SceneThresholdOutOfRange(_))
         ));
+    }
+
+    #[test]
+    fn output_defaults_to_automatic_blue_noise_dithered_presentation() {
+        let config = DisplayOutputConfig::default();
+        let parsed: Config = toml::from_str(
+            r#"
+            [color.output]
+            color_space = "extended-linear"
+            format = "rgba16-float"
+            dither = "ordered"
+            query_display = false
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.color_space, OutputColorSpace::Auto);
+        assert_eq!(config.format, OutputFormat::Auto);
+        assert_eq!(config.dither, DitherMode::BlueNoise);
+        assert!(config.query_display);
+        assert_eq!(
+            parsed.color.output,
+            DisplayOutputConfig {
+                color_space: OutputColorSpace::ExtendedLinear,
+                format: OutputFormat::Rgba16Float,
+                dither: DitherMode::Ordered,
+                query_display: false,
+            }
+        );
     }
 
     #[test]

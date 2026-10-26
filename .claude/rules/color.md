@@ -206,7 +206,7 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8); and the display
   overrides `color.target.primaries`, `transfer`, `reference_white_nits`, `peak_nits` and
   `black_nits`, all unset by default. Resolving them is `rusplay_client::display` (next
-  section); feeding the result into `ColorMapSettings` belongs to `client-color-pipeline`.
+  section); the client presentation below turns the result into `ColorMapSettings`.
 
 ## Display target (`rusplay-client::display`)
 
@@ -238,17 +238,78 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   min, `luminances` min, 0. A black level at or above the peak is
   `TargetBlackNotBelowPeak`, since the overrides are validated only against each other.
 
+## Client presentation (`rusplay-client`)
+
+- Per frame the present stage runs unpack, then `Lineariser` for PQ/HLG frames (`OutputLight::Linear`;
+  for HLG on an HDR target the OOTF uses the target's peak), then `ColorMapper` unless the plan
+  is identity, then `Scaler`, all at the source resolution except the scaler's output.
+  `ColorRoute::plan` (`present/mapping.rs`) builds the `ColorMapSettings` from
+  `ColorVolume::of_content` of the frame's colour, the colour target and `MappingOptions` (the
+  `color.tone_mapping` and `color.gamut_mapping` sections, the same conversion the host makes),
+  and `ColorStage` caches it until the frame colour or the target changes. The texture handed to
+  the sink is linear light in the target primaries with 1.0 at the target's reference white, and
+  its `FrameColor` says so (`client.md`).
+- The window picks its surface once at attach (`window/output.rs`, `SurfaceOutput::choose`, pure
+  and unit tested). `color.output.query_display` (on by default) asks the compositor for the
+  first output's image description (`query_display(None)`); an answer makes the display
+  `Managed` (the description with the overrides laid over it), no answer `Unmanaged` (the
+  overrides over the sRGB fallback). The surface colour spaces, in `auto` order:
+  - managed HDR display: `Bt2100Pq` (BT.2020 primaries, PQ with the target's reference white
+    written as 203 cd/m², the protocol's default PQ reference, which the compositor maps onto the
+    output's own reference white), then `ExtendedSrgbLinear`, then sRGB;
+  - managed Display P3 SDR display: `DisplayP3` (sRGB transfer), then scRGB, then sRGB; any other
+    gamut wider than BT.709: scRGB, then sRGB;
+  - otherwise sRGB. On a managed compositor an sRGB surface's target is sRGB/BT.709 SDR at the
+    display's reference white whatever the display is, since the compositor converts from sRGB;
+    on an unmanaged one the target is the overrides, encoded verbatim (primaries, transfer, PQ
+    in absolute cd/m²) into the untagged buffer, which is how a user describes a panel that
+    receives pixels unconverted.
+  `ExtendedSrgbLinear` (scRGB) is the target's linear light converted to BT.709 primaries with
+  1.0 at reference white and nothing clipped, negative values carrying the wider gamut. Formats
+  per space: `Rgb10a2Unorm`, `Bgra8Unorm`, `Rgba8Unorm` for sRGB and Display P3,
+  `Rgba16Float` for scRGB, `Rgb10a2Unorm` then `Rgba16Float` for PQ, each only where the surface
+  capabilities list that colour space for that format (Mesa's Wayland WSI should offer the wide
+  ones only on a colour-managed compositor and tag the surface itself; not yet checked against a
+  running HDR compositor). `color.output.color_space` (`auto`,
+  `srgb`, `display-p3`, `extended-linear`, `pq`) and `color.output.format` (`auto`, `rgba8`,
+  `rgb10a2`, `rgba16-float`) force a choice.
+- Encoding is the last step of `compose.wgsl`, after the cursor blend: the target-to-signal
+  matrix (Bradford), then the signal's transfer: sRGB, BT.709 OETF, gamma 2.2, PQ of
+  `light * white / 10000`, HLG (BT.2100 inverse OOTF at the signal's peak with the signal
+  primaries' luma row, then the OETF), linear clamped to `0..1`, or scRGB unclamped.
+- Dithering (`color.output.dither`: `blue-noise` default, `ordered`, `off`) quantises in the
+  shader as `floor(encoded * (2^bits - 1) + t) / (2^bits - 1)` with the threshold `t` from the
+  pattern, 8 bits for the 8-bit formats, 10 for `Rgb10a2Unorm`, none for float. Doing the floor
+  itself keeps the result independent of the hardware's float-to-unorm rounding. `ordered` is a
+  16x16 Bayer matrix computed from the pixel's bits; `blue-noise` is a 64x64 void-and-cluster
+  ranking (Gaussian σ 1.5 on the torus, 10% initial fill from a fixed xorshift seed, tightest
+  cluster and largest void found from incrementally updated energies), generated once per
+  process (`window/dither.rs`) and uploaded as `r32float`. The pattern is static across frames.
+- Tests: GPU against f64 CPU references, in `present/mapping/tests.rs` (BT.2020 PQ greys onto
+  an sRGB display follow `ToneCurve::map_nits`; saturated PQ and SDR BT.2020 colours land in
+  the sRGB gamut with ICtCp or Oklab hue within 3° or 2° and never further than per-channel
+  clipping moves it, lightness held, an in-gamut colour untouched; a source that matches the
+  display takes no mapping pass) and `window/compose/tests.rs` (sRGB and PQ codes against the
+  CPU transfer functions, scRGB keeping negative and above-1 values, both dither patterns
+  matching `floor(v + t)` per pixel with the mean on the level, and an identity chain, PQ
+  through the lineariser and sRGB, reproducing its source codes).
+- The window does not follow the output it is on or a change of the output's description
+  (`client-color-output-follow` in `docs/FEATURES.md`), and HDR metadata (ST 2086, MaxCLL) is
+  not passed to the compositor: wgpu has no `vkSetHdrMetadataEXT`.
+
 ## Implementation
 
 - Stages are fused into as few dispatches as possible. When the analytic chain gets expensive,
   the colour stages (2 to 4) can be baked into a 3D LUT (`rgba16float`, 65³ by default,
-  tetrahedral interpolation), rebuilt only when the source or target description changes. The
+  tetrahedral interpolation), rebuilt only when the source or target description changes
+  (`client-color-lut` in `docs/PERFORMANCE.md`; the client runs the analytic passes today). The
   analytic shader stays the reference.
 - Math is f32 on the GPU with `rgba16float` intermediates. CPU references in f64 check every
   stage. Tests cover in-gamut colours passing through unchanged, BT.2020 primaries landing on the
   P3 boundary with hue preserved (ΔE_ITP bound), the BT.2390 curve matching the spec's reference
   points, and round trips where the target contains the source.
 - Every choice above is a config option with the default named here: target overrides, operator,
-  gamut mapping mode, dynamic peak detection, reference white, LUT size and dither.
+  gamut mapping mode, dynamic peak detection, reference white, surface colour space and format,
+  and dither; the LUT size comes with the bake.
 - Changing the source or target description reconfigures the plan in place, never on the
   per-frame path.

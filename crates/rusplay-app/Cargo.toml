@@ -9,10 +9,19 @@ publish.workspace = true
 name = "rusplay"
 path = "src/main.rs"
 
+[features]
+default = ["flac", "pipewire"]
+flac = ["rusplay-client/flac"]
+pipewire = ["rusplay-client/pipewire"]
+software = ["rusplay-client/software"]
+software-asm = ["rusplay-client/software-asm"]
+vaapi = ["rusplay-client/vaapi"]
+
 [dependencies]
 gpui.workspace = true
 gpui_platform = { workspace = true, features = ["wayland"] }
-rusplay-client.workspace = true
+raw-window-handle.workspace = true
+rusplay-client = { workspace = true, features = ["window"] }
 rusplay-config.workspace = true
 thiserror.workspace = true
 toml = { workspace = true, features = ["std", "parse", "serde"] }

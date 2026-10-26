@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 flac = ["rusplay-host/flac"]
+input = ["rusplay-host/input"]
 pipewire = ["rusplay-host/pipewire"]
 software-encoders = ["rusplay-host/software-encoders"]
 svt-av1 = ["rusplay-host/svt-av1"]

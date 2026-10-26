@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::Arc,
+    sync::{Arc, mpsc::Sender},
     time::{Duration, Instant},
 };
 
@@ -48,6 +48,7 @@ pub(crate) struct ControlLinks {
     pub client: SocketAddr,
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
+    pub input: Option<Sender<Vec<u8>>>,
 }
 
 pub(crate) struct ControlStage {
@@ -159,6 +160,14 @@ impl ControlStage {
             Ok(StreamKind::Pairing | StreamKind::Reconnect) => {
                 if let Some(reply) = self.links.replay.answer(datagram) {
                     self.links.transport.send_to(reply, self.links.client)?;
+                }
+                true
+            }
+            Ok(StreamKind::Input) => {
+                if self.streaming
+                    && let Some(input) = &self.links.input
+                {
+                    input.send(datagram.to_vec()).ok();
                 }
                 true
             }

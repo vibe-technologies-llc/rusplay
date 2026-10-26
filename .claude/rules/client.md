@@ -12,8 +12,7 @@ paths:
   `Credentials::Peer` runs `reconnect_as_client`), installs the session keys and only then starts
   the stages, so nothing streams unsealed. It returns once the host has answered the client's
   `Hello`, or fails with `HandshakeTimeout` after `network.handshake_timeout_ms`,
-  `HelloUndeliverable` or `HandshakeAborted`. `probe` only opens the configured decoders; it is what
-  the app calls until `app-stream-view` replaces it with `connect`.
+  `HelloUndeliverable` or `HandshakeAborted`. `probe` only opens the configured decoders.
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. Before the first video frame, and again whenever any of it changes, the host
@@ -64,11 +63,13 @@ paths:
   `submitted_at` instants for latency accounting.
 - Present runs on the app's `Gpu` (device and queue): CPU planes are written row by row into the
   `RgbConverter` upload buffer through `Queue::write_buffer_with` (the one unavoidable copy for
-  software decode), unpacked to `rgba16float` at the source resolution and, when the target set by
-  `ClientStream::set_target` differs, resampled by `Scaler` (the upscale filter, anti-ringing and
-  sigmoid when enlarging either axis, the downscale filter otherwise). Without a target, or at the
-  same size, the unpack writes straight into the output texture. Chroma siting is `Left`, matching
-  the host's `ColorConverter` default.
+  software decode), unpacked to `rgba16float` at the source resolution, taken through the colour
+  passes (`present/mapping.rs`, below) and, when the target set by `ClientStream::set_target`
+  differs, resampled by `Scaler` (the upscale filter, anti-ringing and, for an SDR colour target
+  only, sigmoid when enlarging either axis; the downscale filter otherwise). The passes ping-pong
+  between at most two scratch textures at the source resolution and the last one writes the
+  output texture, so a frame that needs no colour pass and no scaling is unpacked straight into
+  it. Chroma siting is `Left`, matching the host's `ColorConverter` default.
 - Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC`, pooled up
   to four per target size as `Arc<wgpu::Texture>`; a texture is reused once only the pool holds it,
   so the app may keep a `PresentedFrame` for as long as it displays it. If all four are held the
@@ -78,16 +79,21 @@ paths:
   implemented for `FnMut(PresentedFrame)` closures) and `LatestFrame`, a cloneable latest-wins
   sink with `take` and `wait`. Sinks must not block.
 - Every `PresentedFrame` carries `FrameColor`: the `ColorSpace` (primaries, transfer, range,
-  matrix and the `HdrLevels` with optional mastering and content light metadata: the host's
-  description with whatever the decoder read from the bitstream laid over it,
-  `DecodedFrame::color.over(description.color)`, so the bitstream wins), the resolved
-  `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. SDR
-  transfers (sRGB, BT.709, gamma 2.2, linear) are linearised (`OutputLight::Linear`), PQ and
-  HLG are left encoded (`OutputLight::Encoded`, no sigmoid) in the stream's own primaries, so
-  nothing assumes an sRGB or BT.709 display. The colour describes what the texture holds: a
-  gamut or tone-mapping pass goes in `present.rs` between the unpack and the scaler, on the
-  source-resolution linear texture, and updates `FrameColor` accordingly, without changing the
-  public types.
+  matrix and the `HdrLevels` with optional mastering and content light metadata), the resolved
+  `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. The
+  source is the host's description with whatever the decoder read from the bitstream laid over
+  it (`DecodedFrame::color.over(description.color)`, so the bitstream wins), and it drives the
+  unpack: SDR transfers are linearised there, PQ and HLG are unpacked encoded. What the sink
+  receives describes the presented texture instead, `FrameColor::mapped_to(&target)`: always
+  `OutputLight::Linear`, in the colour target's primaries with 1.0 at its reference white, the
+  target's transfer and levels as the encoding still to apply, no mastering or content light
+  metadata.
+- The colour target is `FrameSink::color_target` (defaulted to `None`; `WindowSink` returns the
+  window's, `color.md`), read on every frame, else the `color.target` overrides resolved against
+  an empty `DisplayImage` at connect (sRGB at 203 cd/m² by default). `ColorStage` plans a
+  `ColorRoute` only when the source colour or the target changes: a `Lineariser` pass for
+  encoded (PQ/HLG) frames and a `ColorMapper` pass unless `ColorPlan::is_identity`. Its design
+  is in `color.md`.
 - Audio (`audio.rs`): `connect` opens an `AudioOutput` before it spawns the stages. The default
   (`default_audio_output`) is `AudioPlayback` when the `pipewire` feature is on and none
   otherwise; `connect_with_audio` takes any `Option<Box<dyn AudioOutput>>` (tests pass a capturing
@@ -120,8 +126,11 @@ paths:
   `Transport::max_datagram_len` and sends them straight away. `InputPacketer` is pure: it splits
   a batch into sections of at most half the datagram budget, repeats the previous section in
   every datagram and emits the empty repeat datagram after state changes
-  (`input.resend_delay_ms`). A send error ends the input stage and with it the stream; the gamepad stage never
-  returns an error.
+  (`input.resend_delay_ms`). The stage feeds every event it sends to a `HeldInput` and, every
+  `input.snapshot_interval_ms`, packs its `snapshot` records with `InputPacketer::pack_state`
+  into datagrams of the same sequence (`input_snapshots_sent`), so the host can repair a key
+  whose release was lost with its repeat (`input.md`). A send error ends the input stage and with
+  it the stream; the gamepad stage never returns an error.
 - The gamepad stage drives `PhysicalGamepads` (5 ms poll, which also bounds how long a rumble
   command or a stop waits), sends its events through the same `InputHandle`, and applies
   `RumbleCommand`s from a channel. The receive stage fills that channel from
@@ -140,10 +149,15 @@ paths:
   `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is repaired
   by the host, which repeats the image every `network.cursor_image_repeat_ms` (`host.md`); the
   client never asks for it.
-- The display's colour target comes from the `display` module (`query_target`,
-  `resolve_target`), documented in `color.md`; nothing in the session calls it yet
-  (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
-  compositor.
+- Every `CursorMessage` carries `space`, the pixel extent its position, hotspot and shape are
+  measured in (the host's capture size), kept in `CursorState::space`. The window scales
+  position, hotspot and shape by `target / space` per axis, so the cursor lands and is sized
+  right whatever the stream resolution is. `CursorImage::rgba` is read as sRGB with straight
+  alpha.
+- The display's colour target comes from the `display` module (`query_display`,
+  `resolve_target`), documented in `color.md`; `StreamWindow::attach` queries it and the session
+  resolves the overrides alone as the fallback. `tests/display.rs` has an `#[ignore]`d test
+  against the running compositor.
 - DMA-BUF frames from VAAPI (`NV12`/`P010`) are imported by a `DmaBufImporter` created on the
   first one, which needs a `Gpu` whose device came from `rusplay_scale::device_descriptor`
   (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
@@ -158,8 +172,9 @@ paths:
   waiting for (and then carrying the newest) stream description;
   `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
 - The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
-  record decoding a real host uses; the test client config turns `input.gamepads` off so the
-  tests never touch `/dev/input`.
+  record decoding a real host uses (`InputRecord`, so the periodic held-state snapshot arrives as
+  `StateRecord`s that `held_state_snapshots_reach_the_host` looks for); the test client config
+  turns `input.gamepads` off so the tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange followed by a `StreamFormat`
   (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names
@@ -178,3 +193,63 @@ paths:
   presented frame rather than that the first one back is a keyframe. Host-side messages are
   awaited with `TestHost::wait_for`, never read immediately. The scaling test holds the host
   back with `HostOptions::gate` until `set_target` has run, so every presented frame is scaled.
+
+## Window (`window` feature)
+
+- `StreamWindow::attach(WaylandTarget, &Config)` (`unsafe`, same pointer contract as
+  `WaylandCapture`) presents the stream in an app window. It wraps the window's `wl_display` with
+  `Backend::from_foreign_display` and its own event queue (`window/surface.rs`), and makes a child
+  `wl_surface` as a desynchronised `wl_subsurface` above the window's surface, with an empty input
+  region (pointer and keyboard events keep going to the window's own surface, which is what input
+  capture attaches to) and a `wp_viewport`. `wl_compositor`, `wl_subcompositor` and
+  `wp_viewporter` are required (`WindowGlobalMissing`).
+- It creates its own wgpu instance, a surface on the child `wl_surface`, an adapter compatible
+  with it (high performance) and a device from `rusplay_scale::device_descriptor`, so DMA-BUF
+  import works. `StreamWindow::gpu` is that device for `ClientSession::connect`, and
+  `StreamWindow::sink` the `FrameSink` (`WindowSink`), so frames go from the present stage to the
+  window thread without touching the app's UI thread.
+- `set_layout(Option<WindowLayout>)` takes the picture rectangle in whole logical pixels of the
+  parent surface (`x`, `y`, `width`, `height`) and its device size (`pixels`), as computed by the
+  pure `WindowLayout::letterbox(LogicalArea, scale, source)`: the largest rectangle of the source
+  aspect inside the area, edges rounded inward to whole logical pixels, centred, device size
+  `round(logical * scale)`. The subsurface position is set at once (it applies on the parent's
+  next commit); the caller sets `ClientStream::set_target(layout.pixels)` so the present stage
+  scales to exactly the swapchain size.
+- The `rusplay-client-window` thread waits on one condvar for a new frame, a layout change, a
+  cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message) or stop,
+  and keeps the last frame so a cursor move redraws without a new picture. It draws only a frame
+  whose texture size equals `layout.pixels`; anything else is a frame scaled for an older layout
+  and is skipped. It (re)configures the swapchain to that size, sets the viewport destination to
+  the logical size just before presenting (so buffer and destination change in the same commit
+  and the compositor maps the buffer 1:1), composes and presents with `Queue::present`.
+- Swapchain: format and surface colour space from `SurfaceOutput::choose` (`window/output.rs`,
+  `color.md`; `SurfaceOutputUnsupported` when nothing fits the `color.output` choice), no view
+  formats, `video.present_mode` (`mailbox` by default, `immediate`, `fifo`; a mode the surface
+  lacks is `PresentModeUnsupported`, never a silent fallback) and `video.present_frame_latency`
+  (1 by default, 1 to 3), opaque alpha. The choice is made once at attach; its
+  `DisplayEncoding::target` is what `WindowSink::color_target` and `StreamWindow::color_target`
+  return.
+- `compose.wgsl` is one fullscreen-triangle render pass that `textureLoad`s the picture 1:1 (no
+  sampler, no filtering: sizes always match), blends the cursor over it as premultiplied
+  linear light (converted from BT.709 into the target primaries by a matrix) and encodes and
+  dithers the result for the surface (`color.md`). The cursor (`window/cursor.rs`) is uploaded once per shape as `rgba16float`,
+  linearised from sRGB and premultiplied on the CPU, and when the picture is scaled it is
+  resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
+  picture, via `present::scale_settings`) into a texture of `round(size * target / space)`,
+  rebuilt only when the shape or the scale changes. Its origin is
+  `round((position - hotspot) * target / space)`, clipped by the picture.
+- Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
+  `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
+  `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`
+  updates it (`WindowLayout::region`, `None` while there is no layout, which drops absolute
+  positions). `is_engaged` and `release` pass through. `is_finished` also reports a capture
+  thread that ended, and `stop` stops the capture first (which releases every held key and
+  button) and then the presenter, returning the capture's error before the presenter's.
+- Surface results: `Timeout`/`Occluded` skip the draw, `Outdated`/`Suboptimal` reconfigure,
+  `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
+  `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
+  Wayland objects are destroyed.
+- GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
+  blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
+  and origin, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
+  by running the app.

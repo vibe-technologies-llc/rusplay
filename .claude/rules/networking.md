@@ -17,7 +17,8 @@ paths:
   fragmentation.
 - Any change to the header or message encoding bumps `ProtocolVersion::CURRENT`. Peers with
   different versions refuse each other with `VersionMismatch`, with no compatibility shims.
-- The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, a
+- The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, the
+  `space` (u32 width and height) the position, hotspot and image are measured in, a
   flags byte (visible, has image) and, only when the shape changed, a `CursorImage` (u16 size and
   hotspot, then tightly packed RGBA8). It is latest-wins like video, never queued behind frames.
   The receiver cannot ask for a lost image, so the host repeats it every
@@ -25,10 +26,11 @@ paths:
 - Input travels on `StreamKind::Input` as `InputPacket`: the header `sequence` counts datagrams
   and the payload is a big-endian `u16` length of the `current` section, the `current` section and
   the `previous` section (the preceding datagram's `current`), each a run of `[len u8][record]`.
-  The records are opaque to the protocol crate (`rusplay-input`'s `InputEvent` bytes).
+  The records are opaque to the protocol crate (`rusplay-input`'s `InputRecord` bytes: an
+  `InputEvent`, or a `StateRecord` of the periodic held-state snapshot).
   `InputSequence::admit` tells the receiver whether to drop a datagram, apply `current`, or apply
   `previous` and `current`, in serial-number arithmetic. Input is unreliable on purpose, with
-  that one-datagram redundancy as its only loss repair. See `input.md` for the full contract.
+  that one-datagram redundancy and the periodic snapshot as its only loss repair. See `input.md` for the full contract.
 - Loss is handled per frame: Reed-Solomon FEC shards (`FecScheme`, overhead from
   `network.fec_overhead_percent`) recover small losses, and an unrecoverable frame triggers a
   `RequestKeyframe`/intra-refresh request instead of retransmission.

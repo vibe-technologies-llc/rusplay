@@ -80,7 +80,12 @@ paths:
     shape changed, when the session's first message goes out, and again every
     `network.cursor_image_repeat_ms` (0 turns repetition off), which repairs a lost image
     message because the client cannot ask for one; the repeat also fires on an idle cursor. A
-    bitmap wider or taller than 65535 pixels is `CursorImageTooLarge`.
+    bitmap wider or taller than 65535 pixels is `CursorImageTooLarge`. Position, hotspot and
+    bitmap stay in capture pixels, never resampled on the host; every message names that space
+    (`CursorMessage::space`, the size of the latest captured frame, published by the capture
+    stage on the `CaptureFeed` so it survives sessions) and the client scales to the stream. The
+    stage sends nothing until a frame has been captured, and a capture resize counts as a
+    change, so it sends a message even while the cursor sits still.
 - Encode → send is a `sync_channel` of two encoded frames filled with `try_send`. A full queue
   drops the frame without consuming a frame number and forces the next frame to be a keyframe,
   because later frames would reference the dropped one.
@@ -97,10 +102,11 @@ paths:
     the modifier kept one, `DmaBufTexture::channels`), so swizzled formats such as `BX24` go
     through the `Lineariser` like any other channel order. `Gpu::open` creates the device with
     `rusplay_scale::device_descriptor`, which is what makes import possible.
-  - `open_portal_capture(config, gpu)` keeps the capture's own format order (10-bit first above 8
-    bits) restricted to `UPLOAD_FORMATS`, and offers for each one the modifiers
-    `DmaBufImporter::modifiers` says the device imports (`capture_options`, unit tested), never the
-    implicit one. With no importer or no importable modifier at all, `prefer_dmabuf` is turned
+  - `feed_from_session(session, config, gpu)`, behind both `open_portal_capture(config, gpu)` and
+    the combined input session of `open_portal`, keeps the capture's own format order (10-bit
+    first above 8 bits) restricted to `UPLOAD_FORMATS`, and offers for each one the modifiers
+    `DmaBufImporter::modifiers` says the device imports (`capture_options`, unit tested), never
+    the implicit one. With no importer or no importable modifier at all, `prefer_dmabuf` is turned
     off and the capture asks for shared memory.
   - A DMA-BUF frame that fails to import (importer unavailable, unsupported format or modifier)
     makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
@@ -148,8 +154,9 @@ paths:
     (a capture resize with `video.resolution` unset); the new encoder starts with a keyframe and
     keeps the last bitrate hint.
 - `FrameSource` (`next_frame(timeout)`) is the capture seam: `PipeWireCapture` implements it
-  behind the `pipewire` feature, tests feed synthetic frames. `open_portal_capture` opens the
-  portal on the calling thread (`pollster`, restore token as configured) and returns the feed;
+  behind the `pipewire` feature, tests feed synthetic frames. `open_portal_capture(config, gpu)`
+  opens the portal on the calling thread (`pollster`, restore token as configured) and returns the
+  feed;
   without the `pipewire` feature it is `CaptureNotCompiled`.
 - `AudioSource` (`read_frame(&mut [f32], timeout)`, `overruns`) is the audio capture seam, built
   on the audio thread by an `AudioSourceFactory` (`Arc<dyn Fn(&AudioConfig)>`) so sources need
@@ -159,7 +166,34 @@ paths:
   the two, or they open the real PipeWire monitor. `FrameSource::cursor_feed` is the matching
   cursor seam (`PipeWireCapture` forwards its `cursor_feed`); `rusplay_capture::latest` builds a
   feed for tests.
-- Input injection is not wired: `host-input` in `docs/FEATURES.md`.
+- Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
+  `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
+  `service(&mut Vec<RumbleCommand>)`) behind a mutex that the session's input stage holds for the
+  session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
+  `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
+  holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
+  a request channel, servicing it every 50 ms while no session uses it so the compositor's pings
+  are answered between clients. The injector thread ends when the feed drops.
+  - `rusplay-host-input` (only with a feed) receives the datagrams the control stage forwards
+    once the `Hello` is answered (earlier ones are dropped), reads them with `InputPacket::read`
+    and `InputSequence::admit` (a fresh sequence per session), decodes each record with
+    `InputRecord::decode` and injects it; an event goes straight to the target, a state record
+    is turned into the events that bring the host to the client's held state
+    (`HeldInput::reconcile`, `input_events_repaired`) and those are injected. A failed injection
+    is not recorded as held, so the next snapshot tries again. A malformed datagram or record
+    counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
+    in `input_failures` without ending the session, since a paused device or a closed compositor
+    seat must not take the video down. Every 4 ms it calls `InputTarget::service` and sends each
+    `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
+    window drops the command (`rumble_dropped`), because the client caps every effect length. On
+    the way out it releases whatever `HeldInput` says the client still held.
+  - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input }`; the GPU is needed for the
+    capture's importable modifiers, so the GPU is opened before the portal. With `input.accept_remote` it
+    opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over
+    `SplitSink<LibeiInjector, UinputGamepads>`; a build without the `input` feature (or without
+    `pipewire`) fails with `InputNotCompiled` (`CaptureNotCompiled`), and
+    `input.accept_remote = false` opens the plain ScreenCast session with no feed.
+    `open_portal_capture` stays for callers that want capture only.
 - `src/pipeline/tests.rs` runs `GpuPipeline` up to the encoder input (no encoder) and reads luma
   codes back: a 10-bit PQ capture into a PQ stream keeps its codes and channel order, a PQ
   capture into the default SDR stream lands on the BT.709 code of its luminance, a description
@@ -174,7 +208,12 @@ paths:
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
   (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
-  first frame and again with a newer generation after a resize). `src/tests/media.rs` covers the
+  first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
+  input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
+  `Hello`, a snapshot repairing a stuck key, rumble back as control messages, held input released
+  when the session ends, failing injections counted, no feed ignores input) and `src/input.rs`
+  unit-tests the datagram handling
+  and the injector thread. `src/tests/media.rs` covers the
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
   image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
@@ -186,4 +225,9 @@ paths:
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins
-  slot may drop the opening keyframe.
+  slot may drop the opening keyframe. The same holds for `src/tests.rs` on a starved machine: the
+  send thread can fall behind and the full queue drops a frame, which forces a keyframe by design,
+  so a keyframe after the first is only asserted to be covered by a counted drop. The loopback
+  test also sends a key through the client's `InputHandle` (with a short
+  `input.snapshot_interval_ms`) and checks it reaches the host's recording target, that snapshots
+  arrive, and that the host releases the key when the stream ends.

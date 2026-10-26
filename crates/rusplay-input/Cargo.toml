@@ -30,7 +30,11 @@ rustix = { workspace = true, features = ["event", "fs", "time"], optional = true
 thiserror.workspace = true
 wayland-backend = { workspace = true, features = ["client_system", "dlopen"], optional = true }
 wayland-client = { workspace = true, features = ["dlopen", "system"], optional = true }
-wayland-protocols = { workspace = true, features = ["client", "unstable"], optional = true }
+wayland-protocols = {
+    workspace = true,
+    features = ["client", "staging", "unstable"],
+    optional = true
+}
 
 [dev-dependencies]
 tempfile.workspace = true

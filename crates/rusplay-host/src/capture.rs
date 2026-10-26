@@ -17,20 +17,21 @@ fn capture(feed: &CaptureFeed, shared: &Shared) -> Result<(), HostError> {
     let mut source = feed.source();
 
     if let Some(frame) = feed.take_retained() {
-        offer(shared, frame);
+        offer(feed, shared, frame);
     }
 
     while !shared.stopped() {
         if let Some(frame) = source.next_frame(CAPTURE_POLL)? {
             shared.counters.frames_captured.increment();
-            offer(shared, frame);
+            offer(feed, shared, frame);
         }
     }
 
     Ok(())
 }
 
-fn offer(shared: &Shared, frame: Frame) {
+fn offer(feed: &CaptureFeed, shared: &Shared, frame: Frame) {
+    feed.set_capture_size(frame.resolution);
     if let Ok(Some(_)) = shared.mailbox.put(frame) {
         shared.counters.frames_superseded.increment();
     }

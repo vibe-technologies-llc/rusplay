@@ -98,6 +98,8 @@ pub enum ConfigError {
     },
     #[error("decode queue must hold at least one frame")]
     ZeroDecodeQueue,
+    #[error("present frame latency {0} is outside 1..=3")]
+    PresentFrameLatencyOutOfRange(u8),
     #[error("peers.host_file is set to an empty path")]
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
@@ -166,6 +168,7 @@ impl ConfigError {
                 Some("network.keepalive_interval_ms")
             }
             Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
+            Self::PresentFrameLatencyOutOfRange(_) => Some("video.present_frame_latency"),
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
             Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),

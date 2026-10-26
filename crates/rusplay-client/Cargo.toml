@@ -11,9 +11,18 @@ pipewire = ["rusplay-audio/pipewire"]
 software = ["rusplay-decode/software"]
 software-asm = ["rusplay-decode/software-asm"]
 vaapi = ["rusplay-decode/vaapi"]
+window = [
+    "dep:half",
+    "dep:pollster",
+    "rusplay-input/wayland",
+    "wayland-client/dlopen",
+    "wayland-client/system"
+]
 
 [dependencies]
+half = { workspace = true, optional = true }
 parking_lot.workspace = true
+pollster = { workspace = true, optional = true }
 rusplay-audio.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
@@ -28,6 +37,7 @@ wayland-protocols = { workspace = true, features = ["client", "staging"] }
 wgpu.workspace = true
 
 [dev-dependencies]
+half.workspace = true
 pollster.workspace = true
 
 [lints]

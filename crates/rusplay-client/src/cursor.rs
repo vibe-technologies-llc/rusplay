@@ -4,20 +4,27 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
+use rusplay_core::Resolution;
 use rusplay_protocol::{CursorImage, CursorMessage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorState {
     pub x: i32,
     pub y: i32,
+    pub space: Resolution,
     pub visible: bool,
     pub image: Option<Arc<CursorImage>>,
+}
+
+pub(crate) trait CursorWatcher: Send + Sync + std::fmt::Debug {
+    fn changed(&self);
 }
 
 #[derive(Debug, Default)]
 struct LatestState {
     cursor: Option<CursorState>,
     updates: u64,
+    watchers: Vec<Arc<dyn CursorWatcher>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -55,6 +62,11 @@ impl LatestCursor {
         state.cursor.clone()
     }
 
+    #[cfg(feature = "window")]
+    pub(crate) fn watch(&self, watcher: Arc<dyn CursorWatcher>) {
+        self.shared.0.lock().watchers.push(watcher);
+    }
+
     pub(crate) fn update(&self, message: CursorMessage) {
         let (state, changed) = &*self.shared;
         let mut state = state.lock();
@@ -69,13 +81,18 @@ impl LatestCursor {
         state.cursor = Some(CursorState {
             x: message.x,
             y: message.y,
+            space: message.space,
             visible: message.visible,
             image,
         });
         state.updates += 1;
+        let watchers = state.watchers.clone();
         drop(state);
 
         changed.notify_all();
+        for watcher in watchers {
+            watcher.changed();
+        }
     }
 }
 
@@ -99,6 +116,7 @@ mod tests {
         CursorMessage {
             x,
             y: 2 * x,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image,
         }
@@ -122,6 +140,15 @@ mod tests {
         let latest = cursor.latest().unwrap();
         assert_eq!((latest.x, latest.y), (5, 10));
         assert_eq!(cursor.updates(), 2);
+    }
+
+    #[test]
+    fn the_space_of_a_message_is_kept_with_the_position() {
+        let cursor = LatestCursor::new();
+
+        cursor.update(message(4, None));
+
+        assert_eq!(cursor.latest().unwrap().space, Resolution::new(1920, 1080));
     }
 
     #[test]

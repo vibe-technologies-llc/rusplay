@@ -7,12 +7,13 @@ use std::{
 use rusplay_audio::{AudioDecoder, AudioError, CODEC_THREAD_STACK_BYTES, OpusAudioDecoder};
 use rusplay_capture::{CursorBitmap, CursorUpdate, Publisher, latest};
 use rusplay_config::AudioConfig;
+use rusplay_core::Resolution;
 use rusplay_net::ReassembledFrame;
 use rusplay_protocol::ControlMessage;
 
 use super::{
-    AtomicU32, Fixture, TestClient, fake_factory, feed, feed_with_cursor, host_config, pin,
-    wait_for_end,
+    AtomicU32, FRAME_SIZE, Fixture, RESIZED, TestClient, fake_factory, feed, feed_with_cursor,
+    host_config, pin, resizing_feed_with_cursor, scaling_factory, wait_for_end,
 };
 use crate::{AudioSource, AudioSourceFactory, HostError};
 
@@ -230,6 +231,7 @@ fn the_first_cursor_message_carries_the_image_and_later_ones_only_the_position()
     assert!(moved);
     assert_eq!((image.width, image.height), (2, 2));
     assert_eq!(image.rgba, vec![9; 16]);
+    assert_eq!(client.cursor_messages[0].space, FRAME_SIZE);
     assert_eq!(client.cursor_messages[1].x, 5);
     assert_eq!(client.cursor_messages[1].image, None);
     assert_eq!(client.cursor_messages[2].x, 8);
@@ -353,5 +355,64 @@ fn a_feed_without_a_cursor_stream_starts_no_cursor_stage() {
     assert!(matches!(client.cursor_messages.as_slice(), []));
     assert!(!client.has(ControlMessage::Goodbye));
     assert_eq!(stream.stats().cursor_messages_sent, 0);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn cursor_messages_name_the_capture_size_whatever_the_stream_resolution() {
+    let stream_size = Resolution::new(32, 16);
+    let fixture = Fixture::new(host_config());
+    let (publisher, subscriber) = latest();
+    publish(&publisher, update(40, Some(bitmap(3))));
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(
+        Some(pin()),
+        feed_with_cursor(4, subscriber),
+        scaling_factory(&bitrate, stream_size),
+    );
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.cursor_messages.is_empty() && !client.formats.is_empty());
+
+    let message = &client.cursor_messages[0];
+    assert_eq!(client.formats[0].1.resolution, stream_size);
+    assert_eq!(message.space, FRAME_SIZE);
+    assert_eq!((message.x, message.y), (40, 80));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_capture_resize_reaches_the_client_without_the_cursor_moving() {
+    let mut config = host_config();
+    config.network.cursor_image_repeat_ms = 0;
+    let fixture = Fixture::new(config);
+    let (publisher, subscriber) = latest();
+    publish(&publisher, update(1, Some(bitmap(3))));
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(
+        Some(pin()),
+        resizing_feed_with_cursor(40, 5, subscriber),
+        fake_factory(&bitrate),
+    );
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let resized = client.pump_until(|client| {
+        client
+            .cursor_messages
+            .iter()
+            .any(|message| message.space == RESIZED)
+    });
+
+    assert!(resized);
+    assert!(
+        client
+            .cursor_messages
+            .iter()
+            .all(|message| message.x == 1 && [FRAME_SIZE, RESIZED].contains(&message.space))
+    );
     stream.stop().unwrap();
 }

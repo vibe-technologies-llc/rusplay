@@ -9,7 +9,8 @@ use parking_lot::Mutex;
 use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, CursorBitmap, CursorUpdate, Publisher, Subscriber, latest};
 use rusplay_client::{
-    AudioOutput, AudioOutputStats, ClientSession, Credentials, LatestFrame, PresentedFrame,
+    AudioOutput, AudioOutputStats, ClientSession, ClientStream, Credentials, LatestFrame,
+    PresentedFrame,
 };
 use rusplay_config::{
     Config, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VideoDecoderConfig,
@@ -21,8 +22,9 @@ use rusplay_core::{
 };
 use rusplay_host::{
     AudioSource, CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostError,
-    HostSession, HostStats, PeerStore, Pin,
+    HostSession, HostStats, InputFeed, InputTarget, PeerStore, Pin,
 };
+use rusplay_input::{InputError, InputEvent, RumbleCommand};
 use tempfile::TempDir;
 
 const PIN: &str = "771205";
@@ -42,6 +44,23 @@ const AUDIO_SAMPLES_TO_HEAR: usize = 48_000;
 const CURSOR_TARGET_X: i32 = 77;
 const CURSOR_SIZE: u32 = 4;
 const CURSOR_FILL: u8 = 211;
+const HELD_KEY: u32 = 30;
+const SNAPSHOT_INTERVAL_MS: u16 = 40;
+const SNAPSHOTS_TO_SEE: u64 = 2;
+
+#[derive(Clone, Default)]
+struct RecordedInput(Arc<Mutex<Vec<InputEvent>>>);
+
+impl InputTarget for RecordedInput {
+    fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
+        self.0.lock().push(event);
+        Ok(())
+    }
+
+    fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        Ok(())
+    }
+}
 
 struct MovingBox {
     index: u32,
@@ -163,6 +182,7 @@ fn client_config() -> Config {
     config.video.codec = Codec::H264;
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = u8::MAX;
+    config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
     config
 }
 
@@ -171,10 +191,11 @@ fn supported(config: &Config) -> bool {
         .is_ok_and(|caps| caps.supports(config.video.codec, config.video.pixel_format))
 }
 
-fn bind_host(config: Config, dir: &TempDir) -> Arc<HostSession> {
+fn bind_host(config: Config, dir: &TempDir, input: &RecordedInput) -> Arc<HostSession> {
     let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
     let session = HostSession::bind(config, store)
         .unwrap()
+        .with_input(InputFeed::new(input.clone()))
         .with_audio_source(Arc::new(|config| {
             let samples = config.opus.frame_duration.samples_at(config.sample_rate);
             let nanos = samples as u64 * 1_000_000_000 / u64::from(config.sample_rate.hz());
@@ -215,6 +236,28 @@ fn loudest(samples: &Mutex<Vec<f32>>) -> f32 {
         .fold(0.0, |peak: f32, sample| peak.max(sample.abs()))
 }
 
+fn press_held_key(stream: &ClientStream, injected: &RecordedInput, deadline: Instant) {
+    stream.input().send(InputEvent::Key {
+        keycode: HELD_KEY,
+        pressed: true,
+    });
+
+    while Instant::now() < deadline
+        && (injected.0.lock().is_empty() || stream.stats().input_snapshots_sent < SNAPSHOTS_TO_SEE)
+    {
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn assert_held_key_pressed_then_released(injected: &[InputEvent]) {
+    let key = |pressed| InputEvent::Key {
+        keycode: HELD_KEY,
+        pressed,
+    };
+
+    assert_eq!(injected, [key(true), key(false)]);
+}
+
 fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     let config = host_config(encoder);
     if !supported(&config) {
@@ -224,7 +267,8 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
         return;
     };
     let dir = TempDir::new().unwrap();
-    let host = bind_host(config, &dir);
+    let injected = RecordedInput::default();
+    let host = bind_host(config, &dir, &injected);
     let address = host.local_addr().unwrap();
     let (publisher, subscriber) = latest();
     publish(&publisher, cursor_update(1, Some(cursor_bitmap())));
@@ -275,6 +319,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
         publish(&publisher, cursor_update(step, None));
         thread::sleep(Duration::from_millis(5));
     }
+    press_held_key(&stream, &injected, deadline);
     let frame = latest.take().unwrap();
     let texels = download(&gpu, &frame.texture);
     drop(frame);
@@ -283,6 +328,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     stream.stop().unwrap();
     let host_stats = serving.join().unwrap().unwrap();
     let loudest = loudest(&heard.samples);
+    let injected = injected.0.lock().clone();
 
     let seen = seen.lock().clone();
     let corner = texels[(SOURCE.height as usize - 1) * SOURCE.width as usize];
@@ -301,6 +347,10 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     assert!(client_stats.audio_packets_received > 0);
     assert_eq!(client_stats.audio_decode_errors, 0);
     assert!(loudest > TONE_AMPLITUDE / 2.0);
+    assert_held_key_pressed_then_released(&injected);
+    assert!(client_stats.input_snapshots_sent >= SNAPSHOTS_TO_SEE);
+    assert!(host_stats.input_state_records >= 3);
+    assert_eq!(cursor_state.space, SOURCE);
     assert_eq!(cursor_state.x, CURSOR_TARGET_X);
     assert_eq!(cursor_state.y, CURSOR_TARGET_X / 2);
     let image = cursor_state.image.unwrap();
