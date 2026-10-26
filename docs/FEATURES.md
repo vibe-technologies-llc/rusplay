@@ -1,5 +1,5 @@
 # Scaling
-- [S] `scale-dmabuf-sync`: wait for a capture DMA-BUF's implicit fence (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` imported as a Vulkan semaphore) or PipeWire's explicit sync timeline before reading it; only VAAPI frames are synchronised today (`vaSyncSurface`)
+- [S] `scale-dmabuf-sync`: wait for a capture DMA-BUF's implicit fence (`DMA_BUF_IOCTL_EXPORT_SYNC_FILE` imported as a Vulkan semaphore) or PipeWire's explicit sync timeline before reading it; only VAAPI frames are synchronised today (`vaSyncSurface`); wgpu 30 does not enable `VK_KHR_external_semaphore_fd`, so the device must be opened through `wgpu::hal::vulkan::Adapter::open_with_callback` adding it (replacing `device_descriptor` for every caller) before `hal::vulkan::Queue::add_wait_semaphore` can gate the next submit on the imported sync file
 
 # Video encode
 - [L] `encode-nvenc`: NVENC encoder with CUDA external-memory input
