@@ -1,6 +1,6 @@
 # Host
 - [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
-- [S] `host-keyframe-repeat-flaky`: `a_request_older_than_the_last_keyframe_is_ignored` in `rusplay-host/src/tests.rs` failed once (`frames_repeated != 1`) in about 65 runs pinned to two busy CPUs; it passes alone, so a timing assumption in the test or the mailbox needs finding
+- [S] `host-tests-assume-every-source-frame-is-encoded`: the latest-wins mailbox supersedes source frames produced before the client's `Hello` starts the stream, but `a_paired_client_receives_numbered_frames_that_start_with_a_keyframe`, `the_stream_format_is_announced_before_the_first_frame_and_again_on_a_resize` and `a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe` in `rusplay-host/src/tests.rs` wait for as many frames as the source produces, so a `Hello` more than one source interval late (`SOURCE_INTERVAL`, 10 ms) leaves them waiting out `WAIT`; the source should hold its frames until the stream has started
 
 # Video decode
 - [S] `decode-vaapi-driver-field-long-term`: after a field of a long-term frame is unmarked with MMCO 2 and a non-reference frame was decoded earlier, Mesa's VAAPI H.264 decode makes every macroblock of the next P field use reference entry 0 (software decode and the DPB state agree on the right lists, and ffmpeg's VAAPI path reproduces it); find a workaround or confirm a driver fix

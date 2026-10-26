@@ -552,24 +552,24 @@ fn a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe() 
 fn a_request_older_than_the_last_keyframe_is_ignored() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
-    let serving = fixture.serve(Some(pin()), feed(2), fake_factory(&bitrate));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
     let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+    client.send(ControlMessage::RequestKeyframe { frame: 0 });
     client.pump_until(|client| client.frames.len() >= 2);
-    client.send(ControlMessage::RequestKeyframe { frame: 1 });
-    client.pump_until(|client| client.frames.len() >= 3);
-    client.send(ControlMessage::RequestKeyframe { frame: 1 });
+    client.send(ControlMessage::RequestKeyframe { frame: 0 });
     let settled = client.pump_until(|_| stream.stats().keyframe_requests >= 2);
     client.pump(Duration::from_millis(100), |_| false);
     let stats = stream.stats();
 
     assert!(settled);
-    assert!(client.frames[2].keyframe);
+    assert!(client.frames[1].keyframe);
     assert_eq!(stats.frames_repeated, 1);
     assert_eq!(stats.keyframe_requests_ignored, 1);
-    assert_eq!(client.frames.len(), 3);
+    assert_eq!(client.frames.len(), 2);
     stream.stop().unwrap();
 }
 
