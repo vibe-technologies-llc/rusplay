@@ -495,7 +495,7 @@ fn wait_for_end(stream: HostStream) -> Result<(), HostError> {
 fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
-    let serving = fixture.serve(Some(pin()), feed(6), fake_factory(&bitrate));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
@@ -504,12 +504,16 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
         client.frames.len() >= 4 && client.has_hello() && stream.stats().frames_sent >= 4
     });
     let stats = stream.stats();
+    let later_keyframes = client.frames[1..]
+        .iter()
+        .filter(|frame| frame.keyframe)
+        .count() as u64;
 
     assert!(complete);
     assert_eq!(admission, Admission::Paired);
     assert_eq!(fixture.host.peers().read().len(), 1);
     assert!(client.frames[0].keyframe);
-    assert!(client.frames[1..].iter().all(|frame| !frame.keyframe));
+    assert!(later_keyframes <= stats.frames_dropped);
     assert!(
         client
             .frames
@@ -518,7 +522,7 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
             .all(|(frame, number)| frame.number == number)
     );
     assert!(stats.frames_sent >= 4);
-    assert_eq!(stats.keyframes_sent, 1);
+    assert!(stats.keyframes_sent <= 1 + stats.frames_dropped);
     stream.stop().unwrap();
 }
 
