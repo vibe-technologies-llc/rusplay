@@ -1,5 +1,6 @@
 # Host
 - [S] `host-first-frames-keyframe-flaky`: `a_paired_client_receives_numbered_frames_that_start_with_a_keyframe` in `rusplay-host/src/tests.rs` fails about one run in six under load (`frames[1..]` holds a keyframe, line 464), even with the GPU tests skipped; a forced keyframe from a dropped frame or an early `RequestKeyframe` is the likely cause
+- [S] `host-cursor-stream-coordinates`: the host sends cursor positions and shapes in capture pixels, but the client places them in the stream's resolution (`StreamDescription::resolution`), so with `video.resolution` set to a size other than the capture's the drawn cursor is offset and wrongly sized; the host should scale `CursorMessage` positions (and say how the shape scales) to the stream resolution
 
 # Video decode
 - [S] `decode-vaapi-driver-field-long-term`: after a field of a long-term frame is unmarked with MMCO 2 and a non-reference frame was decoded earlier, Mesa's VAAPI H.264 decode makes every macroblock of the next P field use reference entry 0 (software decode and the DPB state agree on the right lists, and ffmpeg's VAAPI path reproduces it); find a workaround or confirm a driver fix

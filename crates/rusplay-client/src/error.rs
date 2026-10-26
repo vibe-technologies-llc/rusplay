@@ -1,6 +1,7 @@
 use std::{fmt, io, time::Duration};
 
 use rusplay_audio::AudioError;
+use rusplay_config::PresentMode;
 use rusplay_core::AudioCodec;
 use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
@@ -8,7 +9,10 @@ use rusplay_net::NetError;
 use rusplay_protocol::ProtocolError;
 use rusplay_scale::ScaleError;
 use thiserror::Error;
-use wayland_client::{ConnectError, DispatchError, globals::GlobalError};
+use wayland_client::{
+    ConnectError, DispatchError,
+    globals::{BindError, GlobalError},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
@@ -18,6 +22,7 @@ pub enum Stage {
     Audio,
     Input,
     Gamepad,
+    Window,
 }
 
 impl Stage {
@@ -29,6 +34,7 @@ impl Stage {
             Self::Audio => "audio",
             Self::Input => "input",
             Self::Gamepad => "gamepad",
+            Self::Window => "window",
         }
     }
 }
@@ -113,4 +119,28 @@ pub enum ClientError {
         found: usize,
         needed: usize,
     },
+    #[error("the window handle does not name a live wayland surface")]
+    WindowHandleInvalid,
+    #[error("the compositor does not offer {interface}, which the stream surface needs")]
+    WindowGlobalMissing {
+        interface: &'static str,
+        #[source]
+        source: BindError,
+    },
+    #[error("the wayland connection failed while managing the stream surface")]
+    WindowDispatch(#[source] DispatchError),
+    #[error("failed to create a gpu surface for the stream")]
+    WindowSurface(#[source] wgpu::CreateSurfaceError),
+    #[error("no gpu adapter can present to the stream surface")]
+    WindowAdapter(#[source] wgpu::RequestAdapterError),
+    #[error("failed to open the gpu device for the stream")]
+    WindowDevice(#[source] wgpu::RequestDeviceError),
+    #[error("the stream surface offers neither bgra8 nor rgba8")]
+    SurfaceFormatUnsupported,
+    #[error("the stream surface does not offer the {mode:?} present mode")]
+    PresentModeUnsupported { mode: PresentMode },
+    #[error("the stream surface was lost")]
+    SurfaceLost,
+    #[error("the gpu rejected the stream surface texture")]
+    SurfaceValidation,
 }

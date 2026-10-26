@@ -17,6 +17,10 @@ pub fn background() -> Rgba {
     rgb8(0x16, 0x18, 0x1d)
 }
 
+pub fn backdrop() -> Rgba {
+    rgb8(0x00, 0x00, 0x00)
+}
+
 pub fn surface() -> Rgba {
     rgb8(0x1e, 0x21, 0x28)
 }

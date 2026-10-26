@@ -1,4 +1,11 @@
-use rusplay_client::{ClientError, ClientSession};
+use std::net::SocketAddr;
+
+use gpui::Window;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+use rusplay_client::{
+    ClientError, ClientSession, ClientStream, Credentials, Gpu, StreamWindow, WaylandTarget,
+    WindowSink,
+};
 use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
 use thiserror::Error;
 
@@ -8,6 +15,8 @@ pub enum SessionError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     Client(#[from] ClientError),
+    #[error("the window is not a wayland surface")]
+    NotWayland,
 }
 
 pub fn load_client_config(environment: &ConfigEnvironment) -> Result<Config, ConfigError> {
@@ -16,10 +25,35 @@ pub fn load_client_config(environment: &ConfigEnvironment) -> Result<Config, Con
     Config::load_or_default(&path)
 }
 
-pub fn run_client(environment: &ConfigEnvironment) -> Result<(), SessionError> {
-    let config = load_client_config(environment)?;
+pub fn attach_window(window: &Window, config: &Config) -> Result<StreamWindow, SessionError> {
+    let target = wayland_target(window).ok_or(SessionError::NotWayland)?;
 
-    ClientSession::new(config).probe()?;
+    Ok(unsafe { StreamWindow::attach(target, config) }?)
+}
 
-    Ok(())
+pub fn connect(
+    config: Config,
+    host: SocketAddr,
+    credentials: &Credentials,
+    gpu: Gpu,
+    sink: WindowSink,
+) -> Result<ClientStream, SessionError> {
+    Ok(ClientSession::new(config).connect(host, credentials, gpu, sink)?)
+}
+
+fn wayland_target(window: &Window) -> Option<WaylandTarget> {
+    let RawDisplayHandle::Wayland(display) =
+        HasDisplayHandle::display_handle(window).ok()?.as_raw()
+    else {
+        return None;
+    };
+    let RawWindowHandle::Wayland(surface) = HasWindowHandle::window_handle(window).ok()?.as_raw()
+    else {
+        return None;
+    };
+
+    Some(WaylandTarget {
+        display: display.display,
+        surface: surface.surface,
+    })
 }

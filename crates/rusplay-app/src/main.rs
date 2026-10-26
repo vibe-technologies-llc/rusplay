@@ -3,6 +3,7 @@ mod hosts;
 mod notice;
 mod session;
 mod settings;
+mod stream;
 mod theme;
 mod widgets;
 
@@ -33,7 +34,7 @@ fn main() {
         };
 
         let opened = cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| RusplayApp::new(ConfigEnvironment::from_process(), cx));
+            let view = cx.new(|cx| RusplayApp::new(ConfigEnvironment::from_process(), window, cx));
             window.focus(&gpui::Focusable::focus_handle(&view, cx), cx);
             view
         });

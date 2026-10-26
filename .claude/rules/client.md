@@ -12,8 +12,7 @@ paths:
   `Credentials::Peer` runs `reconnect_as_client`), installs the session keys and only then starts
   the stages, so nothing streams unsealed. It returns once the host has answered the client's
   `Hello`, or fails with `HandshakeTimeout` after `network.handshake_timeout_ms`,
-  `HelloUndeliverable` or `HandshakeAborted`. `probe` only opens the configured decoders; it is what
-  the app calls until `app-stream-view` replaces it with `connect`.
+  `HelloUndeliverable` or `HandshakeAborted`. `probe` only opens the configured decoders.
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. Before the first video frame, and again whenever any of it changes, the host
@@ -140,6 +139,9 @@ paths:
   `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is repaired
   by the host, which repeats the image every `network.cursor_image_repeat_ms` (`host.md`); the
   client never asks for it.
+- Cursor positions and shapes are taken to be in the stream's resolution (`PresentedFrame::source`,
+  the description's size); the host currently sends capture pixels (`host-cursor-stream-coordinates`
+  in `docs/BUGS.md`). `CursorImage::rgba` is read as sRGB with straight alpha.
 - The display's colour target comes from the `display` module (`query_target`,
   `resolve_target`), documented in `color.md`; nothing in the session calls it yet
   (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
@@ -178,3 +180,63 @@ paths:
   presented frame rather than that the first one back is a keyframe. Host-side messages are
   awaited with `TestHost::wait_for`, never read immediately. The scaling test holds the host
   back with `HostOptions::gate` until `set_target` has run, so every presented frame is scaled.
+
+## Window (`window` feature)
+
+- `StreamWindow::attach(WaylandTarget, &Config)` (`unsafe`, same pointer contract as
+  `WaylandCapture`) presents the stream in an app window. It wraps the window's `wl_display` with
+  `Backend::from_foreign_display` and its own event queue (`window/surface.rs`), and makes a child
+  `wl_surface` as a desynchronised `wl_subsurface` above the window's surface, with an empty input
+  region (pointer and keyboard events keep going to the window's own surface, which is what input
+  capture attaches to) and a `wp_viewport`. `wl_compositor`, `wl_subcompositor` and
+  `wp_viewporter` are required (`WindowGlobalMissing`).
+- It creates its own wgpu instance, a surface on the child `wl_surface`, an adapter compatible
+  with it (high performance) and a device from `rusplay_scale::device_descriptor`, so DMA-BUF
+  import works. `StreamWindow::gpu` is that device for `ClientSession::connect`, and
+  `StreamWindow::sink` the `FrameSink` (`WindowSink`), so frames go from the present stage to the
+  window thread without touching the app's UI thread.
+- `set_layout(Option<WindowLayout>)` takes the picture rectangle in whole logical pixels of the
+  parent surface (`x`, `y`, `width`, `height`) and its device size (`pixels`), as computed by the
+  pure `WindowLayout::letterbox(LogicalArea, scale, source)`: the largest rectangle of the source
+  aspect inside the area, edges rounded inward to whole logical pixels, centred, device size
+  `round(logical * scale)`. The subsurface position is set at once (it applies on the parent's
+  next commit); the caller sets `ClientStream::set_target(layout.pixels)` so the present stage
+  scales to exactly the swapchain size.
+- The `rusplay-client-window` thread waits on one condvar for a new frame, a layout change, a
+  cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message) or stop,
+  and keeps the last frame so a cursor move redraws without a new picture. It draws only a frame
+  whose texture size equals `layout.pixels`; anything else is a frame scaled for an older layout
+  and is skipped. It (re)configures the swapchain to that size, sets the viewport destination to
+  the logical size just before presenting (so buffer and destination change in the same commit
+  and the compositor maps the buffer 1:1), composes and presents with `Queue::present`.
+- Swapchain: `Bgra8Unorm` or `Rgba8Unorm` (`SurfaceFormatUnsupported` otherwise) with its sRGB
+  view format, `video.present_mode` (`mailbox` by default, `immediate`, `fifo`; a mode the
+  surface lacks is `PresentModeUnsupported`, never a silent fallback) and
+  `video.present_frame_latency` (1 by default, 1 to 3), opaque alpha. `OutputLight::Linear`
+  frames are drawn through the sRGB view, so the hardware encodes linear light; `Encoded`
+  (PQ/HLG) frames go through the plain view with their code values unchanged. That is the
+  presentation's whole colour handling: gamut and tone mapping to the display, dithering and
+  deeper swapchains belong to `client-color-pipeline`.
+- `compose.wgsl` is one fullscreen-triangle render pass that `textureLoad`s the picture 1:1 (no
+  sampler, no filtering: sizes always match) and blends the cursor over it as premultiplied
+  linear light. The cursor (`window/cursor.rs`) is uploaded once per shape as `rgba16float`,
+  linearised from sRGB and premultiplied on the CPU, and when the picture is scaled it is
+  resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
+  picture, via `present::scale_settings`) into a texture of `round(size * target / source)`,
+  rebuilt only when the shape or the scale changes. Its origin is
+  `round((position - hotspot) * target / source)`, clipped by the picture.
+- Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
+  `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
+  `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`
+  updates it (`WindowLayout::region`, `None` while there is no layout, which drops absolute
+  positions). `is_engaged` and `release` pass through. `is_finished` also reports a capture
+  thread that ended, and `stop` stops the capture first (which releases every held key and
+  button) and then the presenter, returning the capture's error before the presenter's.
+- Surface results: `Timeout`/`Occluded` skip the draw, `Outdated`/`Suboptimal` reconfigure,
+  `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
+  `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
+  Wayland objects are destroyed.
+- GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
+  blend inside the cursor rectangle only, clipping at the edge, and the cursor layer's scaled size
+  and origin. The subsurface and swapchain paths need a running compositor and are only checked
+  by running the app.

@@ -9,6 +9,7 @@ pub type EncoderParams = BTreeMap<String, String>;
 
 const MAX_QP: u8 = 51;
 const MAX_SVT_AV1_PRESET: u8 = 13;
+const PRESENT_FRAME_LATENCY_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -22,6 +23,8 @@ pub struct VideoConfig {
     pub encoder: VideoEncoderConfig,
     pub decoder: VideoDecoderConfig,
     pub decode_queue_frames: u8,
+    pub present_mode: PresentMode,
+    pub present_frame_latency: u8,
 }
 
 impl Default for VideoConfig {
@@ -36,6 +39,8 @@ impl Default for VideoConfig {
             encoder: VideoEncoderConfig::default(),
             decoder: VideoDecoderConfig::default(),
             decode_queue_frames: 3,
+            present_mode: PresentMode::default(),
+            present_frame_latency: 1,
         }
     }
 }
@@ -72,10 +77,24 @@ impl VideoConfig {
         if self.decode_queue_frames == 0 {
             return Err(ConfigError::ZeroDecodeQueue);
         }
+        if !PRESENT_FRAME_LATENCY_RANGE.contains(&self.present_frame_latency) {
+            return Err(ConfigError::PresentFrameLatencyOutOfRange(
+                self.present_frame_latency,
+            ));
+        }
 
         self.encoder.validate()?;
         self.decoder.validate()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PresentMode {
+    #[default]
+    Mailbox,
+    Immediate,
+    Fifo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -288,5 +307,39 @@ impl Default for SvtAv1Config {
             threads: None,
             params: EncoderParams::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn present_mode_defaults_to_mailbox_and_uses_kebab_case_names() {
+        let config: VideoConfig = toml::from_str("present_mode = \"immediate\"").unwrap();
+
+        assert_eq!(config.present_mode, PresentMode::Immediate);
+        assert_eq!(VideoConfig::default().present_mode, PresentMode::Mailbox);
+    }
+
+    #[test]
+    fn present_frame_latency_is_range_checked() {
+        let mut config = VideoConfig::default();
+        assert_eq!(config.present_frame_latency, 1);
+
+        config.present_frame_latency = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::PresentFrameLatencyOutOfRange(0))
+        ));
+
+        config.present_frame_latency = 4;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::PresentFrameLatencyOutOfRange(4))
+        ));
+
+        config.present_frame_latency = 3;
+        assert!(config.validate().is_ok());
     }
 }

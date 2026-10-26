@@ -29,9 +29,9 @@ pub use crate::{
     peers::PeersConfig,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
-        EncoderParams, NvencConfig, NvencPreset, NvencTuning, RateControl, SoftwarePreset,
-        SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig, VideoEncoderConfig, X264Config,
-        X264Tune, X265Config, X265Tune,
+        EncoderParams, NvencConfig, NvencPreset, NvencTuning, PresentMode, RateControl,
+        SoftwarePreset, SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig, VideoEncoderConfig,
+        X264Config, X264Tune, X265Config, X265Tune,
     },
 };
 
@@ -199,6 +199,7 @@ mod tests {
             ConfigError::ZeroVideoBitrate,
             ConfigError::MtuOutOfRange(1),
             ConfigError::EmptyRestoreTokenFile,
+            ConfigError::PresentFrameLatencyOutOfRange(0),
         ];
 
         for error in errors {

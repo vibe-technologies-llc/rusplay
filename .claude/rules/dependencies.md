@@ -29,6 +29,7 @@ paths:
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
   | Wayland input capture on gpui's connection | `wayland-client` and `wayland-backend` (`system` and `dlopen`: libwayland-client is loaded at run time, as gpui does) | `rusplay-input/wayland` |
+  | Stream subsurface on gpui's connection | the same `wayland-client` `system` and `dlopen` features | `rusplay-client/window` |
   | rav1d SIMD | rav1d's hand-written x86/ARM assembly (`nasm` at build time on x86_64, the C compiler's assembler on aarch64) | `rusplay-decode/software-asm`, `rusplay-client/software-asm` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
@@ -61,12 +62,13 @@ paths:
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads on the host and physical gamepads with force feedback on the client,
   `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wayland-protocols`
-  (pointer constraints and relative pointer bindings, `rusplay-input/wayland`), `wgpu`
+  (pointer constraints, relative pointer and, from `staging`, cursor shape bindings, `rusplay-input/wayland`), `wgpu`
   (GPU scaling), `ash` (raw Vulkan for DMA-BUF import in `rusplay-scale`, default features off so
   it loads nothing itself; kept at the version wgpu-hal uses, since handles cross between them),
   `rav1d` for software AV1 decode (default features off; its `asm` feature is only enabled by
   `software-asm`, which needs `nasm` on x86_64), `cros-codecs` parsers for VAAPI decode, `rubato` for audio resampling when it is
-  needed. Pairing and transport encryption use RustCrypto only: `spake2` (pinned to 0.4.0, the
+  needed. `half` (`rusplay-client/window`, the cursor's `rgba16float` upload) and `pollster`
+  (`rusplay-client/window`, blocking on wgpu's adapter and device requests). Pairing and transport encryption use RustCrypto only: `spake2` (pinned to 0.4.0, the
   latest stable release; 0.5 is still a pre-release), `hkdf`, `sha2`, `chacha20poly1305`,
   `subtle` and `zeroize`. `libc` is allowed as bare syscall declarations only for what rustix
   lacks (`recvmmsg`); it links nothing std does not already.
@@ -80,5 +82,8 @@ paths:
   - Zed's workspace `[patch.crates-io]` entries that gpui needs are copied into the root
     `Cargo.toml` (`async-task`, `calloop`, `khronos-egl`).
   - gpui's `gpui_wgpu` uses Zed's own git `wgpu`, not the crates.io `wgpu` the workspace declares,
-    so the two are separate crates in the tree.
+    so the two are separate crates in the tree. The stream is presented on a subsurface with the
+    workspace `wgpu` (`ui.md`), so no handle crosses between them and they need no reconciling.
+  - `raw-window-handle` (0.6, the version gpui implements) reads the `wl_display` and
+    `wl_surface` pointers off gpui's `Window`.
   - `unicode-segmentation` (pure Rust) gives the text field grapheme boundaries.
