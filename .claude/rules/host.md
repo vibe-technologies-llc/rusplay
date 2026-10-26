@@ -90,20 +90,36 @@ paths:
   new capture frame pending, the pipeline re-encodes its last encoder input as a keyframe
   (`frames_repeated`), so a static screen still answers.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
-  - Only shared-memory `XR24`/`AR24`/`XB24`/`AB24` frames are accepted: they upload with
-    `write_texture` straight into a `Bgra8UnormSrgb`/`Rgba8UnormSrgb` texture, whose sRGB view
-    linearises on load, which is the copy the CPU path cannot avoid. `open_portal_capture`
-    therefore asks PipeWire for exactly those formats with `prefer_dmabuf` off. A DMA-BUF frame
-    is `DmaBufCaptureUnsupported` until `host-dmabuf-capture`; another fourcc is
-    `CaptureFormatUnsupported`. The captured surface is taken to be sRGB: `Frame::color`
-    is not read yet (`host-source-color`).
+  - Shared-memory `XR24`/`AR24`/`XB24`/`AB24` and 10-bit `XR30`/`AR30`/`XB30`/`AB30` frames are
+    accepted (`UPLOAD_FORMATS` in `src/upload.rs`): they upload with `write_texture` straight into a
+    `Bgra8Unorm`/`Rgba8Unorm` texture (which also has an sRGB view) or an `Rgb10a2Unorm` one, the
+    copy the CPU path cannot avoid. `XR30`/`AR30` hold blue in the low bits, so their
+    `SourceChannels` say `ChannelOrder::Bgra`. `open_portal_capture` keeps the capture's own
+    format order (10-bit first above 8 bits) restricted to those formats, with `prefer_dmabuf`
+    off. A DMA-BUF frame is `DmaBufCaptureUnsupported` until `host-dmabuf-capture`; another
+    fourcc is `CaptureFormatUnsupported`.
+  - Each frame is read by its own `Frame::color`. `Route::plan` (`src/route.rs`, pure and unit
+    tested) turns the upload format, the description and the capture size into the stages to run,
+    and the pipeline replans only when that `RouteKey` changes, so a renegotiated description
+    reconfigures the `Lineariser`s and `ColorMapper` in place (`configure`) from the next frame.
+    The mapper (`ColorMapSettings` from `ColorVolume::of_content` of the source and of
+    `video.color`, with `color.tone_mapping` and `color.gamut_mapping`) runs unless
+    `ColorPlan::is_identity` says it changes nothing.
+  - Routes. Encoded: when no mapping is needed, the source transfer is the stream's (and for PQ and
+    HLG the `HdrLevels` match too) and there is no linear-light scaling, the encoded image goes
+    straight to `ColorConverter` with `InputLight::Encoded`, through a `Lineariser` with
+    `OutputLight::Encoded` first only when the channels are not plain RGBA. Gamma-space scaling:
+    when `scaling.downscale.linear_light` is off and the stream is smaller, the encoded image is
+    scaled, then linearised by a second `Lineariser` at the stream size, then mapped. Linear: an
+    sRGB source in a format with an sRGB view is read through that view; anything else is
+    linearised by a `Lineariser` at the capture size (PQ and HLG as display light relative to the
+    source's reference white); then scale, map and convert with `InputLight::Linear`. Upscaling is
+    always in linear light, since the sigmoid needs it.
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
-    axis grows). When `video.color.primaries` is not BT.709 a `ColorMapper` maps sRGB into the
-    stream's primaries with `color.gamut_mapping`. `ColorConverter` (linear input,
-    `video.color`, `video.pixel_format`, planar, `scaling.downscale.chroma_filter`, left siting,
-    4-byte rows) writes the `YuvFrame`, which is copied into a `MAP_READ` buffer in the same
-    submission.
+    axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
+    `video.pixel_format`, planar, `scaling.downscale.chroma_filter`, left siting, 4-byte rows)
+    writes the `YuvFrame`, which is copied into a `MAP_READ` buffer in the same submission.
   - The readback is mapped, and its planes are repacked row by row into the reused buffer of the
     encoder's input `Frame` in the CPU input contract layout (`EncoderPlanes`: luma pitch of the
     width rounded up to even, chroma pitch half of it when subsampled), which is the one copy out
@@ -124,6 +140,12 @@ paths:
   cursor seam (`PipeWireCapture` forwards its `cursor_feed`); `rusplay_capture::latest` builds a
   feed for tests.
 - Input injection is not wired: `host-input` in `docs/FEATURES.md`.
+- `src/pipeline/tests.rs` runs `GpuPipeline` up to the encoder input (no encoder) and reads luma
+  codes back: a 10-bit PQ capture into a PQ stream keeps its codes and channel order, a PQ
+  capture into the default SDR stream lands on the BT.709 code of its luminance, a description
+  change mid-stream reconfigures and changing back gives identical codes, and a black/white
+  stripe downscale gives the linear-light or the gamma-light average as configured. It returns
+  early without a GPU adapter.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
@@ -133,7 +155,7 @@ paths:
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
   image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
-  synthetic moving box, a tone and a moving cursor through `GpuPipeline` with SVT-AV1 and with
+  synthetic moving box (described as sRGB, as capture describes an undescribed surface), a tone and a moving cursor through `GpuPipeline` with SVT-AV1 and with
   VAAPI AV1 into the real `rusplay_client::ClientSession` (software decode, a test-only
   dev-dependency, configured for H.264 so only the host's `StreamFormat` can make it decode AV1)
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's

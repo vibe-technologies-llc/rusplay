@@ -329,6 +329,13 @@ impl ColorPlan {
         self.tone
     }
 
+    pub fn is_identity(&self) -> bool {
+        self.path == MappingPath::Matrix
+            && self.tone.is_none()
+            && (self.gain - 1.0).abs() <= PEAK_TOLERANCE
+            && self.source_to_target.max_difference(&Matrix3::IDENTITY) <= CONTAINMENT_TOLERANCE
+    }
+
     pub const fn path(&self) -> MappingPath {
         self.path
     }

@@ -1,21 +1,22 @@
+#[cfg(test)]
+mod tests;
+
 use std::sync::mpsc;
 
 use rusplay_capture::{Frame, FrameBuffer};
 use rusplay_config::Config;
-use rusplay_core::{
-    Codec, ColorPrimaries, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp,
-};
+use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
-    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings,
-    GamutMapping, InputLight, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
-    ToneMapping, YuvFrame,
+    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, InputLight,
+    LineariseSettings, Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, YuvFrame,
 };
 
 use crate::{
     Gpu, HostError,
-    upload::{EncoderPlanes, check_shm_frame, texture_format_for},
+    route::{Route, RouteKey, SourceRead},
+    upload::{EncoderPlanes, UploadFormat, check_shm_frame, upload_format_for},
 };
 
 const CONVERT_ROW_ALIGNMENT: u32 = 4;
@@ -57,9 +58,10 @@ pub(crate) trait VideoPipeline {
 
 struct Upload {
     resolution: Resolution,
-    format: wgpu::TextureFormat,
+    format: UploadFormat,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    srgb_view: Option<wgpu::TextureView>,
 }
 
 struct Linear {
@@ -84,9 +86,14 @@ pub(crate) struct GpuPipeline {
     config: Config,
     pipelines: ScalePipelines,
     upload: Option<Upload>,
+    route: Option<(RouteKey, Route)>,
+    prepared: Option<Linear>,
     scaled: Option<Linear>,
+    relinearised: Option<Linear>,
     mapped: Option<Linear>,
+    preparer: Option<Lineariser>,
     scaler: Option<Scaler>,
+    relineariser: Option<Lineariser>,
     mapper: Option<ColorMapper>,
     conversion: Option<Conversion>,
     encoder: Option<OpenEncoder>,
@@ -103,9 +110,14 @@ impl GpuPipeline {
             config,
             pipelines,
             upload: None,
+            route: None,
+            prepared: None,
             scaled: None,
+            relinearised: None,
             mapped: None,
+            preparer: None,
             scaler: None,
+            relineariser: None,
             mapper: None,
             conversion: None,
             encoder: None,
@@ -114,7 +126,7 @@ impl GpuPipeline {
         }
     }
 
-    fn upload(&mut self, frame: &Frame) -> Result<(), HostError> {
+    fn upload(&mut self, frame: &Frame) -> Result<RouteKey, HostError> {
         let data = match &frame.buffer {
             FrameBuffer::Shm { data, stride } => {
                 check_shm_frame(
@@ -131,7 +143,7 @@ impl GpuPipeline {
                 });
             }
         };
-        let format = texture_format_for(frame.format)?;
+        let format = upload_format_for(frame.format)?;
         let upload = ensure_upload(&self.gpu.device, &mut self.upload, frame.resolution, format);
 
         self.gpu.queue.write_texture(
@@ -145,12 +157,29 @@ impl GpuPipeline {
             extent(frame.resolution),
         );
 
-        Ok(())
+        Ok(RouteKey {
+            upload: format,
+            color: frame.color,
+            capture: frame.resolution,
+        })
     }
 
-    fn convert(&mut self, capture: Resolution) -> Result<(), HostError> {
-        let video = &self.config.video;
-        let stream = video.resolution.unwrap_or(capture);
+    fn route(&mut self, key: RouteKey) -> Result<Route, HostError> {
+        if let Some((cached, route)) = &self.route
+            && *cached == key
+        {
+            return Ok(*route);
+        }
+
+        let route = Route::plan(&self.config, &key)?;
+        self.route = Some((key, route));
+        Ok(route)
+    }
+
+    fn convert(&mut self, key: RouteKey) -> Result<(), HostError> {
+        let route = self.route(key)?;
+        let capture = key.capture;
+        let stream = self.config.video.resolution.unwrap_or(capture);
         let device = &self.gpu.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rusplay-host-convert"),
@@ -159,25 +188,48 @@ impl GpuPipeline {
         let Some(upload) = &self.upload else {
             return Ok(());
         };
-        let mut current = &upload.view;
+        let mut current = match route.read {
+            SourceRead::Raw => &upload.view,
+            SourceRead::Srgb => upload.srgb_view.as_ref().unwrap_or(&upload.view),
+        };
 
-        if stream != capture {
-            let settings = scale_settings(&self.config, capture, stream);
+        if let Some(settings) = route.prepare {
+            let preparer =
+                ensure_lineariser(&self.pipelines, device, &mut self.preparer, settings)?;
+            let target =
+                ensure_linear(device, &mut self.prepared, capture, "rusplay-host-prepared");
+            preparer.encode(device, &mut encoder, current, &target.view)?;
+            current = &target.view;
+        }
+
+        if let Some(settings) = route.scale {
             let scaler = ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?;
             let target = ensure_linear(device, &mut self.scaled, stream, "rusplay-host-scaled");
             scaler.encode(device, &mut encoder, current, &target.view);
             current = &target.view;
         }
 
-        if video.color.primaries != ColorPrimaries::Bt709 {
-            let settings = map_settings(&self.config);
+        if let Some(settings) = route.relinearise {
+            let relineariser =
+                ensure_lineariser(&self.pipelines, device, &mut self.relineariser, settings)?;
+            let target = ensure_linear(
+                device,
+                &mut self.relinearised,
+                stream,
+                "rusplay-host-relinearised",
+            );
+            relineariser.encode(device, &mut encoder, current, &target.view)?;
+            current = &target.view;
+        }
+
+        if let Some(settings) = route.map {
             let mapper = ensure_mapper(&self.pipelines, device, &mut self.mapper, settings)?;
             let target = ensure_linear(device, &mut self.mapped, stream, "rusplay-host-mapped");
             mapper.encode(device, &mut encoder, current, &target.view);
             current = &target.view;
         }
 
-        let settings = convert_settings(&self.config, stream);
+        let settings = convert_settings(&self.config, stream, route.input);
         let conversion =
             ensure_conversion(&self.pipelines, device, &mut self.conversion, settings)?;
         conversion
@@ -276,8 +328,8 @@ impl GpuPipeline {
 
 impl VideoPipeline for GpuPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
-        self.upload(frame)?;
-        self.convert(frame.resolution)?;
+        let key = self.upload(frame)?;
+        self.convert(key)?;
         self.read_back(frame.timestamp)?;
         self.encode_input(keyframe)
     }
@@ -325,7 +377,7 @@ fn ensure_upload<'a>(
     device: &wgpu::Device,
     slot: &'a mut Option<Upload>,
     resolution: Resolution,
-    format: wgpu::TextureFormat,
+    format: UploadFormat,
 ) -> &'a Upload {
     let upload = slot
         .take()
@@ -337,16 +389,23 @@ fn ensure_upload<'a>(
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format,
+                format: format.texture,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
+                view_formats: format.srgb_view.as_slice(),
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let srgb_view = format.srgb_view.map(|srgb| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(srgb),
+                    ..wgpu::TextureViewDescriptor::default()
+                })
+            });
             Upload {
                 resolution,
                 format,
                 texture,
                 view,
+                srgb_view,
             }
         });
 
@@ -397,6 +456,23 @@ fn ensure_scaler<'a>(
     };
 
     Ok(slot.insert(scaler))
+}
+
+fn ensure_lineariser<'a>(
+    pipelines: &ScalePipelines,
+    device: &wgpu::Device,
+    slot: &'a mut Option<Lineariser>,
+    settings: LineariseSettings,
+) -> Result<&'a mut Lineariser, HostError> {
+    let lineariser = match slot.take() {
+        Some(mut lineariser) => {
+            lineariser.configure(device, settings)?;
+            lineariser
+        }
+        None => Lineariser::new(pipelines, device, settings)?,
+    };
+
+    Ok(slot.insert(lineariser))
 }
 
 fn ensure_mapper<'a>(
@@ -459,46 +535,7 @@ fn conversion_buffers(
     }
 }
 
-fn scale_settings(config: &Config, source: Resolution, target: Resolution) -> ScaleSettings {
-    let scaling = &config.scaling;
-    let upscaling = target.width > source.width || target.height > source.height;
-
-    if upscaling {
-        let upscale = &scaling.upscale;
-        ScaleSettings {
-            filter: upscale.filter,
-            source,
-            target,
-            antiringing: upscale.antiringing,
-            sigmoid: upscale.sigmoid.then_some(Sigmoid {
-                center: upscale.sigmoid_center,
-                slope: upscale.sigmoid_slope,
-            }),
-        }
-    } else {
-        ScaleSettings {
-            filter: scaling.downscale.filter,
-            source,
-            target,
-            antiringing: 0.0,
-            sigmoid: None,
-        }
-    }
-}
-
-fn map_settings(config: &Config) -> ColorMapSettings {
-    ColorMapSettings {
-        source: ColorVolume::srgb_display(),
-        target: ColorVolume::of_content(&config.video.color),
-        tone: ToneMapping::default(),
-        gamut: GamutMapping {
-            mode: config.color.gamut_mapping.mode,
-            knee: f64::from(config.color.gamut_mapping.knee),
-        },
-    }
-}
-
-fn convert_settings(config: &Config, resolution: Resolution) -> ConvertSettings {
+fn convert_settings(config: &Config, resolution: Resolution, input: InputLight) -> ConvertSettings {
     let video = &config.video;
 
     ConvertSettings {
@@ -509,7 +546,7 @@ fn convert_settings(config: &Config, resolution: Resolution) -> ConvertSettings 
         range: video.color.range,
         transfer: video.color.transfer,
         hdr: video.color.hdr,
-        input: InputLight::Linear,
+        input,
         chroma_filter: config.scaling.downscale.chroma_filter,
         chroma_siting: ChromaSiting::Left,
         row_alignment: CONVERT_ROW_ALIGNMENT,

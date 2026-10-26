@@ -87,11 +87,25 @@ const COLOR_PEAK_SHADER: &str = concat!(
     include_str!("color_peak.wgsl")
 );
 
+const LINEARISE_FLOAT_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("destination_rgba16float.wgsl"),
+    include_str!("linearise_float.wgsl"),
+    include_str!("linearise_common.wgsl")
+);
+const LINEARISE_PACKED_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("destination_rgba16float.wgsl"),
+    include_str!("linearise_packed.wgsl"),
+    include_str!("linearise_common.wgsl")
+);
+
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
 const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
+const LINEARISE_WORKGROUP: (u32, u32) = (8, 8);
 const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
 const PEAK_WORKGROUP: (u32, u32) = (1, 1);
 
@@ -119,6 +133,55 @@ pub struct ScalePipelines {
     pub(crate) convert: ConvertPipelines,
     pub(crate) unpack: UnpackPasses,
     pub(crate) color: ColorPipelines,
+    pub(crate) linearise: LinearisePipelines,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LinearisePipelines {
+    pub params_layout: wgpu::BindGroupLayout,
+    pub packed_source_layout: wgpu::BindGroupLayout,
+    pub float: ShaderPass,
+    pub packed: ShaderPass,
+}
+
+impl LinearisePipelines {
+    fn new(
+        device: &wgpu::Device,
+        source_layout: &wgpu::BindGroupLayout,
+        destination_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let params_layout = layout(device, "rusplay-linearise-params", &[uniform_entry(0)]);
+        let packed_source_layout = layout(
+            device,
+            "rusplay-linearise-packed-source",
+            &[uint_texture_entry(0)],
+        );
+        let float = compute_pipeline(
+            device,
+            "rusplay-linearise",
+            &[source_layout, destination_layout, &params_layout],
+            LINEARISE_FLOAT_SHADER,
+            "linearise",
+            LINEARISE_WORKGROUP,
+            &[],
+        );
+        let packed = compute_pipeline(
+            device,
+            "rusplay-linearise-packed",
+            &[&packed_source_layout, destination_layout, &params_layout],
+            LINEARISE_PACKED_SHADER,
+            "linearise",
+            LINEARISE_WORKGROUP,
+            &[],
+        );
+
+        Self {
+            params_layout,
+            packed_source_layout,
+            float,
+            packed,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +420,7 @@ impl ScalePipelines {
 
         let convert = ConvertPipelines::new(device, &source_layout, &polar_layout);
         let color = ColorPipelines::new(device, &source_layout, &destination_layout);
+        let linearise = LinearisePipelines::new(device, &source_layout, &destination_layout);
 
         let unpack = unpack_passes(
             device,
@@ -378,6 +442,7 @@ impl ScalePipelines {
             convert,
             unpack,
             color,
+            linearise,
         }
     }
 

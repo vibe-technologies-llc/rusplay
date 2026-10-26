@@ -137,6 +137,28 @@ fn identical_primaries_map_through_the_identity() {
 
     assert_eq!(plan.path(), MappingPath::Matrix);
     assert!(plan.source_to_target().max_difference(&Matrix3::IDENTITY) < EXACT);
+    assert!(plan.is_identity());
+}
+
+#[test]
+fn only_a_mapping_that_changes_nothing_is_the_identity() {
+    let pq = |white: f64, peak: f64| ColorVolume {
+        primaries: ColorPrimaries::Bt2020,
+        transfer: TransferFunction::Pq,
+        reference_white_nits: white,
+        peak_nits: peak,
+        black_nits: 0.0,
+    };
+    let plan = |source, target| {
+        ColorPlan::new(&settings(source, target, GamutMapMode::Perceptual)).unwrap()
+    };
+
+    assert!(plan(pq(203.0, 1000.0), pq(203.0, 1000.0)).is_identity());
+    assert!(plan(sdr(ColorPrimaries::Bt2020), pq(203.0, 1000.0)).is_identity());
+    assert!(!plan(pq(203.0, 1000.0), pq(100.0, 1000.0)).is_identity());
+    assert!(!plan(pq(203.0, 4000.0), pq(203.0, 1000.0)).is_identity());
+    assert!(!plan(pq(203.0, 1000.0), sdr(ColorPrimaries::Bt2020)).is_identity());
+    assert!(!plan(sdr(ColorPrimaries::Bt709), sdr(ColorPrimaries::Bt2020)).is_identity());
 }
 
 #[test]

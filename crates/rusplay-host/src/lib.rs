@@ -10,6 +10,7 @@ mod gpu;
 mod mailbox;
 mod outbox;
 mod pipeline;
+mod route;
 mod send;
 mod session;
 mod shared;

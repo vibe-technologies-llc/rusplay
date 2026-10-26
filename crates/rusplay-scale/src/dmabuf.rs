@@ -8,7 +8,7 @@ use ash::vk;
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
 use self::vulkan::{ImageRequest, MemoryPlane, ModifierProperties, VulkanImporter};
-use crate::ScaleError;
+use crate::{ChannelOrder, ScaleError, SourceChannels};
 
 pub const DMABUF_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
 
@@ -38,6 +38,12 @@ pub enum DmaBufFormat {
     Abgr8888,
     Xbgr2101010,
     Abgr2101010,
+    Xrgb2101010,
+    Argb2101010,
+    Bgrx8888,
+    Rgbx8888,
+    Rgbx1010102,
+    Bgrx1010102,
     Nv12,
     P010,
 }
@@ -72,6 +78,20 @@ const RGB10A2: PlaneSpec = PlaneSpec {
     view_formats: &[],
     subsampled: false,
 };
+const RGBA8_PLAIN: PlaneSpec = PlaneSpec {
+    vulkan: vk::Format::R8G8B8A8_UNORM,
+    texture: wgpu::TextureFormat::Rgba8Unorm,
+    linear: None,
+    view_formats: &[],
+    subsampled: false,
+};
+const PACKED32: PlaneSpec = PlaneSpec {
+    vulkan: vk::Format::R32_UINT,
+    texture: wgpu::TextureFormat::R32Uint,
+    linear: None,
+    view_formats: &[],
+    subsampled: false,
+};
 const LUMA8: PlaneSpec = PlaneSpec {
     vulkan: vk::Format::R8_UINT,
     texture: wgpu::TextureFormat::R8Uint,
@@ -102,13 +122,19 @@ const CHROMA16: PlaneSpec = PlaneSpec {
 };
 
 impl DmaBufFormat {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 14] = [
         Self::Xrgb8888,
         Self::Argb8888,
         Self::Xbgr8888,
         Self::Abgr8888,
         Self::Xbgr2101010,
         Self::Abgr2101010,
+        Self::Xrgb2101010,
+        Self::Argb2101010,
+        Self::Bgrx8888,
+        Self::Rgbx8888,
+        Self::Rgbx1010102,
+        Self::Bgrx1010102,
         Self::Nv12,
         Self::P010,
     ];
@@ -121,6 +147,12 @@ impl DmaBufFormat {
             Self::Abgr8888 => *b"AB24",
             Self::Xbgr2101010 => *b"XB30",
             Self::Abgr2101010 => *b"AB30",
+            Self::Xrgb2101010 => *b"XR30",
+            Self::Argb2101010 => *b"AR30",
+            Self::Bgrx8888 => *b"BX24",
+            Self::Rgbx8888 => *b"RX24",
+            Self::Rgbx1010102 => *b"RX30",
+            Self::Bgrx1010102 => *b"BX30",
             Self::Nv12 => *b"NV12",
             Self::P010 => *b"P010",
         })
@@ -141,7 +173,13 @@ impl DmaBufFormat {
             | Self::Xbgr8888
             | Self::Abgr8888
             | Self::Xbgr2101010
-            | Self::Abgr2101010 => return None,
+            | Self::Abgr2101010
+            | Self::Xrgb2101010
+            | Self::Argb2101010
+            | Self::Bgrx8888
+            | Self::Rgbx8888
+            | Self::Rgbx1010102
+            | Self::Bgrx1010102 => return None,
         };
 
         Some(PixelFormat {
@@ -150,11 +188,29 @@ impl DmaBufFormat {
         })
     }
 
+    pub const fn channels(self) -> Option<SourceChannels> {
+        Some(match self {
+            Self::Xrgb8888 | Self::Xbgr8888 | Self::Xbgr2101010 => SourceChannels::RGBX,
+            Self::Argb8888 | Self::Abgr8888 | Self::Abgr2101010 => SourceChannels::RGBA,
+            Self::Xrgb2101010 => SourceChannels::float(ChannelOrder::Bgra, true),
+            Self::Argb2101010 => SourceChannels::float(ChannelOrder::Bgra, false),
+            Self::Bgrx8888 => SourceChannels::float(ChannelOrder::Argb, true),
+            Self::Rgbx8888 => SourceChannels::float(ChannelOrder::Abgr, true),
+            Self::Rgbx1010102 => SourceChannels::packed(ChannelOrder::Bgra, true),
+            Self::Bgrx1010102 => SourceChannels::packed(ChannelOrder::Rgba, true),
+            Self::Nv12 | Self::P010 => return None,
+        })
+    }
+
     const fn planes(self) -> &'static [PlaneSpec] {
         match self {
             Self::Xrgb8888 | Self::Argb8888 => &[BGRA8],
             Self::Xbgr8888 | Self::Abgr8888 => &[RGBA8],
-            Self::Xbgr2101010 | Self::Abgr2101010 => &[RGB10A2],
+            Self::Xbgr2101010 | Self::Abgr2101010 | Self::Xrgb2101010 | Self::Argb2101010 => {
+                &[RGB10A2]
+            }
+            Self::Bgrx8888 | Self::Rgbx8888 => &[RGBA8_PLAIN],
+            Self::Rgbx1010102 | Self::Bgrx1010102 => &[PACKED32],
             Self::Nv12 => &[LUMA8, CHROMA8],
             Self::P010 => &[LUMA16, CHROMA16],
         }
@@ -210,6 +266,10 @@ impl DmaBufTexture {
 
     pub fn view(&self, plane: usize) -> Option<&wgpu::TextureView> {
         self.planes.get(plane).map(|imported| &imported.view)
+    }
+
+    pub fn channels(&self) -> Option<SourceChannels> {
+        self.format.channels()
     }
 
     pub fn linear_view(&self) -> Option<&wgpu::TextureView> {

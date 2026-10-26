@@ -1,5 +1,5 @@
 # Host
-- [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
+- [S] `host-first-frames-keyframe-flaky`: `a_paired_client_receives_numbered_frames_that_start_with_a_keyframe` in `rusplay-host/src/tests.rs` fails about one run in six under load (`frames[1..]` holds a keyframe, line 464), even with the GPU tests skipped; a forced keyframe from a dropped frame or an early `RequestKeyframe` is the likely cause
 
 # Video decode
 - [S] `decode-vaapi-driver-field-long-term`: after a field of a long-term frame is unmarked with MMCO 2 and a non-reference frame was decoded earlier, Mesa's VAAPI H.264 decode makes every macroblock of the next P field use reference entry 0 (software decode and the DPB state agree on the right lists, and ffmpeg's VAAPI path reproduces it); find a workaround or confirm a driver fix

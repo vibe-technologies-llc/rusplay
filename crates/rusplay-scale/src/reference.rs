@@ -1,8 +1,8 @@
-use rusplay_core::TransferFunction;
+use rusplay_core::{HdrLevels, TransferFunction};
 
 use crate::{
-    ConvertSettings, FrameLayout, InputLight, Kernel, OutputLight, PlaneContent, PlaneLayout,
-    Quantization, RgbConvertSettings, ScaleSettings, TapTable,
+    ConvertSettings, FrameLayout, InputLight, Kernel, LineariseSettings, OutputLight, PlaneContent,
+    PlaneLayout, Quantization, RgbConvertSettings, ScaleSettings, TapTable,
     polar::PolarGeometry,
     scaler::Axis,
     shaping::Shaping,
@@ -164,6 +164,79 @@ fn hlg_scene_light(settings: &ConvertSettings, display: [f64; 3]) -> [f64; 3] {
 
     let gain = luminance.powf(settings.hlg_exponent());
     display.map(|component| (component * gain).clamp(0.0, 1.0))
+}
+
+fn hlg_inverse_oetf(code: f64) -> f64 {
+    if code <= 0.5 {
+        code * code / 3.0
+    } else {
+        (((code - (0.5 - HLG_A * (4.0 * HLG_A).ln())) / HLG_A).exp() + HLG_B) / 12.0
+    }
+}
+
+fn srgb_eotf(code: f64) -> f64 {
+    if code <= 0.040_45 {
+        code / 12.92
+    } else {
+        ((code + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn bt709_inverse_oetf(code: f64) -> f64 {
+    if code < 0.081 {
+        code / 4.5
+    } else {
+        ((code + 0.099) / 1.099).powf(1.0 / 0.45)
+    }
+}
+
+pub(crate) fn linearise_texel(settings: &LineariseSettings, rgb: [f64; 3]) -> [f64; 3] {
+    let code = rgb.map(|value| value.clamp(0.0, 1.0));
+    let scale = settings.hdr_scale();
+
+    match (settings.output, settings.transfer) {
+        (OutputLight::Encoded, _) | (OutputLight::Linear, TransferFunction::Linear) => rgb,
+        (OutputLight::Linear, TransferFunction::Srgb) => code.map(srgb_eotf),
+        (OutputLight::Linear, TransferFunction::Bt709) => code.map(bt709_inverse_oetf),
+        (OutputLight::Linear, TransferFunction::Gamma22) => code.map(|value| value.powf(2.2)),
+        (OutputLight::Linear, TransferFunction::Pq) => code
+            .map(|value| rusplay_core::pq_to_nits(value) / f64::from(HdrLevels::MAX_NITS) * scale),
+        (OutputLight::Linear, TransferFunction::Hlg) => {
+            let scene = code.map(hlg_inverse_oetf);
+            let luminance = dot(settings.matrix.rows()[0], scene);
+            if luminance <= 0.0 {
+                return [0.0; 3];
+            }
+            let gain = luminance.powf(settings.hlg_exponent());
+            scene.map(|value| value * gain * scale)
+        }
+    }
+}
+
+pub(crate) fn linearise(source: &Image, settings: &LineariseSettings) -> Image {
+    let lanes = settings.channels.order.lanes().map(|lane| lane as usize);
+
+    Image::from_fn(source.width, source.height, |x, y| {
+        let texel = source.texel(i64::from(x), i64::from(y));
+        let rgb = [0, 1, 2].map(|channel| f64::from(texel[lanes[channel]]));
+        let alpha = if settings.channels.opaque {
+            1.0
+        } else {
+            texel[lanes[3]]
+        };
+        let [red, green, blue] = linearise_texel(settings, rgb);
+
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = [red as f32, green as f32, blue as f32, alpha];
+        narrowed
+    })
+}
+
+pub(crate) fn encode_linear(settings: &ConvertSettings, linear: [f64; 3]) -> [f64; 3] {
+    #[allow(clippy::cast_possible_truncation)]
+    let texel = [linear[0] as f32, linear[1] as f32, linear[2] as f32, 1.0];
+
+    encode_texel(settings, texel)
 }
 
 fn encode_texel(settings: &ConvertSettings, texel: [f32; 4]) -> [f64; 3] {

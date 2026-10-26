@@ -17,8 +17,9 @@ use rustix::{
 use super::*;
 use crate::{
     ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout, InputLight,
-    OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines,
-    testing::{self, Gpu, Image},
+    LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
+    ScalePipelines,
+    testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
 };
 
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
@@ -164,6 +165,80 @@ fn rgb_formats_import_without_conversion() {
             format != DmaBufFormat::Abgr2101010,
             "{format:?}"
         );
+    }
+}
+
+fn drm_rgb(format: DmaBufFormat, word: u32) -> Option<[f32; 3]> {
+    let ten = |shift: u32| f32::from(u16::try_from((word >> shift) & 1023).unwrap()) / 1023.0;
+    let eight = |shift: u32| f32::from(u8::try_from((word >> shift) & 255).unwrap()) / 255.0;
+
+    Some(match format {
+        DmaBufFormat::Xrgb8888 | DmaBufFormat::Argb8888 => [eight(16), eight(8), eight(0)],
+        DmaBufFormat::Xbgr8888 | DmaBufFormat::Abgr8888 => [eight(0), eight(8), eight(16)],
+        DmaBufFormat::Bgrx8888 => [eight(8), eight(16), eight(24)],
+        DmaBufFormat::Rgbx8888 => [eight(24), eight(16), eight(8)],
+        DmaBufFormat::Xrgb2101010 | DmaBufFormat::Argb2101010 => [ten(20), ten(10), ten(0)],
+        DmaBufFormat::Xbgr2101010 | DmaBufFormat::Abgr2101010 => [ten(0), ten(10), ten(20)],
+        DmaBufFormat::Rgbx1010102 => [ten(22), ten(12), ten(2)],
+        DmaBufFormat::Bgrx1010102 => [ten(2), ten(12), ten(22)],
+        DmaBufFormat::Nv12 | DmaBufFormat::P010 => return None,
+    })
+}
+
+#[test]
+fn every_rgb_format_reads_back_in_drm_channel_order() {
+    let Some(mut fixture) = fixture() else {
+        return;
+    };
+    let pipelines = ScalePipelines::new(&fixture.gpu.device);
+    let size = (37, 23);
+
+    for format in DmaBufFormat::ALL {
+        let Some(channels) = format.channels() else {
+            continue;
+        };
+        let bytes = rgb_bytes(size, format.fourcc());
+        let fd = udmabuf(&bytes).unwrap();
+        let texture = fixture
+            .importer
+            .import(&single_plane(&fd, format.fourcc(), size, RGB_STRIDE))
+            .unwrap();
+        let mut lineariser = Lineariser::new(
+            &pipelines,
+            &fixture.gpu.device,
+            LineariseSettings::encoded(channels),
+        )
+        .unwrap();
+        let target = testing::storage_target(fixture.gpu, size.0, size.1);
+
+        testing::submit(fixture.gpu, |encoder| {
+            lineariser
+                .encode(
+                    &fixture.gpu.device,
+                    encoder,
+                    texture.view(0).unwrap(),
+                    &testing::view(&target),
+                )
+                .unwrap();
+        });
+        let read = testing::download(fixture.gpu, &target);
+
+        assert_eq!(texture.channels(), Some(channels));
+        for (index, texel) in read.pixels.iter().enumerate() {
+            let (x, y) = (index % size.0 as usize, index / size.0 as usize);
+            let at = y * usize::try_from(RGB_STRIDE).unwrap() + x * RGB_TEXEL_BYTES as usize;
+            let word = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            let want = drm_rgb(format, word).unwrap();
+            for (got, want) in texel.iter().zip(want) {
+                assert!(
+                    (got - want).abs() <= RGBA16F_TOLERANCE / 2.0,
+                    "{format:?} at {x},{y}: {texel:?} for {word:#010x}"
+                );
+            }
+            if channels.opaque {
+                assert!((texel[3] - 1.0).abs() < f32::EPSILON, "{format:?}");
+            }
+        }
     }
 }
 

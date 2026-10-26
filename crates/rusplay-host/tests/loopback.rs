@@ -17,6 +17,7 @@ use rusplay_config::{
 };
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
+    TransferFunction,
 };
 use rusplay_host::{
     AudioSource, CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostError,
@@ -133,7 +134,10 @@ impl FrameSource for MovingBox {
         Ok(Some(Frame {
             resolution: SOURCE,
             format: DrmFourcc::from_code(*b"XR24"),
-            color: ColorSpace::default(),
+            color: ColorSpace {
+                transfer: TransferFunction::Srgb,
+                ..ColorSpace::default()
+            },
             timestamp: Timestamp::from_micros(u64::from(self.index) * 16_000),
             buffer: FrameBuffer::Shm { data, stride },
         }))
