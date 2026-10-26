@@ -144,9 +144,13 @@ paths:
   intermediate at luma width, `unpack_rgb` applies the vertical taps, the `MatrixCoefficients::inverse_rows`
   and `output_light`, into an `rgba16float` storage texture. `output_light` is either
   `unpack_output_transfer.wgsl`, the inverse OETF for `OutputLight::Linear` (sRGB, BT.709, gamma
-  2.2 or linear; PQ and HLG must use `OutputLight::Encoded`), or `unpack_output_lut.wgsl`, the
-  colour LUT lookup of `encode_with_lut`/`encode_planes_with_lut` (`color.md`), whose group 2
-  adds the LUT texture and its decoding uniform to the target. Chroma is upsampled with
+  2.2 or linear; PQ and HLG must use `OutputLight::Encoded`), `unpack_output_chain.wgsl`, the
+  analytic colour chain of `encode_with_chain`/`encode_planes_with_chain`, whose group 2 adds the
+  colour params, tone state, boundary table and signal uniform to the target, or
+  `unpack_output_lut.wgsl`, the colour LUT lookup of `encode_with_lut`/`encode_planes_with_lut`,
+  whose group 2 adds the LUT texture and its decoding uniform (`color.md`; both are a
+  `FusedUnpack` of the target layout and the buffer and planes pipelines). The unpack uniform is
+  named `unpacking`, leaving `params` to the colour preludes. Chroma is upsampled with
   `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
   and must be separable. `reference::unpack_rgb` is its CPU reference. The input is a WGSL module
   providing `luma_code`/`chroma_codes` (integer codes after the `sample_shift` and `max_code`
@@ -243,14 +247,16 @@ paths:
   identity matrix, no tone stage, equal white levels), which is how the host skips the mapper.
 - Tone and gamut mapping (`color.rs`, `color/`, `color_*.wgsl`) share `ScalePipelines`
   (`ColorPipelines`: the map pass at 8x8 with a params, tone-state and boundary-table layout,
-  the boundary table's bake at 16x4, and the histogram and peak passes on an analysis layout), the source and destination layouts and
+  the boundary table's bake at 16x4 and its hue erosion at 64x1 (`BoundaryPipelines`), and the histogram and peak passes on an analysis layout), the source and destination layouts and
   the `GroupCache` scheme with the scaler. Their design is in `.claude/rules/color.md`.
 - `bench.rs` is an ignored test that prints per-frame GPU times for the representative
   workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
   --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's
   clocks otherwise swing results by 30%. Rerun it before and after any shader performance
-  change. Its `present` lines time a whole 4K HDR frame through the analytic colour passes and
-  through the colour LUT at 65³, 97³ and 129³, with the one-off bake.
+  change. Its `present` lines time a whole 4K HDR frame through the separate analytic colour
+  passes, the fused `ColorChain`, and the colour LUT at 65³, 97³ and 129³ with the one-off
+  bake. Comparing paths needs them timed round robin in one run, since the clocks also differ
+  from run to run.
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a

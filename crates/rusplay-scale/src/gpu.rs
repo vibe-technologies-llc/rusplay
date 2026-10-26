@@ -3,9 +3,10 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 use crate::color::{
-    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
-    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_UPPER_TOLERANCE,
-    BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, HISTOGRAM_BINS,
+    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_HUE_SLOPE,
+    BOUNDARY_LOWER_TOLERANCE, BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS,
+    BOUNDARY_UPPER_TOLERANCE, BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER,
+    HISTOGRAM_BINS, boundary_erosion_columns,
 };
 
 const RESAMPLE_SHADER: &str = concat!(
@@ -74,6 +75,30 @@ const UNPACK_PLANES_RGB_LUT_SHADER: &str = concat!(
     include_str!("unpack_output_lut.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
+const UNPACK_RGB_CHAIN_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("unpack_output_chain.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_PLANES_RGB_CHAIN_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("unpack_output_chain.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("shaping.wgsl"),
@@ -117,6 +142,12 @@ const COLOR_BOUNDARY_BAKE_SHADER: &str = concat!(
     include_str!("color_gamut.wgsl"),
     include_str!("color_boundary_bake.wgsl")
 );
+const COLOR_BOUNDARY_ERODE_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_boundary_erode.wgsl")
+);
 const COLOR_HISTOGRAM_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("color_common.wgsl"),
@@ -152,6 +183,7 @@ const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
 const BOUNDARY_BAKE_WORKGROUP: (u32, u32) = (16, 4);
+const BOUNDARY_ERODE_WORKGROUP: (u32, u32) = (64, 1);
 const LINEARISE_WORKGROUP: (u32, u32) = (8, 8);
 const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
 const PEAK_WORKGROUP: (u32, u32) = (1, 1);
@@ -241,9 +273,56 @@ pub(crate) struct UnpackPasses {
     pub planes_layout: wgpu::BindGroupLayout,
     pub planes_chroma: ShaderPass,
     pub planes_rgb: ShaderPass,
-    pub lut_target_layout: wgpu::BindGroupLayout,
-    pub rgb_lut: ShaderPass,
-    pub planes_rgb_lut: ShaderPass,
+    pub lut: FusedUnpack,
+    pub chain: FusedUnpack,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FusedUnpack {
+    pub target_layout: wgpu::BindGroupLayout,
+    pub rgb: ShaderPass,
+    pub planes_rgb: ShaderPass,
+}
+
+struct FusedUnpackDescriptor<'a> {
+    label: &'a str,
+    target_entries: &'a [wgpu::BindGroupLayoutEntry],
+    shaders: [&'a str; 2],
+    constants: &'a [(&'a str, f64)],
+}
+
+impl FusedUnpack {
+    fn new(
+        device: &wgpu::Device,
+        inputs: [&wgpu::BindGroupLayout; 2],
+        layouts: [&wgpu::BindGroupLayout; 4],
+        descriptor: &FusedUnpackDescriptor<'_>,
+    ) -> Self {
+        let [source_layout, _, _, convert_table_layout] = layouts;
+        let target_layout = layout(device, descriptor.label, descriptor.target_entries);
+        let [rgb, planes_rgb] = [0, 1].map(|index| {
+            compute_pipeline(
+                device,
+                descriptor.label,
+                &[
+                    inputs[index],
+                    source_layout,
+                    &target_layout,
+                    convert_table_layout,
+                ],
+                descriptor.shaders[index],
+                "unpack_rgb",
+                CONVERT_WORKGROUP,
+                descriptor.constants,
+            )
+        });
+
+        Self {
+            target_layout,
+            rgb,
+            planes_rgb,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -256,12 +335,59 @@ pub(crate) struct ColorPipelines {
     pub lut_store_layout: wgpu::BindGroupLayout,
     pub lut_bake_layout: wgpu::BindGroupLayout,
     pub lut_bake: ShaderPass,
-    pub boundary_store_layout: wgpu::BindGroupLayout,
-    pub boundary_params_layout: wgpu::BindGroupLayout,
-    pub boundary_bake: ShaderPass,
+    pub boundary: BoundaryPipelines,
 }
 
-fn gamut_constants() -> [(&'static str, f64); 11] {
+#[derive(Debug, Clone)]
+pub(crate) struct BoundaryPipelines {
+    pub store_layout: wgpu::BindGroupLayout,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub bake: ShaderPass,
+    pub erosion_layout: wgpu::BindGroupLayout,
+    pub erode: ShaderPass,
+}
+
+impl BoundaryPipelines {
+    fn new(device: &wgpu::Device, gamut_constants: &[(&str, f64)]) -> Self {
+        let store_layout = layout(
+            device,
+            "rusplay-color-boundary-store",
+            &[storage_texture_entry(0, BOUNDARY_TABLE_FORMAT)],
+        );
+        let params_layout = layout(device, "rusplay-color-boundary-params", &[uniform_entry(0)]);
+        let erosion_layout = layout(
+            device,
+            "rusplay-color-boundary-erosion",
+            &[uniform_entry(0), texture_entry(2)],
+        );
+
+        Self {
+            bake: compute_pipeline(
+                device,
+                "rusplay-color-boundary-bake",
+                &[&store_layout, &params_layout],
+                COLOR_BOUNDARY_BAKE_SHADER,
+                "bake_boundary",
+                BOUNDARY_BAKE_WORKGROUP,
+                gamut_constants,
+            ),
+            erode: compute_pipeline(
+                device,
+                "rusplay-color-boundary-erode",
+                &[&store_layout, &erosion_layout],
+                COLOR_BOUNDARY_ERODE_SHADER,
+                "erode_boundary",
+                BOUNDARY_ERODE_WORKGROUP,
+                gamut_constants,
+            ),
+            store_layout,
+            params_layout,
+            erosion_layout,
+        }
+    }
+}
+
+fn gamut_constants() -> [(&'static str, f64); 13] {
     [
         ("BOUNDARY_COARSE_STEPS", f64::from(BOUNDARY_COARSE_STEPS)),
         (
@@ -276,6 +402,11 @@ fn gamut_constants() -> [(&'static str, f64); 11] {
         ("BOUNDARY_RAMP_CENTRE", BOUNDARY_RAMP_CENTRE),
         ("BOUNDARY_REACH", BOUNDARY_REACH),
         ("BOUNDARY_HEADROOM", BOUNDARY_HEADROOM),
+        ("BOUNDARY_HUE_SLOPE", BOUNDARY_HUE_SLOPE),
+        (
+            "BOUNDARY_EROSION_COLUMNS",
+            f64::from(boundary_erosion_columns()),
+        ),
         ("COMPRESSION_POWER", COMPRESSION_POWER),
     ]
 }
@@ -325,22 +456,6 @@ impl ColorPipelines {
             LUT_BAKE_WORKGROUP,
             &gamut_constants,
         );
-        let boundary_store_layout = layout(
-            device,
-            "rusplay-color-boundary-store",
-            &[storage_texture_entry(0, BOUNDARY_TABLE_FORMAT)],
-        );
-        let boundary_params_layout =
-            layout(device, "rusplay-color-boundary-params", &[uniform_entry(0)]);
-        let boundary_bake = compute_pipeline(
-            device,
-            "rusplay-color-boundary-bake",
-            &[&boundary_store_layout, &boundary_params_layout],
-            COLOR_BOUNDARY_BAKE_SHADER,
-            "bake_boundary",
-            BOUNDARY_BAKE_WORKGROUP,
-            &gamut_constants,
-        );
         let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
         let histogram = compute_pipeline(
             device,
@@ -370,9 +485,7 @@ impl ColorPipelines {
             lut_store_layout,
             lut_bake_layout,
             lut_bake,
-            boundary_store_layout,
-            boundary_params_layout,
-            boundary_bake,
+            boundary: BoundaryPipelines::new(device, &gamut_constants),
         }
     }
 }
@@ -596,41 +709,38 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         layouts,
         [UNPACK_PLANES_CHROMA_SHADER, UNPACK_PLANES_RGB_SHADER],
     );
-    let lut_target_layout = layout(
+    let inputs = [&input_layout, &planes_layout];
+    let lut = FusedUnpack::new(
         device,
-        "rusplay-unpack-lut-target",
-        &[
-            storage_texture_entry(0, INTERMEDIATE_FORMAT),
-            texture_3d_entry(1),
-            uniform_entry(2),
-        ],
-    );
-    let [source_layout, _, _, convert_table_layout] = layouts;
-    let lut_pass = |label: &str, input_layout: &wgpu::BindGroupLayout, shader: &str| {
-        compute_pipeline(
-            device,
-            label,
-            &[
-                input_layout,
-                source_layout,
-                &lut_target_layout,
-                convert_table_layout,
+        inputs,
+        layouts,
+        &FusedUnpackDescriptor {
+            label: "rusplay-unpack-lut",
+            target_entries: &[
+                storage_texture_entry(0, INTERMEDIATE_FORMAT),
+                texture_3d_entry(1),
+                uniform_entry(2),
             ],
-            shader,
-            "unpack_rgb",
-            CONVERT_WORKGROUP,
-            &[],
-        )
-    };
-    let rgb_lut = lut_pass(
-        "rusplay-unpack-rgb-lut",
-        &input_layout,
-        UNPACK_RGB_LUT_SHADER,
+            shaders: [UNPACK_RGB_LUT_SHADER, UNPACK_PLANES_RGB_LUT_SHADER],
+            constants: &[],
+        },
     );
-    let planes_rgb_lut = lut_pass(
-        "rusplay-unpack-planes-rgb-lut",
-        &planes_layout,
-        UNPACK_PLANES_RGB_LUT_SHADER,
+    let chain = FusedUnpack::new(
+        device,
+        inputs,
+        layouts,
+        &FusedUnpackDescriptor {
+            label: "rusplay-unpack-chain",
+            target_entries: &[
+                storage_texture_entry(0, INTERMEDIATE_FORMAT),
+                uniform_entry(1),
+                storage_buffer_entry(2),
+                texture_entry(3),
+                uniform_entry(4),
+            ],
+            shaders: [UNPACK_RGB_CHAIN_SHADER, UNPACK_PLANES_RGB_CHAIN_SHADER],
+            constants: &gamut_constants(),
+        },
     );
 
     UnpackPasses {
@@ -640,9 +750,8 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         planes_layout,
         planes_chroma,
         planes_rgb,
-        lut_target_layout,
-        rgb_lut,
-        planes_rgb_lut,
+        lut,
+        chain,
     }
 }
 

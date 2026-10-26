@@ -24,9 +24,9 @@ mod unpack;
 
 pub use crate::{
     color::{
-        ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper, ColorPlan, ColorVolume,
-        DEFAULT_LUT_SIZE, DynamicPeak, GamutMapping, LUT_SIZES, MappingPath, ToneCurve,
-        ToneMapping, ToneStage, WorkingSpace,
+        ColorChain, ColorChainSettings, ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper,
+        ColorPlan, ColorVolume, DEFAULT_LUT_SIZE, DynamicPeak, GamutMapping, LUT_SIZES,
+        MappingPath, ToneCurve, ToneMapping, ToneStage, WorkingSpace,
     },
     convert::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,

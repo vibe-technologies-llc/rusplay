@@ -50,6 +50,15 @@ pub enum ScaleError {
     SceneThresholdOutOfRange(f64),
     #[error("colour lut size {0} is outside the supported range or the device's 3d texture limit")]
     LutSizeOutOfRange(u32),
+    #[error("dynamic peak detection cannot be fused into the unpack")]
+    ChainDynamicPeak,
+    #[error("a fused colour chain needs the unpack to output encoded values")]
+    ChainInputNotEncoded,
+    #[error("the colour chain decodes {chain:?} input, the frame is {frame:?}")]
+    ChainTransferMismatch {
+        chain: TransferFunction,
+        frame: TransferFunction,
+    },
     #[error("dynamic peak detection cannot be baked into a colour lut")]
     LutDynamicPeak,
     #[error("highlight gamut mapping is discontinuous and cannot be baked into a colour lut")]

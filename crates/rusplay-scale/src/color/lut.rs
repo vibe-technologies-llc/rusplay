@@ -1,13 +1,13 @@
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::ops::RangeInclusive;
 
 use rusplay_core::{HdrLevels, MatrixCoefficients, TransferFunction};
 
 use crate::{
-    LineariseSettings, OutputLight, Reconfigured, ScaleError, SourceChannels,
-    color::{ColorMapSettings, ColorPlan, MapperBuffers, MappingPath, float},
+    Reconfigured, ScaleError,
+    color::{ColorChainSettings, ColorMapSettings, ColorPlan, MapperBuffers, MappingPath, float},
     gpu::{self, LUT_FORMAT, ScalePipelines, buffer_group, uniform_buffer},
 };
 
@@ -24,13 +24,12 @@ pub struct ColorLutSettings {
 }
 
 impl ColorLutSettings {
-    fn linearise(&self) -> LineariseSettings {
-        LineariseSettings {
-            channels: SourceChannels::RGBA,
+    const fn chain(&self) -> ColorChainSettings {
+        ColorChainSettings {
             transfer: self.transfer,
             hdr: self.hdr,
             matrix: self.matrix,
-            output: OutputLight::Linear,
+            map: self.map,
         }
     }
 
@@ -38,7 +37,7 @@ impl ColorLutSettings {
         if !LUT_SIZES.contains(&self.size) || self.size > device.limits().max_texture_dimension_3d {
             return Err(ScaleError::LutSizeOutOfRange(self.size));
         }
-        self.linearise().validate()?;
+        self.chain().linearise().validate()?;
 
         let mut plan = ColorPlan::new(&self.map.unwrap_or_default())?;
         if plan.tone.is_some_and(|stage| stage.dynamic_peak.is_some()) {
@@ -58,29 +57,6 @@ impl ColorLutSettings {
             peak: plan.target_peak,
             bake: plan,
         })
-    }
-
-    fn bake_bytes(&self, plan: &LutPlan) -> Vec<u8> {
-        let linearise = self.linearise();
-        let luma = self.matrix.rows()[0];
-        let mut words = Vec::with_capacity(BAKE_WORDS);
-
-        words.extend(luma.map(float));
-        words.push(0);
-        words.extend([
-            float(linearise.hdr_scale()),
-            float(linearise.hlg_exponent()),
-            0,
-            0,
-        ]);
-        words.extend([
-            linearise.transfer_code(),
-            u32::from(self.map.is_some()),
-            u32::from(plan.toe),
-            0,
-        ]);
-
-        words.iter().flat_map(|word| word.to_ne_bytes()).collect()
     }
 }
 
@@ -104,8 +80,6 @@ impl LutPlan {
         .collect()
     }
 }
-
-const BAKE_WORDS: usize = 12;
 
 #[derive(Debug)]
 struct LutResources {
@@ -140,7 +114,11 @@ impl LutResources {
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let bake = uniform_buffer(device, "rusplay-color-lut-bake", &settings.bake_bytes(plan));
+        let bake = uniform_buffer(
+            device,
+            "rusplay-color-lut-bake",
+            &settings.chain().signal_bytes(plan.toe),
+        );
 
         Self {
             store_group: gpu::view_group(device, &pipelines.color.lut_store_layout, &view),

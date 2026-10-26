@@ -6,10 +6,11 @@ use rusplay_core::{
 };
 
 use crate::{
-    ChromaSiting, ColorConverter, ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper,
-    ColorVolume, ConvertSettings, DEFAULT_ROW_ALIGNMENT, DynamicPeak, GamutMapping, InputLight,
-    LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
-    ScalePipelines, ScaleSettings, Scaler, SourceChannels, ToneMapping, YuvFrame,
+    ChromaSiting, ColorChain, ColorChainSettings, ColorConverter, ColorLut, ColorLutSettings,
+    ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings, DEFAULT_ROW_ALIGNMENT,
+    DynamicPeak, GamutMapping, InputLight, LineariseSettings, Lineariser, OutputLight, PlaneLayout,
+    RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, SourceChannels,
+    ToneMapping, YuvFrame,
     testing::{self, Gpu, Image},
 };
 
@@ -277,6 +278,24 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
             mapper.encode(&gpu.device, encoder, &views[1], &views[2]);
         });
         println!("present {name} analytic {size:?}: {analytic:?}");
+
+        let mut chain = ColorChain::new(
+            &pipelines,
+            &gpu.device,
+            ColorChainSettings {
+                transfer: TransferFunction::Pq,
+                hdr: HdrLevels::default(),
+                matrix: MatrixCoefficients::Bt2020Ncl,
+                map: Some(settings),
+            },
+        )
+        .unwrap();
+        let fused = best_frame_time(gpu, |encoder| {
+            converter
+                .encode_with_chain(&gpu.device, encoder, &frame, &mut chain, &views[0])
+                .unwrap();
+        });
+        println!("present {name} fused analytic {size:?}: {fused:?}");
 
         for lut_size in LUT_SIZES {
             let lut_settings = ColorLutSettings {
