@@ -92,8 +92,10 @@ paths:
   window's, `color.md`), read on every frame, else the `color.target` overrides resolved against
   an empty `DisplayImage` at connect (sRGB at 203 cd/m² by default). `ColorStage` plans a
   `ColorRoute` only when the source colour or the target changes: a `Lineariser` pass for
-  encoded (PQ/HLG) frames and a `ColorMapper` pass unless `ColorPlan::is_identity`. Its design
-  is in `color.md`.
+  encoded (PQ/HLG) frames and a `ColorMapper` pass unless `ColorPlan::is_identity`, or, with
+  `color.processing.method = "lut"`, one `ColorLut` that the unpack samples instead of both
+  (`ColorStage::lut`, the frame unpacked as `ColorRoute::unpack` says). Its design is in
+  `color.md`.
 - Audio (`audio.rs`): `connect` opens an `AudioOutput` before it spawns the stages. The default
   (`default_audio_output`) is `AudioPlayback` when the `pipewire` feature is on and none
   otherwise; `connect_with_audio` takes any `Option<Box<dyn AudioOutput>>` (tests pass a capturing

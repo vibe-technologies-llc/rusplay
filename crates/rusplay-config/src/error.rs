@@ -35,6 +35,8 @@ pub enum ConfigError {
     SceneThresholdOutOfRange(f32),
     #[error("gamut mapping knee {0} is outside 0.0..1.0")]
     GamutKneeOutOfRange(f32),
+    #[error("colour lut size {0} is outside 17..=129")]
+    LutSizeOutOfRange(u32),
     #[error("svt-av1 preset {0} is outside 0..=13")]
     SvtAv1PresetOutOfRange(u8),
     #[error("constant quality qp {0} is outside 0..=51")]
@@ -138,6 +140,7 @@ impl ConfigError {
             Self::TargetPeakOutOfRange(_) => Some("color.target.peak_nits"),
             Self::TargetBlackNotBelowPeak { .. } => Some("color.target.black_nits"),
             Self::GamutKneeOutOfRange(_) => Some("color.gamut_mapping.knee"),
+            Self::LutSizeOutOfRange(_) => Some("color.processing.lut_size"),
             Self::PeakPercentileOutOfRange(_) => Some("color.tone_mapping.peak_percentile"),
             Self::ZeroSmoothingFrames => Some("color.tone_mapping.smoothing_frames"),
             Self::SceneThresholdOutOfRange(_) => Some("color.tone_mapping.scene_threshold_db"),

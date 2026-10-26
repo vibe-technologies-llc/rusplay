@@ -48,6 +48,19 @@ pub enum ScaleError {
     ZeroSmoothingFrames,
     #[error("scene cut threshold {0} dB is not a positive number")]
     SceneThresholdOutOfRange(f64),
+    #[error("colour lut size {0} is outside the supported range or the device's 3d texture limit")]
+    LutSizeOutOfRange(u32),
+    #[error("dynamic peak detection cannot be baked into a colour lut")]
+    LutDynamicPeak,
+    #[error("highlight gamut mapping is discontinuous and cannot be baked into a colour lut")]
+    LutHighlightMapping,
+    #[error("a colour lut lookup needs the unpack to output encoded values")]
+    LutInputNotEncoded,
+    #[error("the colour lut was baked for {lut:?} input, the frame is {frame:?}")]
+    LutTransferMismatch {
+        lut: TransferFunction,
+        frame: TransferFunction,
+    },
     #[error("a colour conversion matrix is singular")]
     SingularColorMatrix,
     #[error("the yuv frame was created for a different layout than the converter's")]

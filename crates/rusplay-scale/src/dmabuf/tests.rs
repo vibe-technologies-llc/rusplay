@@ -1,15 +1,16 @@
 use std::os::fd::{AsFd, OwnedFd};
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorRange, HdrLevels, MatrixCoefficients, PixelFormat,
-    Resolution, ScaleFilter, TransferFunction,
+    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, HdrLevels, MatrixCoefficients,
+    PixelFormat, Resolution, ScaleFilter, TransferFunction,
 };
 
 use super::*;
 use crate::{
-    ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout, InputLight,
+    ChromaSiting, ColorConverter, ColorLut, ColorLutSettings, ColorMapSettings, ColorVolume,
+    ConvertSettings, DEFAULT_LUT_SIZE, DEFAULT_ROW_ALIGNMENT, FrameLayout, InputLight,
     LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
-    ScalePipelines,
+    ScalePipelines, YuvFrame,
     testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
     udmabuf::PAGE_BYTES,
 };
@@ -283,11 +284,80 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
             });
             let expected = testing::download(gpu, &from_buffer);
             let actual = testing::download(gpu, &from_planes);
+            let (lut_expected, lut_actual) =
+                unpack_through_lut(gpu, &pipelines, settings, (&upload, &texture));
 
             assert_eq!(texture.plane_count(), 2);
             assert_eq!(actual.max_difference(&expected), 0.0, "{format:?} {size:?}");
+            assert_eq!(
+                lut_actual.max_difference(&lut_expected),
+                0.0,
+                "{format:?} {size:?} through a lut"
+            );
         }
     }
+}
+
+fn unpack_through_lut(
+    gpu: &Gpu,
+    pipelines: &ScalePipelines,
+    settings: RgbConvertSettings,
+    (upload, texture): (&YuvFrame, &DmaBufTexture),
+) -> (Image, Image) {
+    let encoded = RgbConvertSettings {
+        transfer: TransferFunction::Pq,
+        output: OutputLight::Encoded,
+        ..settings
+    };
+    let mut converter = RgbConverter::new(pipelines, &gpu.device, encoded).unwrap();
+    let mut lut = ColorLut::new(
+        pipelines,
+        &gpu.device,
+        ColorLutSettings {
+            transfer: TransferFunction::Pq,
+            hdr: HdrLevels::default(),
+            matrix: settings.matrix,
+            map: Some(ColorMapSettings {
+                source: ColorVolume {
+                    primaries: ColorPrimaries::Bt2020,
+                    transfer: TransferFunction::Pq,
+                    peak_nits: 1000.0,
+                    ..ColorVolume::srgb_display()
+                },
+                ..ColorMapSettings::default()
+            }),
+            size: DEFAULT_LUT_SIZE,
+        },
+    )
+    .unwrap();
+    let (width, height) = (settings.resolution.width, settings.resolution.height);
+    let from_buffer = testing::storage_target(gpu, width, height);
+    let from_planes = testing::storage_target(gpu, width, height);
+
+    testing::submit(gpu, |encoder| {
+        converter
+            .encode_with_lut(
+                &gpu.device,
+                encoder,
+                upload,
+                &mut lut,
+                &testing::view(&from_buffer),
+            )
+            .unwrap();
+        converter
+            .encode_planes_with_lut(
+                &gpu.device,
+                encoder,
+                texture,
+                &mut lut,
+                &testing::view(&from_planes),
+            )
+            .unwrap();
+    });
+    (
+        testing::download(gpu, &from_buffer),
+        testing::download(gpu, &from_planes),
+    )
 }
 
 #[test]

@@ -108,6 +108,8 @@ const PRESENT_MODES: &[&str] = &["mailbox", "immediate", "fifo"];
 const OUTPUT_COLOR_SPACES: &[&str] = &["auto", "srgb", "display-p3", "extended-linear", "pq"];
 const OUTPUT_FORMATS: &[&str] = &["auto", "rgba8", "rgb10a2", "rgba16-float"];
 const DITHER_MODES: &[&str] = &["blue-noise", "ordered", "off"];
+const COLOR_METHODS: &[&str] = &["analytic", "lut"];
+const LUT_SIZES: Kind = Kind::Integer { min: 17, max: 129 };
 const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
 const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
 const RATE_CONTROL_MODES: &[&str] = &["cbr", "vbr", "constant-quality"];
@@ -1167,6 +1169,21 @@ pub static FIELDS: &[Field] = &[
         "Compression knee",
         Kind::Decimal,
     ),
+    field(
+        Section::Color,
+        "Processing",
+        "color.processing.method",
+        "Method",
+        Kind::Choice(COLOR_METHODS),
+    ),
+    field(
+        Section::Color,
+        "Processing",
+        "color.processing.lut_size",
+        "LUT size",
+        LUT_SIZES,
+    )
+    .unit("points per axis"),
     field(
         Section::Color,
         "Output",

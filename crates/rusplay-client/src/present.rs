@@ -13,9 +13,9 @@ use rusplay_config::ScalingConfig;
 use rusplay_core::Resolution;
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ChromaSiting, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
-    PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
-    YuvFrame,
+    ChromaSiting, ColorLut, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture,
+    FrameLayout, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines,
+    ScaleSettings, Scaler, Sigmoid, YuvFrame,
 };
 
 pub(crate) use crate::present::mapping::{ColorStage, MappingOptions, whole_nits};
@@ -158,7 +158,7 @@ impl PresentStage {
                 (PlaneLayout::SemiPlanar, UnpackInput::Planes(planes))
             }
         };
-        let settings = convert_settings(&self.options, source, decoded, layout);
+        let settings = convert_settings(&self.options, source, decoded, route.unpack, layout);
         let unpacker = ensure_unpacker(&self.pipelines, device, &mut self.unpacker, settings)?;
 
         let lease = match &video.decoded.buffer {
@@ -198,6 +198,7 @@ impl PresentStage {
             device,
             &mut encoder,
             &input,
+            self.color.lut(&route),
             chain.destination(pass),
         )?;
         pass += 1;
@@ -294,16 +295,25 @@ fn unpack(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     input: &UnpackInput,
+    lut: Option<&mut ColorLut>,
     target: &wgpu::TextureView,
 ) -> Result<(), ClientError> {
-    match (input, &unpacker.upload) {
-        (UnpackInput::Upload, Some(upload)) => {
-            unpacker.converter.encode(device, encoder, upload, target)
+    let converter = &mut unpacker.converter;
+
+    match (input, &unpacker.upload, lut) {
+        (UnpackInput::Upload, None, _) => Ok(()),
+        (UnpackInput::Upload, Some(upload), None) => {
+            converter.encode(device, encoder, upload, target)
         }
-        (UnpackInput::Upload, None) => Ok(()),
-        (UnpackInput::Planes(planes), _) => unpacker
-            .converter
-            .encode_planes(device, encoder, planes, target),
+        (UnpackInput::Upload, Some(upload), Some(lut)) => {
+            converter.encode_with_lut(device, encoder, upload, lut, target)
+        }
+        (UnpackInput::Planes(planes), _, None) => {
+            converter.encode_planes(device, encoder, planes, target)
+        }
+        (UnpackInput::Planes(planes), _, Some(lut)) => {
+            converter.encode_planes_with_lut(device, encoder, planes, lut, target)
+        }
     }
     .map_err(ClientError::from)
 }
@@ -341,6 +351,7 @@ fn convert_settings(
     options: &PresentOptions,
     resolution: Resolution,
     color: FrameColor,
+    output: OutputLight,
     layout: PlaneLayout,
 ) -> RgbConvertSettings {
     RgbConvertSettings {
@@ -350,7 +361,7 @@ fn convert_settings(
         matrix: color.matrix,
         range: color.space.range,
         transfer: color.space.transfer,
-        output: color.light,
+        output,
         chroma_filter: options.scaling.upscale.chroma_filter,
         chroma_siting: ChromaSiting::Left,
         row_alignment: UPLOAD_ROW_ALIGNMENT,
