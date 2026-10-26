@@ -4789,6 +4789,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen 0.73.2",
  "cros-codecs",
+ "libloading 0.9.0",
  "parking_lot 0.13.0",
  "pkg-config",
  "rusplay-capture",

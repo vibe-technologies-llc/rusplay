@@ -13,7 +13,7 @@ paths:
   | Backend | Codecs | Chroma / depth | Input |
   |---|---|---|---|
   | VAAPI | H.264, HEVC, AV1 | 4:2:0; 4:2:2/4:4:4 HEVC and 4:4:4 AV1 where the driver exposes it; 10-bit HEVC/AV1, 12-bit HEVC | DMA-BUF import, zero copy; CPU frames uploaded |
-  | NVENC | H.264, HEVC, AV1 | 4:4:4 H.264/HEVC; 4:2:2 H.264/HEVC on GPUs that support it; 10-bit | DMA-BUF through CUDA external memory |
+  | NVENC | H.264, HEVC, AV1 | 4:2:0; 4:4:4 H.264 (8-bit) and HEVC (8/10-bit) where the GPU reports it; 10-bit HEVC/AV1; no 4:2:2 or 12-bit (SDK 12.2) | linear DMA-BUF as CUDA external memory, zero copy; CPU frames uploaded |
   | x264 | H.264 | 4:2:0, 4:2:2, 4:4:4 (High 4:2:2 / High 4:4:4 Predictive), 8/10-bit | CPU |
   | x265 | HEVC | 4:2:0, 4:2:2, 4:4:4 (RExt), 8/10/12-bit | CPU |
   | SVT-AV1 | AV1 | 4:2:0 (Main profile) | CPU |
@@ -24,7 +24,8 @@ paths:
   `(Codec, PixelFormat)` pairs the configured backend can produce, so a session can negotiate the
   stream format with the client. It walks every codec, chroma and depth: VAAPI opens
   `encoder.device` and runs the same profile, entry point and RT format queries as `open`
-  (`select` in `src/vaapi/mod.rs`); x265 asks `x265_api_query` for each depth; x264 and SVT-AV1
+  (`select` in `src/vaapi/mod.rs`); NVENC loads the driver, opens a CUDA context and encode session
+  on `encoder.gpu_index` and runs the same `Probe` as `open` (`src/nvenc/mod.rs`); x265 asks `x265_api_query` for each depth; x264 and SVT-AV1
   answer from the same `supports` predicates their `open` checks. A backend whose feature is off
   is `BackendNotCompiled`. Tests hold `capabilities` and `open` to the same answer for every pair.
 - Defaults are low latency: no B-frames, no lookahead, one frame in flight, infinite GOP with
@@ -39,7 +40,10 @@ paths:
   AV1 `color_config`, and, when `video.color.hdr` has them, the ST 2086 mastering display colour
   volume and CTA-861.3 content light level as SEI (H.264/HEVC, payload types 137 and 144) or
   metadata OBUs (AV1, types 2 and 1) on every keyframe. `src/hdr.rs` turns a `MasteringDisplay`
-  into `St2086` units (G, B, R, white in 0.00002 steps; luminance in 0.0001 cd/m²). Each backend
+  into `St2086` units (G, B, R, white in 0.00002 steps; luminance in 0.0001 cd/m²) and builds the
+  message bodies both hardware backends share: `sei_payload` (ST 2086 order, big-endian),
+  `av1_payload` (R, G, B, white in 0.16, luminance 24.8 and 18.14) and `content_light_payload`.
+  `src/obu.rs` holds the AV1 temporal delimiter both prepend when the driver output lacks one. Each backend
   has a parameter-mapping test and a test that encodes BT.2020 PQ with Display P3 mastering
   metadata (`hdr::fixtures::hdr10_color`) and decodes it with `rusplay-decode` (VAAPI for
   H.264/HEVC, rav1d and VAAPI for AV1), expecting `DecodedFrame::color` to report all of it.
@@ -175,6 +179,90 @@ paths:
   from exported VA surfaces. Every hardware test returns early when the render node, the codec or
   the format is missing.
 
+## NVENC (`nvenc` feature)
+
+- Nothing is linked at build time. `src/nvenc/driver.rs` loads `libcuda.so.1` and
+  `libnvidia-encode.so.1` with `libloading` on every `open` and `capabilities` call (a missing
+  library is `LibraryNotFound`, a missing symbol `SymbolMissing`), refuses a driver whose
+  `NvEncodeAPIGetMaxSupportedVersion` is below 12.2 (`DriverTooOld`), fills the function list from
+  `NvEncodeAPICreateInstance` and requires every entry it uses (`DriverFunctionMissing`). The
+  structs in `src/nvenc/ffi.rs` are hand written for SDK 12.2; their sizes, offsets and versions are
+  tested against the header (see `dependencies.md`). Bit fields are `BitField` offsets into the
+  `u32` that holds them. Errors are `EncodeError::Cuda { call, status }` and
+  `EncodeError::Nvenc { call, status }`.
+- Ownership: `Driver` (libraries and function pointers) → `CudaContext` (created with
+  `cuCtxCreate` on `encoder.gpu_index`, else `GpuIndexOutOfRange`, then popped so no thread keeps
+  it current) → `Encoder` (the `nvEncOpenEncodeSessionEx` handle) → input buffers, bitstream
+  buffer, registrations and imported CUDA memory, each an `Rc` owner whose `Drop` frees it. Every
+  entry point pushes the context for its duration (`CudaContext::enter`) and pops it after, so the
+  encoder can move threads; `NvencEncoder` is `Send` by an `unsafe impl`, like VAAPI.
+- Selection (`Probe`): the profile is a pure function of codec and format (`config::profile`):
+  H.264 High (4:2:0 8-bit) and High 4:4:4 (4:4:4 8-bit); HEVC Main, Main10, and FRExt for 4:4:4
+  8/10-bit; AV1 Main for 4:2:0 8/10-bit. A pair counts when that profile exists, the codec GUID is
+  listed, the NVENC buffer format is among `nvEncGetInputFormats`, and for 4:4:4 and 10-bit
+  `NV_ENC_CAPS_SUPPORT_YUV444_ENCODE` / `_10BIT_ENCODE` are set. A missing codec is
+  `CodecUnsupported`, any other refusal `ChromaUnsupported` (above 4:2:0) or `BitDepthUnsupported`.
+  `NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES` gates the rate control (`RateControlUnsupported`) and
+  `WIDTH/HEIGHT_MIN/MAX` the resolution (`ResolutionUnsupported`).
+- Configuration: `nvEncGetEncodePresetConfigEx` with `preset` (P1 to P7) and `tuning`
+  (`ultra-low-latency` by default, `low-latency`, `high-quality`) gives the base `NV_ENC_CONFIG`;
+  `config::configure` then forces the low-latency structure over it: infinite GOP and IDR period,
+  `frameIntervalP` 1 (no B-frames), no lookahead, zero reorder delay, one reference, parameter sets
+  (or the AV1 sequence header) repeated on every IDR, no AUD. The encoder is synchronous
+  (`enableEncodeAsync` 0) with picture-type decision on (`enablePTD` 1), so each `encode` returns the
+  frame it submitted. Chroma goes in `chromaFormatIDC` (1 or 3), depth in `inputBitDepth` and
+  `outputBitDepth`; the colour description fills the H.264/HEVC VUI (signal type and colour
+  description present, H.273 codes, full-range flag) or the AV1 `colorPrimaries`,
+  `transferCharacteristics`, `matrixCoefficients` and `colorRange`; custom primaries fail at open
+  with `ColorPrimariesUnsignalable`.
+- Rate control: `Cbr` is `NV_ENC_PARAMS_RC_CBR`, `Vbr` is `_VBR` with the maximum as `maxBitRate`,
+  `ConstantQuality` is `_CONSTQP` with the QP on every picture type (AV1 `qp * 5`, at most 255).
+  The VBV buffer and initial delay are `VBV_BUFFER_FRAMES` frames at the peak rate (`src/rate.rs`).
+  `set_bitrate` marks the rate dirty and the next `encode` applies it with `nvEncReconfigureEncoder`
+  on the same session, without an IDR.
+- Intra refresh is on when the GPU reports `NV_ENC_CAPS_SUPPORT_INTRA_REFRESH`: one sweep over
+  `intra-refresh-frames` frames (default the frame rate rounded up, one second) as
+  `intraRefreshCnt`, with `intraRefreshPeriod` one frame longer, as the SDK requires the count to
+  be smaller.
+- `params` keys: `intra-refresh-frames` (`0` turns it off), `spatial-aq` and `temporal-aq`
+  (`true`/`false`, `1`/`0`, `on`/`off`; temporal AQ only where the caps report it), `aq-strength`
+  (1 to 15), `multipass` (`disabled`, `quarter-resolution`, `full-resolution`) and `split-encode`
+  (`auto`, `auto-forced`, `two`, `three`, `disabled`). Another key is `UnknownParameter`, a bad value
+  `InvalidParameterValue`, both at open before the driver loads. Lookahead is not offered, since it
+  holds frames back.
+- HDR metadata is attached to keyframes only: the SEI payload array of `NV_ENC_PIC_PARAMS_H264`/
+  `_HEVC` (types 137 and 144, bodies from `src/hdr.rs`; NVENC wraps them in one SEI NAL) or the
+  AV1 `obuPayloadArray` (metadata types 2 and 1, AV1 fixed point). SDK 12.2 has no native
+  mastering-display fields.
+- Input. CPU frames follow the CPU input contract and are packed (`layout::pack`) into one
+  NVENC-allocated input buffer per session (`nvEncCreateInputBuffer`, locked for the write):
+  `NV12` and `YUV420_10BIT` (P010, samples moved to the top 10 bits) for 4:2:0, `YUV444` and
+  `YUV444_10BIT` (three planes, same MSB alignment) for 4:4:4, chroma right after the luma at
+  `pitch * height`. DMA-BUF frames must be linear (`DmaBufModifierUnsupported` otherwise) and in
+  `NV12`, `P010`, `YU24` or `Q410` (`FrameFormatMismatch`), laid out the way NVENC addresses a
+  CUDA pointer: one pitch for every plane, a multiple of 4, and plane `i` at
+  `offset₀ + i * pitch * height` (`DmaBufPlaneCount`, `DmaBufPlaneStride`, `DmaBufPlaneOffset`,
+  `DmaBufStrideUnaligned`, `DmaBufTooShort`; `layout::dma_buf_layout`, unit tested). The fd is
+  duplicated and imported with `cuImportExternalMemory` (`OPAQUE_FD`, which takes ownership of the
+  fd), mapped whole with `cuExternalMemoryGetMappedBuffer`, and the luma pointer is registered as
+  `NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR` with that pitch; each frame maps the registration,
+  encodes and unmaps it. Imports are cached like VAAPI's (device and inode, resolution, planes;
+  16 entries, least recently used out). The host pipeline hands the encoder CPU frames today
+  (`host-encoder-gpu-handoff` in `docs/PERFORMANCE.md`).
+- Output: the bitstream buffer is locked after every picture; `keyframe` is the forced IDR or a
+  reported `NV_ENC_PIC_TYPE_IDR`. A keyframe is forced (`FORCEIDR | OUTPUT_SPSPPS`) on the first
+  frame and on `request_keyframe`. With `video.resolution` unset the session is initialised on the
+  first frame; a later size is `FrameResolutionMismatch`.
+- Tests: `ffi.rs` checks every struct size, the offsets the backend writes and the struct versions
+  against SDK 12.2; `config.rs` the profile, preset, tuning, rate-control, low-latency, intra
+  refresh, chroma/depth, VUI/AV1 colour, params and HDR payload mapping on zeroed configs;
+  `layout.rs` the packing and the DMA-BUF layout checks; `driver.rs` and `tests.rs` the
+  missing-library path (`LibraryNotFound` from both `open` and `capabilities`, and parameter and
+  colour errors before any library loads). The hardware tests in `tests.rs` (capabilities against
+  `open`, keyframes on start and request with the bitstream agreeing, every rate-control mode,
+  first-frame resolution, AV1 HDR10 through rav1d) return early without the driver; none has run
+  on NVIDIA hardware yet (`encode-nvenc-hardware` in `docs/FEATURES.md`).
+
 ## CPU input contract
 
 Software encoders take a `rusplay_capture::Frame` whose buffer is `FrameBuffer::Shm`. A
@@ -200,5 +288,5 @@ Software encoders take a `rusplay_capture::Frame` whose buffer is `FrameBuffer::
 - Samples follow `video.color`: range, matrix and transfer are signalled in the stream, never
   applied by the encoder.
 - `rusplay_encode::input` holds the contract in code: `fourcc_for`, `pixel_format_of` and
-  `YuvFrame::from_frame`, which every software backend and the VAAPI upload use and which a
+  `YuvFrame::from_frame`, which every software backend and the VAAPI and NVENC uploads use and which a
   colour-convert stage can call to produce frames.

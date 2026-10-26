@@ -1,4 +1,17 @@
 use rusplay_core::{Chromaticity, MasteringDisplay};
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+use rusplay_core::{ContentLightLevel, Luminance};
+
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+const AV1_CHROMATICITY_UNITS: u64 = 1 << 16;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+const AV1_MAX_LUMINANCE_UNITS: u64 = 1 << 8;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+const AV1_MIN_LUMINANCE_UNITS: u64 = 1 << 14;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+const MASTERING_PAYLOAD_LEN: usize = 24;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+const CONTENT_LIGHT_PAYLOAD_LEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct St2086 {
@@ -26,6 +39,36 @@ impl St2086 {
             max_luminance: display.max_nits.units(),
             min_luminance: display.min_nits.units(),
         }
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    pub(crate) fn sei_payload(&self) -> [u8; MASTERING_PAYLOAD_LEN] {
+        let mut payload = [0; MASTERING_PAYLOAD_LEN];
+        let points = [self.green, self.blue, self.red, self.white];
+        for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
+            slot[..2].copy_from_slice(&x.to_be_bytes());
+            slot[2..].copy_from_slice(&y.to_be_bytes());
+        }
+        payload[16..20].copy_from_slice(&self.max_luminance.to_be_bytes());
+        payload[20..].copy_from_slice(&self.min_luminance.to_be_bytes());
+
+        payload
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    pub(crate) fn av1_payload(&self) -> [u8; MASTERING_PAYLOAD_LEN] {
+        let mut payload = [0; MASTERING_PAYLOAD_LEN];
+        let points = [self.red, self.green, self.blue, self.white];
+        for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
+            slot[..2].copy_from_slice(&av1_chromaticity(x).to_be_bytes());
+            slot[2..].copy_from_slice(&av1_chromaticity(y).to_be_bytes());
+        }
+        let max = av1_luminance(self.max_luminance, AV1_MAX_LUMINANCE_UNITS);
+        let min = av1_luminance(self.min_luminance, AV1_MIN_LUMINANCE_UNITS);
+        payload[16..20].copy_from_slice(&max.to_be_bytes());
+        payload[20..].copy_from_slice(&min.to_be_bytes());
+
+        payload
     }
 
     #[cfg(any(feature = "x265", test))]
@@ -58,6 +101,41 @@ impl St2086 {
             f64::from(self.min_luminance) / nit,
         )
     }
+}
+
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+pub(crate) fn content_light_payload(light: ContentLightLevel) -> [u8; CONTENT_LIGHT_PAYLOAD_LEN] {
+    let [cll_high, cll_low] = light.max_cll_nits.to_be_bytes();
+    let [fall_high, fall_low] = light.max_fall_nits.to_be_bytes();
+
+    [cll_high, cll_low, fall_high, fall_low]
+}
+
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+fn rescale(value: u64, to: u64, from: u64) -> u64 {
+    (value * to + from / 2) / from
+}
+
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+fn av1_chromaticity(units: u16) -> u16 {
+    let scaled = rescale(
+        u64::from(units),
+        AV1_CHROMATICITY_UNITS,
+        u64::from(Chromaticity::UNITS_PER_ONE),
+    );
+
+    u16::try_from(scaled).unwrap_or(u16::MAX)
+}
+
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+fn av1_luminance(units: u32, fixed_point: u64) -> u32 {
+    let scaled = rescale(
+        u64::from(units),
+        fixed_point,
+        u64::from(Luminance::UNITS_PER_NIT),
+    );
+
+    u32::try_from(scaled).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -124,6 +202,51 @@ mod tests {
         assert_eq!(units.white, [15_635, 16_450]);
         assert_eq!(units.max_luminance, 10_000_000);
         assert_eq!(units.min_luminance, 50);
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    #[test]
+    fn sei_payload_orders_green_blue_red_white_then_luminance() {
+        let payload = St2086::of(&bt2020_display()).sei_payload();
+
+        assert_eq!(&payload[..4], &[0x21, 0x34, 0x9b, 0xaa]);
+        assert_eq!(&payload[16..20], &[0x00, 0x98, 0x96, 0x80]);
+        assert_eq!(&payload[20..], &[0, 0, 0, 50]);
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    #[test]
+    fn av1_payload_uses_av1_fixed_point_in_red_green_blue_order() {
+        let payload = St2086::of(&bt2020_display()).av1_payload();
+
+        assert_eq!(&payload[..2], &av1_chromaticity(35_400).to_be_bytes());
+        assert_eq!(&payload[16..20], &(1000_u32 << 8).to_be_bytes());
+        assert_eq!(&payload[20..], &82_u32.to_be_bytes());
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    #[test]
+    fn content_light_payload_is_two_big_endian_words() {
+        let light = rusplay_core::ContentLightLevel {
+            max_cll_nits: 1000,
+            max_fall_nits: 400,
+        };
+
+        assert_eq!(content_light_payload(light), [0x03, 0xe8, 0x01, 0x90]);
+    }
+
+    #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    #[test]
+    fn av1_chromaticity_round_trips_through_st2086_units() {
+        for units in [0_u16, 1, 6_550, 15_635, 35_400, 49_999] {
+            let back = rescale(
+                u64::from(av1_chromaticity(units)),
+                u64::from(Chromaticity::UNITS_PER_ONE),
+                AV1_CHROMATICITY_UNITS,
+            );
+
+            assert_eq!(back, u64::from(units));
+        }
     }
 
     #[test]

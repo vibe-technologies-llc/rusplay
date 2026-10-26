@@ -1129,7 +1129,7 @@ fn av1_inter_header_parses_after_a_key_frame() {
             parser.ref_frame_update(&header).unwrap();
         }
     }
-    let mut inter = super::av1::temporal_delimiter();
+    let mut inter = crate::obu::temporal_delimiter();
     inter.extend(stream.frame_header(false, 1).0);
     let ObuAction::Process(delimiter) = parser.read_obu(&inter).unwrap() else {
         panic!("dropped the temporal delimiter");

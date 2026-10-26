@@ -5,15 +5,21 @@ mod error;
     feature = "x264",
     feature = "x265",
     feature = "svt-av1",
-    feature = "vaapi"
+    feature = "vaapi",
+    feature = "nvenc"
 ))]
 mod hdr;
 pub mod input;
+#[cfg(feature = "nvenc")]
+mod nvenc;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+mod obu;
 #[cfg(any(
     feature = "x264",
     feature = "x265",
     feature = "svt-av1",
-    feature = "vaapi"
+    feature = "vaapi",
+    feature = "nvenc"
 ))]
 mod rate;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
@@ -38,7 +44,9 @@ use rusplay_core::EncodedFrame;
 pub use crate::{
     backend::Backend,
     capabilities::{Capabilities, capabilities},
-    error::{EncodeError, VaCall, VaStatus},
+    error::{
+        ApiVersion, CudaCall, CudaStatus, EncodeError, NvencCall, NvencStatus, VaCall, VaStatus,
+    },
 };
 
 pub trait VideoEncoder: Send {
@@ -71,6 +79,17 @@ pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> 
         rusplay_config::VideoEncoderConfig::Vaapi(vaapi) => {
             Ok(Box::new(vaapi::VaapiEncoder::new(config, vaapi)?))
         }
+        #[cfg(feature = "nvenc")]
+        rusplay_config::VideoEncoderConfig::Nvenc(nvenc) => {
+            Ok(Box::new(nvenc::NvencEncoder::new(config, nvenc)?))
+        }
+        #[cfg(not(all(
+            feature = "vaapi",
+            feature = "nvenc",
+            feature = "x264",
+            feature = "x265",
+            feature = "svt-av1"
+        )))]
         _ => Err(EncodeError::BackendNotCompiled { backend }),
     }
 }
