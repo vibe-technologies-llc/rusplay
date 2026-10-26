@@ -163,4 +163,6 @@ paths:
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins
-  slot may drop the opening keyframe.
+  slot may drop the opening keyframe. The same holds for `src/tests.rs` on a starved machine: the
+  send thread can fall behind and the full queue drops a frame, which forces a keyframe by design,
+  so a keyframe after the first is only asserted to be covered by a counted drop.
