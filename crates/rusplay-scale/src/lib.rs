@@ -18,6 +18,8 @@ mod table;
 mod taps;
 #[cfg(test)]
 mod testing;
+#[cfg(any(test, feature = "udmabuf"))]
+pub mod udmabuf;
 mod unpack;
 
 pub use crate::{

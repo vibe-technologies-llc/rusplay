@@ -1,16 +1,20 @@
 #[cfg(test)]
 mod tests;
 
-use std::sync::mpsc;
+use std::{
+    os::fd::{AsFd, BorrowedFd},
+    sync::mpsc,
+};
 
-use rusplay_capture::{Frame, FrameBuffer};
+use rusplay_capture::{Frame, FrameBuffer, Plane, ShmFallback};
 use rusplay_config::Config;
 use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
-    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, InputLight,
-    LineariseSettings, Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, YuvFrame,
+    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
+    DmaBufImporter, DmaBufPlane, InputLight, LineariseSettings, Lineariser, PlaneLayout,
+    ScalePipelines, ScaleSettings, Scaler, YuvFrame,
 };
 
 use crate::{
@@ -64,6 +68,12 @@ struct Upload {
     srgb_view: Option<wgpu::TextureView>,
 }
 
+struct Source {
+    key: RouteKey,
+    view: wgpu::TextureView,
+    srgb_view: Option<wgpu::TextureView>,
+}
+
 struct Linear {
     resolution: Resolution,
     view: wgpu::TextureView,
@@ -85,6 +95,8 @@ pub(crate) struct GpuPipeline {
     gpu: Gpu,
     config: Config,
     pipelines: ScalePipelines,
+    fallback: Option<ShmFallback>,
+    importer: Option<DmaBufImporter>,
     upload: Option<Upload>,
     route: Option<(RouteKey, Route)>,
     prepared: Option<Linear>,
@@ -102,13 +114,15 @@ pub(crate) struct GpuPipeline {
 }
 
 impl GpuPipeline {
-    pub(crate) fn new(gpu: Gpu, config: Config) -> Self {
+    pub(crate) fn new(gpu: Gpu, config: Config, fallback: Option<ShmFallback>) -> Self {
         let pipelines = ScalePipelines::new(&gpu.device);
 
         Self {
             gpu,
             config,
             pipelines,
+            fallback,
+            importer: None,
             upload: None,
             route: None,
             prepared: None,
@@ -126,41 +140,110 @@ impl GpuPipeline {
         }
     }
 
-    fn upload(&mut self, frame: &Frame) -> Result<RouteKey, HostError> {
-        let data = match &frame.buffer {
-            FrameBuffer::Shm { data, stride } => {
-                check_shm_frame(
-                    data,
-                    *stride,
-                    frame.resolution.width,
-                    frame.resolution.height,
-                )?;
-                (data, *stride)
-            }
-            FrameBuffer::DmaBuf { .. } => {
-                return Err(HostError::DmaBufCaptureUnsupported {
-                    fourcc: frame.format,
-                });
-            }
-        };
+    fn upload(&mut self, frame: &Frame) -> Result<Option<Source>, HostError> {
+        match &frame.buffer {
+            FrameBuffer::Shm { data, stride } => self.upload_shm(frame, data, *stride).map(Some),
+            FrameBuffer::DmaBuf {
+                fd,
+                modifier,
+                planes,
+                ..
+            } => match self.import(frame, fd.as_fd(), *modifier, planes) {
+                Ok(source) => Ok(Some(source)),
+                Err(error) => {
+                    let Some(fallback) = &self.fallback else {
+                        return Err(error);
+                    };
+                    fallback.request();
+                    Ok(None)
+                }
+            },
+        }
+    }
+
+    fn upload_shm(&mut self, frame: &Frame, data: &[u8], stride: u32) -> Result<Source, HostError> {
+        check_shm_frame(
+            data,
+            stride,
+            frame.resolution.width,
+            frame.resolution.height,
+        )?;
         let format = upload_format_for(frame.format)?;
         let upload = ensure_upload(&self.gpu.device, &mut self.upload, frame.resolution, format);
 
         self.gpu.queue.write_texture(
             upload.texture.as_image_copy(),
-            data.0,
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(data.1),
+                bytes_per_row: Some(stride),
                 rows_per_image: Some(frame.resolution.height),
             },
             extent(frame.resolution),
         );
 
-        Ok(RouteKey {
-            upload: format,
-            color: frame.color,
-            capture: frame.resolution,
+        Ok(Source {
+            key: RouteKey {
+                upload: format,
+                color: frame.color,
+                capture: frame.resolution,
+            },
+            view: upload.view.clone(),
+            srgb_view: upload.srgb_view.clone(),
+        })
+    }
+
+    fn import(
+        &mut self,
+        frame: &Frame,
+        fd: BorrowedFd<'_>,
+        modifier: u64,
+        planes: &[Plane],
+    ) -> Result<Source, HostError> {
+        let importer = match &mut self.importer {
+            Some(importer) => importer,
+            None => self.importer.insert(DmaBufImporter::new(&self.gpu.device)?),
+        };
+        let dmabuf = importer.import(&DmaBuf {
+            fourcc: frame.format.0,
+            modifier,
+            width: frame.resolution.width,
+            height: frame.resolution.height,
+            planes: planes
+                .iter()
+                .map(|plane| DmaBufPlane {
+                    fd,
+                    offset: u64::from(plane.offset),
+                    stride: u64::from(plane.stride),
+                })
+                .collect(),
+        })?;
+
+        let unsupported = HostError::CaptureFormatUnsupported {
+            fourcc: frame.format,
+        };
+        let (Some(channels), Some(texture), Some(view)) =
+            (dmabuf.channels(), dmabuf.texture(0), dmabuf.view(0))
+        else {
+            return Err(unsupported);
+        };
+        let srgb_view = dmabuf.linear_view().cloned();
+        let upload = UploadFormat {
+            texture: texture.format(),
+            srgb_view: srgb_view
+                .as_ref()
+                .map(|_| texture.format().add_srgb_suffix()),
+            channels,
+        };
+
+        Ok(Source {
+            key: RouteKey {
+                upload,
+                color: frame.color,
+                capture: frame.resolution,
+            },
+            view: view.clone(),
+            srgb_view,
         })
     }
 
@@ -176,21 +259,18 @@ impl GpuPipeline {
         Ok(route)
     }
 
-    fn convert(&mut self, key: RouteKey) -> Result<(), HostError> {
-        let route = self.route(key)?;
-        let capture = key.capture;
+    fn convert(&mut self, source: &Source) -> Result<(), HostError> {
+        let route = self.route(source.key)?;
+        let capture = source.key.capture;
         let stream = self.config.video.resolution.unwrap_or(capture);
         let device = &self.gpu.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rusplay-host-convert"),
         });
 
-        let Some(upload) = &self.upload else {
-            return Ok(());
-        };
         let mut current = match route.read {
-            SourceRead::Raw => &upload.view,
-            SourceRead::Srgb => upload.srgb_view.as_ref().unwrap_or(&upload.view),
+            SourceRead::Raw => &source.view,
+            SourceRead::Srgb => source.srgb_view.as_ref().unwrap_or(&source.view),
         };
 
         if let Some(settings) = route.prepare {
@@ -328,8 +408,10 @@ impl GpuPipeline {
 
 impl VideoPipeline for GpuPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
-        let key = self.upload(frame)?;
-        self.convert(key)?;
+        let Some(source) = self.upload(frame)? else {
+            return Ok(None);
+        };
+        self.convert(&source)?;
         self.read_back(frame.timestamp)?;
         self.encode_input(keyframe)
     }

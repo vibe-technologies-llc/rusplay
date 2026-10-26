@@ -70,16 +70,26 @@ paths:
   `DEFAULT_MODIFIERS`: `DRM_FORMAT_MOD_INVALID` (implicit, preferred) then
   `DRM_FORMAT_MOD_LINEAR`; Vulkan cannot import the implicit modifier.
 - A DMA-BUF `Frame` owns a duplicate of the plane fd (`FrameBuffer::DmaBuf { fd, modifier,
-  planes }`, one `Plane { offset, stride }` per `spa_data`, e.g. AMD DCC metadata planes). Every
-  plane must live in the same buffer (compared by device and inode), otherwise
-  `DmaBufPlanesSplit`. The PipeWire buffer stays dequeued while its frame is in the handoff or held
-  by the consumer, so the compositor cannot render into it: it is requeued when a newer frame
-  supersedes it, or when the consumer next calls any `next_frame` variant (the contents of a
-  DMA-BUF frame are valid until then). The buffer handle crosses threads as an address and is only
-  requeued on the PipeWire thread, and only if no `remove_buffer` event dropped it meanwhile.
+  planes, lease }`, one `Plane { offset, stride }` per `spa_data`, e.g. AMD DCC metadata planes).
+  Every plane must live in the same buffer (compared by device and inode), otherwise
+  `DmaBufPlanesSplit`. The PipeWire buffer stays dequeued for as long as the frame's
+  `BufferLease` lives, so the compositor cannot render into it while anything reads it: dropping
+  the frame (a newer one superseding it in the handoff, or the consumer letting go) sends a
+  release command to the PipeWire thread, which requeues it. The frame can therefore cross
+  threads and be kept for as long as its consumer needs. The handle is an address plus a serial
+  from `HeldBuffers::hold`, and is only requeued on the PipeWire thread, only if no
+  `remove_buffer` event dropped it meanwhile and the serial still matches. Frames built outside
+  PipeWire (tests, synthetic sources) use `BufferLease::detached()`.
+- `PipeWireCapture::shm_fallback` hands out a `ShmFallback` (a shared flag, usable without the
+  `pipewire` feature). A consumer that cannot import the DMA-BUF frames calls `request`; the next
+  `process` turns `prefer_dmabuf` off and calls `update_params` with the shared-memory
+  `EnumFormat` only, so the producer renegotiates to shared memory for the rest of the stream.
 - All unsafe PipeWire buffer access sits in `src/pipewire/raw.rs` (`DequeuedBuffer`, which requeues
   on drop, `borrow_fd`, `HeldBuffers`). The invariant it relies on: every pointer and fd it hands
   out belongs to a buffer that is dequeued for at least as long as the borrow.
+- The consumer bounds how many buffers it keeps dequeued. The host keeps at most the handoff slot,
+  its own mailbox, the frame being encoded and nothing else (it drops the previous retained frame
+  before encoding the next), against the `DEFAULT_BUFFER_COUNT` of 4 the stream asks for.
 - With `capture.cursor = "metadata"` (`StreamOptions::cursor_metadata`) the stream asks for
   `SPA_META_Cursor` sized for bitmaps up to 512×512. Every dequeued buffer, including the
   cursor-only ones and the stale ones drained before the newest, is parsed by
@@ -95,7 +105,7 @@ paths:
   `StreamKind::Cursor`.
 - `tests/live.rs` holds `#[ignore]`d tests. Four run an in-process PipeWire video source and
   capture from it (needs only a PipeWire daemon): shared memory, DMA-BUF (fake dma-bufs backed by
-  temp files, exercising modifier fixation and buffer hold/release across a dozen frames) and the
+  temp files, exercising modifier fixation and lease release across a dozen frames) and the
   `prefer_dmabuf = false` path, plus cursor metadata (bitmap sent once, then position only). One
   goes through the real portal picker.
 - The cursor defaults to `Metadata` so it can be drawn on the client at full rate and without

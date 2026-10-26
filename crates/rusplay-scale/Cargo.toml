@@ -12,6 +12,9 @@ rustix = { workspace = true, features = ["fs"] }
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["std", "parking_lot", "vulkan", "wgsl"] }
 
+[features]
+udmabuf = []
+
 [dev-dependencies]
 half.workspace = true
 pollster.workspace = true

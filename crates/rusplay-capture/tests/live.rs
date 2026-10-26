@@ -105,11 +105,9 @@ fn local_source_negotiates_a_dmabuf_modifier() {
     let options = StreamOptions::new(&config.capture, &config.video);
 
     let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
-    let frames: Vec<_> = (0..FRAMES_TO_CYCLE)
-        .map(|_| capture.next_frame_timeout(FRAME_WAIT).unwrap().unwrap())
-        .collect();
 
-    for frame in frames {
+    for _ in 0..FRAMES_TO_CYCLE {
+        let frame = capture.next_frame_timeout(FRAME_WAIT).unwrap().unwrap();
         let FrameBuffer::DmaBuf {
             modifier, planes, ..
         } = frame.buffer

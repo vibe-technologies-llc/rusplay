@@ -12,7 +12,7 @@ use cros_codecs::codec::{
     h264::parser::{Nalu as H264Nalu, NaluType as H264NaluType, Parser as H264Parser},
     h265::parser::{Nalu as H265Nalu, NaluType as H265NaluType, Parser as H265Parser},
 };
-use rusplay_capture::{DrmFourcc, Frame, FrameBuffer, Plane};
+use rusplay_capture::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
 use rusplay_config::{
     RateControl, SoftwareDecoderConfig, VaapiConfig, VaapiDecoderConfig, VideoConfig,
     VideoEncoderConfig,
@@ -740,6 +740,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
                     stride: plane.pitch,
                 })
                 .collect(),
+            lease: BufferLease::detached(),
         },
     };
 
@@ -804,6 +805,7 @@ fn fake_dma_buf(format: DrmFourcc, planes: usize) -> Frame {
                 };
                 planes
             ],
+            lease: BufferLease::detached(),
         },
     }
 }

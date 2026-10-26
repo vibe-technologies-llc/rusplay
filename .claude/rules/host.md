@@ -90,14 +90,30 @@ paths:
   new capture frame pending, the pipeline re-encodes its last encoder input as a keyframe
   (`frames_repeated`), so a static screen still answers.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
+  - DMA-BUF frames are the default path and are never copied: `GpuPipeline` imports them with its
+    own `DmaBufImporter` (created on the first DMA-BUF frame, its cache keeping a capture
+    swapchain's imports) and binds the imported view, or its sRGB `linear_view`, as the first
+    stage's source. The route's `UploadFormat` comes from the import (texture format, sRGB view if
+    the modifier kept one, `DmaBufTexture::channels`), so swizzled formats such as `BX24` go
+    through the `Lineariser` like any other channel order. `Gpu::open` creates the device with
+    `rusplay_scale::device_descriptor`, which is what makes import possible.
+  - `open_portal_capture(config, gpu)` keeps the capture's own format order (10-bit first above 8
+    bits) restricted to `UPLOAD_FORMATS`, and offers for each one the modifiers
+    `DmaBufImporter::modifiers` says the device imports (`capture_options`, unit tested), never the
+    implicit one. With no importer or no importable modifier at all, `prefer_dmabuf` is turned
+    off and the capture asks for shared memory.
+  - A DMA-BUF frame that fails to import (importer unavailable, unsupported format or modifier)
+    makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
+    `PipeWireCapture` forwards) and skip the frame, so PipeWire renegotiates to shared memory and
+    the session keeps going; a source without a fallback returns the import error.
+  - The frame, and so its PipeWire buffer lease, is held until the readback wait has seen the GPU
+    finish, and then as the feed's retained frame; the encode stage drops the previous retained
+    frame before encoding the next, so a session holds at most three capture buffers.
   - Shared-memory `XR24`/`AR24`/`XB24`/`AB24` and 10-bit `XR30`/`AR30`/`XB30`/`AB30` frames are
     accepted (`UPLOAD_FORMATS` in `src/upload.rs`): they upload with `write_texture` straight into a
     `Bgra8Unorm`/`Rgba8Unorm` texture (which also has an sRGB view) or an `Rgb10a2Unorm` one, the
     copy the CPU path cannot avoid. `XR30`/`AR30` hold blue in the low bits, so their
-    `SourceChannels` say `ChannelOrder::Bgra`. `open_portal_capture` keeps the capture's own
-    format order (10-bit first above 8 bits) restricted to those formats, with `prefer_dmabuf`
-    off. A DMA-BUF frame is `DmaBufCaptureUnsupported` until `host-dmabuf-capture`; another
-    fourcc is `CaptureFormatUnsupported`.
+    `SourceChannels` say `ChannelOrder::Bgra`. Another fourcc is `CaptureFormatUnsupported`.
   - Each frame is read by its own `Frame::color`. `Route::plan` (`src/route.rs`, pure and unit
     tested) turns the upload format, the description and the capture size into the stages to run,
     and the pipeline replans only when that `RouteKey` changes, so a renegotiated description
@@ -144,8 +160,11 @@ paths:
   codes back: a 10-bit PQ capture into a PQ stream keeps its codes and channel order, a PQ
   capture into the default SDR stream lands on the BT.709 code of its luminance, a description
   change mid-stream reconfigures and changing back gives identical codes, and a black/white
-  stripe downscale gives the linear-light or the gamma-light average as configured. It returns
-  early without a GPU adapter.
+  stripe downscale gives the linear-light or the gamma-light average as configured. DMA-BUF tests
+  build udmabuf frames: imported `XR24` and `XR30` give the same codes as the same shared-memory
+  frames, `XB24` and `BX24` read their channel order, and an unimportable frame requests the
+  shared-memory fallback (or fails without one). It returns early without a GPU adapter, and the
+  DMA-BUF tests also without `/dev/udmabuf` or the import feature.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`

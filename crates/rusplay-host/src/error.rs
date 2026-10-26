@@ -89,11 +89,6 @@ pub enum HostError {
     HelloUndeliverable,
     #[error("nothing arrived from the client for {0:?}")]
     ClientSilent(Duration),
-    #[error(
-        "captured {} dma-buf frames cannot be converted without dma-buf import into wgpu",
-        fourcc_text(*fourcc)
-    )]
-    DmaBufCaptureUnsupported { fourcc: DrmFourcc },
     #[error("captured frames in {} have no gpu upload format", fourcc_text(*fourcc))]
     CaptureFormatUnsupported { fourcc: DrmFourcc },
     #[error("captured frame holds {found} bytes, short of the {needed} its rows need")]

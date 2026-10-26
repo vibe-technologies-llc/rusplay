@@ -9,7 +9,7 @@ use std::{
 use rusplay_core::Timestamp;
 
 use crate::{
-    CaptureError, Frame, FrameBuffer, Plane, modifier::DRM_FORMAT_MOD_INVALID,
+    BufferLease, CaptureError, Frame, FrameBuffer, Plane, modifier::DRM_FORMAT_MOD_INVALID,
     pipewire::format::NegotiatedFormat,
 };
 
@@ -75,6 +75,7 @@ pub(crate) fn dmabuf_frame(
             fd: OwnedFd::from(file),
             modifier: format.modifier.unwrap_or(DRM_FORMAT_MOD_INVALID),
             planes,
+            lease: BufferLease::detached(),
         },
     })
 }
@@ -199,6 +200,7 @@ mod tests {
             fd,
             modifier,
             planes,
+            ..
         } = frame.buffer
         else {
             panic!("expected a dma-buf frame");

@@ -1,11 +1,15 @@
-use rusplay_capture::DrmFourcc;
+use std::os::fd::OwnedFd;
+
+use rusplay_capture::{BufferLease, DRM_FORMAT_MOD_LINEAR, DrmFourcc};
 use rusplay_core::{BitDepth, ChromaSubsampling, ColorPrimaries, TransferFunction, pq_from_nits};
+use rusplay_scale::{ScaleError, udmabuf};
 
 use super::*;
 
 const SIZE: Resolution = Resolution::new(16, 8);
 const TEN_BIT_MAX: f64 = 1023.0;
 const EIGHT_BIT_MAX: f64 = 255.0;
+const DMABUF_STRIDE: u32 = 256;
 
 fn config(color: ColorSpace, depth: BitDepth) -> Config {
     let mut config = Config::default();
@@ -20,7 +24,15 @@ fn config(color: ColorSpace, depth: BitDepth) -> Config {
 fn pipeline(config: Config) -> Option<GpuPipeline> {
     let gpu = Gpu::open().ok()?;
 
-    Some(GpuPipeline::new(gpu, config))
+    Some(GpuPipeline::new(gpu, config, None))
+}
+
+fn dmabuf_pipeline(config: Config) -> Option<GpuPipeline> {
+    let pipeline = pipeline(config)?;
+    DmaBufImporter::new(&pipeline.gpu.device).ok()?;
+    udmabuf::create(&[0])?;
+
+    Some(pipeline)
 }
 
 fn srgb() -> ColorSpace {
@@ -54,6 +66,60 @@ fn frame(fourcc: [u8; 4], color: ColorSpace, texel: impl Fn(u32) -> u32) -> Fram
     }
 }
 
+fn dmabuf_frame(fourcc: [u8; 4], color: ColorSpace, texel: impl Fn(u32) -> u32) -> Frame {
+    let row_padding = (DMABUF_STRIDE - SIZE.width * 4) as usize;
+    let bytes: Vec<u8> = (0..SIZE.height)
+        .flat_map(|_| {
+            (0..SIZE.width)
+                .map(&texel)
+                .flat_map(u32::to_le_bytes)
+                .chain(std::iter::repeat_n(0, row_padding))
+        })
+        .collect();
+
+    Frame {
+        resolution: SIZE,
+        format: DrmFourcc::from_code(fourcc),
+        color,
+        timestamp: Timestamp::ZERO,
+        buffer: FrameBuffer::DmaBuf {
+            fd: udmabuf::create(&bytes).unwrap(),
+            modifier: DRM_FORMAT_MOD_LINEAR,
+            planes: vec![Plane {
+                offset: 0,
+                stride: DMABUF_STRIDE,
+            }],
+            lease: BufferLease::detached(),
+        },
+    }
+}
+
+fn unimportable_frame() -> Frame {
+    Frame {
+        resolution: SIZE,
+        format: DrmFourcc::from_code(*b"YUYV"),
+        color: srgb(),
+        timestamp: Timestamp::ZERO,
+        buffer: FrameBuffer::DmaBuf {
+            fd: OwnedFd::from(tempfile::tempfile().unwrap()),
+            modifier: DRM_FORMAT_MOD_LINEAR,
+            planes: vec![Plane {
+                offset: 0,
+                stride: DMABUF_STRIDE,
+            }],
+            lease: BufferLease::detached(),
+        },
+    }
+}
+
+fn xbgr8888(red: u32, green: u32, blue: u32) -> u32 {
+    (0xff << 24) | (blue << 16) | (green << 8) | red
+}
+
+fn bgrx8888(red: u32, green: u32, blue: u32) -> u32 {
+    (blue << 24) | (green << 16) | (red << 8) | 0xff
+}
+
 fn xrgb8888(red: u32, green: u32, blue: u32) -> u32 {
     (0xff << 24) | (red << 16) | (green << 8) | blue
 }
@@ -69,8 +135,8 @@ fn ten_bit_code(value: f64) -> u32 {
 }
 
 fn luma_row(pipeline: &mut GpuPipeline, frame: &Frame) -> Vec<u32> {
-    let key = pipeline.upload(frame).unwrap();
-    pipeline.convert(key).unwrap();
+    let source = pipeline.upload(frame).unwrap().unwrap();
+    pipeline.convert(&source).unwrap();
     pipeline.read_back(frame.timestamp).unwrap();
 
     let input = pipeline.input.as_ref().unwrap();
@@ -200,4 +266,104 @@ fn downscaling_follows_the_linear_light_setting() {
     let linear_code = (srgb_half * EIGHT_BIT_MAX).round() as u32;
     assert_codes(&linear[1..linear.len() - 1], linear_code, 1, "linear light");
     assert_codes(&gamma[1..gamma.len() - 1], 128, 1, "gamma light");
+}
+
+#[test]
+fn dmabuf_captures_convert_like_the_same_shared_memory_frames() {
+    let Some(mut pipeline) = dmabuf_pipeline(config(pq_bt2020(), BitDepth::Ten)) else {
+        return;
+    };
+    let gradient = |column: u32| column * 60;
+
+    let shared_srgb = luma_row(
+        &mut pipeline,
+        &frame(*b"XR24", srgb(), |column| {
+            xrgb8888(column * 15, 200, 255 - column * 15)
+        }),
+    );
+    let imported_srgb = luma_row(
+        &mut pipeline,
+        &dmabuf_frame(*b"XR24", srgb(), |column| {
+            xrgb8888(column * 15, 200, 255 - column * 15)
+        }),
+    );
+    let shared_pq = luma_row(
+        &mut pipeline,
+        &frame(*b"XR30", pq_bt2020(), |column| {
+            xrgb2101010(gradient(column), 400, 1023 - gradient(column))
+        }),
+    );
+    let imported_pq = luma_row(
+        &mut pipeline,
+        &dmabuf_frame(*b"XR30", pq_bt2020(), |column| {
+            xrgb2101010(gradient(column), 400, 1023 - gradient(column))
+        }),
+    );
+
+    assert_eq!(shared_srgb, imported_srgb);
+    assert_eq!(shared_pq, imported_pq);
+}
+
+#[test]
+fn swizzled_dmabuf_formats_read_their_channel_order() {
+    let Some(mut pipeline) = dmabuf_pipeline(config(srgb(), BitDepth::Eight)) else {
+        return;
+    };
+    let colour = |column: u32| (column * 15, 255 - column * 15, 90);
+
+    let reference = luma_row(
+        &mut pipeline,
+        &frame(*b"XR24", srgb(), |column| {
+            let (red, green, blue) = colour(column);
+            xrgb8888(red, green, blue)
+        }),
+    );
+    let red_first = luma_row(
+        &mut pipeline,
+        &dmabuf_frame(*b"XB24", srgb(), |column| {
+            let (red, green, blue) = colour(column);
+            xbgr8888(red, green, blue)
+        }),
+    );
+    let alpha_last = luma_row(
+        &mut pipeline,
+        &dmabuf_frame(*b"BX24", srgb(), |column| {
+            let (red, green, blue) = colour(column);
+            bgrx8888(red, green, blue)
+        }),
+    );
+
+    assert_eq!(reference, red_first);
+    for (expected, code) in reference.iter().zip(&alpha_last) {
+        assert!(
+            expected.abs_diff(*code) <= 1,
+            "bx24: code {code}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let fallback = ShmFallback::default();
+    let mut with_fallback =
+        GpuPipeline::new(gpu.clone(), Config::default(), Some(fallback.clone()));
+    let mut without = GpuPipeline::new(gpu, Config::default(), None);
+
+    let skipped = with_fallback.encode(&unimportable_frame(), true);
+    let failed = without.encode(&unimportable_frame(), true);
+
+    assert!(matches!(skipped, Ok(None)));
+    assert!(fallback.is_requested());
+    assert!(with_fallback.encoder.is_none());
+    assert!(matches!(
+        failed,
+        Err(HostError::Scale(
+            ScaleError::DmaBufFormatUnsupported(_)
+                | ScaleError::DmaBufImportUnavailable
+                | ScaleError::DmaBufNeedsVulkan
+        ))
+    ));
 }

@@ -12,7 +12,10 @@ use pipewire::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct BufferHandle(usize);
+pub(crate) struct BufferHandle {
+    address: usize,
+    serial: u64,
+}
 
 pub(crate) struct DequeuedBuffer<'s> {
     stream: &'s Stream,
@@ -59,10 +62,10 @@ impl<'s> DequeuedBuffer<'s> {
         Some(unsafe { slice::from_raw_parts(meta.data.cast::<u8>(), size) })
     }
 
-    pub fn hold(self) -> BufferHandle {
-        let handle = BufferHandle(self.raw.as_ptr().expose_provenance());
+    fn hold(self) -> usize {
+        let address = self.raw.as_ptr().expose_provenance();
         mem::forget(self);
-        handle
+        address
     }
 }
 
@@ -84,16 +87,23 @@ pub(crate) fn borrow_fd(data: &Data) -> Option<BorrowedFd<'_>> {
 #[derive(Debug, Default)]
 pub(crate) struct HeldBuffers {
     handles: Vec<BufferHandle>,
+    next_serial: u64,
 }
 
 impl HeldBuffers {
-    pub fn insert(&mut self, handle: BufferHandle) {
+    pub fn hold(&mut self, buffer: DequeuedBuffer<'_>) -> BufferHandle {
+        let handle = BufferHandle {
+            address: buffer.hold(),
+            serial: self.next_serial,
+        };
+        self.next_serial += 1;
         self.handles.push(handle);
+        handle
     }
 
     pub fn forget(&mut self, raw: *mut pw_sys::pw_buffer) {
-        let handle = BufferHandle(raw.expose_provenance());
-        self.handles.retain(|held| *held != handle);
+        let address = raw.expose_provenance();
+        self.handles.retain(|held| held.address != address);
     }
 
     pub fn release(&mut self, handle: BufferHandle, stream: &Stream) {
@@ -102,7 +112,7 @@ impl HeldBuffers {
         };
         self.handles.swap_remove(index);
 
-        let raw = ptr::with_exposed_provenance_mut::<pw_sys::pw_buffer>(handle.0);
+        let raw = ptr::with_exposed_provenance_mut::<pw_sys::pw_buffer>(handle.address);
         unsafe { stream.queue_raw_buffer(raw) };
     }
 }

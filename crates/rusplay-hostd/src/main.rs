@@ -68,8 +68,8 @@ fn run() -> Result<(), HostdError> {
 
 fn serve(config: Config) -> Result<(), HostdError> {
     let peers = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
-    let feed = open_portal_capture(&config)?;
     let gpu = Gpu::open()?;
+    let feed = open_portal_capture(&config, &gpu)?;
     let host = HostSession::bind(config, peers)?;
     let address = host.local_addr()?;
     eprintln!("rusplay-hostd: listening on {address}");

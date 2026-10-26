@@ -101,8 +101,10 @@ impl HostSession {
         feed: &Arc<CaptureFeed>,
     ) -> Result<HostStream, HostError> {
         let config = self.config.clone();
-        let factory: PipelineFactory =
-            Box::new(move || Ok(Box::new(GpuPipeline::new(gpu, config)) as Box<dyn VideoPipeline>));
+        let fallback = feed.shm_fallback();
+        let factory: PipelineFactory = Box::new(move || {
+            Ok(Box::new(GpuPipeline::new(gpu, config, fallback)) as Box<dyn VideoPipeline>)
+        });
 
         self.serve_with(client, feed, factory)
     }

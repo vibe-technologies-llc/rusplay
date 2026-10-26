@@ -621,6 +621,7 @@ impl Session {
             fd,
             modifier,
             planes,
+            ..
         } = &frame.buffer
         else {
             return Err(EncodeError::CpuFrameRequired { backend: BACKEND });

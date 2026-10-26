@@ -2,6 +2,7 @@ mod cursor;
 mod error;
 mod frame;
 mod handoff;
+mod lease;
 mod modifier;
 #[cfg(feature = "pipewire")]
 mod pipewire;
@@ -18,6 +19,7 @@ pub use crate::{
     error::CaptureError,
     frame::{DrmFourcc, Frame, FrameBuffer, Plane},
     handoff::{Publisher, Received, Subscriber, latest},
+    lease::{BufferLease, ShmFallback},
     modifier::{
         DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
         choose_modifier, modifiers_for,

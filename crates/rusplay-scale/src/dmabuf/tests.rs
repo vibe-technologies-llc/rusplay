@@ -1,17 +1,8 @@
-use std::{
-    ffi::c_void,
-    fs::File,
-    io::Write,
-    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
-};
+use std::os::fd::{AsFd, OwnedFd};
 
 use rusplay_core::{
     BitDepth, ChromaSubsampling, ColorRange, HdrLevels, MatrixCoefficients, PixelFormat,
     Resolution, ScaleFilter, TransferFunction,
-};
-use rustix::{
-    fs::{Mode, OFlags, SealFlags},
-    ioctl::{Ioctl, IoctlOutput, Opcode, opcode},
 };
 
 use super::*;
@@ -20,73 +11,16 @@ use crate::{
     LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
     ScalePipelines,
     testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
+    udmabuf::PAGE_BYTES,
 };
 
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
-const PAGE_BYTES: usize = 4096;
-const UDMABUF_FLAGS_CLOEXEC: u32 = 1;
 const RGB_STRIDE: u64 = 256;
 const RGB_TEXEL_BYTES: u32 = 4;
 
-#[repr(C)]
-struct UdmabufCreate {
-    memfd: u32,
-    flags: u32,
-    offset: u64,
-    size: u64,
-}
-
-struct CreateUdmabuf(UdmabufCreate);
-
-unsafe impl Ioctl for CreateUdmabuf {
-    type Output = OwnedFd;
-
-    const IS_MUTATING: bool = false;
-
-    fn opcode(&self) -> Opcode {
-        opcode::write::<UdmabufCreate>(b'u', 0x42)
-    }
-
-    fn as_ptr(&mut self) -> *mut c_void {
-        (&raw mut self.0).cast()
-    }
-
-    unsafe fn output_from_ptr(
-        out: IoctlOutput,
-        _extract_output: *mut c_void,
-    ) -> rustix::io::Result<OwnedFd> {
-        Ok(unsafe { OwnedFd::from_raw_fd(out) })
-    }
-}
-
 fn udmabuf(bytes: &[u8]) -> Option<OwnedFd> {
-    let device = rustix::fs::open(
-        "/dev/udmabuf",
-        OFlags::RDWR | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .ok()?;
-    let size = bytes.len().next_multiple_of(PAGE_BYTES);
-
-    let memfd = rustix::fs::memfd_create(
-        "rusplay-dmabuf-test",
-        rustix::fs::MemfdFlags::ALLOW_SEALING | rustix::fs::MemfdFlags::CLOEXEC,
-    )
-    .unwrap();
-    rustix::fs::ftruncate(&memfd, size as u64).unwrap();
-    File::from(memfd.try_clone().unwrap())
-        .write_all(bytes)
-        .unwrap();
-    rustix::fs::fcntl_add_seals(&memfd, SealFlags::SHRINK).unwrap();
-
-    let create = UdmabufCreate {
-        memfd: u32::try_from(memfd.as_raw_fd()).unwrap(),
-        flags: UDMABUF_FLAGS_CLOEXEC,
-        offset: 0,
-        size: size as u64,
-    };
-    unsafe { rustix::ioctl::ioctl(&device, CreateUdmabuf(create)) }.ok()
+    crate::udmabuf::create(bytes)
 }
 
 struct Fixture {

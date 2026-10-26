@@ -201,9 +201,9 @@ paths:
 - Lifetime: the import holds a reference on the buffer's memory, but the producer may reuse the
   buffer once its lease ends. The caller keeps the lease (a decoder's `DmaBufFrame`, a capture
   `Frame`) until the GPU work reading it completes: `release_after_submission(&queue, lease)`
-  after `Queue::submit` drops it from `on_submitted_work_done`. A PipeWire capture frame is only
-  valid until the next `next_frame` call, so the host must not ask for the next frame before the
-  previous one's work is done. Implicit fences are not waited on (`scale-dmabuf-sync`).
+  after `Queue::submit` drops it from `on_submitted_work_done`. A PipeWire capture frame stays
+  valid while its `BufferLease` lives, so holding the `Frame` until the work is done is enough.
+  Implicit fences are not waited on (`scale-dmabuf-sync`).
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1
@@ -231,7 +231,8 @@ paths:
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a
   `OnceLock`, created with `device_descriptor`) and return early when no adapter exists, so
   GPU-less machines pass. DMA-BUF tests build `LINEAR` buffers from a sealed memfd through
-  `/dev/udmabuf` and also return early when it or the import feature is missing. Each pass is
+  `/dev/udmabuf` (`rusplay_scale::udmabuf::create`, public behind the `udmabuf` feature so the
+  host's tests can use it too) and also return early when it or the import feature is missing. Each pass is
   compared with a CPU reference in `reference.rs` built from the same `TapTable`s and kernels,
   with clamp-to-edge addressing and `f16` rounding of every stored texel, to within a few
   `rgba16float` ulps (`4/1024`). Test images are quantised to `f16` before upload so the

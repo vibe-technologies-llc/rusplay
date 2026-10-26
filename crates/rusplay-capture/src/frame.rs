@@ -2,6 +2,8 @@ use std::os::fd::OwnedFd;
 
 use rusplay_core::{ColorSpace, Resolution, Timestamp};
 
+use crate::BufferLease;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DrmFourcc(pub u32);
 
@@ -23,6 +25,7 @@ pub enum FrameBuffer {
         fd: OwnedFd,
         modifier: u64,
         planes: Vec<Plane>,
+        lease: BufferLease,
     },
     Shm {
         data: Vec<u8>,

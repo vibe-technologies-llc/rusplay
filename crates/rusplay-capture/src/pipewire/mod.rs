@@ -44,7 +44,8 @@ use self::{
     raw::{BufferHandle, DequeuedBuffer, HeldBuffers, borrow_fd, header_is_corrupted},
 };
 use crate::{
-    CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, PortalSession,
+    BufferLease, CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, PortalSession,
+    ShmFallback,
     cursor::{CursorTracker, CursorUpdate},
     handoff::{Publisher, Received, Subscriber, latest},
     modifier::FormatModifiers,
@@ -111,19 +112,14 @@ enum Command {
     Stop,
 }
 
-struct Delivery {
-    frame: Frame,
-    hold: Option<BufferHandle>,
-}
-
 type Failure = Arc<Mutex<Option<CaptureError>>>;
 
 pub struct PipeWireCapture {
-    deliveries: Subscriber<Delivery>,
+    deliveries: Subscriber<Frame>,
     cursor: Subscriber<CursorUpdate>,
     failure: Failure,
+    fallback: ShmFallback,
     control: channel::Sender<Command>,
-    in_use: Option<BufferHandle>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -136,6 +132,7 @@ impl PipeWireCapture {
         let (publisher, deliveries) = latest();
         let (cursor_publisher, cursor) = latest();
         let failure = Failure::default();
+        let fallback = ShmFallback::default();
         let (control, commands) = channel::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
 
@@ -146,6 +143,8 @@ impl PipeWireCapture {
             publisher,
             cursor_publisher,
             failure: Arc::clone(&failure),
+            fallback: fallback.clone(),
+            control: control.clone(),
             commands,
         };
         let worker = thread::Builder::new()
@@ -161,8 +160,8 @@ impl PipeWireCapture {
             deliveries,
             cursor,
             failure,
+            fallback,
             control,
-            in_use: None,
             worker: Some(worker),
         };
         match started_rx.recv() {
@@ -195,13 +194,11 @@ impl PipeWireCapture {
     }
 
     pub fn try_next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
-        self.release_in_use();
         let received = self.deliveries.try_recv();
         self.resolve(received)
     }
 
     pub fn next_frame_timeout(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
-        self.release_in_use();
         let received = self.deliveries.recv_timeout(timeout);
         self.resolve(received)
     }
@@ -210,23 +207,16 @@ impl PipeWireCapture {
         self.deliveries.superseded()
     }
 
-    fn release_in_use(&mut self) {
-        if let Some(handle) = self.in_use.take() {
-            let _ = self.control.send(Command::Release(handle));
-        }
+    pub fn shm_fallback(&self) -> ShmFallback {
+        self.fallback.clone()
     }
 
-    fn resolve(&mut self, received: Received<Delivery>) -> Result<Option<Frame>, CaptureError> {
+    fn resolve(&self, received: Received<Frame>) -> Result<Option<Frame>, CaptureError> {
         match received {
-            Received::Value(delivery) => Ok(Some(self.accept(delivery))),
+            Received::Value(frame) => Ok(Some(frame)),
             Received::Empty => Ok(None),
             Received::Closed => Err(self.take_failure()),
         }
-    }
-
-    fn accept(&mut self, delivery: Delivery) -> Frame {
-        self.in_use = delivery.hold;
-        delivery.frame
     }
 
     fn take_failure(&self) -> CaptureError {
@@ -246,11 +236,7 @@ impl PipeWireCapture {
 
 impl CaptureSource for PipeWireCapture {
     fn next_frame(&mut self) -> Result<Frame, CaptureError> {
-        self.release_in_use();
-        match self.deliveries.recv() {
-            Some(delivery) => Ok(self.accept(delivery)),
-            None => Err(self.take_failure()),
-        }
+        self.deliveries.recv().ok_or_else(|| self.take_failure())
     }
 
     fn cursor_feed(&self) -> Option<Subscriber<CursorUpdate>> {
@@ -268,20 +254,24 @@ struct WorkerSetup {
     remote: OwnedFd,
     node_id: u32,
     options: StreamOptions,
-    publisher: Publisher<Delivery>,
+    publisher: Publisher<Frame>,
     cursor_publisher: Publisher<CursorUpdate>,
     failure: Failure,
+    fallback: ShmFallback,
+    control: channel::Sender<Command>,
     commands: channel::Receiver<Command>,
 }
 
 struct Worker {
     options: StreamOptions,
     format: Option<NegotiatedFormat>,
-    publisher: Publisher<Delivery>,
+    publisher: Publisher<Frame>,
     cursor_publisher: Publisher<CursorUpdate>,
     cursor: CursorTracker,
     held: Rc<RefCell<HeldBuffers>>,
     failure: Failure,
+    fallback: ShmFallback,
+    control: channel::Sender<Command>,
     mainloop: MainLoopWeak,
     epoch: Instant,
 }
@@ -361,7 +351,32 @@ impl Worker {
         Ok(())
     }
 
+    fn fall_back_if_requested(&mut self, stream: &Stream) -> Result<(), CaptureError> {
+        if !self.options.prefer_dmabuf || !self.fallback.is_requested() {
+            return Ok(());
+        }
+
+        self.options.prefer_dmabuf = false;
+        let params = self.options.enum_formats()?;
+        stream.update_params(&mut as_pods(&params)?)?;
+        Ok(())
+    }
+
+    fn lease(&self, buffer: DequeuedBuffer<'_>) -> BufferLease {
+        let handle = self.held.borrow_mut().hold(buffer);
+        let control = self.control.clone();
+
+        BufferLease::new(move || {
+            let _ = control.send(Command::Release(handle));
+        })
+    }
+
     fn on_process(&mut self, stream: &Stream) {
+        if let Err(error) = self.fall_back_if_requested(stream) {
+            self.fail(error);
+            return;
+        }
+
         let mut newest = None;
         while let Some(buffer) = DequeuedBuffer::dequeue(stream) {
             self.observe_cursor(&buffer);
@@ -371,7 +386,7 @@ impl Worker {
             return;
         };
 
-        let frame = match self.convert(&mut buffer) {
+        let mut frame = match self.convert(&mut buffer) {
             Ok(Some(frame)) => frame,
             Ok(None) => return,
             Err(error) => {
@@ -381,15 +396,10 @@ impl Worker {
             }
         };
 
-        let hold = matches!(frame.buffer, FrameBuffer::DmaBuf { .. }).then(|| {
-            let handle = buffer.hold();
-            self.held.borrow_mut().insert(handle);
-            handle
-        });
-        let stale = self.publisher.replace(Delivery { frame, hold });
-        if let Some(handle) = stale.and_then(|stale| stale.hold) {
-            self.held.borrow_mut().release(handle, stream);
+        if let FrameBuffer::DmaBuf { lease, .. } = &mut frame.buffer {
+            *lease = self.lease(buffer);
         }
+        drop(self.publisher.replace(frame));
     }
 
     fn observe_cursor(&mut self, buffer: &DequeuedBuffer<'_>) {
@@ -500,6 +510,8 @@ fn run_worker(
         cursor: CursorTracker::default(),
         held: Rc::clone(&held),
         failure: setup.failure,
+        fallback: setup.fallback,
+        control: setup.control,
         mainloop: mainloop.downgrade(),
         epoch: Instant::now(),
     };

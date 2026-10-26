@@ -1,6 +1,6 @@
 use std::{fs::File, os::fd::OwnedFd};
 
-use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
+use rusplay_capture::{BufferLease, DrmFourcc, Frame, FrameBuffer};
 use rusplay_config::{EncoderParams, VideoConfig, VideoEncoderConfig};
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
@@ -67,6 +67,7 @@ pub fn dmabuf_frame() -> Frame {
             fd,
             modifier: 0,
             planes: Vec::new(),
+            lease: BufferLease::detached(),
         },
     }
 }

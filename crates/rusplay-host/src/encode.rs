@@ -87,6 +87,7 @@ impl EncodeStage {
 
             let encoded = match frame {
                 Some(frame) => {
+                    drop(links.feed.take_retained());
                     let encoded = pipeline.encode(&frame, self.force_keyframe)?;
                     self.last_input = Some((frame.timestamp, Instant::now()));
                     links.feed.retain(frame);
