@@ -29,10 +29,27 @@ paths:
   interpolated) uploaded as a storage buffer once per plan. Anti-ringing for polar uses the 2x2
   texels around the centre, and the pass both sigmoidizes its input and unsigmoidizes its
   output. `Scaler` picks the plan from `Kernel::geometry`.
-- Linear light comes from sampling an sRGB view of the source, so `textureLoad` returns
-  linearised values. Do not add manual transfer functions where a texture view format does the
-  job. The one manual transfer is the OETF in colour conversion: storage writes cannot target an
-  sRGB format, BT.709 has no view format, and the output is a buffer anyway.
+- Linear light comes from sampling an sRGB view of the source where one exists, so `textureLoad`
+  returns linearised values for free. Everything else is linearised by `Lineariser`
+  (`linearise.rs`, `linearise_common.wgsl` with `linearise_float.wgsl` or
+  `linearise_packed.wgsl`), one pass from any source texture to an `rgba16float` storage texture
+  of the same size. Its `LineariseSettings` name the `SourceChannels` (how to read RGB out of the
+  texel), the source `TransferFunction` with its `HdrLevels`, the `MatrixCoefficients` whose luma
+  row the HLG OOTF uses, and an `OutputLight`. `Linear` applies the EOTF: sRGB, gamma 2.2, the
+  inverse BT.709 OETF (the exact inverse of what `ColorConverter` writes), PQ as
+  `nits / reference_white_nits`, HLG as the inverse OETF, the BT.2100 OOTF with
+  `gamma = 1.2 + 0.42 * log10(peak / 1000)` and `peak / white`, so the output is display light
+  with 1.0 at the source's reference white, which is the `ColorMapper` input contract and what
+  `ColorConverter` re-encodes. `Encoded` only reorders the channels. `reference::linearise` is the
+  f64 mirror; tests check every transfer against it, that it inverts `reference::encode_linear`
+  (the converter's OETFs) for every transfer, every channel order and both packings.
+- `SourceChannels { packing, order, opaque }`: `TexelPacking::Float` reads a float texture
+  (`textureLoad` lanes), `Rgb10Alpha2Low` reads an `R32Uint` texture and splits the word into
+  three 10-bit fields above a 2-bit one (the `RGBX1010102` family). `ChannelOrder` (`Rgba`,
+  `Bgra`, `Argb`, `Abgr`) names which lane holds red, green, blue and alpha; `opaque` forces
+  alpha to 1. A source of the wrong kind is `LineariseSourceFormat`. The scaler and the converter
+  read plain RGBA only: a swizzled source goes through the lineariser first (with
+  `OutputLight::Encoded` when the next stage wants gamma-space values).
 - Anti-ringing follows mpv/libplacebo: each separable pass tracks the min/max of the two source
   texels bracketing the sample centre (`TapTable::anchors` holds the left one,
   `floor(centre)`), and the result is `mix(sum, clamp(sum, low, high), strength)`. The strength
@@ -191,6 +208,8 @@ paths:
   size and shape (the inner loop is ALU-bound and the texture cache already captures the
   reuse), and the separable passes already run at roughly 85% of memory bandwidth even for an
   8K to 720p Hermite downscale, so a tile has nothing left to win.
+- `ColorPlan::is_identity` is true when the mapping would change nothing (matrix path with an
+  identity matrix, no tone stage, equal white levels), which is how the host skips the mapper.
 - Tone and gamut mapping (`color.rs`, `color/`, `color_*.wgsl`) share `ScalePipelines`
   (`ColorPipelines`: the map pass at 8x8 with a params and tone-state layout, and the
   histogram and peak passes on an analysis layout), the source and destination layouts and

@@ -72,7 +72,7 @@ mod portal {
     };
     use rusplay_config::Config;
 
-    use crate::{CaptureFeed, FrameSource, HostError, upload::UPLOAD_FORMATS};
+    use crate::{CaptureFeed, FrameSource, HostError, upload::upload_format_for};
 
     impl FrameSource for PipeWireCapture {
         fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
@@ -93,15 +93,16 @@ mod portal {
             pollster::block_on(PortalSession::open(capture))?
         };
 
-        let formats: Vec<_> = UPLOAD_FORMATS.iter().map(|(fourcc, _)| *fourcc).collect();
-        let mut options = StreamOptions::new(capture, &config.video).with_modifiers(
-            formats
-                .iter()
-                .copied()
-                .map(FormatModifiers::with_defaults)
-                .collect(),
-        );
-        options.formats = formats;
+        let mut options = StreamOptions::new(capture, &config.video);
+        options
+            .formats
+            .retain(|fourcc| upload_format_for(*fourcc).is_ok());
+        options.modifiers = options
+            .formats
+            .iter()
+            .copied()
+            .map(FormatModifiers::with_defaults)
+            .collect();
         options.prefer_dmabuf = false;
 
         Ok(CaptureFeed::new(PipeWireCapture::from_portal(

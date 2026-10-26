@@ -1,5 +1,5 @@
 # Host
-- [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
+- [S] `host-first-frames-keyframe-flaky`: `a_paired_client_receives_numbered_frames_that_start_with_a_keyframe` in `rusplay-host/src/tests.rs` fails about one run in six under load (`frames[1..]` holds a keyframe, line 464), even with the GPU tests skipped; a forced keyframe from a dropped frame or an early `RequestKeyframe` is the likely cause
 - [S] `host-keyframe-repeat-flaky`: `a_request_older_than_the_last_keyframe_is_ignored` in `rusplay-host/src/tests.rs` failed once (`frames_repeated != 1`) in about 65 runs pinned to two busy CPUs; it passes alone, so a timing assumption in the test or the mailbox needs finding
 
 # Video decode

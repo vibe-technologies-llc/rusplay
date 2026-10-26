@@ -1,31 +1,78 @@
 use rusplay_capture::DrmFourcc;
 use rusplay_core::ChromaSubsampling;
-use rusplay_scale::FrameLayout;
+use rusplay_scale::{ChannelOrder, FrameLayout, SourceChannels};
 
 use crate::HostError;
 
-pub(crate) const UPLOAD_FORMATS: [(DrmFourcc, wgpu::TextureFormat); 4] = [
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UploadFormat {
+    pub texture: wgpu::TextureFormat,
+    pub srgb_view: Option<wgpu::TextureFormat>,
+    pub channels: SourceChannels,
+}
+
+const BGRA8: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+const RGBA8: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const RGB10A2: wgpu::TextureFormat = wgpu::TextureFormat::Rgb10a2Unorm;
+
+const fn eight_bit(
+    texture: wgpu::TextureFormat,
+    srgb: wgpu::TextureFormat,
+    opaque: bool,
+) -> UploadFormat {
+    UploadFormat {
+        texture,
+        srgb_view: Some(srgb),
+        channels: SourceChannels::float(ChannelOrder::Rgba, opaque),
+    }
+}
+
+const fn ten_bit(order: ChannelOrder, opaque: bool) -> UploadFormat {
+    UploadFormat {
+        texture: RGB10A2,
+        srgb_view: None,
+        channels: SourceChannels::float(order, opaque),
+    }
+}
+
+pub(crate) const UPLOAD_FORMATS: [(DrmFourcc, UploadFormat); 8] = [
     (
         DrmFourcc::from_code(*b"XR24"),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
+        eight_bit(BGRA8, wgpu::TextureFormat::Bgra8UnormSrgb, true),
     ),
     (
         DrmFourcc::from_code(*b"AR24"),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
+        eight_bit(BGRA8, wgpu::TextureFormat::Bgra8UnormSrgb, false),
     ),
     (
         DrmFourcc::from_code(*b"XB24"),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        eight_bit(RGBA8, wgpu::TextureFormat::Rgba8UnormSrgb, true),
     ),
     (
         DrmFourcc::from_code(*b"AB24"),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        eight_bit(RGBA8, wgpu::TextureFormat::Rgba8UnormSrgb, false),
+    ),
+    (
+        DrmFourcc::from_code(*b"XR30"),
+        ten_bit(ChannelOrder::Bgra, true),
+    ),
+    (
+        DrmFourcc::from_code(*b"AR30"),
+        ten_bit(ChannelOrder::Bgra, false),
+    ),
+    (
+        DrmFourcc::from_code(*b"XB30"),
+        ten_bit(ChannelOrder::Rgba, true),
+    ),
+    (
+        DrmFourcc::from_code(*b"AB30"),
+        ten_bit(ChannelOrder::Rgba, false),
     ),
 ];
 
 pub(crate) const UPLOAD_BYTES_PER_PIXEL: u32 = 4;
 
-pub(crate) fn texture_format_for(fourcc: DrmFourcc) -> Result<wgpu::TextureFormat, HostError> {
+pub(crate) fn upload_format_for(fourcc: DrmFourcc) -> Result<UploadFormat, HostError> {
     UPLOAD_FORMATS
         .iter()
         .find(|(candidate, _)| *candidate == fourcc)
@@ -181,13 +228,20 @@ mod tests {
     }
 
     #[test]
-    fn only_formats_with_an_srgb_view_are_uploaded() {
-        assert_eq!(
-            texture_format_for(DrmFourcc::from_code(*b"XR24")).unwrap(),
-            wgpu::TextureFormat::Bgra8UnormSrgb
-        );
+    fn eight_and_ten_bit_rgb_formats_are_uploaded() {
+        let eight = upload_format_for(DrmFourcc::from_code(*b"XR24")).unwrap();
+        let ten_bgr = upload_format_for(DrmFourcc::from_code(*b"XR30")).unwrap();
+        let ten_rgb = upload_format_for(DrmFourcc::from_code(*b"XB30")).unwrap();
+
+        assert_eq!(eight.texture, wgpu::TextureFormat::Bgra8Unorm);
+        assert_eq!(eight.srgb_view, Some(wgpu::TextureFormat::Bgra8UnormSrgb));
+        assert!(eight.channels.reads_as_rgba());
+        assert_eq!(ten_bgr.texture, wgpu::TextureFormat::Rgb10a2Unorm);
+        assert_eq!(ten_bgr.srgb_view, None);
+        assert_eq!(ten_bgr.channels.order, ChannelOrder::Bgra);
+        assert_eq!(ten_rgb.channels.order, ChannelOrder::Rgba);
         assert!(matches!(
-            texture_format_for(DrmFourcc::from_code(*b"XR30")),
+            upload_format_for(DrmFourcc::from_code(*b"NV12")),
             Err(HostError::CaptureFormatUnsupported { .. })
         ));
     }
