@@ -25,7 +25,7 @@ use crate::{
     },
 };
 
-const MANAGER_VERSIONS: RangeInclusive<u32> = 1..=3;
+pub(crate) const MANAGER_VERSIONS: RangeInclusive<u32> = 1..=3;
 const MAX_OUTPUT_VERSION: u32 = 4;
 
 #[derive(Debug)]
@@ -277,62 +277,70 @@ impl Dispatch<WpImageDescriptionInfoV1, usize> for Probe {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let Some(probe) = state.output(*index) else {
-            return;
-        };
-        let image = &mut probe.image;
-
-        match event {
-            wp_image_description_info_v1::Event::Primaries {
-                r_x,
-                r_y,
-                g_x,
-                g_y,
-                b_x,
-                b_y,
-                w_x,
-                w_y,
-            } => {
-                image.primaries =
-                    primaries_from_chromaticity([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y])
-                        .or(image.primaries);
-            }
-            wp_image_description_info_v1::Event::PrimariesNamed { primaries } => {
-                image.primaries = primaries
-                    .into_result()
-                    .ok()
-                    .and_then(primaries_from_named)
-                    .or(image.primaries);
-            }
-            wp_image_description_info_v1::Event::TargetPrimaries {
-                r_x,
-                r_y,
-                g_x,
-                g_y,
-                b_x,
-                b_y,
-                w_x,
-                w_y,
-            } => {
-                image.target_primaries =
-                    primaries_from_chromaticity([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y]);
-            }
-            wp_image_description_info_v1::Event::TfNamed { tf } => {
-                image.transfer = tf.into_result().ok().and_then(transfer_from_named);
-            }
-            wp_image_description_info_v1::Event::TfPower { eexp } => {
-                image.transfer = transfer_from_power(eexp);
-            }
-            wp_image_description_info_v1::Event::Luminances {
-                min_lum,
-                max_lum,
-                reference_lum,
-            } => image.luminances = luminances_from_wire(min_lum, max_lum, reference_lum),
-            wp_image_description_info_v1::Event::TargetLuminance { min_lum, max_lum } => {
-                image.target_luminance = target_luminance_from_wire(min_lum, max_lum);
-            }
-            wp_image_description_info_v1::Event::Done => probe.progress = Progress::Described,
-            _ => {}
+        if let Some(probe) = state.output(*index)
+            && apply_information(&mut probe.image, event)
+        {
+            probe.progress = Progress::Described;
         }
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn apply_information(
+    image: &mut DisplayImage,
+    event: wp_image_description_info_v1::Event,
+) -> bool {
+    match event {
+        wp_image_description_info_v1::Event::Primaries {
+            r_x,
+            r_y,
+            g_x,
+            g_y,
+            b_x,
+            b_y,
+            w_x,
+            w_y,
+        } => {
+            image.primaries = primaries_from_chromaticity([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y])
+                .or(image.primaries);
+        }
+        wp_image_description_info_v1::Event::PrimariesNamed { primaries } => {
+            image.primaries = primaries
+                .into_result()
+                .ok()
+                .and_then(primaries_from_named)
+                .or(image.primaries);
+        }
+        wp_image_description_info_v1::Event::TargetPrimaries {
+            r_x,
+            r_y,
+            g_x,
+            g_y,
+            b_x,
+            b_y,
+            w_x,
+            w_y,
+        } => {
+            image.target_primaries =
+                primaries_from_chromaticity([r_x, r_y, g_x, g_y, b_x, b_y, w_x, w_y]);
+        }
+        wp_image_description_info_v1::Event::TfNamed { tf } => {
+            image.transfer = tf.into_result().ok().and_then(transfer_from_named);
+        }
+        wp_image_description_info_v1::Event::TfPower { eexp } => {
+            image.transfer = transfer_from_power(eexp);
+        }
+        wp_image_description_info_v1::Event::Luminances {
+            min_lum,
+            max_lum,
+            reference_lum,
+        } => image.luminances = luminances_from_wire(min_lum, max_lum, reference_lum),
+        wp_image_description_info_v1::Event::TargetLuminance { min_lum, max_lum } => {
+            image.target_luminance = target_luminance_from_wire(min_lum, max_lum);
+        }
+        wp_image_description_info_v1::Event::Done => return true,
+        _ => {}
+    }
+
+    false
 }

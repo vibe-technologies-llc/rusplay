@@ -94,6 +94,10 @@ impl Composer {
         }
     }
 
+    pub(crate) fn set_encoding(&mut self, encoding: &DisplayEncoding) {
+        self.encoding = encoding_words(encoding);
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode(
         &mut self,

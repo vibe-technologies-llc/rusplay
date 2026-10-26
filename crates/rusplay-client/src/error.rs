@@ -11,6 +11,7 @@ use rusplay_scale::ScaleError;
 use thiserror::Error;
 use wayland_client::{
     ConnectError, DispatchError,
+    backend::WaylandError,
     globals::{BindError, GlobalError},
 };
 
@@ -129,6 +130,10 @@ pub enum ClientError {
     },
     #[error("the wayland connection failed while managing the stream surface")]
     WindowDispatch(#[source] DispatchError),
+    #[error("the wayland connection failed while following the stream surface's output")]
+    OutputFollowRead(#[source] WaylandError),
+    #[error("waiting on the wayland connection failed while following the stream surface's output")]
+    OutputFollowPoll(#[source] io::Error),
     #[error("failed to create a gpu surface for the stream")]
     WindowSurface(#[source] wgpu::CreateSurfaceError),
     #[error("no gpu adapter can present to the stream surface")]

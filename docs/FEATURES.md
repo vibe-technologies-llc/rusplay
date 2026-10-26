@@ -7,4 +7,3 @@
 
 # Colour
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
-- [S] `client-color-output-follow`: track the output the stream window is on (`wl_surface.enter` on the child surface, matched to `query_outputs` by `wl_output` name), and re-query its image description and re-choose the surface output when it or the output's description changes; `StreamWindow::attach` queries the first output once today

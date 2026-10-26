@@ -12,6 +12,8 @@ use wayland_protocols::wp::color_management::v1::client::wp_color_manager_v1::{
 };
 
 use crate::ClientError;
+#[cfg(feature = "window")]
+pub(crate) use crate::display::wayland::{MANAGER_VERSIONS, apply_information};
 pub use crate::display::wayland::{OutputDisplay, query_display, query_outputs, query_target};
 
 const MIN_LUMINANCE_UNITS_PER_NIT: f64 = 10_000.0;
