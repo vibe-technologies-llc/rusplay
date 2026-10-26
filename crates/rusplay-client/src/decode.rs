@@ -13,7 +13,7 @@ use rusplay_decode::{DecodeError, DecodedFrame, VideoDecoder};
 
 use crate::{
     ClientError,
-    receive::{EncodedVideo, Feedback},
+    receive::{DecodeInput, Feedback},
     slot::Slot,
     stats::Counters,
 };
@@ -30,7 +30,7 @@ pub(crate) struct DecodedVideo {
 
 #[derive(Debug)]
 pub(crate) struct DecodeLinks {
-    pub queue: Receiver<EncodedVideo>,
+    pub queue: Receiver<DecodeInput>,
     pub output: Arc<Slot<DecodedVideo>>,
     pub feedback: Sender<Feedback>,
     pub stop: Arc<AtomicBool>,
@@ -79,10 +79,18 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
     let mut active = None;
     let mut skipping = false;
 
-    while let Ok(video) = links.queue.recv() {
+    while let Ok(input) = links.queue.recv() {
         if links.stop.load(Ordering::Relaxed) {
             break;
         }
+
+        let video = match input {
+            DecodeInput::Open(codec) => {
+                decoder_for(&mut active, codec, config)?;
+                continue;
+            }
+            DecodeInput::Video(video) => video,
+        };
 
         if video.frame.keyframe {
             skipping = false;
@@ -129,4 +137,33 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use rusplay_config::SoftwareDecoderConfig;
+
+    use super::*;
+
+    #[test]
+    fn a_decoder_open_request_opens_the_decoder_before_any_frame() {
+        let (queue, queued) = mpsc::sync_channel(4);
+        let (feedback, _feedback_received) = mpsc::channel();
+        let links = DecodeLinks {
+            queue: queued,
+            output: Arc::new(Slot::new()),
+            feedback,
+            stop: Arc::new(AtomicBool::new(false)),
+            counters: Arc::new(Counters::default()),
+        };
+        let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+
+        queue.send(DecodeInput::Open(Codec::H264)).unwrap();
+        let result = run(&config, &links);
+
+        assert!(matches!(result, Err(ClientError::Decode(_))));
+        assert_eq!(links.counters.snapshot().frames_decoded, 0);
+    }
 }

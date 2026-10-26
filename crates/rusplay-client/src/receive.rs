@@ -10,7 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::NetworkConfig;
-use rusplay_core::{EncodedFrame, Timestamp};
+use rusplay_core::{Codec, EncodedFrame, Timestamp};
 use rusplay_input::RumbleCommand;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
@@ -32,6 +32,12 @@ pub(crate) struct EncodedVideo {
     pub number: u32,
     pub stream: StreamDescription,
     pub received_at: Instant,
+}
+
+#[derive(Debug)]
+pub(crate) enum DecodeInput {
+    Open(Codec),
+    Video(EncodedVideo),
 }
 
 pub(crate) type SharedFormat = Arc<Mutex<Option<StreamDescription>>>;
@@ -99,7 +105,7 @@ struct AudioIngress {
 
 #[derive(Debug)]
 pub(crate) struct Links {
-    pub decode_queue: SyncSender<EncodedVideo>,
+    pub decode_queue: SyncSender<DecodeInput>,
     pub audio_queue: Option<SyncSender<EncodedAudio>>,
     pub rumble: Option<Sender<RumbleCommand>>,
     pub cursor: LatestCursor,
@@ -404,7 +410,7 @@ impl ReceiveStage {
             received_at: now,
         };
 
-        match self.links.decode_queue.try_send(video) {
+        match self.links.decode_queue.try_send(DecodeInput::Video(video)) {
             Ok(()) => Ok(Flow::Continue),
             Err(TrySendError::Full(_)) => {
                 self.links.counters.frames_dropped.increment();
@@ -477,7 +483,17 @@ impl ReceiveStage {
             return;
         }
 
+        let reopens = self
+            .stream
+            .is_none_or(|current| current.codec != description.codec);
+
         self.stream = Some(description);
+        if reopens {
+            self.links
+                .decode_queue
+                .try_send(DecodeInput::Open(description.codec))
+                .ok();
+        }
         *self.links.format.lock() = Some(description);
         self.links.counters.stream_formats_received.increment();
     }
@@ -588,7 +604,7 @@ mod tests {
         stop: Arc<AtomicBool>,
         stage: Option<JoinHandle<Result<(), ClientError>>>,
         format: SharedFormat,
-        decode: Receiver<EncodedVideo>,
+        decode: Receiver<DecodeInput>,
         _feedback: Sender<Feedback>,
     }
 
@@ -664,10 +680,18 @@ mod tests {
             self.send(&[packet.to_datagram().unwrap()]);
         }
 
-        fn next_video(&self) -> EncodedVideo {
+        fn next_input(&self) -> DecodeInput {
             self.decode
                 .recv_timeout(WAIT)
-                .expect("a video frame reaches the decode queue")
+                .expect("an input reaches the decode queue")
+        }
+
+        fn next_video(&self) -> EncodedVideo {
+            loop {
+                if let DecodeInput::Video(video) = self.next_input() {
+                    return video;
+                }
+            }
         }
 
         fn next_audio(&self) -> EncodedAudio {
@@ -758,6 +782,28 @@ mod tests {
         assert_eq!(first.frame.codec, Codec::Hevc);
         assert_eq!(second.stream, description(8, 1920));
         assert_eq!(*rig.format.lock(), Some(description(8, 1920)));
+        assert!(rig.decode.try_recv().is_err());
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_new_codec_in_a_stream_description_queues_a_decoder_open_ahead_of_video() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+        let av1 = StreamDescription {
+            codec: Codec::Av1,
+            ..description(9, 1920)
+        };
+
+        rig.describe(0, description(1, 1280));
+        assert!(matches!(rig.next_input(), DecodeInput::Open(Codec::Hevc)));
+
+        rig.describe(1, description(2, 1920));
+        rig.describe(2, av1);
+        assert!(matches!(rig.next_input(), DecodeInput::Open(Codec::Av1)));
+
+        rig.send(&packetizer.packetize(0, true, &payload(64, 0)).unwrap());
+        assert!(matches!(rig.next_input(), DecodeInput::Video(_)));
         assert!(rig.decode.try_recv().is_err());
         assert!(rig.finish().is_ok());
     }

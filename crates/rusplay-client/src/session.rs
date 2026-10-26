@@ -26,7 +26,7 @@ use crate::{
     decode::{self, DecodeLinks},
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage},
     present::{self, PresentLinks, PresentOptions, SharedTarget},
-    receive::{EncodedVideo, Feedback, Links, ReceiveStage, SharedFormat},
+    receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
     stats::Counters,
 };
@@ -315,7 +315,7 @@ impl ClientStream {
         &mut self,
         config: &Config,
         decoded: &Arc<Slot<decode::DecodedVideo>>,
-    ) -> Result<(mpsc::SyncSender<EncodedVideo>, mpsc::Receiver<Feedback>), ClientError> {
+    ) -> Result<(mpsc::SyncSender<DecodeInput>, mpsc::Receiver<Feedback>), ClientError> {
         let (queue, queued) = mpsc::sync_channel(usize::from(config.video.decode_queue_frames));
         let (feedback, feedback_received) = mpsc::channel();
         let backend = config.video.decoder.clone();

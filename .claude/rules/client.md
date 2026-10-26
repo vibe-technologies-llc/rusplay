@@ -52,9 +52,13 @@ paths:
   them, so overflow drops the frame and resyncs. Decode → present is a latest-wins `Slot`: a
   decoded frame that is superseded before the GPU took it is dropped (`frames_superseded`), which
   also releases a DMA-BUF lease at once. The decoder is opened on the decode thread (decoders are
-  not `Send`) for the codec of the first frame's description and reopened when a description
-  names another codec; an open failure ends the stream with `Decode`. `connect` does not wait for
-  it (`client-decoder-preopen` in `docs/PERFORMANCE.md`).
+  not `Send`). The decode queue carries `DecodeInput`: besides `Video`, the receive stage
+  `try_send`s an `Open(codec)` whenever a `StreamFormat` is the first or names another codec, so
+  the decoder is set up (rav1d's thread pool, a VAAPI session) before the opening keyframe
+  arrives; being in queue order, it never reopens ahead of older frames of the previous codec. A
+  full queue drops the `Open` and the first frame opens the decoder as before. The decoder is also
+  reopened when a frame's description names another codec; an open failure ends the stream with
+  `Decode`, and `connect` does not wait for it.
 - Encoded frames carry the receive time since stream start as their `Timestamp`, since video
   packets have no timestamp field. `PresentedFrame` has `received_at`, `decoded_at` and
   `submitted_at` instants for latency accounting.
