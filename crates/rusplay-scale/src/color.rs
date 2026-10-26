@@ -1,3 +1,4 @@
+mod lut;
 mod spaces;
 mod tone;
 
@@ -15,6 +16,7 @@ use rusplay_core::{
 use wgpu::util::DeviceExt;
 
 pub use crate::color::{
+    lut::{ColorLut, ColorLutSettings, DEFAULT_LUT_SIZE, LUT_SIZES},
     spaces::WorkingSpace,
     tone::{DynamicPeak, ToneCurve, ToneMapping},
 };

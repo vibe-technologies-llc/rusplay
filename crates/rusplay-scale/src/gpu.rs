@@ -34,6 +34,17 @@ const UNPACK_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_output_transfer.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_RGB_LUT_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("color_lut_storage.wgsl"),
+    include_str!("color_lut_sample.wgsl"),
+    include_str!("unpack_output_lut.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
 const UNPACK_PLANES_CHROMA_SHADER: &str = concat!(
@@ -46,6 +57,17 @@ const UNPACK_PLANES_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_output_transfer.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_PLANES_RGB_LUT_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("color_lut_storage.wgsl"),
+    include_str!("color_lut_sample.wgsl"),
+    include_str!("unpack_output_lut.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
 const POLAR_SHADER: &str = concat!(
@@ -71,7 +93,18 @@ const COLOR_MAP_SHADER: &str = concat!(
     include_str!("color_common.wgsl"),
     include_str!("color_tone.wgsl"),
     include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
     include_str!("color_map.wgsl")
+);
+const COLOR_LUT_BAKE_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("color_lut_storage.wgsl"),
+    include_str!("color_lut_bake.wgsl")
 );
 
 const COLOR_HISTOGRAM_SHADER: &str = concat!(
@@ -91,12 +124,14 @@ const LINEARISE_FLOAT_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("destination_rgba16float.wgsl"),
     include_str!("linearise_float.wgsl"),
+    include_str!("transfer_decode.wgsl"),
     include_str!("linearise_common.wgsl")
 );
 const LINEARISE_PACKED_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("destination_rgba16float.wgsl"),
     include_str!("linearise_packed.wgsl"),
+    include_str!("transfer_decode.wgsl"),
     include_str!("linearise_common.wgsl")
 );
 
@@ -105,6 +140,7 @@ const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
+const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
 const LINEARISE_WORKGROUP: (u32, u32) = (8, 8);
 const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
 const PEAK_WORKGROUP: (u32, u32) = (1, 1);
@@ -115,6 +151,7 @@ pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+pub(crate) const LUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShaderPass {
@@ -192,6 +229,9 @@ pub(crate) struct UnpackPasses {
     pub planes_layout: wgpu::BindGroupLayout,
     pub planes_chroma: ShaderPass,
     pub planes_rgb: ShaderPass,
+    pub lut_target_layout: wgpu::BindGroupLayout,
+    pub rgb_lut: ShaderPass,
+    pub planes_rgb_lut: ShaderPass,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +241,9 @@ pub(crate) struct ColorPipelines {
     pub map: ShaderPass,
     pub histogram: ShaderPass,
     pub peak: ShaderPass,
+    pub lut_store_layout: wgpu::BindGroupLayout,
+    pub lut_bake_layout: wgpu::BindGroupLayout,
+    pub lut_bake: ShaderPass,
 }
 
 impl ColorPipelines {
@@ -235,6 +278,24 @@ impl ColorPipelines {
                 ("COMPRESSION_POWER", COMPRESSION_POWER),
             ],
         );
+        let lut_store_layout = layout(
+            device,
+            "rusplay-color-lut-store",
+            &[storage_texture_3d_entry(0, LUT_FORMAT)],
+        );
+        let lut_bake_layout = layout(device, "rusplay-color-lut-bake", &[uniform_entry(0)]);
+        let lut_bake = compute_pipeline(
+            device,
+            "rusplay-color-lut-bake",
+            &[&lut_store_layout, &params_layout, &lut_bake_layout],
+            COLOR_LUT_BAKE_SHADER,
+            "bake_lut",
+            LUT_BAKE_WORKGROUP,
+            &[
+                ("BOUNDARY_STEPS", f64::from(BOUNDARY_STEPS)),
+                ("COMPRESSION_POWER", COMPRESSION_POWER),
+            ],
+        );
         let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
         let histogram = compute_pipeline(
             device,
@@ -261,6 +322,9 @@ impl ColorPipelines {
             map,
             histogram,
             peak,
+            lut_store_layout,
+            lut_bake_layout,
+            lut_bake,
         }
     }
 }
@@ -484,6 +548,42 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         layouts,
         [UNPACK_PLANES_CHROMA_SHADER, UNPACK_PLANES_RGB_SHADER],
     );
+    let lut_target_layout = layout(
+        device,
+        "rusplay-unpack-lut-target",
+        &[
+            storage_texture_entry(0, INTERMEDIATE_FORMAT),
+            texture_3d_entry(1),
+            uniform_entry(2),
+        ],
+    );
+    let [source_layout, _, _, convert_table_layout] = layouts;
+    let lut_pass = |label: &str, input_layout: &wgpu::BindGroupLayout, shader: &str| {
+        compute_pipeline(
+            device,
+            label,
+            &[
+                input_layout,
+                source_layout,
+                &lut_target_layout,
+                convert_table_layout,
+            ],
+            shader,
+            "unpack_rgb",
+            CONVERT_WORKGROUP,
+            &[],
+        )
+    };
+    let rgb_lut = lut_pass(
+        "rusplay-unpack-rgb-lut",
+        &input_layout,
+        UNPACK_RGB_LUT_SHADER,
+    );
+    let planes_rgb_lut = lut_pass(
+        "rusplay-unpack-planes-rgb-lut",
+        &planes_layout,
+        UNPACK_PLANES_RGB_LUT_SHADER,
+    );
 
     UnpackPasses {
         input_layout,
@@ -492,6 +592,9 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
         planes_layout,
         planes_chroma,
         planes_rgb,
+        lut_target_layout,
+        rgb_lut,
+        planes_rgb_lut,
     }
 }
 
@@ -602,6 +705,31 @@ pub(crate) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
             sample_type: wgpu::TextureSampleType::Float { filterable: false },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
+        },
+    )
+}
+
+fn texture_3d_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    compute_entry(
+        binding,
+        wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+    )
+}
+
+fn storage_texture_3d_entry(
+    binding: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::BindGroupLayoutEntry {
+    compute_entry(
+        binding,
+        wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format,
+            view_dimension: wgpu::TextureViewDimension::D3,
         },
     )
 }

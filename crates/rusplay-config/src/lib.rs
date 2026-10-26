@@ -21,8 +21,8 @@ pub use crate::{
     audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
     color::{
-        ColorConfig, DisplayOutputConfig, DisplayTargetConfig, DitherMode, GamutMappingConfig,
-        OutputColorSpace, OutputFormat, ToneMappingConfig,
+        ColorConfig, ColorMethod, ColorProcessingConfig, DisplayOutputConfig, DisplayTargetConfig,
+        DitherMode, GamutMappingConfig, OutputColorSpace, OutputFormat, ToneMappingConfig,
     },
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,

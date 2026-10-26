@@ -26,5 +26,5 @@ fn unpack_rgb(@builtin(global_invocation_id) id: vec3<u32>) {
     let ycbcr = vec3<f32>(luma_at(id.x, id.y), filtered_chroma(id.x, id.y));
     let encoded = vec3<f32>(dot(params.row_r.xyz, ycbcr), dot(params.row_g.xyz, ycbcr), dot(params.row_b.xyz, ycbcr));
 
-    textureStore(target_texture, vec2<i32>(id.xy), vec4<f32>(decode_transfer(encoded), 1.0));
+    textureStore(target_texture, vec2<i32>(id.xy), vec4<f32>(output_light(encoded), 1.0));
 }

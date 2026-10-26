@@ -4,8 +4,8 @@ use rusplay_core::{
 };
 
 use crate::{
-    ChromaSiting, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent, PlaneLayout,
-    Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
+    ChromaSiting, ColorLut, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent,
+    PlaneLayout, Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
     gpu::{
         self, CHROMA_FORMAT, ScalePipelines, ShaderPass, buffer_group, storage_buffer,
@@ -128,6 +128,7 @@ pub struct RgbConverter {
     inputs: GroupCache<wgpu::Buffer>,
     planes: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
     targets: GroupCache<wgpu::TextureView>,
+    lut_targets: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
 }
 
 impl RgbConverter {
@@ -147,6 +148,7 @@ impl RgbConverter {
             inputs: GroupCache::default(),
             planes: GroupCache::default(),
             targets: GroupCache::default(),
+            lut_targets: GroupCache::default(),
         })
     }
 
@@ -193,10 +195,54 @@ impl RgbConverter {
         frame: &YuvFrame,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
+        self.encode_frame(device, encoder, frame, None, target)
+    }
+
+    pub fn encode_with_lut(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &YuvFrame,
+        lut: &mut ColorLut,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        self.encode_frame(device, encoder, frame, Some(lut), target)
+    }
+
+    pub fn encode_planes(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &DmaBufTexture,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        self.encode_dmabuf(device, encoder, source, None, target)
+    }
+
+    pub fn encode_planes_with_lut(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &DmaBufTexture,
+        lut: &mut ColorLut,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
+        self.encode_dmabuf(device, encoder, source, Some(lut), target)
+    }
+
+    fn encode_frame(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &YuvFrame,
+        lut: Option<&mut ColorLut>,
+        target: &wgpu::TextureView,
+    ) -> Result<(), ScaleError> {
         if *frame.layout() != self.layout {
             return Err(ScaleError::FrameLayoutMismatch);
         }
 
+        let output = self.output(device, encoder, lut, target)?;
         let pipelines = &self.pipelines;
         let input_group = self.inputs.get_or_create(frame.buffer(), || {
             buffer_group(
@@ -206,24 +252,26 @@ impl RgbConverter {
                 &[frame.buffer()],
             )
         });
-        let target_group = self
-            .targets
-            .get_or_create(target, || pipelines.destination_group(device, target));
+        let rgb = match output {
+            Output::Transfer(_) => &pipelines.unpack.rgb,
+            Output::Lut(_) => &pipelines.unpack.rgb_lut,
+        };
 
         self.plan.encode(
-            [&pipelines.unpack.chroma, &pipelines.unpack.rgb],
+            [&pipelines.unpack.chroma, rgb],
             encoder,
             &input_group,
-            &target_group,
+            output.group(),
         );
         Ok(())
     }
 
-    pub fn encode_planes(
+    fn encode_dmabuf(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source: &DmaBufTexture,
+        lut: Option<&mut ColorLut>,
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
         let mismatch = ScaleError::DmaBufFormatMismatch {
@@ -246,27 +294,97 @@ impl RgbConverter {
             return Err(ScaleError::DmaBufTooSmall { found, needed });
         }
 
+        let output = self.output(device, encoder, lut, target)?;
         let pipelines = &self.pipelines;
         let input_group = self
             .planes
             .get_or_create(&(luma.clone(), chroma.clone()), || {
                 planes_group(device, &pipelines.unpack.planes_layout, luma, chroma)
             });
-        let target_group = self
-            .targets
-            .get_or_create(target, || pipelines.destination_group(device, target));
+        let rgb = match output {
+            Output::Transfer(_) => &pipelines.unpack.planes_rgb,
+            Output::Lut(_) => &pipelines.unpack.planes_rgb_lut,
+        };
 
         self.plan.encode(
-            [
-                &pipelines.unpack.planes_chroma,
-                &pipelines.unpack.planes_rgb,
-            ],
+            [&pipelines.unpack.planes_chroma, rgb],
             encoder,
             &input_group,
-            &target_group,
+            output.group(),
         );
         Ok(())
     }
+
+    fn output(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        lut: Option<&mut ColorLut>,
+        target: &wgpu::TextureView,
+    ) -> Result<Output, ScaleError> {
+        let pipelines = &self.pipelines;
+        let Some(lut) = lut else {
+            return Ok(Output::Transfer(self.targets.get_or_create(target, || {
+                pipelines.destination_group(device, target)
+            })));
+        };
+
+        if self.settings.output != OutputLight::Encoded {
+            return Err(ScaleError::LutInputNotEncoded);
+        }
+        let baked_for = lut.settings().transfer;
+        if baked_for != self.settings.transfer {
+            return Err(ScaleError::LutTransferMismatch {
+                lut: baked_for,
+                frame: self.settings.transfer,
+            });
+        }
+
+        lut.encode_bake(encoder);
+        let key = (target.clone(), lut.view().clone());
+        Ok(Output::Lut(self.lut_targets.get_or_create(&key, || {
+            lut_target_group(device, &pipelines.unpack.lut_target_layout, target, lut)
+        })))
+    }
+}
+
+enum Output {
+    Transfer(wgpu::BindGroup),
+    Lut(wgpu::BindGroup),
+}
+
+impl Output {
+    const fn group(&self) -> &wgpu::BindGroup {
+        match self {
+            Self::Transfer(group) | Self::Lut(group) => group,
+        }
+    }
+}
+
+fn lut_target_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    target: &wgpu::TextureView,
+    lut: &ColorLut,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("rusplay-unpack-lut-target"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(target),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(lut.view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: lut.decoding().as_entire_binding(),
+            },
+        ],
+    })
 }
 
 fn planes_group(

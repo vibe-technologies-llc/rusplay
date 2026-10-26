@@ -1,8 +1,9 @@
-use rusplay_config::ColorConfig;
+use rusplay_config::{ColorConfig, ColorMethod};
 use rusplay_core::{ColorSpace, HdrLevels, TransferFunction};
 use rusplay_scale::{
-    ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, DynamicPeak, GamutMapping,
-    LineariseSettings, Lineariser, OutputLight, ScalePipelines, SourceChannels, ToneMapping,
+    ColorLut, ColorLutSettings, ColorMapSettings, ColorMapper, ColorPlan, ColorVolume, DynamicPeak,
+    GamutMapping, LineariseSettings, Lineariser, MappingPath, OutputLight, ScalePipelines,
+    SourceChannels, ToneMapping,
 };
 
 use crate::{ClientError, FrameColor};
@@ -11,6 +12,7 @@ use crate::{ClientError, FrameColor};
 pub(crate) struct MappingOptions {
     pub tone: ToneMapping,
     pub gamut: GamutMapping,
+    pub lut_size: Option<u32>,
 }
 
 impl From<&ColorConfig> for MappingOptions {
@@ -31,6 +33,8 @@ impl From<&ColorConfig> for MappingOptions {
                 mode: gamut.mode,
                 knee: f64::from(gamut.knee),
             },
+            lut_size: (color.processing.method == ColorMethod::Lut)
+                .then_some(color.processing.lut_size),
         }
     }
 }
@@ -39,6 +43,8 @@ impl From<&ColorConfig> for MappingOptions {
 pub(crate) struct ColorRoute {
     pub linearise: Option<LineariseSettings>,
     pub map: Option<ColorMapSettings>,
+    pub lut: Option<ColorLutSettings>,
+    pub unpack: OutputLight,
     pub output: FrameColor,
 }
 
@@ -62,13 +68,34 @@ impl ColorRoute {
             tone: options.tone,
             gamut: options.gamut,
         };
-        let identity = ColorPlan::new(&settings)?.is_identity();
+        let plan = ColorPlan::new(&settings)?;
+        let map = (!plan.is_identity()).then_some(settings);
+        let output = source.mapped_to(&target);
+        let bakeable = plan.path() != MappingPath::Highlight
+            && plan.tone().is_none_or(|stage| stage.dynamic_peak.is_none());
 
-        Ok(Self {
-            linearise,
-            map: (!identity).then_some(settings),
-            output: source.mapped_to(&target),
-        })
+        match options.lut_size {
+            Some(size) if bakeable && (linearise.is_some() || map.is_some()) => Ok(Self {
+                linearise: None,
+                map: None,
+                lut: Some(ColorLutSettings {
+                    transfer: space.transfer,
+                    hdr: space.hdr,
+                    matrix: source.matrix,
+                    map,
+                    size,
+                }),
+                unpack: OutputLight::Encoded,
+                output,
+            }),
+            _ => Ok(Self {
+                linearise,
+                map,
+                lut: None,
+                unpack: source.light,
+                output,
+            }),
+        }
     }
 
     pub(crate) fn passes(&self) -> usize {
@@ -97,6 +124,7 @@ pub(crate) struct ColorStage {
     planned: Option<(FrameColor, ColorVolume, ColorRoute)>,
     lineariser: Option<Lineariser>,
     mapper: Option<ColorMapper>,
+    lut: Option<ColorLut>,
 }
 
 impl ColorStage {
@@ -107,6 +135,7 @@ impl ColorStage {
             planned: None,
             lineariser: None,
             mapper: None,
+            lut: None,
         }
     }
 
@@ -142,6 +171,14 @@ impl ColorStage {
                 None => self.mapper = Some(ColorMapper::new(&self.pipelines, device, settings)?),
             }
         }
+        if let Some(settings) = route.lut {
+            match &mut self.lut {
+                Some(lut) => {
+                    lut.configure(device, settings)?;
+                }
+                None => self.lut = Some(ColorLut::new(&self.pipelines, device, settings)?),
+            }
+        }
         self.planned = Some((source, target, route));
 
         Ok(route)
@@ -170,6 +207,10 @@ impl ColorStage {
         if let Some(mapper) = &mut self.mapper {
             mapper.encode(device, encoder, source, target);
         }
+    }
+
+    pub(crate) fn lut(&mut self, route: &ColorRoute) -> Option<&mut ColorLut> {
+        route.lut.and(self.lut.as_mut())
     }
 
     #[cfg(test)]

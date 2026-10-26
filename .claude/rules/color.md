@@ -200,10 +200,45 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 - Cost at 3840x2160 on an RX 9070 (`bench.rs`, a per-pixel noise pattern that keeps every wave
   on the slow path): perceptual 0.85 ms SDR and 2.0 ms HDR (PQ in every bisection step),
   relative 0.24 ms. BT.2390 tone mapping adds about 0.1 ms and dynamic peak detection about
-  0.18 ms. The 3D LUT bake below is the way to make perceptual cheap.
+  0.18 ms. A whole 10-bit 4:2:0 BT.2020 PQ frame (unpack, `Lineariser`, perceptual BT.2390
+  `ColorMapper`) is 2.67 ms; through the LUT below it is 0.57 ms at 65³ (0.62 ms at 97³, 0.63 ms
+  at 129³), against 0.27 ms for the unpack alone, plus a one-off bake of about 0.18 ms (0.39,
+  0.78).
+- `ColorLut` (`color/lut.rs`, `color_lut_bake.wgsl`, `color_lut_storage.wgsl`,
+  `color_lut_sample.wgsl`) bakes linearisation, tone mapping and gamut mapping into one
+  `size`³ `rgba16float` 3D texture indexed by the frame's encoded R'G'B' (the PQ, HLG or SDR
+  code itself, so the shaping is the source's own). `ColorLutSettings` names the source
+  transfer, `HdrLevels` and matrix (the `Lineariser` inputs) and an optional
+  `ColorMapSettings`; the bake is one dispatch per lattice point running `decode_signal`
+  (`transfer_decode.wgsl`, shared with the lineariser) and `map_light` (`color_light.wgsl`,
+  shared with `color_map.wgsl`) against the very params uniform and tone state `ColorMapper`
+  builds, so the LUT is the analytic shader sampled. It runs from `encode_bake` in the frame's
+  own command buffer, once after `new` or a `configure` that changed the settings
+  (`Reconfigured::Tables`, a new texture). Values are stored through a sign-symmetric 1/2.4
+  power (with the sRGB linear toe for SDR sources and for signed matrix output), which keeps
+  greys and dark colours close to linear in the lattice. Final clamps stay analytic: the
+  `Clip` path is baked unclamped as `Matrix` and every mapped path clamps to
+  `[0, target_peak]` after the lookup, so the clamp's kink is not interpolated. Dynamic peak
+  detection (`LutDynamicPeak`) and `highlight` (`LutHighlightMapping`, discontinuous by design)
+  cannot be baked; sizes are `LUT_SIZES` (2 to 256, and the device's 3D limit).
+- The lookup is fused into `RgbConverter` (`encode_with_lut`, `encode_planes_with_lut`):
+  `unpack_rgb.wgsl` with `unpack_output_lut.wgsl` replaces the inverse OETF by a tetrahedral
+  interpolation of the eight surrounding lattice texels (`textureLoad`, four per sample), so a
+  frame takes one source-resolution pass instead of three. The converter must output
+  `Encoded` (`LutInputNotEncoded`) for the LUT's transfer (`LutTransferMismatch`).
+- LUT accuracy against the analytic passes (`color/lut/tests.rs`: 2^17 random R'G'B' codes plus
+  saturated BT.2020 primaries and secondaries from 1 to 4000 cd/m², 4:4:4 12-bit, ΔE_ITP per
+  BT.2124, codes with every channel below 0.03 left out as sub-display black): at 65³ greys and
+  smooth mappings (linearise only, SDR relative) are within 0.8; gamut-mapped HDR is mean
+  0.10 to 0.24, p99 0.9 to 2.7, with isolated maxima of 15 to 37 at the gamut cusps and at
+  the perceptual boundary search's discontinuity (`color-perceptual-boundary-discontinuity` in
+  `docs/BUGS.md`). 97³ halves p99 (at most 1.5). About 0.1 to 0.2 of the mean is the analytic
+  path's own `rgba16float` intermediate, which the fused pass does not have. Because p99 exceeds
+  one JND near the gamut boundary, the analytic passes stay the default.
 - Config: `color.tone_mapping.operator` (`bt2390`), `dynamic_peak` (false), `peak_percentile`
   (99.995), `smoothing_frames` (20) and `scene_threshold_db` (3.0);
-  `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8); and the display
+  `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8);
+  `color.processing.method` (`analytic` default, `lut`) and `lut_size` (65, 17 to 129); and the display
   overrides `color.target.primaries`, `transfer`, `reference_white_nits`, `peak_nits` and
   `black_nits`, all unset by default. Resolving them is `rusplay_client::display` (next
   section); the client presentation below turns the result into `ColorMapSettings`.
@@ -242,7 +277,11 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 
 - Per frame the present stage runs unpack, then `Lineariser` for PQ/HLG frames (`OutputLight::Linear`;
   for HLG on an HDR target the OOTF uses the target's peak), then `ColorMapper` unless the plan
-  is identity, then `Scaler`, all at the source resolution except the scaler's output.
+  is identity, then `Scaler`, all at the source resolution except the scaler's output. With
+  `color.processing.method = "lut"` the route instead carries `ColorLutSettings` whenever it
+  would run a lineariser or a mapper and the plan is bakeable (no dynamic peak, not
+  `highlight`): the frame is unpacked `Encoded` straight through the `ColorLut` and takes no
+  colour pass (`ColorRoute::passes` is 0, `ColorRoute::unpack` says how to unpack).
   `ColorRoute::plan` (`present/mapping.rs`) builds the `ColorMapSettings` from
   `ColorVolume::of_content` of the frame's colour, the colour target and `MappingOptions` (the
   `color.tone_mapping` and `color.gamut_mapping` sections, the same conversion the host makes),
@@ -322,17 +361,17 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 
 ## Implementation
 
-- Stages are fused into as few dispatches as possible. When the analytic chain gets expensive,
-  the colour stages (2 to 4) can be baked into a 3D LUT (`rgba16float`, 65³ by default,
-  tetrahedral interpolation), rebuilt only when the source or target description changes
-  (`client-color-lut` in `docs/PERFORMANCE.md`; the client runs the analytic passes today). The
-  analytic shader stays the reference.
+- Stages are fused into as few dispatches as possible. The colour stages (2 to 4) can be baked
+  into a 3D LUT (`rgba16float`, 65³ by default, tetrahedral interpolation) fused into the
+  unpack, rebuilt only when the source or target description changes (`ColorLut` above,
+  opt-in through `color.processing.method`). The analytic shader stays the reference and the
+  default; `client-color-lut-boundary` in `docs/PERFORMANCE.md` is what it takes to flip it.
 - Math is f32 on the GPU with `rgba16float` intermediates. CPU references in f64 check every
   stage. Tests cover in-gamut colours passing through unchanged, BT.2020 primaries landing on the
   P3 boundary with hue preserved (ΔE_ITP bound), the BT.2390 curve matching the spec's reference
   points, and round trips where the target contains the source.
 - Every choice above is a config option with the default named here: target overrides, operator,
   gamut mapping mode, dynamic peak detection, reference white, surface colour space and format,
-  and dither; the LUT size comes with the bake.
+  dither, and the processing method and LUT size.
 - Changing the source or target description reconfigures the plan in place, never on the
   per-frame path.

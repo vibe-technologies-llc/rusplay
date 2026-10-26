@@ -9,6 +9,7 @@ use crate::ConfigError;
 
 const KNEE_RANGE: Range<f32> = 0.0..1.0;
 const PERCENTILE_RANGE: RangeInclusive<f32> = f32::MIN_POSITIVE..=100.0;
+const LUT_SIZE_RANGE: RangeInclusive<u32> = 17..=129;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -16,6 +17,7 @@ pub struct ColorConfig {
     pub target: DisplayTargetConfig,
     pub tone_mapping: ToneMappingConfig,
     pub gamut_mapping: GamutMappingConfig,
+    pub processing: ColorProcessingConfig,
     pub output: DisplayOutputConfig,
 }
 
@@ -23,7 +25,42 @@ impl ColorConfig {
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         self.target.validate()?;
         self.tone_mapping.validate()?;
-        self.gamut_mapping.validate()
+        self.gamut_mapping.validate()?;
+        self.processing.validate()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorMethod {
+    #[default]
+    Analytic,
+    Lut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ColorProcessingConfig {
+    pub method: ColorMethod,
+    pub lut_size: u32,
+}
+
+impl ColorProcessingConfig {
+    fn validate(self) -> Result<(), ConfigError> {
+        if LUT_SIZE_RANGE.contains(&self.lut_size) {
+            Ok(())
+        } else {
+            Err(ConfigError::LutSizeOutOfRange(self.lut_size))
+        }
+    }
+}
+
+impl Default for ColorProcessingConfig {
+    fn default() -> Self {
+        Self {
+            method: ColorMethod::Analytic,
+            lut_size: 65,
+        }
     }
 }
 
@@ -236,6 +273,37 @@ mod tests {
         assert!(matches!(
             dark_peak.validate(),
             Err(ConfigError::TargetPeakOutOfRange(0))
+        ));
+    }
+
+    #[test]
+    fn processing_defaults_to_analytic_and_bounds_the_lut_size() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [color.processing]
+            method = "lut"
+            lut_size = 97
+            "#,
+        )
+        .unwrap();
+        let tiny: Config = toml::from_str(
+            r"
+            [color.processing]
+            lut_size = 8
+            ",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ColorProcessingConfig::default().method,
+            ColorMethod::Analytic
+        );
+        assert_eq!(ColorProcessingConfig::default().lut_size, 65);
+        assert_eq!(parsed.color.processing.method, ColorMethod::Lut);
+        assert!(parsed.validate().is_ok());
+        assert!(matches!(
+            tiny.validate(),
+            Err(ConfigError::LutSizeOutOfRange(8))
         ));
     }
 

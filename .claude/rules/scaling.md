@@ -32,7 +32,8 @@ paths:
 - Linear light comes from sampling an sRGB view of the source where one exists, so `textureLoad`
   returns linearised values for free. Everything else is linearised by `Lineariser`
   (`linearise.rs`, `linearise_common.wgsl` with `linearise_float.wgsl` or
-  `linearise_packed.wgsl`), one pass from any source texture to an `rgba16float` storage texture
+  `linearise_packed.wgsl`, the transfer maths in `transfer_decode.wgsl`, which the colour LUT
+  bake shares), one pass from any source texture to an `rgba16float` storage texture
   of the same size. Its `LineariseSettings` name the `SourceChannels` (how to read RGB out of the
   texel), the source `TransferFunction` with its `HdrLevels`, the `MatrixCoefficients` whose luma
   row the HLG OOTF uses, and an `OutputLight`. `Linear` applies the EOTF: sRGB, gamma 2.2, the
@@ -141,8 +142,11 @@ paths:
   `YuvFrame` upload buffer laid out by `FrameLayout::packed` (planar or semi-planar, any depth).
   `unpack_chroma` applies the horizontal chroma taps straight from the buffer into an `rg32float`
   intermediate at luma width, `unpack_rgb` applies the vertical taps, the `MatrixCoefficients::inverse_rows`
-  and, for `OutputLight::Linear`, the inverse OETF (sRGB, BT.709, gamma 2.2 or linear; PQ and HLG
-  must use `OutputLight::Encoded`), into an `rgba16float` storage texture. Chroma is upsampled with
+  and `output_light`, into an `rgba16float` storage texture. `output_light` is either
+  `unpack_output_transfer.wgsl`, the inverse OETF for `OutputLight::Linear` (sRGB, BT.709, gamma
+  2.2 or linear; PQ and HLG must use `OutputLight::Encoded`), or `unpack_output_lut.wgsl`, the
+  colour LUT lookup of `encode_with_lut`/`encode_planes_with_lut` (`color.md`), whose group 2
+  adds the LUT texture and its decoding uniform to the target. Chroma is upsampled with
   `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
   and must be separable. `reference::unpack_rgb` is its CPU reference. The input is a WGSL module
   providing `luma_code`/`chroma_codes` (integer codes after the `sample_shift` and `max_code`
@@ -245,7 +249,8 @@ paths:
   workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
   --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's
   clocks otherwise swing results by 30%. Rerun it before and after any shader performance
-  change.
+  change. Its `present` lines time a whole 4K HDR frame through the analytic colour passes and
+  through the colour LUT at 65³, 97³ and 129³, with the one-off bake.
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a

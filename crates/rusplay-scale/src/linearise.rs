@@ -109,7 +109,7 @@ impl LineariseSettings {
         }
     }
 
-    fn validate(&self) -> Result<(), ScaleError> {
+    pub(crate) fn validate(&self) -> Result<(), ScaleError> {
         if !self.transfer.is_hdr() || self.output == OutputLight::Encoded {
             return Ok(());
         }
@@ -125,7 +125,7 @@ impl LineariseSettings {
         Ok(())
     }
 
-    const fn transfer_code(&self) -> u32 {
+    pub(crate) const fn transfer_code(&self) -> u32 {
         match (self.output, self.transfer) {
             (OutputLight::Encoded, _) | (OutputLight::Linear, TransferFunction::Linear) => {
                 TRANSFER_NONE
