@@ -133,6 +133,20 @@ fn resizing_feed(frames: u32, after: u32) -> Arc<CaptureFeed> {
     })
 }
 
+fn resizing_feed_with_cursor(
+    frames: u32,
+    after: u32,
+    cursor: Subscriber<CursorUpdate>,
+) -> Arc<CaptureFeed> {
+    CaptureFeed::new(CountingSource {
+        remaining: frames,
+        produced: 0,
+        resize_after: Some(after),
+        cursor: Some(cursor),
+        started: stream_started(),
+    })
+}
+
 fn feed_with_cursor(frames: u32, cursor: Subscriber<CursorUpdate>) -> Arc<CaptureFeed> {
     CaptureFeed::new(CountingSource {
         remaining: frames,
@@ -148,6 +162,7 @@ struct FakePipeline {
     last: Option<u8>,
     encoded: u32,
     resolution: Option<Resolution>,
+    stream: Option<Resolution>,
     bitrate: Arc<AtomicU32>,
 }
 
@@ -197,7 +212,7 @@ impl VideoPipeline for FakePipeline {
     fn stream_format(&self) -> Option<StreamFormat> {
         self.resolution.map(|resolution| StreamFormat {
             codec: Codec::Av1,
-            resolution,
+            resolution: self.stream.unwrap_or(resolution),
             format: PixelFormat::default(),
             color: ColorSpace::default(),
         })
@@ -209,6 +224,17 @@ fn fake_factory(bitrate: &Arc<AtomicU32>) -> PipelineFactory {
     Box::new(move || {
         Ok(Box::new(FakePipeline {
             bitrate,
+            ..FakePipeline::default()
+        }) as Box<dyn VideoPipeline>)
+    })
+}
+
+fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> PipelineFactory {
+    let bitrate = Arc::clone(bitrate);
+    Box::new(move || {
+        Ok(Box::new(FakePipeline {
+            bitrate,
+            stream: Some(stream),
             ..FakePipeline::default()
         }) as Box<dyn VideoPipeline>)
     })

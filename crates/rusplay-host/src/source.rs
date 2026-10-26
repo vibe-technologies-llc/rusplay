@@ -1,7 +1,15 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use parking_lot::{Mutex, MutexGuard};
 use rusplay_capture::{CaptureError, CursorUpdate, Frame, Subscriber};
+use rusplay_core::Resolution;
 
 pub trait FrameSource: Send {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError>;
@@ -16,6 +24,7 @@ pub struct CaptureFeed {
     retained: Mutex<Option<Frame>>,
     cursor: Option<Subscriber<CursorUpdate>>,
     cursor_state: Mutex<Option<CursorUpdate>>,
+    capture_size: AtomicU64,
 }
 
 impl CaptureFeed {
@@ -25,6 +34,7 @@ impl CaptureFeed {
             source: Mutex::new(Box::new(source)),
             retained: Mutex::new(None),
             cursor_state: Mutex::new(None),
+            capture_size: AtomicU64::new(0),
         })
     }
 
@@ -34,6 +44,22 @@ impl CaptureFeed {
 
     pub(crate) fn retain(&self, frame: Frame) {
         *self.retained.lock() = Some(frame);
+    }
+
+    pub(crate) fn set_capture_size(&self, size: Resolution) {
+        let packed = u64::from(size.width) << u32::BITS | u64::from(size.height);
+        self.capture_size.store(packed, Ordering::Relaxed);
+    }
+
+    pub(crate) fn capture_size(&self) -> Option<Resolution> {
+        let packed = self.capture_size.load(Ordering::Relaxed).to_be_bytes();
+        let (width, height) = packed.split_at(4);
+        let size = Resolution::new(
+            u32::from_be_bytes(width.try_into().ok()?),
+            u32::from_be_bytes(height.try_into().ok()?),
+        );
+
+        (size.pixel_count() > 0).then_some(size)
     }
 
     pub(crate) fn take_retained(&self) -> Option<Frame> {

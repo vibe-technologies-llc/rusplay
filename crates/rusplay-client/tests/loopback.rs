@@ -329,6 +329,7 @@ fn cursor_position_and_image_reach_the_app() {
         .map(|step| CursorMessage {
             x: step * 10,
             y: step * 5,
+            space: Resolution::new(1920, 1080),
             visible: true,
             image: None,
         })

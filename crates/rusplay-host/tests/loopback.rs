@@ -350,6 +350,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     assert_held_key_pressed_then_released(&injected);
     assert!(client_stats.input_snapshots_sent >= SNAPSHOTS_TO_SEE);
     assert!(host_stats.input_state_records >= 3);
+    assert_eq!(cursor_state.space, SOURCE);
     assert_eq!(cursor_state.x, CURSOR_TARGET_X);
     assert_eq!(cursor_state.y, CURSOR_TARGET_X / 2);
     let image = cursor_state.image.unwrap();
