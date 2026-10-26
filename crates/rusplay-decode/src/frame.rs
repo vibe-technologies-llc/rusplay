@@ -138,7 +138,7 @@ pub struct CpuFrame {
 }
 
 impl CpuFrame {
-    #[cfg_attr(not(feature = "software"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "software", feature = "nvdec")), allow(dead_code))]
     pub(crate) fn new(storage: impl PlaneStorage + 'static) -> Self {
         Self {
             storage: Box::new(storage),

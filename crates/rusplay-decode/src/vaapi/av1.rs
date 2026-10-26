@@ -6,15 +6,14 @@ use cros_codecs::codec::av1::parser::{
     TileGroupObu,
 };
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
-    Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
-    Backend, BitstreamUnit, DecodeError, DecodedFrame,
+    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb,
+    signal::{self, HdrTracker},
     vaapi::{
-        Stream, StreamFormat, annexb, ffi,
-        signal::HdrTracker,
+        Stream, StreamFormat, ffi,
         va::{Buffer, Display, INVALID_SURFACE, PoolSurface},
     },
 };
@@ -171,7 +170,7 @@ impl Av1Decoder {
             self.slots = Default::default();
         }
         stream.color = self.hdr.resolve(
-            signalled_color(&sequence),
+            signal::av1_color(&sequence),
             header.frame_type == FrameType::KeyFrame,
         );
 
@@ -310,21 +309,6 @@ impl Av1Decoder {
             .map(|slot| stream.output_sized(&slot.display, timestamp, slot.render))
             .transpose()
     }
-}
-
-fn signalled_color(sequence: &SequenceHeaderObu) -> SignalledColor {
-    let color = &sequence.color_config;
-    let signalled = SignalledColor::default().with_full_range(color.color_range);
-    if !color.color_description_present_flag {
-        return signalled;
-    }
-
-    let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
-    signalled.with_h273_codes(
-        code(color.color_primaries as u32),
-        code(color.transfer_characteristics as u32),
-        code(color.matrix_coefficients as u32),
-    )
 }
 
 fn stream_format(sequence: &SequenceHeaderObu) -> Result<StreamFormat, DecodeError> {

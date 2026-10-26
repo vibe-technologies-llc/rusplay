@@ -44,6 +44,7 @@ half = { version = "2.7.1", default-features = false }
 hkdf = { version = "0.13.0", default-features = false }
 lexopt = "0.3.2"
 libc = { version = "0.2.191", default-features = false }
+libloading = "0.9.0"
 opus-rs = { version = "0.1.40", default-features = false }
 parking_lot = { version = "0.13.0", default-features = false }
 pipewire = { version = "0.10.1", default-features = false }

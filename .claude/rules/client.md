@@ -166,7 +166,7 @@ paths:
   (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
   `RgbConverter::encode_planes` (`SemiPlanar` settings) with no copy, and the decoded frame, the
   surface's lease, goes to `release_after_submission` after the submit, so the decoder reuses the
-  surface only once the GPU has read it. CPU frames keep their upload buffer, created on the first
+  surface only once the GPU has read it. CPU frames (software and NVDEC) keep their upload buffer, created on the first
   one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
   source size and upscaled, and requires identical output.
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.

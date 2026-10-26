@@ -1,7 +1,16 @@
+#[cfg(any(feature = "vaapi", feature = "nvdec"))]
+mod annexb;
 mod error;
+#[cfg(all(test, any(feature = "vaapi", feature = "nvdec")))]
+#[path = "../tests/common/mod.rs"]
+mod fixtures;
 mod frame;
-#[cfg(any(feature = "software", feature = "vaapi"))]
+#[cfg(any(feature = "software", feature = "vaapi", feature = "nvdec"))]
 mod metadata;
+#[cfg(feature = "nvdec")]
+mod nvdec;
+#[cfg(any(feature = "vaapi", feature = "nvdec"))]
+mod signal;
 #[cfg(feature = "software")]
 mod software;
 #[cfg(feature = "vaapi")]
@@ -9,15 +18,19 @@ mod vaapi;
 
 use std::fmt;
 
-use rusplay_config::{SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig};
+use rusplay_config::{
+    NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig,
+};
 use rusplay_core::{Codec, EncodedFrame};
 
+#[cfg(feature = "nvdec")]
+pub use crate::nvdec::NvdecDecoder;
 #[cfg(feature = "software")]
 pub use crate::software::Rav1dDecoder;
 #[cfg(feature = "vaapi")]
 pub use crate::vaapi::VaapiDecoder;
 pub use crate::{
-    error::{BitstreamUnit, DecodeError, VaCall, VaStatus},
+    error::{BitstreamUnit, CudaCall, CudaStatus, DecodeError, VaCall, VaStatus},
     frame::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
         DmaBufPlane, DrmFourcc,
@@ -65,9 +78,7 @@ pub fn open(
 ) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     match config {
         VideoDecoderConfig::Vaapi(vaapi) => open_vaapi(codec, vaapi),
-        VideoDecoderConfig::Nvdec(_) => Err(DecodeError::BackendNotCompiled {
-            backend: Backend::Nvdec,
-        }),
+        VideoDecoderConfig::Nvdec(nvdec) => open_nvdec(codec, nvdec),
         VideoDecoderConfig::Software(software) => open_software(codec, software),
     }
 }
@@ -87,6 +98,24 @@ fn open_vaapi(
 ) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     Err(DecodeError::BackendNotCompiled {
         backend: Backend::Vaapi,
+    })
+}
+
+#[cfg(feature = "nvdec")]
+fn open_nvdec(
+    codec: Codec,
+    config: &NvdecDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Ok(Box::new(NvdecDecoder::new(codec, config)?))
+}
+
+#[cfg(not(feature = "nvdec"))]
+fn open_nvdec(
+    _codec: Codec,
+    _config: &NvdecDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Err(DecodeError::BackendNotCompiled {
+        backend: Backend::Nvdec,
     })
 }
 
@@ -116,20 +145,27 @@ fn open_software(
 
 #[cfg(test)]
 mod tests {
-    use rusplay_config::NvdecDecoderConfig;
-
     use super::*;
 
     #[test]
-    fn nvdec_is_not_compiled() {
+    fn nvdec_open_matches_its_feature() {
         let config = VideoDecoderConfig::Nvdec(NvdecDecoderConfig::default());
 
-        assert!(matches!(
-            open(Codec::Hevc, &config),
-            Err(DecodeError::BackendNotCompiled {
-                backend: Backend::Nvdec
-            })
-        ));
+        let result = open(Codec::Hevc, &config);
+
+        if cfg!(feature = "nvdec") {
+            assert!(!matches!(
+                result,
+                Err(DecodeError::BackendNotCompiled { .. })
+            ));
+        } else {
+            assert!(matches!(
+                result,
+                Err(DecodeError::BackendNotCompiled {
+                    backend: Backend::Nvdec
+                })
+            ));
+        }
     }
 
     #[test]

@@ -9,24 +9,25 @@ paths:
   unit) in, at most one `DecodedFrame` out, plus `flush` for the frames a reordering stream
   still holds. Backends are VAAPI, NVDEC and software, each behind
   its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
-  config's backend and returns `BackendNotCompiled` when that feature is off (always for NVDEC,
-  which has no backend yet) and `CodecUnsupported` when the backend cannot decode the codec.
-  The backend types (`VaapiDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
+  config's backend and returns `BackendNotCompiled` when that feature is off and
+  `CodecUnsupported` when the backend cannot decode the codec. The backend types
+  (`VaapiDecoder`, `NvdecDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
   decoder lives on the thread that created it.
 - The decoder backend and its options are `video.decoder` in `rusplay-config`
   (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
 - `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the
   stream was coded in, the `color` the bitstream signals (`SignalledColor`, see below), the input
   `timestamp` and a `DecodedBuffer`:
-  - `DecodedBuffer::DmaBuf(DmaBufFrame)` from hardware decoders, for import into wgpu where
+  - `DecodedBuffer::DmaBuf(DmaBufFrame)` from VAAPI, for import into wgpu where
     `rusplay-scale` upscales and converts to the display format. `DmaBufFrame::image()` is a
     `DmaBufImage`: DRM `fourcc`, `modifier`, allocated `width`/`height`, the `objects` (an
     owned fd and size each) and the `planes` (object index, offset, pitch), which is exactly
     what `VK_EXT_image_drm_format_modifier` import needs. The `DmaBufFrame` is a lease: the
     buffer is not reused by the decoder until it is dropped, so it must outlive the GPU work
     that reads it. Importers dup the fd if the API takes ownership.
-  - `DecodedBuffer::Cpu(CpuFrame)`, the software path only: three planes (Y, U, V) borrowed
-    from the decoder's own picture without a copy. Each `CpuPlane` has `data`, `stride` in
+  - `DecodedBuffer::Cpu(CpuFrame)` from the software decoder (three planes, Y, U, V, borrowed
+    from the decoder's own picture without a copy) and from NVDEC (the same three planes in a
+    pooled host buffer, see below). Each `CpuPlane` has `data`, `stride` in
     bytes, `width`/`height` in samples and `bytes_per_sample` (1 for 8-bit, 2 for 10/12-bit,
     whose samples are little-endian `u16`s holding the value in the low bits).
 - Monochrome streams are rejected with `DecodeError::Monochrome`; there is no 4:0:0
@@ -37,8 +38,8 @@ paths:
   Unsigned fields stay `None` so the client falls back to the stream description. Mastering
   display primaries are mapped back to a named set when they match one exactly; a degenerate or
   out-of-range one is dropped. AV1 metadata fixed point (0.16 chromaticities, 24.8 maximum and
-  18.14 minimum luminance) is converted to ST 2086 units in `src/metadata.rs`, shared by both
-  backends.
+  18.14 minimum luminance) is converted to ST 2086 units in `src/metadata.rs`, shared by every
+  backend.
 - No decoder-side frame buffering beyond what the codec requires: a decoded frame is presented
   as soon as it exists. When one packet yields several pictures, the newest one wins. Frames
   come out in display order. A stream that signals reordering (B-frames) is held for exactly
@@ -127,7 +128,7 @@ paths:
   - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
     and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
     `StreamFormat`), since held frames keep their surfaces busy.
-- Colour (`src/vaapi/signal.rs`): the codes and range come from the active SPS VUI or sequence
+- Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
   header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
   (emulation prevention removed) and AV1 metadata OBUs. `HdrTracker` keeps them per coded video
@@ -147,6 +148,60 @@ paths:
   `SurfacePoolExhausted`. 8-bit 4:2:0 exports as `NV12`, 10-bit as `P010`.
 - Output waits for the picture with `vaSyncSurface` before it is handed out, since wgpu/Vulkan do
   not wait on implicit DMA-BUF fences.
+
+## NVDEC (`nvdec` feature)
+
+- Nothing NVIDIA is needed to build: `src/nvdec/driver.rs` loads `libcuda.so.1` and
+  `libnvcuvid.so.1` with `libloading` when `NvdecDecoder::new(codec, &NvdecDecoderConfig)` runs,
+  so `--all-features` builds and tests on machines without the driver. `src/nvdec/ffi.rs` holds
+  hand-written `#[repr(C)]` declarations of exactly the CUDA driver and cuviddec/nvcuvid subset in
+  use, taken from the SDK 13.1 headers (FFmpeg's `nv-codec-headers`); its tests pin every struct
+  size and the offsets that matter on LP64. `CUVIDPICPARAMS` is opaque, since it only travels from
+  the parser to `cuvidDecodePicture`. A missing library is `LibraryUnavailable`, a missing symbol
+  `SymbolMissing`, a failed call `DecodeError::Cuda { call, status }`, a `gpu_index` past the
+  device count `CudaDeviceMissing`.
+- `new` retains the device's primary context (pushed around every call and released on drop) and
+  fails with `CodecUnsupported` when `cuvidGetDecoderCaps` reports no 8-bit 4:2:0 decoder for the
+  codec. Decoding uses the driver's parser (`cuvidCreateVideoParser`) with display delay 0, a
+  1 MHz clock carrying `Timestamp` micros through untouched, `ulErrorThreshold` 0, and every
+  packet sent with `CUVID_PKT_ENDOFPICTURE` so the picture is decoded on the same call instead of
+  when the next start code arrives. The parser does reordering itself; `flush` sends
+  `CUVID_PKT_ENDOFSTREAM` and returns every picture it still held, oldest first.
+- Parser callbacks run synchronously inside `cuvidParseVideoData` on a heap `ParserState` the
+  parser points at; they never panic, and a failure is stored there, returned as the callback's
+  0 and handed back by `decode`. The sequence callback maps `CUVIDEOFORMAT` to a `StreamFormat`
+  (`src/nvdec/format.rs`, pure and unit tested): chroma from `chroma_format` (monochrome is
+  `Monochrome`), the larger of the luma and chroma depths, the display area clamped to the coded
+  size, and an output surface per format, `NV12`/`P016` (4:2:0), `NV16`/`P216` (4:2:2),
+  `YUV444`/`YUV444_16Bit` (4:4:4). It checks `cuvidGetDecoderCaps` for that chroma and depth
+  (`ChromaUnsupported`, else `BitDepthUnsupported`, else `CodecUnsupported`, the same order
+  VAAPI uses), the output format mask and the size limits (`ResolutionUnsupported`), creates the
+  decoder (`PreferCUVID`, weave, `min_num_decode_surfaces`, one mapped output surface) and
+  returns the surface count to the parser. A changed format downloads pictures still pending
+  from the old decoder first, then recreates it.
+- The decoder crops to the display area and its target is the cropped size rounded up to even
+  (NVDEC requires it), never a different size, so the driver never scales; `DecodedFrame` reports
+  the exact display size and the planes are cut to it.
+- Display callbacks only queue `CUVIDPARSERDISPINFO`. After the packet, the newest queued picture
+  is mapped (`cuvidMapVideoFrame64`), copied plane by plane to host memory with `cuMemcpy2D` and
+  unmapped at once, so no decoder surface is leased to the client; older ones from the same packet
+  are dropped (newest wins). Semi-planar chroma goes through a staging buffer and is split into U
+  and V, and 16-bit surfaces, which hold the value in the high bits, are shifted down so the
+  `CpuPlane`s follow the low-bit contract (`src/nvdec/host.rs`). The planar buffer comes from a
+  pool that frames return to on drop. The client presents it like a software frame; zero-copy
+  hand-off is `decode-nvdec-zero-copy` in `docs/PERFORMANCE.md`.
+- Colour does not come from `CUVIDEOFORMAT::video_signal_description`, which cannot say whether
+  the bitstream signalled anything. `src/nvdec/color.rs` runs the same `cros-codecs` header
+  parsing and `HdrTracker` as VAAPI over each packet before it goes to the parser: the SPS of
+  the first slice's PPS (H.264, HEVC first slice segment) or the sequence header (AV1, with
+  `ref_frame_update` after each frame header so later headers parse), with IDR, IRAP or key frame
+  as the random access point. Every output frame carries the colour resolved for the latest
+  packet, as VAAPI's `Stream::color` does. A header `cros-codecs` cannot parse fails `decode` with
+  `Malformed`, as on VAAPI.
+- Unit tests need no NVIDIA hardware: layouts, the format and capability mapping, plane layout,
+  deinterleaving and shifting, buffer recycling, colour from the fixtures and an injected HEVC
+  mastering SEI, and the missing-library error. Everything that talks to the driver is unverified
+  until `decode-nvdec-hardware` in `docs/FEATURES.md`.
 
 ## Test fixtures
 

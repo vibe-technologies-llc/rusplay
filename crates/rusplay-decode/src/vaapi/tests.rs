@@ -1,5 +1,3 @@
-#[path = "../../tests/common/mod.rs"]
-mod common;
 mod fields;
 
 use std::{path::Path, rc::Rc};
@@ -9,7 +7,7 @@ use rusplay_config::VaapiDecoderConfig;
 use rusplay_core::{Codec, EncodedFrame, Timestamp};
 
 use crate::{
-    DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
+    DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder, fixtures as common,
     vaapi::{
         VaapiDecoder, h264,
         reorder::Depth,

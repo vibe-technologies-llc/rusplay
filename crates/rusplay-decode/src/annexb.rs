@@ -5,7 +5,7 @@ use rusplay_core::Codec;
 
 use crate::{BitstreamUnit, DecodeError};
 
-pub(super) fn malformed(codec: Codec, unit: BitstreamUnit) -> impl FnOnce(String) -> DecodeError {
+pub(crate) fn malformed(codec: Codec, unit: BitstreamUnit) -> impl FnOnce(String) -> DecodeError {
     move |reason| DecodeError::Malformed {
         codec,
         unit,
@@ -17,7 +17,7 @@ fn has_start_code(data: &[u8]) -> bool {
     data.windows(3).any(|window| window == [0, 0, 1])
 }
 
-pub(super) fn next_nalu<'a, H: Header + Debug>(
+pub(crate) fn next_nalu<'a, H: Header + Debug>(
     cursor: &mut Cursor<&'a [u8]>,
     codec: Codec,
 ) -> Result<Option<Nalu<'a, H>>, DecodeError> {

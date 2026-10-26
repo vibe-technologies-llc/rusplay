@@ -24,7 +24,8 @@ paths:
   | PipeWire audio capture and playback | `pipewire` | `rusplay-audio/pipewire` |
   | VAAPI encode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-encode/vaapi` |
   | VAAPI decode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-decode/vaapi` |
-  | NVENC / NVDEC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc`, `rusplay-decode/nvdec` |
+  | NVENC | `nvidia-video-codec-sdk` | `rusplay-encode/nvenc` |
+  | NVDEC | the driver's `libcuda.so.1` and `libnvcuvid.so.1`, loaded at run time with `libloading` through own `#[repr(C)]` declarations in `src/nvdec/ffi.rs`; nothing is linked or needed at build time | `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |

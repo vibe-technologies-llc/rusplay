@@ -7,12 +7,14 @@ publish.workspace = true
 build = "build.rs"
 
 [features]
+nvdec = ["dep:cros-codecs", "dep:libloading"]
 software = ["dep:rav1d"]
 software-asm = ["software", "rav1d/asm"]
 vaapi = ["dep:bindgen", "dep:cros-codecs", "dep:pkg-config"]
 
 [dependencies]
 cros-codecs = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }
 rav1d = { workspace = true, optional = true, features = ["bitdepth_8", "bitdepth_16"] }
 rusplay-config.workspace = true
 rusplay-core.workspace = true

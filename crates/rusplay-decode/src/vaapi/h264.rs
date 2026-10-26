@@ -4,20 +4,19 @@ use std::{io::Cursor, rc::Rc};
 
 use cros_codecs::codec::h264::parser::{NaluHeader, NaluType, Parser, Pps, Slice, SliceType, Sps};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
-    Timestamp,
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
-    BitstreamUnit, DecodeError, DecodedFrame,
+    BitstreamUnit, DecodeError, DecodedFrame, annexb,
+    signal::{self, HdrTracker},
     vaapi::{
-        Stream, StreamFormat, annexb, ffi,
+        Stream, StreamFormat, ffi,
         h264::dpb::{
             Decoded, Dpb, MAX_REFERENCE_FRAMES, OrderCount, Reference, ReferenceList, Structure,
             invalid_picture,
         },
         reorder::{Depth, Reorder},
-        signal::{HdrTracker, vui_color},
         va::{Display, PoolSurface, Profile, SurfaceId},
     },
 };
@@ -240,7 +239,7 @@ impl H264Decoder {
             self.dpb.reset();
             partner = None;
         }
-        stream.color = self.hdr.resolve(signalled_color(&sps), idr);
+        stream.color = self.hdr.resolve(signal::h264_color(&sps), idr);
         self.reorder.configure(reorder_depth(&sps));
 
         let max_frame_num = sps.max_frame_num();
@@ -369,21 +368,6 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
             ceiling: sps.max_dpb_frames().min(MAX_REFERENCE_FRAMES),
         }
     }
-}
-
-fn signalled_color(sps: &Sps) -> SignalledColor {
-    let vui = &sps.vui_parameters;
-
-    vui_color(
-        sps.vui_parameters_present_flag && vui.video_signal_type_present_flag,
-        vui.video_full_range_flag,
-        vui.colour_description_present_flag,
-        [
-            u32::from(vui.colour_primaries),
-            u32::from(vui.transfer_characteristics),
-            u32::from(vui.matrix_coefficients),
-        ],
-    )
 }
 
 fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {

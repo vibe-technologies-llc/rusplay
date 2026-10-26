@@ -63,6 +63,34 @@ pub enum DecodeError {
     SurfacePoolExhausted { capacity: usize },
     #[error("the vaapi driver exported a surface as {layers} layers instead of one")]
     ExportLayers { layers: u32 },
+    #[cfg(feature = "nvdec")]
+    #[error("could not load {library}")]
+    LibraryUnavailable {
+        library: &'static str,
+        #[source]
+        source: libloading::Error,
+    },
+    #[cfg(feature = "nvdec")]
+    #[error("{library} has no {symbol}")]
+    SymbolMissing {
+        library: &'static str,
+        symbol: &'static str,
+        #[source]
+        source: libloading::Error,
+    },
+    #[error("{call} failed with {status}")]
+    Cuda { call: CudaCall, status: CudaStatus },
+    #[error("cuda device {index} does not exist, the driver reports {count} devices")]
+    CudaDeviceMissing { index: u32, count: u32 },
+    #[error("the {backend} decoder cannot decode {codec} at {width}x{height}")]
+    ResolutionUnsupported {
+        backend: Backend,
+        codec: Codec,
+        width: u32,
+        height: u32,
+    },
+    #[error("the nvdec parser delivered a {codec} picture before its sequence")]
+    PictureBeforeSequence { codec: Codec },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +210,77 @@ impl fmt::Display for VaStatus {
         match Self::NAMES.iter().find(|(code, _)| *code == self.0) {
             Some((_, name)) => write!(f, "{name} ({:#x})", self.0),
             None => write!(f, "status {:#x}", self.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CudaCall {
+    Init,
+    DeviceGetCount,
+    DeviceGet,
+    DevicePrimaryCtxRetain,
+    CtxPushCurrent,
+    Memcpy2D,
+    GetDecoderCaps,
+    CreateDecoder,
+    DecodePicture,
+    MapVideoFrame,
+    CreateVideoParser,
+    ParseVideoData,
+}
+
+impl fmt::Display for CudaCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Init => "cuInit",
+            Self::DeviceGetCount => "cuDeviceGetCount",
+            Self::DeviceGet => "cuDeviceGet",
+            Self::DevicePrimaryCtxRetain => "cuDevicePrimaryCtxRetain",
+            Self::CtxPushCurrent => "cuCtxPushCurrent",
+            Self::Memcpy2D => "cuMemcpy2D",
+            Self::GetDecoderCaps => "cuvidGetDecoderCaps",
+            Self::CreateDecoder => "cuvidCreateDecoder",
+            Self::DecodePicture => "cuvidDecodePicture",
+            Self::MapVideoFrame => "cuvidMapVideoFrame64",
+            Self::CreateVideoParser => "cuvidCreateVideoParser",
+            Self::ParseVideoData => "cuvidParseVideoData",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaStatus(pub i32);
+
+impl CudaStatus {
+    const NAMES: [(i32, &'static str); 19] = [
+        (1, "invalid value"),
+        (2, "out of memory"),
+        (3, "not initialized"),
+        (4, "deinitialized"),
+        (34, "stub library"),
+        (46, "device unavailable"),
+        (100, "no device"),
+        (101, "invalid device"),
+        (200, "invalid image"),
+        (201, "invalid context"),
+        (205, "map failed"),
+        (206, "unmap failed"),
+        (304, "operating system call failed"),
+        (400, "invalid handle"),
+        (500, "not found"),
+        (600, "not ready"),
+        (700, "illegal address"),
+        (801, "not supported"),
+        (999, "unknown error"),
+    ];
+}
+
+impl fmt::Display for CudaStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match Self::NAMES.iter().find(|(code, _)| *code == self.0) {
+            Some((_, name)) => write!(f, "{name} ({})", self.0),
+            None => write!(f, "status {}", self.0),
         }
     }
 }

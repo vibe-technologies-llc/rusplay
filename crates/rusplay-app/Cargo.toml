@@ -12,6 +12,7 @@ path = "src/main.rs"
 [features]
 default = ["flac", "pipewire"]
 flac = ["rusplay-client/flac"]
+nvdec = ["rusplay-client/nvdec"]
 pipewire = ["rusplay-client/pipewire"]
 software = ["rusplay-client/software"]
 software-asm = ["rusplay-client/software-asm"]

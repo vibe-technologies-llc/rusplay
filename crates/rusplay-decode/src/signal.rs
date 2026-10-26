@@ -1,3 +1,6 @@
+use cros_codecs::codec::{
+    av1::parser::SequenceHeaderObu, h264::parser::Sps as H264Sps, h265::parser::Sps as HevcSps,
+};
 use rusplay_core::{ContentLightLevel, MasteringDisplay, SignalledColor};
 
 use crate::metadata::{Primaries, av1_mastering_display, content_light, mastering_display};
@@ -14,7 +17,7 @@ const AV1_MASTERING_LEN: usize = 24;
 const AV1_CONTENT_LIGHT_LEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct Hdr {
+pub(crate) struct Hdr {
     mastering: Option<MasteringDisplay>,
     content_light: Option<ContentLightLevel>,
 }
@@ -27,13 +30,13 @@ impl Hdr {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct HdrTracker {
+pub(crate) struct HdrTracker {
     current: Hdr,
     pending: Hdr,
 }
 
 impl HdrTracker {
-    pub(super) fn read_sei(&mut self, payload: &[u8]) {
+    pub(crate) fn read_sei(&mut self, payload: &[u8]) {
         let rbsp = unescape(payload);
         let mut rest = rbsp.as_slice();
 
@@ -68,7 +71,7 @@ impl HdrTracker {
         }
     }
 
-    pub(super) fn read_av1_metadata(&mut self, payload: &[u8]) {
+    pub(crate) fn read_av1_metadata(&mut self, payload: &[u8]) {
         let Some((kind, body)) = leb128(payload) else {
             return;
         };
@@ -88,7 +91,7 @@ impl HdrTracker {
         }
     }
 
-    pub(super) fn resolve(&mut self, base: SignalledColor, random_access: bool) -> SignalledColor {
+    pub(crate) fn resolve(&mut self, base: SignalledColor, random_access: bool) -> SignalledColor {
         let pending = std::mem::take(&mut self.pending);
         if random_access {
             self.current = pending;
@@ -104,7 +107,7 @@ impl HdrTracker {
     }
 }
 
-pub(super) fn vui_color(
+fn vui_color(
     signal_type_present: bool,
     full_range: bool,
     description_present: bool,
@@ -122,6 +125,51 @@ pub(super) fn vui_color(
     }
 
     color
+}
+
+pub(crate) fn h264_color(sps: &H264Sps) -> SignalledColor {
+    let vui = &sps.vui_parameters;
+
+    vui_color(
+        sps.vui_parameters_present_flag && vui.video_signal_type_present_flag,
+        vui.video_full_range_flag,
+        vui.colour_description_present_flag,
+        [
+            u32::from(vui.colour_primaries),
+            u32::from(vui.transfer_characteristics),
+            u32::from(vui.matrix_coefficients),
+        ],
+    )
+}
+
+pub(crate) fn hevc_color(sps: &HevcSps) -> SignalledColor {
+    let vui = &sps.vui_parameters;
+
+    vui_color(
+        sps.vui_parameters_present_flag && vui.video_signal_type_present_flag,
+        vui.video_full_range_flag,
+        vui.colour_description_present_flag,
+        [
+            vui.colour_primaries,
+            vui.transfer_characteristics,
+            vui.matrix_coeffs,
+        ],
+    )
+}
+
+pub(crate) fn av1_color(sequence: &SequenceHeaderObu) -> SignalledColor {
+    let color = &sequence.color_config;
+    let signalled = SignalledColor::default().with_full_range(color.color_range);
+    if !color.color_description_present_flag {
+        return signalled;
+    }
+
+    let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
+    signalled.with_h273_codes(
+        code(color.color_primaries as u32),
+        code(color.transfer_characteristics as u32),
+        code(color.matrix_coefficients as u32),
+    )
 }
 
 fn unescape(payload: &[u8]) -> Vec<u8> {
