@@ -1,4 +1,4 @@
-use std::{ffi::c_void, ops::RangeInclusive, ptr::NonNull};
+use std::{ffi::c_void, ops::RangeInclusive, ptr::NonNull, sync::Arc};
 
 use parking_lot::Mutex;
 use rusplay_input::wayland::WaylandTarget;
@@ -7,8 +7,13 @@ use wayland_client::{
     backend::{Backend, ObjectId},
     globals::{BindError, GlobalList, GlobalListContents, registry_queue_init},
     protocol::{
-        wl_compositor::WlCompositor, wl_region::WlRegion, wl_registry::WlRegistry,
-        wl_subcompositor::WlSubcompositor, wl_subsurface::WlSubsurface, wl_surface::WlSurface,
+        wl_compositor::WlCompositor,
+        wl_output::WlOutput,
+        wl_region::WlRegion,
+        wl_registry::WlRegistry,
+        wl_subcompositor::WlSubcompositor,
+        wl_subsurface::WlSubsurface,
+        wl_surface::{self, WlSurface},
     },
 };
 use wayland_protocols::wp::viewporter::client::{
@@ -22,7 +27,8 @@ const SINGLE_VERSION: RangeInclusive<u32> = 1..=1;
 
 pub(crate) struct ChildSurface {
     connection: Connection,
-    queue: Mutex<EventQueue<Ignore>>,
+    queue: Mutex<EventQueue<SurfaceEvents>>,
+    entered: Arc<Mutex<Vec<WlOutput>>>,
     surface: WlSurface,
     subsurface: WlSubsurface,
     viewport: WpViewport,
@@ -38,8 +44,8 @@ impl ChildSurface {
         let parent = WlSurface::from_id(&connection, parent_id)
             .map_err(|_| ClientError::WindowHandleInvalid)?;
 
-        let (globals, mut queue) =
-            registry_queue_init::<Ignore>(&connection).map_err(ClientError::WaylandRegistry)?;
+        let (globals, mut queue) = registry_queue_init::<SurfaceEvents>(&connection)
+            .map_err(ClientError::WaylandRegistry)?;
         let handle = queue.handle();
         let compositor: WlCompositor =
             bind(&globals, &handle, COMPOSITOR_VERSIONS, "wl_compositor")?;
@@ -60,13 +66,16 @@ impl ChildSurface {
         viewporter.destroy();
         subcompositor.destroy();
 
+        let entered = Arc::new(Mutex::new(Vec::new()));
+
         queue
-            .roundtrip(&mut Ignore)
+            .roundtrip(&mut SurfaceEvents::new(&entered))
             .map_err(ClientError::WindowDispatch)?;
 
         Ok(Self {
             connection,
             queue: Mutex::new(queue),
+            entered,
             surface,
             subsurface,
             viewport,
@@ -93,10 +102,18 @@ impl ChildSurface {
         );
     }
 
-    fn dispatch(&self) -> Result<(), ClientError> {
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
+    pub(crate) fn entered_outputs(&self) -> Vec<WlOutput> {
+        self.entered.lock().clone()
+    }
+
+    pub(crate) fn dispatch(&self) -> Result<(), ClientError> {
         self.queue
             .lock()
-            .dispatch_pending(&mut Ignore)
+            .dispatch_pending(&mut SurfaceEvents::new(&self.entered))
             .map_err(ClientError::WindowDispatch)?;
 
         Ok(())
@@ -114,22 +131,53 @@ impl Drop for ChildSurface {
 
 fn bind<I>(
     globals: &GlobalList,
-    handle: &QueueHandle<Ignore>,
+    handle: &QueueHandle<SurfaceEvents>,
     versions: RangeInclusive<u32>,
     interface: &'static str,
 ) -> Result<I, ClientError>
 where
     I: Proxy + 'static,
-    Ignore: Dispatch<I, ()>,
+    SurfaceEvents: Dispatch<I, ()>,
 {
     globals
         .bind(handle, versions, ())
         .map_err(|source: BindError| ClientError::WindowGlobalMissing { interface, source })
 }
 
-pub(crate) struct Ignore;
+pub(crate) struct SurfaceEvents {
+    entered: Arc<Mutex<Vec<WlOutput>>>,
+}
 
-impl Dispatch<WlRegistry, GlobalListContents> for Ignore {
+impl SurfaceEvents {
+    fn new(entered: &Arc<Mutex<Vec<WlOutput>>>) -> Self {
+        Self {
+            entered: Arc::clone(entered),
+        }
+    }
+}
+
+impl Dispatch<WlSurface, ()> for SurfaceEvents {
+    fn event(
+        state: &mut Self,
+        _: &WlSurface,
+        event: wl_surface::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut entered = state.entered.lock();
+
+        match event {
+            wl_surface::Event::Enter { output } if !entered.contains(&output) => {
+                entered.push(output);
+            }
+            wl_surface::Event::Leave { output } => entered.retain(|held| *held != output),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for SurfaceEvents {
     fn event(
         _: &mut Self,
         _: &WlRegistry,
@@ -144,7 +192,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for Ignore {
 macro_rules! ignore_events {
     ($($interface:ty),* $(,)?) => {
         $(
-            impl Dispatch<$interface, ()> for Ignore {
+            impl Dispatch<$interface, ()> for SurfaceEvents {
                 fn event(
                     _: &mut Self,
                     _: &$interface,
@@ -163,7 +211,6 @@ ignore_events!(
     WlCompositor,
     WlSubcompositor,
     WlSubsurface,
-    WlSurface,
     WlRegion,
     WpViewporter,
     WpViewport,

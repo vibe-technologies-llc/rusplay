@@ -1,6 +1,8 @@
+mod choice;
 mod compose;
 mod cursor;
 mod dither;
+mod follow;
 mod layout;
 mod output;
 mod surface;
@@ -11,7 +13,7 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use rusplay_config::{Config, InputConfig, PresentMode};
+use rusplay_config::{Config, DisplayOutputConfig, DisplayTargetConfig, InputConfig, PresentMode};
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
 use rusplay_input::{capture::CaptureOptions, wayland::WaylandCapture};
@@ -23,8 +25,10 @@ use crate::{
     cursor::CursorWatcher,
     display::{query_display, resolve_target},
     window::{
+        choice::{Admission, OutputChoice},
         compose::Composer,
         cursor::CursorLayer,
+        follow::DisplayFollower,
         output::{Display, SurfaceOutput},
         surface::ChildSurface,
     },
@@ -35,17 +39,27 @@ struct Pending {
     frame: Option<PresentedFrame>,
     layout: Option<WindowLayout>,
     cursor: Option<LatestCursor>,
+    display: Option<DisplayImage>,
     dirty: bool,
     stop: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Shared {
     pending: Mutex<Pending>,
     wake: Condvar,
+    color_target: Mutex<ColorVolume>,
 }
 
 impl Shared {
+    fn new(color_target: ColorVolume) -> Self {
+        Self {
+            pending: Mutex::new(Pending::default()),
+            wake: Condvar::new(),
+            color_target: Mutex::new(color_target),
+        }
+    }
+
     fn update<R>(&self, change: impl FnOnce(&mut Pending) -> R) -> R {
         let mut pending = self.pending.lock();
         let result = change(&mut pending);
@@ -66,7 +80,6 @@ impl CursorWatcher for Shared {
 #[derive(Debug, Clone)]
 pub struct WindowSink {
     shared: Arc<Shared>,
-    target: ColorVolume,
 }
 
 impl FrameSink for WindowSink {
@@ -77,7 +90,7 @@ impl FrameSink for WindowSink {
     }
 
     fn color_target(&self) -> Option<ColorVolume> {
-        Some(self.target)
+        Some(*self.shared.color_target.lock())
     }
 }
 
@@ -89,7 +102,7 @@ pub struct StreamWindow {
     surface: Arc<ChildSurface>,
     presenter: Option<JoinHandle<Result<(), ClientError>>>,
     layout: Option<WindowLayout>,
-    color_target: ColorVolume,
+    follower: Option<DisplayFollower>,
 }
 
 impl StreamWindow {
@@ -126,13 +139,17 @@ impl StreamWindow {
 
         let display = display_for(config)?;
         let options = SurfaceOptions::choose(&surface, &adapter, config, &display)?;
-        let color_target = options.output.encoding.target;
+        let shared = Arc::new(Shared::new(options.output.encoding.target));
         let presenter = Presenter {
             composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
             cursor_layer: CursorLayer::new(&gpu.device, config.scaling),
             gpu: gpu.clone(),
             surface,
+            adapter,
             child: Arc::clone(&child),
+            choice: OutputChoice::new(display, options.output),
+            overrides: config.color.target,
+            output_config: config.color.output,
             options,
             configured: None,
             destination: None,
@@ -140,7 +157,6 @@ impl StreamWindow {
             cursor: None,
         };
 
-        let shared = Arc::new(Shared::default());
         let worker = Arc::clone(&shared);
         let thread = thread::Builder::new()
             .name(format!("rusplay-client-{}", Stage::Window))
@@ -150,6 +166,19 @@ impl StreamWindow {
                 source,
             })?;
 
+        let follower = config
+            .color
+            .output
+            .query_display
+            .then(|| {
+                let notify = Arc::clone(&shared);
+                DisplayFollower::start(Arc::clone(&child), move |image| {
+                    notify.update(|pending| pending.display = Some(image));
+                })
+                .ok()
+            })
+            .flatten();
+
         Ok(Self {
             target,
             capture: None,
@@ -158,12 +187,12 @@ impl StreamWindow {
             surface: child,
             presenter: Some(thread),
             layout: None,
-            color_target,
+            follower,
         })
     }
 
     pub fn color_target(&self) -> ColorVolume {
-        self.color_target
+        *self.shared.color_target.lock()
     }
 
     pub fn gpu(&self) -> Gpu {
@@ -173,7 +202,6 @@ impl StreamWindow {
     pub fn sink(&self) -> WindowSink {
         WindowSink {
             shared: Arc::clone(&self.shared),
-            target: self.color_target,
         }
     }
 
@@ -253,6 +281,7 @@ impl StreamWindow {
 
     fn shut_down(&mut self) -> Result<(), ClientError> {
         let captured = self.capture.take().map_or(Ok(()), WaylandCapture::stop);
+        let followed = self.follower.take().map_or(Ok(()), DisplayFollower::stop);
 
         self.shared.update(|pending| {
             pending.stop = true;
@@ -267,7 +296,8 @@ impl StreamWindow {
         };
 
         captured?;
-        presented
+        presented?;
+        followed
     }
 }
 
@@ -370,7 +400,11 @@ fn wgpu_present_mode(mode: PresentMode) -> wgpu::PresentMode {
 struct Presenter {
     gpu: Gpu,
     surface: wgpu::Surface<'static>,
+    adapter: wgpu::Adapter,
     child: Arc<ChildSurface>,
+    choice: OutputChoice,
+    overrides: DisplayTargetConfig,
+    output_config: DisplayOutputConfig,
     options: SurfaceOptions,
     composer: Composer,
     cursor_layer: CursorLayer,
@@ -383,7 +417,7 @@ struct Presenter {
 impl Presenter {
     fn run(mut self, shared: &Shared) -> Result<(), ClientError> {
         loop {
-            let layout = {
+            let (layout, display) = {
                 let mut pending = shared.pending.lock();
                 while !pending.dirty && !pending.stop {
                     shared.wake.wait(&mut pending);
@@ -393,20 +427,39 @@ impl Presenter {
                 }
 
                 pending.dirty = false;
-                if let Some(frame) = pending.frame.take() {
+                if let Some(frame) = pending.frame.take()
+                    && self.choice.accepts(frame.color)
+                {
                     self.frame = Some(frame);
                 }
                 if let Some(cursor) = pending.cursor.take() {
                     self.cursor = Some(cursor);
                 }
-                pending.layout
+                (pending.layout, pending.display.take())
             };
 
+            if let Some(image) = display {
+                self.follow(&image, shared);
+            }
             self.draw(layout)?;
         }
 
         self.frame = None;
         Ok(())
+    }
+
+    fn follow(&mut self, image: &DisplayImage, shared: &Shared) {
+        let target = self
+            .choice
+            .observe(image, &self.overrides, self.output_config, || {
+                self.surface
+                    .get_capabilities(&self.adapter)
+                    .format_capabilities
+            });
+
+        if let Some(target) = target {
+            *shared.color_target.lock() = target;
+        }
     }
 
     fn draw(&mut self, layout: Option<WindowLayout>) -> Result<(), ClientError> {
@@ -415,6 +468,16 @@ impl Presenter {
         };
         if frame.resolution() != layout.pixels {
             return Ok(());
+        }
+
+        match self.choice.admit(frame.color) {
+            Admission::Reject => return Ok(()),
+            Admission::Draw => {}
+            Admission::Switch(output) => {
+                self.options.output = output;
+                self.composer.set_encoding(&output.encoding);
+                self.configured = None;
+            }
         }
 
         if self.configured != Some(layout.pixels) {

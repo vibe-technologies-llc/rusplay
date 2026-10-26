@@ -249,11 +249,12 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   and `ColorStage` caches it until the frame colour or the target changes. The texture handed to
   the sink is linear light in the target primaries with 1.0 at the target's reference white, and
   its `FrameColor` says so (`client.md`).
-- The window picks its surface once at attach (`window/output.rs`, `SurfaceOutput::choose`, pure
-  and unit tested). `color.output.query_display` (on by default) asks the compositor for the
-  first output's image description (`query_display(None)`); an answer makes the display
-  `Managed` (the description with the overrides laid over it), no answer `Unmanaged` (the
-  overrides over the sRGB fallback). The surface colour spaces, in `auto` order:
+- The window picks its surface at attach and again whenever the output it is on or that output's
+  description changes (`window/output.rs`, `SurfaceOutput::choose`, pure and unit tested).
+  `color.output.query_display` (on by default) asks the compositor for the first output's image
+  description (`query_display(None)`) at attach and starts the output follower (below); an answer
+  makes the display `Managed` (the description with the overrides laid over it), no answer
+  `Unmanaged` (the overrides over the sRGB fallback). The surface colour spaces, in `auto` order:
   - managed HDR display: `Bt2100Pq` (BT.2020 primaries, PQ with the target's reference white
     written as 203 cd/m², the protocol's default PQ reference, which the compositor maps onto the
     output's own reference white), then `ExtendedSrgbLinear`, then sRGB;
@@ -293,9 +294,31 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   CPU transfer functions, scRGB keeping negative and above-1 values, both dither patterns
   matching `floor(v + t)` per pixel with the mean on the level, and an identity chain, PQ
   through the lineariser and sRGB, reproducing its source codes).
-- The window does not follow the output it is on or a change of the output's description
-  (`client-color-output-follow` in `docs/FEATURES.md`), and HDR metadata (ST 2086, MaxCLL) is
-  not passed to the compositor: wgpu has no `vkSetHdrMetadataEXT`.
+- Following the output (`window/follow.rs`, `window/choice.rs`): `ChildSurface` records the
+  `wl_output`s from `wl_surface.enter`/`leave` on the child surface (the proxies are the
+  toolkit's own bindings, so their names are not readable and no `query_outputs` match is
+  needed). The `rusplay-client-output` thread, which exists only when `query_display` is on and
+  the compositor has `wp_color_manager_v1`, dispatches that queue and its own, and polls the
+  socket every 50 ms the way the input capture thread does. It follows one entered output
+  (`follow_choice`): the current one while the surface is still on it, otherwise the most
+  recently entered, and the last one when the surface is on none. For the followed output it
+  holds a `wp_color_management_output_v1` and requests the image description again on
+  `image_description_changed` and whenever the followed output changes; stale answers are
+  dropped by a generation counter. A finished `DisplayImage` goes to the presenter through
+  `Pending::display`, so the presenter thread is the only one that touches the swapchain.
+- `OutputChoice::observe` resolves the new image against the `color.target` overrides and, only if
+  the resulting `Display` differs, runs `SurfaceOutput::choose` again. An image that does not
+  resolve (`TargetBlackNotBelowPeak`) or fits no swapchain keeps the last good choice. A changed
+  `SurfaceOutput` is staged and its target is published at once to `WindowSink::color_target`,
+  so the present stage maps new frames to it (`ColorStage` replans on the changed target). The
+  presenter keeps the old swapchain and `Composer` encoding until the first frame whose
+  `FrameColor` equals `mapped_to` the staged target arrives (`OutputChoice::admit`), then
+  reconfigures the surface and calls `Composer::set_encoding` in the same draw. Frames still in
+  flight for the old target keep drawing with the old encoding; a frame matching neither is
+  dropped and the previous one stays. Nothing waits on the compositor, and a static screen
+  keeps its picture until the next frame.
+- HDR metadata (ST 2086, MaxCLL) is not passed to the compositor: wgpu has no
+  `vkSetHdrMetadataEXT`.
 
 ## Implementation
 

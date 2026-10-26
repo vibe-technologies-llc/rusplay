@@ -155,9 +155,10 @@ paths:
   right whatever the stream resolution is. `CursorImage::rgba` is read as sRGB with straight
   alpha.
 - The display's colour target comes from the `display` module (`query_display`,
-  `resolve_target`), documented in `color.md`; `StreamWindow::attach` queries it and the session
-  resolves the overrides alone as the fallback. `tests/display.rs` has an `#[ignore]`d test
-  against the running compositor.
+  `resolve_target`), documented in `color.md`; `StreamWindow::attach` queries it for the first
+  output and the output follower keeps it current (`color.md`); the session resolves the
+  overrides alone as the fallback. `tests/display.rs` has an `#[ignore]`d test against the
+  running compositor.
 - DMA-BUF frames from VAAPI (`NV12`/`P010`) are imported by a `DmaBufImporter` created on the
   first one, which needs a `Gpu` whose device came from `rusplay_scale::device_descriptor`
   (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
@@ -226,9 +227,10 @@ paths:
   `color.md`; `SurfaceOutputUnsupported` when nothing fits the `color.output` choice), no view
   formats, `video.present_mode` (`mailbox` by default, `immediate`, `fifo`; a mode the surface
   lacks is `PresentModeUnsupported`, never a silent fallback) and `video.present_frame_latency`
-  (1 by default, 1 to 3), opaque alpha. The choice is made once at attach; its
-  `DisplayEncoding::target` is what `WindowSink::color_target` and `StreamWindow::color_target`
-  return.
+  (1 by default, 1 to 3), opaque alpha. The choice is made at attach and redone when the output
+  the window is on, or its description, changes (`color.md`); the `DisplayEncoding::target` of
+  the current choice is what `WindowSink::color_target` and `StreamWindow::color_target` return.
+  `stop` stops the output follower after the capture, and returns its error last.
 - `compose.wgsl` is one fullscreen-triangle render pass that `textureLoad`s the picture 1:1 (no
   sampler, no filtering: sizes always match), blends the cursor over it as premultiplied
   linear light (converted from BT.709 into the target primaries by a matrix) and encodes and
@@ -249,6 +251,9 @@ paths:
   `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
   `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
   Wayland objects are destroyed.
+- `window/follow.rs` has an `#[ignore]`d test that follows a bound output against the running
+  compositor and waits for its description; the follow policy and the stage/switch decisions
+  are unit tested in `window/choice.rs` without one.
 - GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
   blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
   and origin, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
