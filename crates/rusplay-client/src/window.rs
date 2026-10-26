@@ -1,6 +1,8 @@
 mod compose;
 mod cursor;
+mod dither;
 mod layout;
+mod output;
 mod surface;
 
 use std::{
@@ -13,19 +15,20 @@ use rusplay_config::{Config, InputConfig, PresentMode};
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
 use rusplay_input::{capture::CaptureOptions, wayland::WaylandCapture};
-use rusplay_scale::OutputLight;
+use rusplay_scale::ColorVolume;
 
 pub use crate::window::layout::{LogicalArea, WindowLayout};
 use crate::{
-    ClientError, ClientStream, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
+    ClientError, ClientStream, DisplayImage, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
     cursor::CursorWatcher,
-    window::{compose::Composer, cursor::CursorLayer, surface::ChildSurface},
+    display::{query_display, resolve_target},
+    window::{
+        compose::Composer,
+        cursor::CursorLayer,
+        output::{Display, SurfaceOutput},
+        surface::ChildSurface,
+    },
 };
-
-const SURFACE_FORMATS: [wgpu::TextureFormat; 2] = [
-    wgpu::TextureFormat::Bgra8Unorm,
-    wgpu::TextureFormat::Rgba8Unorm,
-];
 
 #[derive(Debug, Default)]
 struct Pending {
@@ -63,6 +66,7 @@ impl CursorWatcher for Shared {
 #[derive(Debug, Clone)]
 pub struct WindowSink {
     shared: Arc<Shared>,
+    target: ColorVolume,
 }
 
 impl FrameSink for WindowSink {
@@ -70,6 +74,10 @@ impl FrameSink for WindowSink {
         let replaced = self.shared.update(|pending| pending.frame.replace(frame));
 
         drop(replaced);
+    }
+
+    fn color_target(&self) -> Option<ColorVolume> {
+        Some(self.target)
     }
 }
 
@@ -81,6 +89,7 @@ pub struct StreamWindow {
     surface: Arc<ChildSurface>,
     presenter: Option<JoinHandle<Result<(), ClientError>>>,
     layout: Option<WindowLayout>,
+    color_target: ColorVolume,
 }
 
 impl StreamWindow {
@@ -115,9 +124,11 @@ impl StreamWindow {
                 .map_err(ClientError::WindowDevice)?;
         let gpu = Gpu { device, queue };
 
-        let options = SurfaceOptions::choose(&surface, &adapter, config)?;
+        let display = display_for(config)?;
+        let options = SurfaceOptions::choose(&surface, &adapter, config, &display)?;
+        let color_target = options.output.encoding.target;
         let presenter = Presenter {
-            composer: Composer::new(&gpu.device),
+            composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
             cursor_layer: CursorLayer::new(&gpu.device, config.scaling),
             gpu: gpu.clone(),
             surface,
@@ -147,7 +158,12 @@ impl StreamWindow {
             surface: child,
             presenter: Some(thread),
             layout: None,
+            color_target,
         })
+    }
+
+    pub fn color_target(&self) -> ColorVolume {
+        self.color_target
     }
 
     pub fn gpu(&self) -> Gpu {
@@ -157,6 +173,7 @@ impl StreamWindow {
     pub fn sink(&self) -> WindowSink {
         WindowSink {
             shared: Arc::clone(&self.shared),
+            target: self.color_target,
         }
     }
 
@@ -260,9 +277,27 @@ impl Drop for StreamWindow {
     }
 }
 
+fn display_for(config: &Config) -> Result<Display, ClientError> {
+    let overrides = &config.color.target;
+    let queried = config
+        .color
+        .output
+        .query_display
+        .then(|| query_display(None).ok())
+        .flatten();
+
+    match queried {
+        Some(image) => Ok(Display::Managed(resolve_target(&image, overrides)?)),
+        None => Ok(Display::Unmanaged(resolve_target(
+            &DisplayImage::default(),
+            overrides,
+        )?)),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SurfaceOptions {
-    format: wgpu::TextureFormat,
+    output: SurfaceOutput,
     present_mode: wgpu::PresentMode,
     alpha_mode: wgpu::CompositeAlphaMode,
     frame_latency: u32,
@@ -273,13 +308,15 @@ impl SurfaceOptions {
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
         config: &Config,
+        display: &Display,
     ) -> Result<Self, ClientError> {
         let capabilities = surface.get_capabilities(adapter);
 
-        let format = SURFACE_FORMATS
-            .into_iter()
-            .find(|format| capabilities.formats.contains(format))
-            .ok_or(ClientError::SurfaceFormatUnsupported)?;
+        let output = SurfaceOutput::choose(
+            &capabilities.format_capabilities,
+            display,
+            config.color.output,
+        )?;
         let present_mode = wgpu_present_mode(config.video.present_mode);
         if !capabilities.present_modes.contains(&present_mode) {
             return Err(ClientError::PresentModeUnsupported {
@@ -300,7 +337,7 @@ impl SurfaceOptions {
         };
 
         Ok(Self {
-            format,
+            output,
             present_mode,
             alpha_mode,
             frame_latency: u32::from(config.video.present_frame_latency),
@@ -310,21 +347,14 @@ impl SurfaceOptions {
     fn configuration(&self, size: Resolution) -> wgpu::SurfaceConfiguration {
         wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: self.format,
-            color_space: wgpu::SurfaceColorSpace::Auto,
+            format: self.output.format,
+            color_space: self.output.color_space,
             width: size.width,
             height: size.height,
             present_mode: self.present_mode,
             desired_maximum_frame_latency: self.frame_latency,
             alpha_mode: self.alpha_mode,
-            view_formats: vec![self.format.add_srgb_suffix()],
-        }
-    }
-
-    fn view_format(&self, light: OutputLight) -> wgpu::TextureFormat {
-        match light {
-            OutputLight::Linear => self.format.add_srgb_suffix(),
-            OutputLight::Encoded => self.format,
+            view_formats: Vec::new(),
         }
     }
 }
@@ -412,11 +442,10 @@ impl Presenter {
             }
         };
 
-        let format = self.options.view_format(frame.color.light);
-        let target = texture.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(format),
-            ..wgpu::TextureViewDescriptor::default()
-        });
+        let format = self.options.output.format;
+        let target = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let picture = frame.view();
         let mut encoder = self
             .gpu

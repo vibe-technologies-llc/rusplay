@@ -14,4 +14,4 @@
 
 # Colour
 - [M] `capture-hdr-negotiation`: offer colour primaries and transfer in the capture `EnumFormat` so HDR-capable compositors pick them, and take mastering display and content light levels once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `mastering` and `content_light` stay unset)
-- [M] `client-color-pipeline`: run decode → linearise → tone map → gamut map → scale → display encode with dithering in the client, fused or baked into a 3D LUT
+- [S] `client-color-output-follow`: track the output the stream window is on (`wl_surface.enter` on the child surface, matched to `query_outputs` by `wl_output` name), and re-query its image description and re-choose the surface output when it or the output's description changes; `StreamWindow::attach` queries the first output once today

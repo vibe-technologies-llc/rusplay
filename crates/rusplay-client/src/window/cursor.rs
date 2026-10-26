@@ -4,7 +4,7 @@ use half::f16;
 use rusplay_config::ScalingConfig;
 use rusplay_core::Resolution;
 use rusplay_protocol::CursorImage;
-use rusplay_scale::{OutputLight, ScalePipelines, Scaler};
+use rusplay_scale::{ScalePipelines, Scaler};
 
 use crate::{ClientError, CursorState, present, window::compose::CursorPlacement};
 
@@ -128,7 +128,7 @@ impl CursorLayer {
             return Ok(source_view);
         }
 
-        let settings = present::scale_settings(&self.scaling, source, size, OutputLight::Linear);
+        let settings = present::scale_settings(&self.scaling, source, size, true);
         let scaler = match self.scaler.take() {
             Some(mut scaler) => {
                 scaler.configure(device, settings)?;

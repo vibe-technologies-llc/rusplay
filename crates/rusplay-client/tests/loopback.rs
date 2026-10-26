@@ -13,10 +13,10 @@ use std::{
 use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
 use parking_lot::Mutex;
 use rusplay_client::{
-    ClientError, ClientSession, Credentials, FrameColor, LatestFrame, OutputLight, Pin,
-    PresentedFrame,
+    ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame, OutputLight,
+    Pin, PresentedFrame,
 };
-use rusplay_core::{ColorRange, ColorSpace, Resolution};
+use rusplay_core::{ColorPrimaries, ColorRange, ColorSpace, Resolution};
 use rusplay_input::InputEvent;
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
@@ -98,8 +98,10 @@ fn frames_arrive_decoded_at_the_source_resolution() {
             },
             described.format,
         )
+        .mapped_to(&ColorVolume::srgb_display())
     );
     assert_eq!(seen[0].color.light, OutputLight::Linear);
+    assert_eq!(seen[0].color.space.primaries, ColorPrimaries::Bt709);
     assert!(
         !host
             .messages()

@@ -1,3 +1,5 @@
+mod mapping;
+
 use std::{
     sync::{
         Arc,
@@ -11,26 +13,30 @@ use rusplay_config::ScalingConfig;
 use rusplay_core::Resolution;
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ChromaSiting, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout, OutputLight,
+    ChromaSiting, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
     PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
     YuvFrame,
 };
 
+pub(crate) use crate::present::mapping::{ColorStage, MappingOptions, whole_nits};
 use crate::{
-    ClientError, FrameColor, FrameSink, Gpu, PresentedFrame, decode::DecodedVideo, slot::Slot,
-    stats::Counters,
+    ClientError, FrameColor, FrameSink, Gpu, PresentedFrame, decode::DecodedVideo,
+    present::mapping::ColorRoute, slot::Slot, stats::Counters,
 };
 
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT_TEXTURES: usize = 4;
 const UPLOAD_ROW_ALIGNMENT: u32 = 4;
 const DECODED_PLANES: usize = 3;
+const SCRATCH_TEXTURES: usize = 2;
 
 pub(crate) type SharedTarget = Arc<Mutex<Option<Resolution>>>;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PresentOptions {
     pub scaling: ScalingConfig,
+    pub mapping: MappingOptions,
+    pub display: ColorVolume,
 }
 
 pub(crate) struct PresentLinks {
@@ -72,9 +78,32 @@ enum UnpackInput {
     Planes(DmaBufTexture),
 }
 
-struct LinearSource {
-    resolution: Resolution,
-    view: wgpu::TextureView,
+#[derive(Default)]
+struct Scratch {
+    resolution: Option<Resolution>,
+    views: Vec<wgpu::TextureView>,
+}
+
+impl Scratch {
+    fn ensure(
+        &mut self,
+        device: &wgpu::Device,
+        resolution: Resolution,
+        count: usize,
+    ) -> &[wgpu::TextureView] {
+        if self.resolution != Some(resolution) {
+            self.resolution = Some(resolution);
+            self.views.clear();
+        }
+        while self.views.len() < count {
+            self.views.push(
+                create_texture(device, "rusplay-client-scratch", resolution)
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
+            );
+        }
+
+        &self.views
+    }
 }
 
 struct PresentStage {
@@ -83,7 +112,8 @@ struct PresentStage {
     pipelines: ScalePipelines,
     unpacker: Option<Unpacker>,
     importer: Option<DmaBufImporter>,
-    linear: Option<LinearSource>,
+    scratch: Scratch,
+    color: ColorStage,
     scaler: Option<Scaler>,
     outputs: OutputPool,
 }
@@ -91,6 +121,7 @@ struct PresentStage {
 impl PresentStage {
     fn new(gpu: Gpu, options: PresentOptions) -> Self {
         let pipelines = ScalePipelines::new(&gpu.device);
+        let color = ColorStage::new(&pipelines, options.mapping);
 
         Self {
             gpu,
@@ -98,7 +129,8 @@ impl PresentStage {
             pipelines,
             unpacker: None,
             importer: None,
-            linear: None,
+            scratch: Scratch::default(),
+            color,
             scaler: None,
             outputs: OutputPool::default(),
         }
@@ -110,8 +142,10 @@ impl PresentStage {
         links: &mut PresentLinks,
     ) -> Result<(), ClientError> {
         let source = video.decoded.resolution;
-        let color = FrameColor::of_stream(video.color, video.decoded.format);
+        let decoded = FrameColor::of_stream(video.color, video.decoded.format);
+        let display = links.sink.color_target().unwrap_or(self.options.display);
         let device = &self.gpu.device;
+        let route = self.color.route(device, decoded, display)?;
 
         let (layout, input) = match &video.decoded.buffer {
             DecodedBuffer::Cpu(_) => (PlaneLayout::Planar, UnpackInput::Upload),
@@ -124,7 +158,7 @@ impl PresentStage {
                 (PlaneLayout::SemiPlanar, UnpackInput::Planes(planes))
             }
         };
-        let settings = convert_settings(&self.options, source, color, layout);
+        let settings = convert_settings(&self.options, source, decoded, layout);
         let unpacker = ensure_unpacker(&self.pipelines, device, &mut self.unpacker, settings)?;
 
         let lease = match &video.decoded.buffer {
@@ -142,20 +176,44 @@ impl PresentStage {
             return Ok(());
         };
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let scale = (target != source)
+            .then(|| scale_settings(&self.options.scaling, source, target, !display.is_hdr()));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rusplay-client-present"),
         });
-        if target == source {
-            unpack(unpacker, device, &mut encoder, &input, &output_view)?;
-        } else {
-            let linear = ensure_linear(device, &mut self.linear, source);
-            unpack(unpacker, device, &mut encoder, &input, &linear.view)?;
-            let settings = scale_settings(&self.options.scaling, source, target, color.light);
+        let passes = 1 + route.passes() + usize::from(scale.is_some());
+        let scratch = self
+            .scratch
+            .ensure(device, source, (passes - 1).min(SCRATCH_TEXTURES));
+        let chain = Chain {
+            scratch,
+            output: &output_view,
+            passes,
+        };
+        let mut pass = 0;
+
+        unpack(
+            unpacker,
+            device,
+            &mut encoder,
+            &input,
+            chain.destination(pass),
+        )?;
+        pass += 1;
+        encode_color(
+            &mut self.color,
+            device,
+            &mut encoder,
+            &route,
+            &chain,
+            &mut pass,
+        )?;
+        if let Some(settings) = scale {
             ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
                 device,
                 &mut encoder,
-                &linear.view,
+                chain.source(pass),
                 &output_view,
             );
         }
@@ -163,6 +221,7 @@ impl PresentStage {
         if let Some(lease) = lease {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
+        let color = route.output;
 
         links.counters.frames_presented.increment();
         links.sink.present(PresentedFrame {
@@ -178,6 +237,56 @@ impl PresentStage {
 
         Ok(())
     }
+}
+
+struct Chain<'a> {
+    scratch: &'a [wgpu::TextureView],
+    output: &'a wgpu::TextureView,
+    passes: usize,
+}
+
+impl Chain<'_> {
+    fn destination(&self, pass: usize) -> &wgpu::TextureView {
+        if pass + 1 == self.passes {
+            self.output
+        } else {
+            &self.scratch[pass % SCRATCH_TEXTURES]
+        }
+    }
+
+    fn source(&self, pass: usize) -> &wgpu::TextureView {
+        &self.scratch[(pass - 1) % SCRATCH_TEXTURES]
+    }
+}
+
+fn encode_color(
+    color: &mut ColorStage,
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    route: &ColorRoute,
+    chain: &Chain<'_>,
+    pass: &mut usize,
+) -> Result<(), ClientError> {
+    if route.linearise.is_some() {
+        color.linearise(
+            device,
+            encoder,
+            chain.source(*pass),
+            chain.destination(*pass),
+        )?;
+        *pass += 1;
+    }
+    if route.map.is_some() {
+        color.map(
+            device,
+            encoder,
+            chain.source(*pass),
+            chain.destination(*pass),
+        );
+        *pass += 1;
+    }
+
+    Ok(())
 }
 
 fn unpack(
@@ -270,23 +379,6 @@ fn ensure_unpacker<'a>(
     Ok(slot.insert(unpacker))
 }
 
-fn ensure_linear<'a>(
-    device: &wgpu::Device,
-    slot: &'a mut Option<LinearSource>,
-    resolution: Resolution,
-) -> &'a LinearSource {
-    let linear = slot
-        .take()
-        .filter(|linear| linear.resolution == resolution)
-        .unwrap_or_else(|| LinearSource {
-            resolution,
-            view: create_texture(device, "rusplay-client-linear", resolution)
-                .create_view(&wgpu::TextureViewDescriptor::default()),
-        });
-
-    slot.insert(linear)
-}
-
 fn ensure_scaler<'a>(
     pipelines: &ScalePipelines,
     device: &wgpu::Device,
@@ -308,7 +400,7 @@ pub(crate) fn scale_settings(
     scaling: &ScalingConfig,
     source: Resolution,
     target: Resolution,
-    light: OutputLight,
+    sigmoid: bool,
 ) -> ScaleSettings {
     let upscaling = target.width > source.width || target.height > source.height;
 
@@ -319,7 +411,7 @@ pub(crate) fn scale_settings(
             source,
             target,
             antiringing: upscale.antiringing,
-            sigmoid: (upscale.sigmoid && light == OutputLight::Linear).then_some(Sigmoid {
+            sigmoid: (upscale.sigmoid && sigmoid).then_some(Sigmoid {
                 center: upscale.sigmoid_center,
                 slope: upscale.sigmoid_slope,
             }),
@@ -577,6 +669,8 @@ mod tests {
             gpu.clone(),
             PresentOptions {
                 scaling: config.scaling,
+                mapping: MappingOptions::from(&config.color),
+                display: ColorVolume::srgb_display(),
             },
         );
 

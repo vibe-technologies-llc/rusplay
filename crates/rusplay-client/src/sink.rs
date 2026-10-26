@@ -5,6 +5,7 @@ use std::{
 
 use parking_lot::{Condvar, Mutex};
 use rusplay_core::Resolution;
+use rusplay_scale::ColorVolume;
 
 use crate::FrameColor;
 
@@ -33,6 +34,10 @@ impl PresentedFrame {
 
 pub trait FrameSink: Send + 'static {
     fn present(&mut self, frame: PresentedFrame);
+
+    fn color_target(&self) -> Option<ColorVolume> {
+        None
+    }
 }
 
 impl<F: FnMut(PresentedFrame) + Send + 'static> FrameSink for F {

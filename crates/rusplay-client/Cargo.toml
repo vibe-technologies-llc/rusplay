@@ -37,6 +37,7 @@ wayland-protocols = { workspace = true, features = ["client", "staging"] }
 wgpu.workspace = true
 
 [dev-dependencies]
+half.workspace = true
 pollster.workspace = true
 
 [lints]
