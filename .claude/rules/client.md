@@ -63,11 +63,13 @@ paths:
   `submitted_at` instants for latency accounting.
 - Present runs on the app's `Gpu` (device and queue): CPU planes are written row by row into the
   `RgbConverter` upload buffer through `Queue::write_buffer_with` (the one unavoidable copy for
-  software decode), unpacked to `rgba16float` at the source resolution and, when the target set by
-  `ClientStream::set_target` differs, resampled by `Scaler` (the upscale filter, anti-ringing and
-  sigmoid when enlarging either axis, the downscale filter otherwise). Without a target, or at the
-  same size, the unpack writes straight into the output texture. Chroma siting is `Left`, matching
-  the host's `ColorConverter` default.
+  software decode), unpacked to `rgba16float` at the source resolution, taken through the colour
+  passes (`present/mapping.rs`, below) and, when the target set by `ClientStream::set_target`
+  differs, resampled by `Scaler` (the upscale filter, anti-ringing and, for an SDR colour target
+  only, sigmoid when enlarging either axis; the downscale filter otherwise). The passes ping-pong
+  between at most two scratch textures at the source resolution and the last one writes the
+  output texture, so a frame that needs no colour pass and no scaling is unpacked straight into
+  it. Chroma siting is `Left`, matching the host's `ColorConverter` default.
 - Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC`, pooled up
   to four per target size as `Arc<wgpu::Texture>`; a texture is reused once only the pool holds it,
   so the app may keep a `PresentedFrame` for as long as it displays it. If all four are held the
@@ -77,16 +79,21 @@ paths:
   implemented for `FnMut(PresentedFrame)` closures) and `LatestFrame`, a cloneable latest-wins
   sink with `take` and `wait`. Sinks must not block.
 - Every `PresentedFrame` carries `FrameColor`: the `ColorSpace` (primaries, transfer, range,
-  matrix and the `HdrLevels` with optional mastering and content light metadata: the host's
-  description with whatever the decoder read from the bitstream laid over it,
-  `DecodedFrame::color.over(description.color)`, so the bitstream wins), the resolved
-  `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. SDR
-  transfers (sRGB, BT.709, gamma 2.2, linear) are linearised (`OutputLight::Linear`), PQ and
-  HLG are left encoded (`OutputLight::Encoded`, no sigmoid) in the stream's own primaries, so
-  nothing assumes an sRGB or BT.709 display. The colour describes what the texture holds: a
-  gamut or tone-mapping pass goes in `present.rs` between the unpack and the scaler, on the
-  source-resolution linear texture, and updates `FrameColor` accordingly, without changing the
-  public types.
+  matrix and the `HdrLevels` with optional mastering and content light metadata), the resolved
+  `MatrixCoefficients`, the coded `PixelFormat` and the `OutputLight` of the texture. The
+  source is the host's description with whatever the decoder read from the bitstream laid over
+  it (`DecodedFrame::color.over(description.color)`, so the bitstream wins), and it drives the
+  unpack: SDR transfers are linearised there, PQ and HLG are unpacked encoded. What the sink
+  receives describes the presented texture instead, `FrameColor::mapped_to(&target)`: always
+  `OutputLight::Linear`, in the colour target's primaries with 1.0 at its reference white, the
+  target's transfer and levels as the encoding still to apply, no mastering or content light
+  metadata.
+- The colour target is `FrameSink::color_target` (defaulted to `None`; `WindowSink` returns the
+  window's, `color.md`), read on every frame, else the `color.target` overrides resolved against
+  an empty `DisplayImage` at connect (sRGB at 203 cd/m² by default). `ColorStage` plans a
+  `ColorRoute` only when the source colour or the target changes: a `Lineariser` pass for
+  encoded (PQ/HLG) frames and a `ColorMapper` pass unless `ColorPlan::is_identity`. Its design
+  is in `color.md`.
 - Audio (`audio.rs`): `connect` opens an `AudioOutput` before it spawns the stages. The default
   (`default_audio_output`) is `AudioPlayback` when the `pipewire` feature is on and none
   otherwise; `connect_with_audio` takes any `Option<Box<dyn AudioOutput>>` (tests pass a capturing
@@ -147,10 +154,10 @@ paths:
   position, hotspot and shape by `target / space` per axis, so the cursor lands and is sized
   right whatever the stream resolution is. `CursorImage::rgba` is read as sRGB with straight
   alpha.
-- The display's colour target comes from the `display` module (`query_target`,
-  `resolve_target`), documented in `color.md`; nothing in the session calls it yet
-  (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
-  compositor.
+- The display's colour target comes from the `display` module (`query_display`,
+  `resolve_target`), documented in `color.md`; `StreamWindow::attach` queries it and the session
+  resolves the overrides alone as the fallback. `tests/display.rs` has an `#[ignore]`d test
+  against the running compositor.
 - DMA-BUF frames from VAAPI (`NV12`/`P010`) are imported by a `DmaBufImporter` created on the
   first one, which needs a `Gpu` whose device came from `rusplay_scale::device_descriptor`
   (otherwise the stage ends with `DmaBufImportUnavailable`). The planes are unpacked with
@@ -215,17 +222,17 @@ paths:
   and is skipped. It (re)configures the swapchain to that size, sets the viewport destination to
   the logical size just before presenting (so buffer and destination change in the same commit
   and the compositor maps the buffer 1:1), composes and presents with `Queue::present`.
-- Swapchain: `Bgra8Unorm` or `Rgba8Unorm` (`SurfaceFormatUnsupported` otherwise) with its sRGB
-  view format, `video.present_mode` (`mailbox` by default, `immediate`, `fifo`; a mode the
-  surface lacks is `PresentModeUnsupported`, never a silent fallback) and
-  `video.present_frame_latency` (1 by default, 1 to 3), opaque alpha. `OutputLight::Linear`
-  frames are drawn through the sRGB view, so the hardware encodes linear light; `Encoded`
-  (PQ/HLG) frames go through the plain view with their code values unchanged. That is the
-  presentation's whole colour handling: gamut and tone mapping to the display, dithering and
-  deeper swapchains belong to `client-color-pipeline`.
+- Swapchain: format and surface colour space from `SurfaceOutput::choose` (`window/output.rs`,
+  `color.md`; `SurfaceOutputUnsupported` when nothing fits the `color.output` choice), no view
+  formats, `video.present_mode` (`mailbox` by default, `immediate`, `fifo`; a mode the surface
+  lacks is `PresentModeUnsupported`, never a silent fallback) and `video.present_frame_latency`
+  (1 by default, 1 to 3), opaque alpha. The choice is made once at attach; its
+  `DisplayEncoding::target` is what `WindowSink::color_target` and `StreamWindow::color_target`
+  return.
 - `compose.wgsl` is one fullscreen-triangle render pass that `textureLoad`s the picture 1:1 (no
-  sampler, no filtering: sizes always match) and blends the cursor over it as premultiplied
-  linear light. The cursor (`window/cursor.rs`) is uploaded once per shape as `rgba16float`,
+  sampler, no filtering: sizes always match), blends the cursor over it as premultiplied
+  linear light (converted from BT.709 into the target primaries by a matrix) and encodes and
+  dithers the result for the surface (`color.md`). The cursor (`window/cursor.rs`) is uploaded once per shape as `rgba16float`,
   linearised from sRGB and premultiplied on the CPU, and when the picture is scaled it is
   resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
   picture, via `present::scale_settings`) into a texture of `round(size * target / space)`,
@@ -243,6 +250,6 @@ paths:
   `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
   Wayland objects are destroyed.
 - GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
-  blend inside the cursor rectangle only, clipping at the edge, and the cursor layer's scaled size
-  and origin. The subsurface and swapchain paths need a running compositor and are only checked
+  blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
+  and origin, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
   by running the app.

@@ -21,11 +21,12 @@ use rusplay_net::{
 use rusplay_protocol::StreamDescription;
 
 use crate::{
-    AudioOutput, ClientError, ClientStats, FrameSink, LatestCursor, Stage,
+    AudioOutput, ClientError, ClientStats, DisplayImage, FrameSink, LatestCursor, Stage,
     audio::{self, AudioLinks, EncodedAudio},
     decode::{self, DecodeLinks},
+    display::resolve_target,
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
-    present::{self, PresentLinks, PresentOptions, SharedTarget},
+    present::{self, MappingOptions, PresentLinks, PresentOptions, SharedTarget},
     receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
     stats::Counters,
@@ -297,6 +298,8 @@ impl ClientStream {
     ) -> Result<(), ClientError> {
         let options = PresentOptions {
             scaling: config.scaling,
+            mapping: MappingOptions::from(&config.color),
+            display: resolve_target(&DisplayImage::default(), &config.color.target)?,
         };
         let links = PresentLinks {
             input: Arc::clone(decoded),

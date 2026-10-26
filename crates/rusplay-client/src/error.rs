@@ -1,7 +1,7 @@
 use std::{fmt, io, time::Duration};
 
 use rusplay_audio::AudioError;
-use rusplay_config::PresentMode;
+use rusplay_config::{OutputColorSpace, OutputFormat, PresentMode};
 use rusplay_core::AudioCodec;
 use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
@@ -135,8 +135,13 @@ pub enum ClientError {
     WindowAdapter(#[source] wgpu::RequestAdapterError),
     #[error("failed to open the gpu device for the stream")]
     WindowDevice(#[source] wgpu::RequestDeviceError),
-    #[error("the stream surface offers neither bgra8 nor rgba8")]
-    SurfaceFormatUnsupported,
+    #[error(
+        "the stream surface offers no {format:?} swapchain in the {color_space:?} colour space"
+    )]
+    SurfaceOutputUnsupported {
+        color_space: OutputColorSpace,
+        format: OutputFormat,
+    },
     #[error("the stream surface does not offer the {mode:?} present mode")]
     PresentModeUnsupported { mode: PresentMode },
     #[error("the stream surface was lost")]

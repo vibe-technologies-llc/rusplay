@@ -1,7 +1,20 @@
 use std::{borrow::Cow, num::NonZeroU64};
 
+use rusplay_core::{ColorPrimaries, Matrix3, WhiteAdaptation};
+
+use crate::window::{
+    dither::{BAYER_BITS, BLUE_NOISE_SIZE, blue_noise_thresholds},
+    output::{DisplayEncoding, DitherPattern, Signal},
+};
+
 const SHADER: &str = include_str!("compose.wgsl");
-const PARAMS_BYTES: u64 = 16;
+const PARAMS_WORDS: usize = 40;
+const PARAMS_BYTES: u64 = PARAMS_WORDS as u64 * 4;
+const PQ_PEAK_NITS: f64 = 10_000.0;
+const HLG_REFERENCE_GAMMA: f64 = 1.2;
+const HLG_GAMMA_PER_DECADE: f64 = 0.42;
+const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
+const NOISE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CursorPlacement {
@@ -15,12 +28,18 @@ pub(crate) struct Composer {
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    encoding: [u32; PARAMS_WORDS],
     params: wgpu::Buffer,
     no_cursor: wgpu::TextureView,
+    noise: wgpu::TextureView,
 }
 
 impl Composer {
-    pub(crate) fn new(device: &wgpu::Device) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoding: &DisplayEncoding,
+    ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rusplay-compose"),
             entries: &[
@@ -36,6 +55,7 @@ impl Composer {
                     },
                     count: None,
                 },
+                texture_entry(3),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -53,30 +73,24 @@ impl Composer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let no_cursor = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("rusplay-compose-no-cursor"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let no_cursor = single_texture(
+            device,
+            "rusplay-compose-no-cursor",
+            1,
+            wgpu::TextureFormat::Rgba16Float,
+        )
+        .create_view(&wgpu::TextureViewDescriptor::default());
+        let noise = upload_noise(device, queue);
 
         Self {
             layout,
             pipeline_layout,
             shader,
             pipelines: Vec::new(),
+            encoding: encoding_words(encoding),
             params,
             no_cursor,
+            noise,
         }
     }
 
@@ -98,7 +112,7 @@ impl Composer {
             },
             |(_, placement)| placement,
         );
-        queue.write_buffer(&self.params, 0, &params_bytes(placement));
+        queue.write_buffer(&self.params, 0, &params_bytes(placement, &self.encoding));
 
         let cursor_view = cursor.map_or(&self.no_cursor, |(view, _)| view);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -116,6 +130,10 @@ impl Composer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&self.noise),
                 },
             ],
         });
@@ -193,6 +211,50 @@ impl Composer {
     }
 }
 
+fn single_texture(
+    device: &wgpu::Device,
+    label: &str,
+    size: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+fn upload_noise(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    let size = u32::try_from(BLUE_NOISE_SIZE).unwrap_or(u32::MAX);
+    let texture = single_texture(device, "rusplay-compose-blue-noise", size, NOISE_FORMAT);
+    let bytes: Vec<u8> = blue_noise_thresholds()
+        .iter()
+        .flat_map(|threshold| threshold.to_le_bytes())
+        .collect();
+
+    queue.write_texture(
+        texture.as_image_copy(),
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size * 4),
+            rows_per_image: Some(size),
+        },
+        texture.size(),
+    );
+
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -206,206 +268,109 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn params_bytes(placement: CursorPlacement) -> [u8; 16] {
+const fn transfer_code(signal: Signal) -> u32 {
+    match signal {
+        Signal::Linear => 0,
+        Signal::Srgb => 1,
+        Signal::Bt709 => 2,
+        Signal::Gamma22 => 3,
+        Signal::Pq { .. } => 4,
+        Signal::Hlg { .. } => 5,
+        Signal::ExtendedLinear => 6,
+    }
+}
+
+pub(crate) fn hlg_exponent(peak_nits: f64) -> f64 {
+    let gamma =
+        HLG_REFERENCE_GAMMA + HLG_GAMMA_PER_DECADE * (peak_nits / HLG_REFERENCE_PEAK_NITS).log10();
+
+    (1.0 - gamma) / gamma
+}
+
+pub(crate) fn signal_scale(signal: Signal) -> f64 {
+    match signal {
+        Signal::Pq { white_nits } => white_nits / PQ_PEAK_NITS,
+        Signal::Hlg {
+            white_nits,
+            peak_nits,
+        } => white_nits / peak_nits,
+        _ => 1.0,
+    }
+}
+
+fn float(value: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let narrowed = value as f32;
+    narrowed.to_bits()
+}
+
+fn push_rows(words: &mut Vec<u32>, matrix: Matrix3) {
+    for row in matrix.rows() {
+        words.extend(row.map(float));
+        words.push(0);
+    }
+}
+
+fn encoding_words(encoding: &DisplayEncoding) -> [u32; PARAMS_WORDS] {
+    let target = encoding.target.primaries;
+    let mut words = Vec::with_capacity(PARAMS_WORDS);
+    words.extend([0; 4]);
+    push_rows(
+        &mut words,
+        ColorPrimaries::Bt709.rgb_to_rgb(target, WhiteAdaptation::Bradford),
+    );
+    push_rows(
+        &mut words,
+        target.rgb_to_rgb(encoding.primaries, WhiteAdaptation::Bradford),
+    );
+    words.extend(encoding.primaries.rgb_to_xyz().rows()[1].map(float));
+    words.push(0);
+
+    let hlg_peak = match encoding.signal {
+        Signal::Hlg { peak_nits, .. } => peak_nits,
+        _ => HLG_REFERENCE_PEAK_NITS,
+    };
+    let steps = encoding
+        .dither
+        .map_or(1, |dither| (1u32 << dither.bits) - 1);
+    words.extend([
+        float(signal_scale(encoding.signal)),
+        float(hlg_exponent(hlg_peak)),
+        float(f64::from(steps)),
+        0,
+    ]);
+    words.extend([
+        transfer_code(encoding.signal),
+        match encoding.dither.map(|dither| dither.pattern) {
+            None => 0,
+            Some(DitherPattern::Ordered) => 1,
+            Some(DitherPattern::BlueNoise) => 2,
+        },
+        u32::try_from(BLUE_NOISE_SIZE).unwrap_or(u32::MAX),
+        BAYER_BITS,
+    ]);
+
+    let mut fixed = [0; PARAMS_WORDS];
+    fixed.copy_from_slice(&words);
+    fixed
+}
+
+fn params_bytes(placement: CursorPlacement, encoding: &[u32; PARAMS_WORDS]) -> Vec<u8> {
     let size = placement
         .size
         .map(|dimension| i32::try_from(dimension).unwrap_or(i32::MAX));
-    let words = [placement.origin[0], placement.origin[1], size[0], size[1]];
+    let cursor = [placement.origin[0], placement.origin[1], size[0], size[1]];
 
-    let mut bytes = [0; 16];
-    for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
-    bytes
+    cursor
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .chain(
+            encoding[cursor.len()..]
+                .iter()
+                .flat_map(|word| word.to_le_bytes()),
+        )
+        .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use half::f16;
-
-    use super::*;
-    use crate::Gpu;
-
-    const WIDTH: u32 = 8;
-    const HEIGHT: u32 = 4;
-    const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-    fn gpu() -> Option<Gpu> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
-                .ok()?;
-
-        Some(Gpu { device, queue })
-    }
-
-    fn filled(gpu: &Gpu, width: u32, height: u32, texel: [f32; 4]) -> wgpu::TextureView {
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("rusplay-test-input"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let bytes: Vec<u8> = (0..width * height)
-            .flat_map(|_| texel)
-            .flat_map(|channel| f16::from_f32(channel).to_le_bytes())
-            .collect();
-        gpu.queue.write_texture(
-            texture.as_image_copy(),
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 8),
-                rows_per_image: Some(height),
-            },
-            texture.size(),
-        );
-
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn compose(gpu: &Gpu, cursor: Option<([f32; 4], CursorPlacement)>) -> Vec<u8> {
-        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("rusplay-test-target"),
-            size: wgpu::Extent3d {
-                width: WIDTH,
-                height: HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TARGET_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let picture = filled(gpu, WIDTH, HEIGHT, [0.25, 0.25, 0.25, 1.0]);
-        let cursor = cursor.map(|(texel, placement)| {
-            (
-                filled(gpu, placement.size[0], placement.size[1], texel),
-                placement,
-            )
-        });
-        let mut composer = Composer::new(&gpu.device);
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        composer.encode(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &picture,
-            cursor.as_ref().map(|(view, placement)| (view, *placement)),
-            &target.create_view(&wgpu::TextureViewDescriptor::default()),
-            TARGET_FORMAT,
-        );
-
-        let row_bytes = (WIDTH * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rusplay-test-readback"),
-            size: u64::from(row_bytes * HEIGHT),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row_bytes),
-                    rows_per_image: None,
-                },
-            },
-            target.size(),
-        );
-        gpu.queue.submit([encoder.finish()]);
-        staging.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .unwrap();
-
-        let bytes = staging
-            .get_mapped_range(..)
-            .unwrap()
-            .chunks_exact(row_bytes as usize)
-            .flat_map(|row| &row[..(WIDTH * 4) as usize])
-            .copied()
-            .collect();
-        staging.unmap();
-        bytes
-    }
-
-    fn pixel(bytes: &[u8], x: u32, y: u32) -> [u8; 4] {
-        let start = ((y * WIDTH + x) * 4) as usize;
-        bytes[start..start + 4].try_into().unwrap()
-    }
-
-    fn close(found: [u8; 4], expected: [u8; 4]) -> bool {
-        found
-            .iter()
-            .zip(expected)
-            .all(|(found, expected)| found.abs_diff(expected) <= 1)
-    }
-
-    #[test]
-    fn the_picture_is_copied_one_to_one_without_a_cursor() {
-        let Some(gpu) = gpu() else {
-            return;
-        };
-
-        let bytes = compose(&gpu, None);
-
-        for (x, y) in [(0, 0), (7, 3), (3, 1)] {
-            assert!(close(pixel(&bytes, x, y), [64, 64, 64, 255]));
-        }
-    }
-
-    #[test]
-    fn the_cursor_is_blended_premultiplied_inside_its_rectangle_only() {
-        let Some(gpu) = gpu() else {
-            return;
-        };
-        let placement = CursorPlacement {
-            origin: [3, 1],
-            size: [2, 2],
-        };
-
-        let bytes = compose(&gpu, Some(([0.5, 0.0, 0.0, 0.5], placement)));
-
-        assert!(close(pixel(&bytes, 3, 1), [159, 32, 32, 255]));
-        assert!(close(pixel(&bytes, 4, 2), [159, 32, 32, 255]));
-        assert!(close(pixel(&bytes, 2, 1), [64, 64, 64, 255]));
-        assert!(close(pixel(&bytes, 5, 1), [64, 64, 64, 255]));
-        assert!(close(pixel(&bytes, 3, 3), [64, 64, 64, 255]));
-    }
-
-    #[test]
-    fn a_cursor_partly_off_the_picture_is_clipped() {
-        let Some(gpu) = gpu() else {
-            return;
-        };
-        let placement = CursorPlacement {
-            origin: [-1, -1],
-            size: [2, 2],
-        };
-
-        let bytes = compose(&gpu, Some(([1.0, 1.0, 1.0, 1.0], placement)));
-
-        assert!(close(pixel(&bytes, 0, 0), [255, 255, 255, 255]));
-        assert!(close(pixel(&bytes, 1, 0), [64, 64, 64, 255]));
-        assert!(close(pixel(&bytes, 0, 1), [64, 64, 64, 255]));
-    }
-}
+mod tests;
