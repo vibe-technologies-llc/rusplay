@@ -1,31 +1,40 @@
+use std::net::SocketAddr;
+
 use gpui::{Context, Entity, EventEmitter, Subscription, Window, div, prelude::*, px};
-use rusplay_config::ConfigEnvironment;
+use rusplay_client::{Credentials, PeerRecord, Pin};
 
 use crate::{
     hosts::model::{HostEntry, HostList},
-    notice::{Notice, NoticeRaised, error_chain},
-    session, theme,
+    notice::{Notice, NoticeRaised},
+    theme,
     widgets::{
         controls::{ButtonStyle, button},
         text_field::{TextField, TextFieldEvent},
     },
 };
 
+#[derive(Debug, Clone)]
+pub struct ConnectRequested {
+    pub host: HostEntry,
+    pub credentials: Credentials,
+}
+
 pub struct HostsView {
     hosts: HostList,
     name_input: Entity<TextField>,
     address_input: Entity<TextField>,
-    environment: ConfigEnvironment,
-    connecting: bool,
+    pin_input: Entity<TextField>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<NoticeRaised> for HostsView {}
+impl EventEmitter<ConnectRequested> for HostsView {}
 
 impl HostsView {
-    pub fn new(default_port: u16, environment: ConfigEnvironment, cx: &mut Context<Self>) -> Self {
+    pub fn new(default_port: u16, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| TextField::new("", "Name (optional)", cx));
         let address_input = cx.new(|cx| TextField::new("", "Address, e.g. 192.168.1.20", cx));
+        let pin_input = cx.new(|cx| TextField::new("", "PIN shown by the host", cx));
 
         let submit = cx.subscribe(&address_input, |this, _, event, cx| {
             if *event == TextFieldEvent::Submitted {
@@ -33,13 +42,26 @@ impl HostsView {
             }
         });
 
+        let connect = cx.subscribe(&pin_input, |this, _, event, cx| {
+            if *event == TextFieldEvent::Submitted {
+                this.connect(cx);
+            }
+        });
+
         Self {
             hosts: HostList::new(default_port),
             name_input,
             address_input,
-            environment,
-            connecting: false,
-            _subscriptions: vec![submit],
+            pin_input,
+            _subscriptions: vec![submit, connect],
+        }
+    }
+
+    pub fn remember_peer(&mut self, address: SocketAddr, peer: PeerRecord, cx: &mut Context<Self>) {
+        if self.hosts.remember_peer(address, peer) {
+            self.pin_input
+                .update(cx, |input, cx| input.set_text("", cx));
+            cx.notify();
         }
     }
 
@@ -66,41 +88,29 @@ impl HostsView {
     }
 
     fn connect(&mut self, cx: &mut Context<Self>) {
-        if self.connecting {
-            return;
-        }
-
         let Some(host) = self.hosts.selected().cloned() else {
             return;
         };
 
-        self.connecting = true;
-        notify(Notice::Info(format!("Connecting to {}", host.name)), cx);
+        let credentials = if let Some(peer) = &host.peer {
+            Credentials::Peer(peer.clone())
+        } else {
+            let parsed = Pin::parse(self.pin_input.read(cx).text());
+            self.pin_input
+                .update(cx, |input, cx| input.set_invalid(parsed.is_err(), cx));
+            match parsed {
+                Ok(pin) => Credentials::Pin(pin),
+                Err(error) => {
+                    notify(
+                        Notice::Failure(format!("Pair with {} first: {error}", host.name)),
+                        cx,
+                    );
+                    return;
+                }
+            }
+        };
 
-        let environment = self.environment.clone();
-        let session = cx.background_spawn(async move { session::run_client(&environment) });
-
-        cx.spawn(async move |this, cx| {
-            let result = session.await;
-
-            this.update(cx, |this, cx| {
-                this.connecting = false;
-                let notice = match result {
-                    Ok(()) => Notice::Info(format!("Session with {} ended", host.name)),
-                    Err(error) => Notice::Failure(format!(
-                        "Could not connect to {}: {}",
-                        host.name,
-                        error_chain(&error)
-                    )),
-                };
-                notify(notice, cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-
-        cx.notify();
+        cx.emit(ConnectRequested { host, credentials });
     }
 
     fn render_host(
@@ -166,12 +176,9 @@ impl HostsView {
 impl Render for HostsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<_> = self.hosts.entries().to_vec();
-        let can_connect = self.hosts.selected().is_some() && !self.connecting;
-        let connect_label = if self.connecting {
-            "Connecting"
-        } else {
-            "Connect"
-        };
+        let selected = self.hosts.selected();
+        let can_connect = selected.is_some();
+        let paired = selected.is_some_and(|host| host.peer.is_some());
 
         let list = if entries.is_empty() {
             div()
@@ -214,10 +221,27 @@ impl Render for HostsView {
                     ),
             )
             .child(
-                div().flex().child(
-                    button("connect", connect_label, ButtonStyle::Primary, can_connect)
-                        .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
-                ),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(if paired {
+                        div()
+                            .w(px(200.0))
+                            .text_sm()
+                            .text_color(theme::text_muted())
+                            .child("Paired")
+                            .into_any_element()
+                    } else {
+                        div()
+                            .w(px(200.0))
+                            .child(self.pin_input.clone())
+                            .into_any_element()
+                    })
+                    .child(
+                        button("connect", "Connect", ButtonStyle::Primary, can_connect)
+                            .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
+                    ),
             )
     }
 }

@@ -104,6 +104,7 @@ const GAMUT_MODES: &[&str] = &[
     "highlight",
 ];
 const RANGES: &[&str] = &["limited", "full"];
+const PRESENT_MODES: &[&str] = &["mailbox", "immediate", "fifo"];
 const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
 const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
 const RATE_CONTROL_MODES: &[&str] = &["cbr", "vbr", "constant-quality"];
@@ -582,6 +583,21 @@ pub static FIELDS: &[Field] = &[
     )
     .optional()
     .when(SOFTWARE_DECODER),
+    field(
+        Section::Video,
+        "Presentation",
+        "video.present_mode",
+        "Present mode",
+        Kind::Choice(PRESENT_MODES),
+    ),
+    field(
+        Section::Video,
+        "Presentation",
+        "video.present_frame_latency",
+        "Frame latency",
+        Kind::Integer { min: 1, max: 3 },
+    )
+    .unit("frames"),
     field(
         Section::Audio,
         "Stream",

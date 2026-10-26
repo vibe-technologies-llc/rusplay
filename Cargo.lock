@@ -4680,6 +4680,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "raw-window-handle",
  "rusplay-client",
  "rusplay-config",
  "rusplay-core",
@@ -4722,6 +4723,7 @@ dependencies = [
 name = "rusplay-client"
 version = "0.1.0"
 dependencies = [
+ "half",
  "parking_lot 0.13.0",
  "pollster 1.0.1",
  "rusplay-audio",

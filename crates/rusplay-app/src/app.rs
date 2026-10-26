@@ -5,10 +5,11 @@ use gpui::{
 use rusplay_config::{Config, ConfigEnvironment};
 
 use crate::{
-    hosts::HostsView,
+    hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
     session,
     settings::{FormModel, SettingsView},
+    stream::{StreamEvent, StreamView},
     theme,
     widgets::controls::option_button,
 };
@@ -40,8 +41,15 @@ impl Page {
     }
 }
 
+struct ActiveStream {
+    view: Entity<StreamView>,
+    _events: Subscription,
+}
+
 pub struct RusplayApp {
     page: Page,
+    environment: ConfigEnvironment,
+    stream: Option<ActiveStream>,
     hosts: Entity<HostsView>,
     settings: Option<Entity<SettingsView>>,
     notice: Option<Notice>,
@@ -50,7 +58,11 @@ pub struct RusplayApp {
 }
 
 impl RusplayApp {
-    pub fn new(environment: ConfigEnvironment, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        environment: ConfigEnvironment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut notice = None;
 
         let config = session::load_client_config(&environment).unwrap_or_else(|error| {
@@ -63,15 +75,29 @@ impl RusplayApp {
 
         let mut subscriptions = Vec::new();
 
-        let hosts = cx.new(|cx| HostsView::new(config.network.port, environment.clone(), cx));
+        let hosts = cx.new(|cx| HostsView::new(config.network.port, cx));
         subscriptions.push(cx.subscribe(&hosts, |this, _, event: &NoticeRaised, cx| {
             this.notice = Some(event.0.clone());
             cx.notify();
         }));
+        subscriptions.push(cx.subscribe_in(
+            &hosts,
+            window,
+            |this, _, event: &ConnectRequested, window, cx| {
+                this.start_stream(event.clone(), window, cx);
+            },
+        ));
+
+        let app = cx.weak_entity();
+        window.on_window_should_close(cx, move |_, cx| {
+            app.update(cx, Self::end_stream).ok();
+            true
+        });
 
         let settings = match FormModel::from_config(&config) {
             Ok(form) => {
-                let settings = cx.new(|cx| SettingsView::new(config, form, environment, cx));
+                let settings =
+                    cx.new(|cx| SettingsView::new(config, form, environment.clone(), cx));
                 subscriptions.push(
                     cx.subscribe(&settings, |this, _, event: &NoticeRaised, cx| {
                         this.notice = Some(event.0.clone());
@@ -91,11 +117,81 @@ impl RusplayApp {
 
         Self {
             page: Page::Hosts,
+            environment,
+            stream: None,
             hosts,
             settings,
             notice,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
+        }
+    }
+
+    fn start_stream(
+        &mut self,
+        request: ConnectRequested,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.stream.is_some() {
+            return;
+        }
+
+        let attached = session::load_client_config(&self.environment)
+            .map_err(session::SessionError::from)
+            .and_then(|config| {
+                session::attach_window(window, &config).map(|attached| (config, attached))
+            });
+        let (config, attached) = match attached {
+            Ok(attached) => attached,
+            Err(error) => {
+                self.notice = Some(Notice::Failure(format!(
+                    "Could not open the stream view: {}",
+                    error_chain(&error)
+                )));
+                cx.notify();
+                return;
+            }
+        };
+
+        let host_name = request.host.name.clone();
+        let stream =
+            cx.new(|cx| StreamView::new(request.host, request.credentials, config, attached, cx));
+        let events = cx.subscribe_in(
+            &stream,
+            window,
+            |this, _, event: &StreamEvent, window, cx| this.stream_event(event, window, cx),
+        );
+        window.focus(&stream.focus_handle(cx), cx);
+
+        self.stream = Some(ActiveStream {
+            view: stream,
+            _events: events,
+        });
+        self.notice = Some(Notice::Info(format!("Connecting to {host_name}")));
+        cx.notify();
+    }
+
+    fn stream_event(&mut self, event: &StreamEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            StreamEvent::Paired { address, peer } => {
+                let (address, peer) = (*address, peer.clone());
+                self.hosts
+                    .update(cx, |hosts, cx| hosts.remember_peer(address, peer, cx));
+            }
+            StreamEvent::Notice(notice) => self.notice = Some(notice.clone()),
+            StreamEvent::Ended(notice) => {
+                self.notice = Some(notice.clone());
+                self.stream = None;
+                window.focus(&self.focus_handle, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn end_stream(&mut self, cx: &mut Context<Self>) {
+        if let Some(stream) = self.stream.take() {
+            stream.view.update(cx, StreamView::disconnect);
         }
     }
 
@@ -167,21 +263,32 @@ impl Focusable for RusplayApp {
 
 impl Render for RusplayApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let navigation = self.render_navigation(cx);
+        let content = match &self.stream {
+            Some(stream) => stream.view.clone().into_any_element(),
+            None => div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .child(self.render_navigation(cx))
+                .child(div().flex_1().min_h_0().child(self.render_page()))
+                .into_any_element(),
+        };
 
         div()
             .id("root")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
-            .on_action(cx.listener(|_, _: &Quit, _, cx| cx.quit()))
+            .on_action(cx.listener(|this, _: &Quit, _, cx| {
+                this.end_stream(cx);
+                cx.quit();
+            }))
             .flex()
             .flex_col()
             .size_full()
             .bg(theme::background())
             .text_color(theme::text())
-            .child(navigation)
-            .child(div().flex_1().min_h_0().child(self.render_page()))
+            .child(div().flex_1().min_h_0().child(content))
             .child(self.render_status())
     }
 }

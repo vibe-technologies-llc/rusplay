@@ -304,7 +304,7 @@ fn ensure_scaler<'a>(
     Ok(slot.insert(scaler))
 }
 
-fn scale_settings(
+pub(crate) fn scale_settings(
     scaling: &ScalingConfig,
     source: Resolution,
     target: Resolution,

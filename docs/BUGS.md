@@ -1,5 +1,6 @@
 # Host
 - [S] `host-downscale-linear-light-ignored`: the host always scales in linear light; `scaling.downscale.linear_light = false` has no effect because no stage re-linearises a gamma-space scaled image before `ColorConverter`
+- [S] `host-cursor-stream-coordinates`: the host sends cursor positions and shapes in capture pixels, but the client places them in the stream's resolution (`StreamDescription::resolution`), so with `video.resolution` set to a size other than the capture's the drawn cursor is offset and wrongly sized; the host should scale `CursorMessage` positions (and say how the shape scales) to the stream resolution
 - [S] `host-keyframe-repeat-flaky`: `a_request_older_than_the_last_keyframe_is_ignored` in `rusplay-host/src/tests.rs` failed once (`frames_repeated != 1`) in about 65 runs pinned to two busy CPUs; it passes alone, so a timing assumption in the test or the mailbox needs finding
 
 # Video decode

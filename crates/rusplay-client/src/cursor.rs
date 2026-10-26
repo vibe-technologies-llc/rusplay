@@ -14,10 +14,15 @@ pub struct CursorState {
     pub image: Option<Arc<CursorImage>>,
 }
 
+pub(crate) trait CursorWatcher: Send + Sync + std::fmt::Debug {
+    fn changed(&self);
+}
+
 #[derive(Debug, Default)]
 struct LatestState {
     cursor: Option<CursorState>,
     updates: u64,
+    watchers: Vec<Arc<dyn CursorWatcher>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -55,6 +60,11 @@ impl LatestCursor {
         state.cursor.clone()
     }
 
+    #[cfg(feature = "window")]
+    pub(crate) fn watch(&self, watcher: Arc<dyn CursorWatcher>) {
+        self.shared.0.lock().watchers.push(watcher);
+    }
+
     pub(crate) fn update(&self, message: CursorMessage) {
         let (state, changed) = &*self.shared;
         let mut state = state.lock();
@@ -73,9 +83,13 @@ impl LatestCursor {
             image,
         });
         state.updates += 1;
+        let watchers = state.watchers.clone();
         drop(state);
 
         changed.notify_all();
+        for watcher in watchers {
+            watcher.changed();
+        }
     }
 }
 

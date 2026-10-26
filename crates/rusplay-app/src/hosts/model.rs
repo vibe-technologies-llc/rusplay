@@ -1,5 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
+use rusplay_client::PeerRecord;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -14,6 +15,7 @@ pub enum HostError {
 pub struct HostEntry {
     pub name: String,
     pub address: SocketAddr,
+    pub peer: Option<PeerRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +74,11 @@ impl HostList {
             named => named.to_owned(),
         };
 
-        self.entries.push(HostEntry { name, address });
+        self.entries.push(HostEntry {
+            name,
+            address,
+            peer: None,
+        });
         let index = self.entries.len() - 1;
         self.selected = Some(index);
 
@@ -82,6 +88,20 @@ impl HostList {
     pub fn select(&mut self, index: usize) {
         if index < self.entries.len() {
             self.selected = Some(index);
+        }
+    }
+
+    pub fn remember_peer(&mut self, address: SocketAddr, peer: PeerRecord) -> bool {
+        match self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.address == address)
+        {
+            Some(entry) => {
+                entry.peer = Some(peer);
+                true
+            }
+            None => false,
         }
     }
 
@@ -101,6 +121,8 @@ impl HostList {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_client::PeerSecret;
+
     use super::*;
 
     fn list() -> HostList {
@@ -181,6 +203,20 @@ mod tests {
 
         hosts.remove(1);
         assert_eq!(hosts.selected(), None);
+    }
+
+    #[test]
+    fn a_paired_host_remembers_its_peer_record() {
+        let mut hosts = list();
+        hosts.add("a", "10.0.0.1").unwrap();
+        hosts.add("b", "10.0.0.2").unwrap();
+        let record = PeerRecord::new("b", PeerSecret::from_bytes([7; 32])).unwrap();
+
+        assert!(hosts.remember_peer("10.0.0.2:47800".parse().unwrap(), record.clone()));
+        assert!(!hosts.remember_peer("10.0.0.9:47800".parse().unwrap(), record.clone()));
+
+        assert_eq!(hosts.entries()[0].peer, None);
+        assert_eq!(hosts.entries()[1].peer, Some(record));
     }
 
     #[test]
