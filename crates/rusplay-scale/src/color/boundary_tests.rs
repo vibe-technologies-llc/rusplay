@@ -19,9 +19,13 @@ const MAX_CHROMA_STEP: f64 = 0.004;
 const CHROMA_STEPS: u32 = 400;
 const FOLD_HUES: std::ops::Range<u32> = 320..336;
 const FOLD_HUE_SUBDIVISION: u32 = 8;
-const TABLE_SAMPLES: u32 = 4096;
+const TABLE_SAMPLES: u32 = 2048;
 const MAX_TABLE_P99: f64 = 0.002;
-const MAX_TABLE_ERROR: f64 = 0.06;
+const MAX_TABLE_OVERSHOOT: f64 = 0.01;
+const TEN_BIT_MAX: u16 = 1023;
+const FOLD_BLUE_CODES: std::ops::RangeInclusive<u16> = 300..=1023;
+const FOLD_BLUE_CODE_STRIDE: usize = 16;
+const MAX_FOLD_CODE_STEP: f64 = 0.03;
 
 fn pq_4000_to_srgb() -> ColorPlan {
     ColorPlan::new(&settings(
@@ -355,22 +359,47 @@ fn the_boundary_table_tracks_the_exact_boundary() {
                     &plan.work_to_target,
                     plan.target_chroma_limit,
                 );
-                (table - exact).abs() / plan.target_chroma_limit
+                (table - exact) / plan.target_chroma_limit
             })
             .collect();
-        errors.sort_by(f64::total_cmp);
+        errors.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
 
-        let p99 = errors[errors.len() * 99 / 100];
-        let worst = errors[errors.len() - 1];
+        let p99 = errors[errors.len() * 99 / 100].abs();
+        let outside = errors.iter().copied().fold(0.0, f64::max);
         assert!(
             p99 <= MAX_TABLE_P99,
             "{:?}: p99 {p99} of the chroma limit",
             plan.space()
         );
         assert!(
-            worst <= MAX_TABLE_ERROR,
-            "{:?}: {worst} of the chroma limit",
+            outside <= MAX_TABLE_OVERSHOOT,
+            "{:?}: {outside} of the chroma limit outside",
             plan.space()
         );
+    }
+}
+
+fn ten_bit(code: u16) -> f64 {
+    f64::from(code) / f64::from(TEN_BIT_MAX)
+}
+
+#[test]
+fn blue_to_magenta_gradients_step_gently_through_the_fold() {
+    for plan in folding_plans() {
+        let peak = plan.target_peak.max(1.0);
+
+        for blue in FOLD_BLUE_CODES.step_by(FOLD_BLUE_CODE_STRIDE) {
+            let outputs: Vec<[f64; 3]> = (0..=blue)
+                .map(|red| reference::map(&plan, linear(&plan, [ten_bit(red), 0.0, ten_bit(blue)])))
+                .collect();
+
+            let (step, red) = largest_step(&outputs);
+            assert!(
+                step / peak <= MAX_FOLD_CODE_STEP,
+                "{:?} blue {blue}: {} of the peak from red {red}",
+                plan.space(),
+                step / peak
+            );
+        }
     }
 }

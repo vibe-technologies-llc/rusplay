@@ -3,9 +3,10 @@ use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
 use crate::color::{
-    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
-    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_UPPER_TOLERANCE,
-    BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, HISTOGRAM_BINS,
+    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_HUE_SLOPE,
+    BOUNDARY_LOWER_TOLERANCE, BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS,
+    BOUNDARY_UPPER_TOLERANCE, BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER,
+    HISTOGRAM_BINS, boundary_erosion_columns,
 };
 
 const RESAMPLE_SHADER: &str = concat!(
@@ -117,6 +118,12 @@ const COLOR_BOUNDARY_BAKE_SHADER: &str = concat!(
     include_str!("color_gamut.wgsl"),
     include_str!("color_boundary_bake.wgsl")
 );
+const COLOR_BOUNDARY_ERODE_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_boundary_erode.wgsl")
+);
 const COLOR_HISTOGRAM_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("color_common.wgsl"),
@@ -152,6 +159,7 @@ const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
 const BOUNDARY_BAKE_WORKGROUP: (u32, u32) = (16, 4);
+const BOUNDARY_ERODE_WORKGROUP: (u32, u32) = (64, 1);
 const LINEARISE_WORKGROUP: (u32, u32) = (8, 8);
 const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
 const PEAK_WORKGROUP: (u32, u32) = (1, 1);
@@ -256,12 +264,59 @@ pub(crate) struct ColorPipelines {
     pub lut_store_layout: wgpu::BindGroupLayout,
     pub lut_bake_layout: wgpu::BindGroupLayout,
     pub lut_bake: ShaderPass,
-    pub boundary_store_layout: wgpu::BindGroupLayout,
-    pub boundary_params_layout: wgpu::BindGroupLayout,
-    pub boundary_bake: ShaderPass,
+    pub boundary: BoundaryPipelines,
 }
 
-fn gamut_constants() -> [(&'static str, f64); 11] {
+#[derive(Debug, Clone)]
+pub(crate) struct BoundaryPipelines {
+    pub store_layout: wgpu::BindGroupLayout,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub bake: ShaderPass,
+    pub erosion_layout: wgpu::BindGroupLayout,
+    pub erode: ShaderPass,
+}
+
+impl BoundaryPipelines {
+    fn new(device: &wgpu::Device, gamut_constants: &[(&str, f64)]) -> Self {
+        let store_layout = layout(
+            device,
+            "rusplay-color-boundary-store",
+            &[storage_texture_entry(0, BOUNDARY_TABLE_FORMAT)],
+        );
+        let params_layout = layout(device, "rusplay-color-boundary-params", &[uniform_entry(0)]);
+        let erosion_layout = layout(
+            device,
+            "rusplay-color-boundary-erosion",
+            &[uniform_entry(0), texture_entry(2)],
+        );
+
+        Self {
+            bake: compute_pipeline(
+                device,
+                "rusplay-color-boundary-bake",
+                &[&store_layout, &params_layout],
+                COLOR_BOUNDARY_BAKE_SHADER,
+                "bake_boundary",
+                BOUNDARY_BAKE_WORKGROUP,
+                gamut_constants,
+            ),
+            erode: compute_pipeline(
+                device,
+                "rusplay-color-boundary-erode",
+                &[&store_layout, &erosion_layout],
+                COLOR_BOUNDARY_ERODE_SHADER,
+                "erode_boundary",
+                BOUNDARY_ERODE_WORKGROUP,
+                gamut_constants,
+            ),
+            store_layout,
+            params_layout,
+            erosion_layout,
+        }
+    }
+}
+
+fn gamut_constants() -> [(&'static str, f64); 13] {
     [
         ("BOUNDARY_COARSE_STEPS", f64::from(BOUNDARY_COARSE_STEPS)),
         (
@@ -276,6 +331,11 @@ fn gamut_constants() -> [(&'static str, f64); 11] {
         ("BOUNDARY_RAMP_CENTRE", BOUNDARY_RAMP_CENTRE),
         ("BOUNDARY_REACH", BOUNDARY_REACH),
         ("BOUNDARY_HEADROOM", BOUNDARY_HEADROOM),
+        ("BOUNDARY_HUE_SLOPE", BOUNDARY_HUE_SLOPE),
+        (
+            "BOUNDARY_EROSION_COLUMNS",
+            f64::from(boundary_erosion_columns()),
+        ),
         ("COMPRESSION_POWER", COMPRESSION_POWER),
     ]
 }
@@ -325,22 +385,6 @@ impl ColorPipelines {
             LUT_BAKE_WORKGROUP,
             &gamut_constants,
         );
-        let boundary_store_layout = layout(
-            device,
-            "rusplay-color-boundary-store",
-            &[storage_texture_entry(0, BOUNDARY_TABLE_FORMAT)],
-        );
-        let boundary_params_layout =
-            layout(device, "rusplay-color-boundary-params", &[uniform_entry(0)]);
-        let boundary_bake = compute_pipeline(
-            device,
-            "rusplay-color-boundary-bake",
-            &[&boundary_store_layout, &boundary_params_layout],
-            COLOR_BOUNDARY_BAKE_SHADER,
-            "bake_boundary",
-            BOUNDARY_BAKE_WORKGROUP,
-            &gamut_constants,
-        );
         let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
         let histogram = compute_pipeline(
             device,
@@ -370,9 +414,7 @@ impl ColorPipelines {
             lut_store_layout,
             lut_bake_layout,
             lut_bake,
-            boundary_store_layout,
-            boundary_params_layout,
-            boundary_bake,
+            boundary: BoundaryPipelines::new(device, &gamut_constants),
         }
     }
 }

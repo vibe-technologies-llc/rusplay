@@ -1,13 +1,13 @@
-use std::f64::consts::TAU;
+use std::{cell::RefCell, collections::HashMap, f64::consts::TAU, rc::Rc};
 
 use rusplay_core::{HdrLevels, Matrix3, pq_from_nits, pq_to_nits};
 
 use crate::color::{
-    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
-    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_TABLE_HUES,
-    BOUNDARY_TABLE_LIGHTNESS, BOUNDARY_UPPER_TOLERANCE, BOUNDARY_WINDOW_START,
+    BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_HUE_SLOPE,
+    BOUNDARY_LOWER_TOLERANCE, BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS,
+    BOUNDARY_TABLE_HUES, BOUNDARY_TABLE_LIGHTNESS, BOUNDARY_UPPER_TOLERANCE, BOUNDARY_WINDOW_START,
     BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS, MappingPath, ToneCurve,
-    ToneStage, WorkingSpace,
+    ToneStage, WorkingSpace, boundary_erosion_columns,
 };
 
 const GAMUT_EPSILON: f64 = 1.0e-5;
@@ -318,7 +318,18 @@ pub(crate) fn chroma_boundary(
     )
 }
 
-fn boundary_node(plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
+#[derive(Default)]
+struct BoundaryNodes {
+    exact: HashMap<(u32, u32), [f64; 2]>,
+    eroded: HashMap<(u32, u32), [f64; 2]>,
+}
+
+thread_local! {
+    static BOUNDARY_TABLES: RefCell<HashMap<Vec<u8>, Rc<RefCell<BoundaryNodes>>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn exact_node(plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
     let lightness =
         plan.boundary_lightness * f64::from(row) / f64::from(BOUNDARY_TABLE_LIGHTNESS - 1);
     let angle = TAU * f64::from(column) / f64::from(BOUNDARY_TABLE_HUES);
@@ -342,6 +353,45 @@ fn boundary_node(plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
     ]
 }
 
+impl BoundaryNodes {
+    fn exact(&mut self, plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
+        *self
+            .exact
+            .entry((column, row))
+            .or_insert_with(|| exact_node(plan, column, row))
+    }
+
+    fn eroded(&mut self, plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
+        if let Some(node) = self.eroded.get(&(column, row)) {
+            return *node;
+        }
+
+        let reach = boundary_erosion_columns();
+        let step = TAU / f64::from(BOUNDARY_TABLE_HUES) * BOUNDARY_HUE_SLOPE;
+        let limits = [plan.target_chroma_limit, plan.source_chroma_limit];
+        let mut node = self.exact(plan, column, row);
+        for offset in 1..=reach {
+            let cone = step * f64::from(offset);
+            if (0..2).all(|limit| cone * limits[limit] >= node[limit]) {
+                break;
+            }
+            for neighbour in [
+                (column + offset) % BOUNDARY_TABLE_HUES,
+                (column + BOUNDARY_TABLE_HUES - offset) % BOUNDARY_TABLE_HUES,
+            ] {
+                let exact = self.exact(plan, neighbour, row);
+                node = [0, 1].map(|limit| node[limit].min(exact[limit] + cone * limits[limit]));
+            }
+        }
+        self.eroded.insert((column, row), node);
+        node
+    }
+}
+
+fn boundary_nodes(plan: &ColorPlan) -> Rc<RefCell<BoundaryNodes>> {
+    BOUNDARY_TABLES.with_borrow_mut(|tables| tables.entry(plan.params_bytes()).or_default().clone())
+}
+
 pub(crate) fn boundary_limits(plan: &ColorPlan, lightness: f64, angle: f64) -> [f64; 2] {
     let last_row = BOUNDARY_TABLE_LIGHTNESS - 1;
     let rows = (lightness / plan.boundary_lightness).clamp(0.0, 1.0) * f64::from(last_row);
@@ -356,14 +406,16 @@ pub(crate) fn boundary_limits(plan: &ColorPlan, lightness: f64, angle: f64) -> [
     let mix = |from: [f64; 2], to: [f64; 2], amount: f64| {
         [0, 1].map(|limit| from[limit] + amount * (to[limit] - from[limit]))
     };
+    let nodes = boundary_nodes(plan);
+    let mut nodes = nodes.borrow_mut();
     let low = mix(
-        boundary_node(plan, column, row),
-        boundary_node(plan, next, row),
+        nodes.eroded(plan, column, row),
+        nodes.eroded(plan, next, row),
         across,
     );
     let high = mix(
-        boundary_node(plan, column, row + 1),
-        boundary_node(plan, next, row + 1),
+        nodes.eroded(plan, column, row + 1),
+        nodes.eroded(plan, next, row + 1),
         across,
     );
 

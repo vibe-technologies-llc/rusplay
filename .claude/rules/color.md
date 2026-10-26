@@ -172,10 +172,10 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   grazing one ends at most half a tolerance out, which the clamp absorbs (clamp distortion p99
   under 0.1 ΔE_ITP, at most 0.3); an excursion counts in proportion to its depth, so a
   shallow one moves `T` halfway between the inner and the outer exit and a deep one gives the
-  inner exit, every transition continuous. The boundary stays steep where the fold is (the
-  inner exit itself races toward the outer one near the tangency), up to about 9% of the peak
-  per 10-bit code in blue to magenta gradients (`color-perceptual-fold-steepness` in
-  `docs/BUGS.md`). Each channel along the ray is a cubic Hermite segment between exact samples with analytic derivatives (the PQ or cube derivative through
+  inner exit, every transition continuous. The soft exit alone stays steep where the fold is
+  (the inner exit races toward the outer one near the tangency): a blue to magenta gradient
+  moved by up to 9.6% of the peak per 10-bit code. The table below is therefore eroded across
+  hue. Each channel along the ray is a cubic Hermite segment between exact samples with analytic derivatives (the PQ or cube derivative through
   `lab_to_lms`, composed with the target or source matrix), integrated at
   `BOUNDARY_SUBSTEPS` = 4 points per segment with the crossing found by linear interpolation; a
   segment whose Bernstein hull is inside is taken whole, and the integral stops once the weight
@@ -191,11 +191,25 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   texture of (`T`, `S`) over `BOUNDARY_TABLE_HUES` = 2048 hues by `BOUNDARY_TABLE_LIGHTNESS` =
   512 lightness rows from 0 to the target peak grey's lightness (`ColorPlan::boundary_lightness`,
   `chroma_limits.z`; brighter colours read the last row, where `T` is 0). `color_boundary_bake.wgsl`
-  fills it in the first `ColorMapper::encode` or `ColorLut::encode_bake` after the plan changes
-  (about 0.26 ms, once), and `boundary_limits` reads it bilinearly with the hue wrapping, as four
+  fills an exact table in the first `ColorMapper::encode` or `ColorLut::encode_bake` after the
+  plan changes (about 0.26 ms, once), and `color_boundary_erode.wgsl` erodes it into the table
+  the pass reads: each node becomes the minimum over its row of `node(h') + BOUNDARY_HUE_SLOPE
+  × chroma limit × |h - h'|` (`BOUNDARY_HUE_SLOPE` = 4 per radian), over
+  `boundary_erosion_columns()` = 82 columns either side, which is where the cone reaches the
+  whole chroma limit, so the result is exactly the largest table below the soft boundary whose
+  slope across hue is at most that, and the loop stops once the cone exceeds the node. It never
+  raises a node, and it leaves every node whose neighbourhood is no steeper untouched: the
+  natural hue slope is p99 1.1 to 1.8 and p99.9 3.6 to 6 per radian, the folds reach 18 to 25,
+  so only the folds and a few near-white nodes change. The fold becomes a ramp of bounded
+  slope and the blue to magenta step drops to at most 2.4% of the peak per 10-bit code (1.9%
+  Oklab); slope 2 gave 1.5% but cuts into the cusps, 8 gave 4.4%. The erosion runs on 64-column
+  workgroup tiles (the row segment plus 82 columns each side in workgroup memory) and costs about
+  a third of the exact bake (0.18 ms against 0.51 ms measured together); the exact table is
+  dropped once encoded. `boundary_limits` reads it bilinearly with the hue wrapping, as four
   `textureLoad`s because `rg32float` is not filterable. A plan that is not `Perceptual` gets a
-  2x2 table that is never baked. The f64 reference interpolates the same nodes, each computed
-  exactly. Against the exact boundary per pixel the table adds mean 0.005 to 0.03, p99 0.1 to
+  2x2 table that is never baked. The f64 reference interpolates the same eroded nodes, each
+  eroded from exactly computed nodes that it caches per thread and plan (keyed by the params
+  bytes). Against the exact boundary per pixel the table adds mean 0.005 to 0.03, p99 0.1 to
   0.24 and at most 1.1 to 2.7 ΔE_ITP at the cusps (CPU emulation over the LUT test codes);
   lightness resolution dominates, 256 rows gave 5 to 8 at the cusps.
 - Tone mapping runs in the same dispatch, before gamut mapping (`color_tone.wgsl`), when the
@@ -237,9 +251,11 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   must shrink 8x when refined 256x, which the old bisection failed in 39 of 84 sweeps; the
   grazing codes (0.28125, 0.23338, 0.546875) and green + 0.0005 map within 0.02 (0.722 and
   0.712 blue, against 0.777 and 0.683 before) on CPU and GPU; mapped chroma grows
-  monotonically through the fold; the GPU follows the reference along the gradients; and the
-  table's `T` stays within 0.2% of the chroma limit of the exact boundary at p99 (at most 6%,
-  at the cusps). Tone tests check BT.2390 against its reference points (the
+  monotonically through the fold; the GPU follows the reference along the gradients; every
+  10-bit BT.2020 blue to magenta gradient (blue from code 300 up, red from 0 to blue) steps by
+  at most 3% of the peak per code, against 9.6% before the erosion; and the table's `T` stays
+  within 0.2% of the chroma limit of the exact boundary at p99 and never more than 1% above it
+  (0.3 to 0.65% measured), sitting up to 7 to 17% below it where the erosion cuts a fold. Tone tests check BT.2390 against its reference points (the
   4000 to 1000 cd/m² maxLum 0.83298 and KS 0.74947, identity below KS, slope 1 at the knee,
   source peak onto target peak, the black lift), that every operator is monotonic and lands on
   the target peak, that hue is held and chroma scales with the intensity ratio, that the

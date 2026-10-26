@@ -243,7 +243,7 @@ paths:
   identity matrix, no tone stage, equal white levels), which is how the host skips the mapper.
 - Tone and gamut mapping (`color.rs`, `color/`, `color_*.wgsl`) share `ScalePipelines`
   (`ColorPipelines`: the map pass at 8x8 with a params, tone-state and boundary-table layout,
-  the boundary table's bake at 16x4, and the histogram and peak passes on an analysis layout), the source and destination layouts and
+  the boundary table's bake at 16x4 and its hue erosion at 64x1 (`BoundaryPipelines`), and the histogram and peak passes on an analysis layout), the source and destination layouts and
   the `GroupCache` scheme with the scaler. Their design is in `.claude/rules/color.md`.
 - `bench.rs` is an ignored test that prints per-frame GPU times for the representative
   workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored

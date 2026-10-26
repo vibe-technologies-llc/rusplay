@@ -9,6 +9,8 @@ override BOUNDARY_RAMP_CENTRE: f32 = 0.5;
 override BOUNDARY_REACH: f32 = 3.0;
 override BOUNDARY_HEADROOM: f32 = 1.25;
 override COMPRESSION_POWER: f32 = 1.2;
+override BOUNDARY_HUE_SLOPE: f32 = 4.0;
+override BOUNDARY_EROSION_COLUMNS: u32 = 82u;
 
 const PATH_MATRIX: u32 = 0u;
 const PATH_PERCEPTUAL: u32 = 1u;

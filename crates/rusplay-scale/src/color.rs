@@ -40,6 +40,7 @@ pub(crate) const BOUNDARY_REACH: f64 = 3.0;
 pub(crate) const BOUNDARY_HEADROOM: f64 = 1.25;
 pub(crate) const BOUNDARY_TABLE_HUES: u32 = 2048;
 pub(crate) const BOUNDARY_TABLE_LIGHTNESS: u32 = 512;
+pub(crate) const BOUNDARY_HUE_SLOPE: f64 = 4.0;
 const UNUSED_BOUNDARY_TABLE: u32 = 2;
 const CHROMA_LIMIT_SAMPLES: u32 = 32;
 const CHROMA_LIMIT_HEADROOM: f64 = 1.2;
@@ -428,7 +429,7 @@ impl ColorPlan {
         self.target_peak
     }
 
-    fn params_bytes(&self) -> Vec<u8> {
+    pub(crate) fn params_bytes(&self) -> Vec<u8> {
         let mut words = Vec::with_capacity(PARAMS_WORDS);
         for matrix in [
             self.source_to_target,
@@ -514,15 +515,111 @@ fn float(value: f64) -> u32 {
     narrowed.to_bits()
 }
 
+pub(crate) fn boundary_erosion_columns() -> u32 {
+    let columns = f64::from(BOUNDARY_TABLE_HUES) / (std::f64::consts::TAU * BOUNDARY_HUE_SLOPE);
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let columns = columns.ceil() as u32;
+    columns
+}
+
 #[derive(Debug)]
 struct MapperBuffers {
     map_group: wgpu::BindGroup,
     analysis_group: wgpu::BindGroup,
-    boundary_store_group: wgpu::BindGroup,
-    boundary_params_group: wgpu::BindGroup,
-    boundary_size: (u32, u32),
-    boundary_baked: bool,
+    boundary_bake: Option<BoundaryBake>,
     tone_state: wgpu::Buffer,
+}
+
+#[derive(Debug)]
+struct BoundaryBake {
+    size: (u32, u32),
+    exact_store_group: wgpu::BindGroup,
+    exact_params_group: wgpu::BindGroup,
+    eroded_store_group: wgpu::BindGroup,
+    erosion_source_group: wgpu::BindGroup,
+}
+
+impl BoundaryBake {
+    fn new(
+        pipelines: &ScalePipelines,
+        device: &wgpu::Device,
+        params: &wgpu::Buffer,
+        table: &wgpu::TextureView,
+        size: (u32, u32),
+    ) -> Self {
+        let exact = boundary_texture(device, "rusplay-color-boundary-exact", size);
+
+        Self {
+            size,
+            exact_store_group: gpu::view_group(
+                device,
+                &pipelines.color.boundary.store_layout,
+                &exact,
+            ),
+            exact_params_group: buffer_group(
+                device,
+                "rusplay-color-boundary-params",
+                &pipelines.color.boundary.params_layout,
+                &[params],
+            ),
+            eroded_store_group: gpu::view_group(
+                device,
+                &pipelines.color.boundary.store_layout,
+                table,
+            ),
+            erosion_source_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rusplay-color-boundary-erosion"),
+                layout: &pipelines.color.boundary.erosion_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&exact),
+                    },
+                ],
+            }),
+        }
+    }
+
+    fn encode(&self, pipelines: &ScalePipelines, encoder: &mut wgpu::CommandEncoder) {
+        gpu::dispatch(
+            encoder,
+            "rusplay-color-boundary-bake",
+            &pipelines.color.boundary.bake,
+            &[&self.exact_store_group, &self.exact_params_group],
+            self.size,
+        );
+        gpu::dispatch(
+            encoder,
+            "rusplay-color-boundary-erode",
+            &pipelines.color.boundary.erode,
+            &[&self.eroded_store_group, &self.erosion_source_group],
+            self.size,
+        );
+    }
+}
+
+fn boundary_texture(device: &wgpu::Device, label: &str, size: (u32, u32)) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: BOUNDARY_TABLE_FORMAT,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 impl MapperBuffers {
@@ -540,22 +637,7 @@ impl MapperBuffers {
             mapped_at_creation: false,
         });
         let boundary_size = plan.boundary_table_size();
-        let boundary = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("rusplay-color-boundary"),
-                size: wgpu::Extent3d {
-                    width: boundary_size.0,
-                    height: boundary_size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: BOUNDARY_TABLE_FORMAT,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let boundary = boundary_texture(device, "rusplay-color-boundary", boundary_size);
 
         Self {
             map_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -582,36 +664,16 @@ impl MapperBuffers {
                 &pipelines.color.analysis_layout,
                 &[&params, &tone_state, &histogram],
             ),
-            boundary_store_group: gpu::view_group(
-                device,
-                &pipelines.color.boundary_store_layout,
-                &boundary,
-            ),
-            boundary_params_group: buffer_group(
-                device,
-                "rusplay-color-boundary-params",
-                &pipelines.color.boundary_params_layout,
-                &[&params],
-            ),
-            boundary_baked: plan.path != MappingPath::Perceptual,
-            boundary_size,
+            boundary_bake: (plan.path == MappingPath::Perceptual)
+                .then(|| BoundaryBake::new(pipelines, device, &params, &boundary, boundary_size)),
             tone_state,
         }
     }
 
     fn encode_boundary(&mut self, pipelines: &ScalePipelines, encoder: &mut wgpu::CommandEncoder) {
-        if self.boundary_baked {
-            return;
+        if let Some(bake) = self.boundary_bake.take() {
+            bake.encode(pipelines, encoder);
         }
-
-        gpu::dispatch(
-            encoder,
-            "rusplay-color-boundary-bake",
-            &pipelines.color.boundary_bake,
-            &[&self.boundary_store_group, &self.boundary_params_group],
-            self.boundary_size,
-        );
-        self.boundary_baked = true;
     }
 }
 
