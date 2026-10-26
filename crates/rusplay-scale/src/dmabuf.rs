@@ -1,4 +1,5 @@
 mod fence;
+mod gpu_fence;
 #[cfg(test)]
 mod tests;
 mod vulkan;
@@ -8,8 +9,11 @@ use std::{collections::VecDeque, os::fd::BorrowedFd};
 use ash::vk;
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
-pub use self::fence::{WriteFence, wait_for_writes};
 use self::vulkan::{ImageRequest, MemoryPlane, ModifierProperties, VulkanImporter};
+pub use self::{
+    fence::{WriteFence, wait_for_writes},
+    gpu_fence::{GpuFenceWait, GpuFenceWaiter, request_fence_wait_device},
+};
 use crate::{ChannelOrder, ScaleError, SourceChannels};
 
 pub const DMABUF_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;

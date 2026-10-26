@@ -203,12 +203,27 @@ paths:
   `Frame`) until the GPU work reading it completes: `release_after_submission(&queue, lease)`
   after `Queue::submit` drops it from `on_submitted_work_done`. A PipeWire capture frame stays
   valid while its `BufferLease` lives, so holding the `Frame` until the work is done is enough.
-  Before reading a producer's buffer, `wait_for_writes(fd, timeout)` (`dmabuf/fence.rs`) polls the
-  dma-buf fd for `POLLIN`, which the kernel signals once every write fence on it (the implicit
-  sync a PipeWire producer relies on when no explicit sync is negotiated) has signalled, and
-  reports `Signalled` or `TimedOut`. It is a CPU wait on the frame path, one syscall when
-  the producer has finished; moving it onto the GPU is `scale-dmabuf-gpu-fence-wait` in
-  `docs/PERFORMANCE.md`. Decoder surfaces need none of this, `vaSyncSurface` already waited.
+  Before reading a producer's buffer its write fences must have signalled (the implicit sync a
+  PipeWire producer relies on when no explicit sync is negotiated). `wait_for_writes(fd, timeout)`
+  (`dmabuf/fence.rs`) polls the dma-buf fd for `POLLIN`, which the kernel signals once every write
+  fence on it has, and reports `Signalled` or `TimedOut`; it is a CPU wait, one syscall when the
+  producer has finished, and the fallback. `GpuFenceWaiter` (`dmabuf/gpu_fence.rs`) moves the wait
+  onto the GPU: `stage(queue, fd)` exports the write fences with
+  `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` (`DMA_BUF_SYNC_READ`), imports the sync file into a fresh
+  binary semaphore as a temporary `SYNC_FD` payload and adds it to the Vulkan queue's wait list
+  with `hal::vulkan::Queue::add_wait_semaphore` at `ALL_COMMANDS`, so the next `Queue::submit`
+  waits for it and nothing else may submit in between. The returned `GpuFenceWait` owns the
+  semaphore: dropped before the submit it unstages and destroys it, dropped after the submit it
+  destroys it from `on_submitted_work_done`, so a semaphore is never destroyed while a
+  submission can still wait on it (`live_semaphores()` counts the ones alive). The GPU wait has
+  no timeout: dma-fences must signal in finite time, and only the CPU fallback honours
+  `capture.dmabuf_fence_timeout_ms`. wgpu 30 does not enable `VK_KHR_external_semaphore_fd`, so
+  `request_fence_wait_device(adapter, label)` opens the device through
+  `wgpu::hal::vulkan::Adapter::open_with_callback` adding it (when the physical device lists it,
+  is Vulkan 1.1 and reports `SYNC_FD` semaphores importable) and otherwise falls back to
+  `Adapter::request_device`; only the host calls it, the client and app keep
+  `device_descriptor`. `GpuFenceWaiter::new` fails with `GpuFenceWaitUnavailable` on a device
+  opened any other way. Decoder surfaces need none of this, `vaSyncSurface` already waited.
 - Workgroup shapes are per pipeline (`ShaderPass` carries the pipeline and its shape, the
   shaders take it through the `WORKGROUP_X`/`WORKGROUP_Y` overrides in `workgroup.wgsl`, and
   `gpu::dispatch` divides by the same shape). Measured on an RX 9070 XT: polar runs at 64x1

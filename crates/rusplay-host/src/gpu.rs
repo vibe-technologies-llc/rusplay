@@ -21,11 +21,7 @@ async fn request() -> Result<Gpu, HostError> {
         })
         .await
         .map_err(|_| HostError::NoGpuAdapter)?;
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("rusplay-host"),
-            ..rusplay_scale::device_descriptor(&adapter)
-        })
+    let (device, queue) = rusplay_scale::request_fence_wait_device(&adapter, "rusplay-host")
         .await
         .map_err(HostError::GpuDevice)?;
 

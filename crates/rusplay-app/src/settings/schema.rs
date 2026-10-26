@@ -982,6 +982,13 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Capture,
         "Source",
+        "capture.dmabuf_gpu_fence_wait",
+        "Wait for DMA-BUF fences on the GPU",
+        Kind::Flag,
+    ),
+    field(
+        Section::Capture,
+        "Source",
         "capture.dmabuf_fence_timeout_ms",
         "DMA-BUF fence timeout",
         U32,

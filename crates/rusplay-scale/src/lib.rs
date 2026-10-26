@@ -33,7 +33,8 @@ pub use crate::{
     },
     dmabuf::{
         DMABUF_FEATURES, DmaBuf, DmaBufFormat, DmaBufImporter, DmaBufPlane, DmaBufTexture,
-        WriteFence, device_descriptor, release_after_submission, wait_for_writes,
+        GpuFenceWait, GpuFenceWaiter, WriteFence, device_descriptor, release_after_submission,
+        request_fence_wait_device, wait_for_writes,
     },
     error::ScaleError,
     gpu::ScalePipelines,

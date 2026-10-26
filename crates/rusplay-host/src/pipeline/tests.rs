@@ -135,8 +135,8 @@ fn ten_bit_code(value: f64) -> u32 {
 }
 
 fn luma_row(pipeline: &mut GpuPipeline, frame: &Frame) -> Vec<u32> {
-    let source = pipeline.upload(frame).unwrap().unwrap();
-    pipeline.convert(&source).unwrap();
+    let mut source = pipeline.upload(frame).unwrap().unwrap();
+    pipeline.convert(&mut source).unwrap();
     pipeline.read_back(frame.timestamp).unwrap();
 
     let input = pipeline.input.as_ref().unwrap();
@@ -366,4 +366,39 @@ fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
                 | ScaleError::DmaBufNeedsVulkan
         ))
     ));
+}
+
+#[test]
+fn gpu_fence_waits_convert_like_cpu_fence_waits() {
+    let mut on = config(srgb(), BitDepth::Eight);
+    on.capture.dmabuf_gpu_fence_wait = true;
+    let mut off = on.clone();
+    off.capture.dmabuf_gpu_fence_wait = false;
+    let (Some(mut gpu_wait), Some(mut cpu_wait)) = (dmabuf_pipeline(on), dmabuf_pipeline(off))
+    else {
+        return;
+    };
+    let texel = |column: u32| xrgb8888(column * 15, 200, 255 - column * 15);
+
+    let gpu_waited = luma_row(&mut gpu_wait, &dmabuf_frame(*b"XR24", srgb(), texel));
+    let cpu_waited = luma_row(&mut cpu_wait, &dmabuf_frame(*b"XR24", srgb(), texel));
+
+    assert!(gpu_wait.fence_waiter.is_some());
+    assert!(cpu_wait.fence_waiter.is_none());
+    assert_eq!(gpu_waited, cpu_waited);
+}
+
+#[test]
+fn a_fence_the_gpu_cannot_wait_on_falls_back_to_the_cpu_wait() {
+    let mut config = config(srgb(), BitDepth::Eight);
+    config.capture.dmabuf_fence_timeout_ms = 5;
+    let Some(pipeline) = dmabuf_pipeline(config) else {
+        return;
+    };
+    let (unready, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+
+    let fence = pipeline.gate_on_writes(unready.as_fd()).unwrap();
+
+    assert!(pipeline.fence_waiter.is_some());
+    assert!(fence.is_none());
 }

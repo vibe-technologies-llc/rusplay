@@ -112,10 +112,17 @@ paths:
     makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
     `PipeWireCapture` forwards) and skip the frame, so PipeWire renegotiates to shared memory and
     the session keeps going; a source without a fallback returns the import error.
-  - Before importing, the pipeline waits for the buffer's write fences with
-    `rusplay_scale::wait_for_writes` for up to `capture.dmabuf_fence_timeout_ms` (default 100,
-    0 only checks); a timeout reads the buffer as it is rather than dropping the frame, so a
-    producer whose fences never signal still streams, as it did before the wait existed.
+  - Before the GPU reads a DMA-BUF the pipeline waits for its write fences (`gate_on_writes`).
+    A buffer whose fences have already signalled (a zero-timeout `wait_for_writes`) is read
+    straight away. Otherwise, with `capture.dmabuf_gpu_fence_wait` on (default) and a
+    `GpuFenceWaiter` (the host's device from `Gpu::open` carries `VK_KHR_external_semaphore_fd`
+    where the driver has it), the fence is staged as a queue wait semaphore, held in
+    `Source::fence` and released right after `convert` submits, so the host thread never blocks
+    on the producer. Without a waiter, or when staging fails (a kernel without
+    `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`), it falls back to `rusplay_scale::wait_for_writes` for up to
+    `capture.dmabuf_fence_timeout_ms` (default 100, 0 only checks); a timeout reads the buffer
+    as it is rather than dropping the frame, so a producer whose fences never signal still
+    streams, as it did before the wait existed. The GPU wait has no timeout.
   - The frame, and so its PipeWire buffer lease, is held until the readback wait has seen the GPU
     finish, and then as the feed's retained frame; the encode stage drops the previous retained
     frame before encoding the next, so a session holds at most three capture buffers.

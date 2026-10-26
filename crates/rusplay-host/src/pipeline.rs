@@ -14,8 +14,9 @@ use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
-    DmaBufImporter, DmaBufPlane, InputLight, LineariseSettings, Lineariser, PlaneLayout,
-    ScalePipelines, ScaleSettings, Scaler, YuvFrame, wait_for_writes,
+    DmaBufImporter, DmaBufPlane, GpuFenceWait, GpuFenceWaiter, InputLight, LineariseSettings,
+    Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, WriteFence, YuvFrame,
+    wait_for_writes,
 };
 
 use crate::{
@@ -73,6 +74,7 @@ struct Source {
     key: RouteKey,
     view: wgpu::TextureView,
     srgb_view: Option<wgpu::TextureView>,
+    fence: Option<GpuFenceWait>,
 }
 
 struct Linear {
@@ -98,6 +100,7 @@ pub(crate) struct GpuPipeline {
     pipelines: ScalePipelines,
     fallback: Option<ShmFallback>,
     importer: Option<DmaBufImporter>,
+    fence_waiter: Option<GpuFenceWaiter>,
     upload: Option<Upload>,
     route: Option<(RouteKey, Route)>,
     prepared: Option<Linear>,
@@ -117,6 +120,11 @@ pub(crate) struct GpuPipeline {
 impl GpuPipeline {
     pub(crate) fn new(gpu: Gpu, config: Config, fallback: Option<ShmFallback>) -> Self {
         let pipelines = ScalePipelines::new(&gpu.device);
+        let fence_waiter = config
+            .capture
+            .dmabuf_gpu_fence_wait
+            .then(|| GpuFenceWaiter::new(&gpu.device).ok())
+            .flatten();
 
         Self {
             gpu,
@@ -124,6 +132,7 @@ impl GpuPipeline {
             pipelines,
             fallback,
             importer: None,
+            fence_waiter,
             upload: None,
             route: None,
             prepared: None,
@@ -191,6 +200,7 @@ impl GpuPipeline {
             },
             view: upload.view.clone(),
             srgb_view: upload.srgb_view.clone(),
+            fence: None,
         })
     }
 
@@ -201,10 +211,6 @@ impl GpuPipeline {
         modifier: u64,
         planes: &[Plane],
     ) -> Result<Source, HostError> {
-        let fence_timeout =
-            Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms));
-        wait_for_writes(fd, fence_timeout)?;
-
         let importer = match &mut self.importer {
             Some(importer) => importer,
             None => self.importer.insert(DmaBufImporter::new(&self.gpu.device)?),
@@ -249,7 +255,26 @@ impl GpuPipeline {
             },
             view: view.clone(),
             srgb_view,
+            fence: self.gate_on_writes(fd)?,
         })
+    }
+
+    fn gate_on_writes(&self, fd: BorrowedFd<'_>) -> Result<Option<GpuFenceWait>, HostError> {
+        let timeout = Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms));
+        let Some(waiter) = &self.fence_waiter else {
+            wait_for_writes(fd, timeout)?;
+            return Ok(None);
+        };
+
+        if wait_for_writes(fd, Duration::ZERO)? == WriteFence::Signalled {
+            return Ok(None);
+        }
+        if let Ok(wait) = waiter.stage(&self.gpu.queue, fd) {
+            return Ok(Some(wait));
+        }
+
+        wait_for_writes(fd, timeout)?;
+        Ok(None)
     }
 
     fn route(&mut self, key: RouteKey) -> Result<Route, HostError> {
@@ -264,7 +289,7 @@ impl GpuPipeline {
         Ok(route)
     }
 
-    fn convert(&mut self, source: &Source) -> Result<(), HostError> {
+    fn convert(&mut self, source: &mut Source) -> Result<(), HostError> {
         let route = self.route(source.key)?;
         let capture = source.key.capture;
         let stream = self.config.video.resolution.unwrap_or(capture);
@@ -328,6 +353,7 @@ impl GpuPipeline {
             conversion.output.layout().size,
         );
         self.gpu.queue.submit([encoder.finish()]);
+        drop(source.fence.take());
 
         Ok(())
     }
@@ -413,10 +439,10 @@ impl GpuPipeline {
 
 impl VideoPipeline for GpuPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
-        let Some(source) = self.upload(frame)? else {
+        let Some(mut source) = self.upload(frame)? else {
             return Ok(None);
         };
-        self.convert(&source)?;
+        self.convert(&mut source)?;
         self.read_back(frame.timestamp)?;
         self.encode_input(keyframe)
     }

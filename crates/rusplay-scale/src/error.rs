@@ -88,6 +88,14 @@ pub enum ScaleError {
     DmaBufFdStat(#[source] Errno),
     #[error("waiting for a dma-buf's write fences failed")]
     DmaBufFencePoll(#[source] Errno),
+    #[error("exporting a dma-buf's write fences as a sync file failed")]
+    DmaBufFenceExport(#[source] Errno),
+    #[error("the device was created without VK_KHR_external_semaphore_fd sync file import")]
+    GpuFenceWaitUnavailable,
+    #[error("vkCreateSemaphore failed for a dma-buf fence")]
+    GpuFenceSemaphoreCreate(#[source] vk::Result),
+    #[error("vkImportSemaphoreFdKHR failed for a dma-buf fence")]
+    GpuFenceSemaphoreImport(#[source] vk::Result),
     #[error("vkCreateImage failed for a dma-buf import")]
     DmaBufImageCreate(#[source] vk::Result),
     #[error("vkGetMemoryFdPropertiesKHR failed for a dma-buf")]

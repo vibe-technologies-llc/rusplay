@@ -460,3 +460,169 @@ fn a_fence_that_never_signals_times_out() {
 
     assert_eq!(fence, WriteFence::TimedOut);
 }
+
+struct FenceFixture {
+    gpu: &'static Gpu,
+    importer: DmaBufImporter,
+    waiter: GpuFenceWaiter,
+}
+
+fn fence_gpu() -> Option<&'static Gpu> {
+    static GPU: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
+
+    GPU.get_or_init(|| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..wgpu::RequestAdapterOptions::default()
+        }))
+        .ok()?;
+        let (device, queue) =
+            pollster::block_on(request_fence_wait_device(&adapter, "rusplay-test-fence")).ok()?;
+
+        Some(Gpu { device, queue })
+    })
+    .as_ref()
+}
+
+fn fence_fixture() -> Option<FenceFixture> {
+    let gpu = fence_gpu()?;
+    udmabuf(&[0])?;
+
+    Some(FenceFixture {
+        gpu,
+        importer: DmaBufImporter::new(&gpu.device).ok()?,
+        waiter: GpuFenceWaiter::new(&gpu.device).ok()?,
+    })
+}
+
+fn read_through_lineariser(
+    fixture: &FenceFixture,
+    pipelines: &ScalePipelines,
+    texture: &DmaBufTexture,
+    fence: &mut dyn FnMut(),
+) -> Image {
+    let gpu = fixture.gpu;
+    let channels = texture.channels().unwrap();
+    let mut lineariser =
+        Lineariser::new(pipelines, &gpu.device, LineariseSettings::encoded(channels)).unwrap();
+    let (width, height) = (texture.resolution().width, texture.resolution().height);
+    let target = testing::storage_target(gpu, width, height);
+
+    fence();
+    testing::submit(gpu, |encoder| {
+        lineariser
+            .encode(
+                &gpu.device,
+                encoder,
+                texture.view(0).unwrap(),
+                &testing::view(&target),
+            )
+            .unwrap();
+    });
+
+    testing::download(gpu, &target)
+}
+
+#[test]
+fn the_fence_wait_device_opens_with_semaphore_import() {
+    let Some(gpu) = fence_gpu() else {
+        return;
+    };
+
+    let waiter = GpuFenceWaiter::new(&gpu.device);
+
+    assert!(waiter.is_ok());
+    assert_eq!(
+        GpuFenceWaiter::new(&testing::gpu().unwrap().device).unwrap_err(),
+        ScaleError::GpuFenceWaitUnavailable
+    );
+}
+
+#[test]
+fn waiting_on_the_gpu_reads_the_same_pixels_as_waiting_on_the_cpu() {
+    let Some(mut fixture) = fence_fixture() else {
+        return;
+    };
+    let pipelines = ScalePipelines::new(&fixture.gpu.device);
+    let size = (37, 23);
+
+    for format in [DmaBufFormat::Xrgb8888, DmaBufFormat::Abgr2101010] {
+        let fd = udmabuf(&rgb_bytes(size, format.fourcc())).unwrap();
+        let texture = fixture
+            .importer
+            .import(&single_plane(&fd, format.fourcc(), size, RGB_STRIDE))
+            .unwrap();
+
+        let cpu_waited = read_through_lineariser(&fixture, &pipelines, &texture, &mut || {
+            wait_for_writes(fd.as_fd(), std::time::Duration::from_millis(100)).unwrap();
+        });
+        let mut staged = None;
+        let gpu_waited = read_through_lineariser(&fixture, &pipelines, &texture, &mut || {
+            staged = Some(
+                fixture
+                    .waiter
+                    .stage(&fixture.gpu.queue, fd.as_fd())
+                    .unwrap(),
+            );
+        });
+        drop(staged);
+
+        assert_eq!(gpu_waited.max_difference(&cpu_waited), 0.0, "{format:?}");
+    }
+}
+
+#[test]
+fn staged_semaphores_are_destroyed_once_their_submission_completes() {
+    let Some(mut fixture) = fence_fixture() else {
+        return;
+    };
+    let pipelines = ScalePipelines::new(&fixture.gpu.device);
+    let size = (16, 8);
+    let fd = udmabuf(&rgb_bytes(size, 9)).unwrap();
+    let fourcc = DmaBufFormat::Xrgb8888.fourcc();
+    let texture = fixture
+        .importer
+        .import(&single_plane(&fd, fourcc, size, RGB_STRIDE))
+        .unwrap();
+    let mut peak = 0;
+
+    for _ in 0..300 {
+        let mut staged = None;
+        read_through_lineariser(&fixture, &pipelines, &texture, &mut || {
+            staged = Some(
+                fixture
+                    .waiter
+                    .stage(&fixture.gpu.queue, fd.as_fd())
+                    .unwrap(),
+            );
+        });
+        drop(staged);
+        peak = peak.max(fixture.waiter.live_semaphores());
+    }
+    fixture
+        .gpu
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+
+    assert!(peak <= 2, "{peak} semaphores alive at once");
+    assert_eq!(fixture.waiter.live_semaphores(), 0);
+}
+
+#[test]
+fn a_staged_wait_that_is_never_submitted_leaves_the_queue_clean() {
+    let Some(fixture) = fence_fixture() else {
+        return;
+    };
+    let fd = udmabuf(&[0]).unwrap();
+
+    let staged = fixture
+        .waiter
+        .stage(&fixture.gpu.queue, fd.as_fd())
+        .unwrap();
+    assert_eq!(fixture.waiter.live_semaphores(), 1);
+    drop(staged);
+
+    assert_eq!(fixture.waiter.live_semaphores(), 0);
+}
