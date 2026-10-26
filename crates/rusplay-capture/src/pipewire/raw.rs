@@ -1,4 +1,5 @@
 use std::{
+    ffi::CStr,
     mem,
     os::fd::BorrowedFd,
     ptr::{self, NonNull},
@@ -115,6 +116,17 @@ impl HeldBuffers {
         let raw = ptr::with_exposed_provenance_mut::<pw_sys::pw_buffer>(handle.address);
         unsafe { stream.queue_raw_buffer(raw) };
     }
+}
+
+pub(crate) fn library_version() -> String {
+    let version = unsafe { pw_sys::pw_get_library_version() };
+    if version.is_null() {
+        return String::new();
+    }
+
+    unsafe { CStr::from_ptr(version) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn header_is_corrupted(header: &[u8]) -> bool {

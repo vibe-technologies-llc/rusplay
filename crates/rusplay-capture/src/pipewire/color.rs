@@ -14,6 +14,59 @@ pub(crate) struct SpaColorimetry {
     pub primaries: u32,
 }
 
+pub(crate) const DESCRIBABLE_TRANSFERS: [u32; 12] = [
+    sys::SPA_VIDEO_TRANSFER_SMPTE2084,
+    sys::SPA_VIDEO_TRANSFER_ARIB_STD_B67,
+    sys::SPA_VIDEO_TRANSFER_SRGB,
+    sys::SPA_VIDEO_TRANSFER_BT709,
+    sys::SPA_VIDEO_TRANSFER_GAMMA22,
+    sys::SPA_VIDEO_TRANSFER_GAMMA10,
+    sys::SPA_VIDEO_TRANSFER_BT2020_10,
+    sys::SPA_VIDEO_TRANSFER_BT2020_12,
+    sys::SPA_VIDEO_TRANSFER_BT601,
+    sys::SPA_VIDEO_TRANSFER_SMPTE240M,
+    sys::SPA_VIDEO_TRANSFER_ADOBERGB,
+    sys::SPA_VIDEO_TRANSFER_UNKNOWN,
+];
+
+pub(crate) const DESCRIBABLE_PRIMARIES: [u32; 12] = [
+    sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTEEG432,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTERP431,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_BT709,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTE170M,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_BT470BG,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTE240M,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_ADOBERGB,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_BT470M,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_FILM,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_EBU3213,
+    sys::SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN,
+];
+
+pub(crate) const fn spa_transfer_for(transfer: TransferFunction) -> u32 {
+    match transfer {
+        TransferFunction::Pq => sys::SPA_VIDEO_TRANSFER_SMPTE2084,
+        TransferFunction::Hlg => sys::SPA_VIDEO_TRANSFER_ARIB_STD_B67,
+        TransferFunction::Srgb => sys::SPA_VIDEO_TRANSFER_SRGB,
+        TransferFunction::Bt709 => sys::SPA_VIDEO_TRANSFER_BT709,
+        TransferFunction::Gamma22 => sys::SPA_VIDEO_TRANSFER_GAMMA22,
+        TransferFunction::Linear => sys::SPA_VIDEO_TRANSFER_GAMMA10,
+    }
+}
+
+pub(crate) const fn spa_primaries_for(primaries: ColorPrimaries) -> Option<u32> {
+    match primaries {
+        ColorPrimaries::Bt2020 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020),
+        ColorPrimaries::DisplayP3 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTEEG432),
+        ColorPrimaries::DciP3 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTERP431),
+        ColorPrimaries::Bt709 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_BT709),
+        ColorPrimaries::Bt601_525 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_SMPTE170M),
+        ColorPrimaries::Bt601_625 => Some(sys::SPA_VIDEO_COLOR_PRIMARIES_BT470BG),
+        ColorPrimaries::Custom(_) => None,
+    }
+}
+
 pub(crate) fn describe_color(
     colorimetry: &SpaColorimetry,
     hdr: HdrLevels,
@@ -101,6 +154,52 @@ mod tests {
             primaries,
             ..SpaColorimetry::default()
         }
+    }
+
+    #[test]
+    fn every_offered_colour_id_is_describable() {
+        for transfer in DESCRIBABLE_TRANSFERS {
+            for primaries in DESCRIBABLE_PRIMARIES {
+                assert!(
+                    describe_color(&colorimetry(primaries, transfer), HdrLevels::default()).is_ok(),
+                    "transfer {transfer}, primaries {primaries}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_preferred_ids_describe_the_stream_colour() {
+        for transfer in [
+            TransferFunction::Pq,
+            TransferFunction::Hlg,
+            TransferFunction::Srgb,
+            TransferFunction::Bt709,
+            TransferFunction::Gamma22,
+            TransferFunction::Linear,
+        ] {
+            for primaries in [
+                ColorPrimaries::Bt2020,
+                ColorPrimaries::DisplayP3,
+                ColorPrimaries::DciP3,
+                ColorPrimaries::Bt709,
+                ColorPrimaries::Bt601_525,
+                ColorPrimaries::Bt601_625,
+            ] {
+                let ids = colorimetry(
+                    spa_primaries_for(primaries).unwrap(),
+                    spa_transfer_for(transfer),
+                );
+
+                let space = describe_color(&ids, HdrLevels::default()).unwrap();
+
+                assert_eq!((space.transfer, space.primaries), (transfer, primaries));
+            }
+        }
+        assert_eq!(
+            spa_primaries_for(ColorPrimaries::Custom(Chromaticities::ADOBE_RGB)),
+            None
+        );
     }
 
     #[test]

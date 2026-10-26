@@ -42,7 +42,7 @@ use rusplay_capture::{
     Received, RestoreTokenStore, StreamOptions,
 };
 use rusplay_config::Config;
-use rusplay_core::Resolution;
+use rusplay_core::{ColorPrimaries, Resolution, TransferFunction};
 
 const FRAME_WAIT: Duration = Duration::from_secs(5);
 const SOURCE_SIZE: Resolution = Resolution::new(64, 48);
@@ -90,11 +90,33 @@ fn local_source_delivers_shared_memory_frames() {
 
     assert_eq!(frame.resolution, SOURCE_SIZE);
     assert_eq!(frame.format, DrmFourcc::from_code(*b"XR24"));
+    assert_eq!(frame.color.transfer, TransferFunction::Srgb);
+    assert_eq!(frame.color.primaries, ColorPrimaries::Bt709);
     let FrameBuffer::Shm { data, stride } = frame.buffer else {
         panic!("expected a shared-memory frame");
     };
     assert_eq!(stride, SOURCE_STRIDE);
     assert!(data.iter().all(|byte| *byte == SOURCE_FILL));
+}
+
+#[test]
+#[ignore = "needs a running PipeWire daemon"]
+fn a_source_describing_hdr_is_captured_with_its_description() {
+    let source = TestSource::spawn_described(
+        SourceMemory::Shared,
+        Colorimetry {
+            transfer: sys::SPA_VIDEO_TRANSFER_SMPTE2084,
+            primaries: sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020,
+        },
+    );
+    let config = Config::default();
+    let options = StreamOptions::new(&config.capture, &config.video);
+
+    let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+    let frame = capture.next_frame().unwrap();
+
+    assert_eq!(frame.color.transfer, TransferFunction::Pq);
+    assert_eq!(frame.color.primaries, ColorPrimaries::Bt2020);
 }
 
 #[test]
@@ -173,6 +195,12 @@ fn pipewire_socket() -> OwnedFd {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Colorimetry {
+    transfer: u32,
+    primaries: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceMemory {
     Shared,
     DmaBuf,
@@ -194,10 +222,18 @@ struct TestSource {
 
 impl TestSource {
     fn spawn(memory: SourceMemory) -> Self {
+        Self::start(memory, None)
+    }
+
+    fn spawn_described(memory: SourceMemory, colorimetry: Colorimetry) -> Self {
+        Self::start(memory, Some(colorimetry))
+    }
+
+    fn start(memory: SourceMemory, colorimetry: Option<Colorimetry>) -> Self {
         let (stop, stop_rx) = channel::channel();
         let (ready, ready_rx) = mpsc::channel();
 
-        let thread = thread::spawn(move || run_source(memory, ready, stop_rx));
+        let thread = thread::spawn(move || run_source(memory, colorimetry, ready, stop_rx));
         let node_id = ready_rx.recv_timeout(FRAME_WAIT).unwrap();
 
         Self {
@@ -228,7 +264,7 @@ fn int(value: u32) -> Value {
     Value::Int(i32::try_from(value).unwrap())
 }
 
-fn source_format(memory: SourceMemory) -> Vec<u8> {
+fn source_format(memory: SourceMemory, colorimetry: Option<Colorimetry>) -> Vec<u8> {
     let mut properties = vec![
         Property::new(
             FormatProperties::MediaType.as_raw(),
@@ -254,6 +290,16 @@ fn source_format(memory: SourceMemory) -> Vec<u8> {
             Value::Fraction(Fraction { num: 60, denom: 1 }),
         ),
     ];
+    if let Some(colorimetry) = colorimetry {
+        properties.push(Property::new(
+            FormatProperties::VideoTransferFunction.as_raw(),
+            Value::Id(Id(colorimetry.transfer)),
+        ));
+        properties.push(Property::new(
+            FormatProperties::VideoColorPrimaries.as_raw(),
+            Value::Id(Id(colorimetry.primaries)),
+        ));
+    }
     if memory == SourceMemory::DmaBuf {
         let modifiers = vec![DRM_FORMAT_MOD_LINEAR.cast_signed(), AMD_TILED.cast_signed()];
         properties.push(Property {
@@ -431,7 +477,12 @@ fn produce(stream: &Stream, state: &mut SourceState) {
     unsafe { stream.queue_raw_buffer(raw) };
 }
 
-fn run_source(memory: SourceMemory, ready: mpsc::Sender<u32>, stop: channel::Receiver<()>) {
+fn run_source(
+    memory: SourceMemory,
+    colorimetry: Option<Colorimetry>,
+    ready: mpsc::Sender<u32>,
+    stop: channel::Receiver<()>,
+) {
     pipewire::init();
 
     let mainloop = MainLoopRc::new(None).unwrap();
@@ -477,7 +528,7 @@ fn run_source(memory: SourceMemory, ready: mpsc::Sender<u32>, stop: channel::Rec
         SourceMemory::Shared => StreamFlags::MAP_BUFFERS,
         SourceMemory::DmaBuf => StreamFlags::ALLOC_BUFFERS,
     };
-    let format = source_format(memory);
+    let format = source_format(memory, colorimetry);
     stream
         .connect(
             Direction::Output,

@@ -13,12 +13,15 @@ use pipewire::spa::{
     sys,
     utils::{Choice, ChoiceEnum, ChoiceFlags, Fraction, Id, Rectangle, SpaTypes},
 };
-use rusplay_core::{ColorSpace, FrameRate, Resolution};
+use rusplay_core::{ColorPrimaries, ColorSpace, FrameRate, Resolution};
 
 use crate::{
     CaptureError, DrmFourcc,
     modifier::{FormatModifiers, choose_modifier, modifiers_for},
-    pipewire::color::SpaColorimetry,
+    pipewire::color::{
+        DESCRIBABLE_PRIMARIES, DESCRIBABLE_TRANSFERS, SpaColorimetry, spa_primaries_for,
+        spa_transfer_for,
+    },
 };
 
 const FORMAT_TABLE: [(VideoFormat, DrmFourcc); 16] = [
@@ -69,6 +72,8 @@ const MAX_FRAME_RATE: Fraction = Fraction {
 };
 const MIN_FRAME_RATE: Fraction = Fraction { num: 0, denom: 1 };
 
+const PROP_FLAG_DROP: u32 = 1 << 5;
+
 const DEFAULT_BUFFER_COUNT: i32 = 4;
 const MIN_BUFFER_COUNT: i32 = 2;
 const MAX_BUFFER_COUNT: i32 = 16;
@@ -101,6 +106,30 @@ pub(crate) fn fourcc_for(spa: VideoFormat) -> Option<DrmFourcc> {
 pub(crate) struct FormatRequest {
     pub size_hint: Option<Resolution>,
     pub frame_rate: FrameRate,
+    pub color: Option<ColorOffer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ColorOffer {
+    pub transfer: u32,
+    pub primaries: u32,
+}
+
+impl ColorOffer {
+    pub fn preferring(color: &ColorSpace) -> Self {
+        let fallback = if color.transfer.is_hdr() {
+            ColorPrimaries::Bt2020
+        } else {
+            ColorPrimaries::Bt709
+        };
+
+        Self {
+            transfer: spa_transfer_for(color.transfer),
+            primaries: spa_primaries_for(color.primaries)
+                .or(spa_primaries_for(fallback))
+                .unwrap_or(sys::SPA_VIDEO_COLOR_PRIMARIES_UNKNOWN),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +255,7 @@ pub(crate) fn dmabuf_enum_format(
     ));
     properties.push(modifier);
     properties.extend(geometry_properties(request));
+    properties.extend(color_properties(request.color));
 
     serialize(Object {
         type_: SpaTypes::ObjectParamFormat.as_raw(),
@@ -280,6 +310,7 @@ pub(crate) fn shm_enum_format(
         format,
     ));
     properties.extend(geometry_properties(request));
+    properties.extend(color_properties(request.color));
 
     serialize(Object {
         type_: SpaTypes::ObjectParamFormat.as_raw(),
@@ -300,6 +331,45 @@ fn media_properties() -> Vec<Property> {
             Value::Id(Id(MediaSubtype::Raw.as_raw())),
         ),
     ]
+}
+
+fn color_properties(offer: Option<ColorOffer>) -> Vec<Property> {
+    let Some(offer) = offer else {
+        return Vec::new();
+    };
+
+    vec![
+        preferred_id(
+            FormatProperties::VideoTransferFunction,
+            offer.transfer,
+            &DESCRIBABLE_TRANSFERS,
+        ),
+        preferred_id(
+            FormatProperties::VideoColorPrimaries,
+            offer.primaries,
+            &DESCRIBABLE_PRIMARIES,
+        ),
+    ]
+}
+
+fn preferred_id(key: FormatProperties, preferred: u32, all: &[u32]) -> Property {
+    let alternatives = [preferred]
+        .into_iter()
+        .chain(all.iter().copied().filter(|id| *id != preferred))
+        .map(Id)
+        .collect();
+
+    Property {
+        key: key.as_raw(),
+        flags: PropertyFlags::from_bits_retain(PROP_FLAG_DROP),
+        value: Value::Choice(ChoiceValue::Id(Choice(
+            ChoiceFlags::empty(),
+            ChoiceEnum::Enum {
+                default: Id(preferred),
+                alternatives,
+            },
+        ))),
+    }
 }
 
 fn geometry_properties(request: FormatRequest) -> [Property; 2] {
@@ -449,7 +519,7 @@ pub(crate) fn parse_format(bytes: &[u8]) -> Result<ParsedFormat, CaptureError> {
 
 fn parse_colorimetry(object: &Object) -> Result<SpaColorimetry, CaptureError> {
     let id = |key: FormatProperties| match property(object, key.as_raw()) {
-        Ok(property) => fixed_id(property).ok_or(CaptureError::FormatPodMalformed),
+        Ok(property) => chosen_id(property).ok_or(CaptureError::FormatPodMalformed),
         Err(_) => Ok(0),
     };
 
@@ -504,6 +574,15 @@ fn fixed_id(property: &Property) -> Option<u32> {
     }
 }
 
+fn chosen_id(property: &Property) -> Option<u32> {
+    match &property.value {
+        Value::Choice(ChoiceValue::Id(Choice(_, ChoiceEnum::Enum { default, .. }))) => {
+            Some(default.0)
+        }
+        _ => fixed_id(property),
+    }
+}
+
 fn fixed_rectangle(property: &Property) -> Option<Rectangle> {
     match &property.value {
         Value::Rectangle(rectangle)
@@ -531,6 +610,7 @@ mod tests {
         FormatRequest {
             size_hint: Some(Resolution::new(2560, 1440)),
             frame_rate: FrameRate::integer(144),
+            color: None,
         }
     }
 
@@ -893,5 +973,109 @@ mod tests {
             Value::Choice(ChoiceValue::Int(Choice(_, ChoiceEnum::Flags { default, .. })))
                 if *default == 1 << sys::SPA_DATA_DmaBuf
         ));
+    }
+
+    fn offered_ids(object: &Object, key: FormatProperties) -> (PropertyFlags, u32, Vec<u32>) {
+        let property = property(object, key.as_raw()).unwrap();
+        let Value::Choice(ChoiceValue::Id(Choice(
+            _,
+            ChoiceEnum::Enum {
+                default,
+                alternatives,
+            },
+        ))) = &property.value
+        else {
+            panic!("expected an id enum, got {:?}", property.value);
+        };
+
+        (
+            property.flags,
+            default.0,
+            alternatives.iter().map(|id| id.0).collect(),
+        )
+    }
+
+    fn hdr_stream() -> ColorSpace {
+        ColorSpace {
+            primaries: ColorPrimaries::Bt2020,
+            transfer: TransferFunction::Pq,
+            ..ColorSpace::default()
+        }
+    }
+
+    #[test]
+    fn every_enum_format_offers_the_stream_colour_first_and_drops_it_when_unmatched() {
+        let offer = FormatRequest {
+            color: Some(ColorOffer::preferring(&hdr_stream())),
+            ..request()
+        };
+
+        let pods = enum_formats(&default_formats(true), Some(&table()), offer).unwrap();
+
+        assert_eq!(pods.len(), 2);
+        for bytes in &pods {
+            let object = parse_object(bytes).unwrap();
+            let (transfer_flags, transfer, transfers) =
+                offered_ids(&object, FormatProperties::VideoTransferFunction);
+            let (primaries_flags, primaries, all_primaries) =
+                offered_ids(&object, FormatProperties::VideoColorPrimaries);
+
+            assert_eq!(transfer, sys::SPA_VIDEO_TRANSFER_SMPTE2084);
+            assert_eq!(primaries, sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020);
+            assert_eq!(transfers[0], transfer);
+            assert_eq!(transfers.len(), DESCRIBABLE_TRANSFERS.len());
+            assert_eq!(all_primaries.len(), DESCRIBABLE_PRIMARIES.len());
+            for flags in [transfer_flags, primaries_flags] {
+                assert_eq!(flags.bits(), PROP_FLAG_DROP);
+            }
+        }
+    }
+
+    #[test]
+    fn an_sdr_stream_prefers_srgb_and_bt709() {
+        let offer = ColorOffer::preferring(&ColorSpace::default());
+
+        assert_eq!(offer.transfer, sys::SPA_VIDEO_TRANSFER_BT709);
+        assert_eq!(offer.primaries, sys::SPA_VIDEO_COLOR_PRIMARIES_BT709);
+        assert_eq!(
+            ColorOffer::preferring(&ColorSpace {
+                transfer: TransferFunction::Srgb,
+                ..ColorSpace::default()
+            })
+            .transfer,
+            sys::SPA_VIDEO_TRANSFER_SRGB
+        );
+    }
+
+    #[test]
+    fn without_an_offer_the_colour_is_left_to_the_producer() {
+        let bytes = shm_enum_format(&default_formats(false), request())
+            .unwrap()
+            .unwrap();
+        let object = parse_object(&bytes).unwrap();
+
+        assert!(property(&object, FormatProperties::VideoTransferFunction.as_raw()).is_err());
+        assert!(property(&object, FormatProperties::VideoColorPrimaries.as_raw()).is_err());
+    }
+
+    #[test]
+    fn an_unfixated_colour_choice_reads_as_its_default() {
+        let offer = FormatRequest {
+            color: Some(ColorOffer::preferring(&hdr_stream())),
+            ..request()
+        };
+        let mut object = parse_object(&fixed_format(VideoFormat::xBGR_210LE, 64, 64)).unwrap();
+        object.properties.extend(color_properties(offer.color));
+
+        let format = parse_format(&serialize(object).unwrap()).unwrap();
+
+        assert_eq!(
+            format.colorimetry.transfer,
+            sys::SPA_VIDEO_TRANSFER_SMPTE2084
+        );
+        assert_eq!(
+            format.colorimetry.primaries,
+            sys::SPA_VIDEO_COLOR_PRIMARIES_BT2020
+        );
     }
 }

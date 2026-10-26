@@ -30,7 +30,7 @@ use pipewire::{
     stream::{Stream, StreamFlags, StreamRc, StreamState},
 };
 use rusplay_config::{CaptureConfig, CursorMode, VideoConfig};
-use rusplay_core::{BitDepth, FrameRate, HdrLevels, Resolution, Timestamp};
+use rusplay_core::{BitDepth, ColorSpace, FrameRate, HdrLevels, Resolution, Timestamp};
 
 pub use self::format::default_formats;
 use self::{
@@ -38,10 +38,12 @@ use self::{
     convert::{DmaBufPlane, ShmPlane, dmabuf_frame, shm_frame},
     cursor_meta::{cursor_meta_param, parse_cursor_meta},
     format::{
-        FormatDecision, FormatRequest, ModifierRequest, NegotiatedFormat, buffers_param, decide,
-        dmabuf_enum_format, enum_formats, header_meta_param, parse_format,
+        ColorOffer, FormatDecision, FormatRequest, ModifierRequest, NegotiatedFormat,
+        buffers_param, decide, dmabuf_enum_format, enum_formats, header_meta_param, parse_format,
     },
-    raw::{BufferHandle, DequeuedBuffer, HeldBuffers, borrow_fd, header_is_corrupted},
+    raw::{
+        BufferHandle, DequeuedBuffer, HeldBuffers, borrow_fd, header_is_corrupted, library_version,
+    },
 };
 use crate::{
     BufferLease, CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, PortalSession,
@@ -60,6 +62,7 @@ pub struct StreamOptions {
     pub prefer_dmabuf: bool,
     pub modifiers: Vec<FormatModifiers>,
     pub cursor_metadata: bool,
+    pub color_preference: Option<ColorSpace>,
     pub hdr: HdrLevels,
     pub size_hint: Option<Resolution>,
     pub frame_rate: FrameRate,
@@ -79,6 +82,7 @@ impl StreamOptions {
             prefer_dmabuf: capture.prefer_dmabuf,
             modifiers,
             cursor_metadata: capture.cursor == CursorMode::Metadata,
+            color_preference: Some(video.color),
             hdr: video.color.hdr,
             size_hint: video.resolution,
             frame_rate: video.frame_rate,
@@ -95,6 +99,7 @@ impl StreamOptions {
         FormatRequest {
             size_hint: self.size_hint,
             frame_rate: self.frame_rate,
+            color: self.color_preference.as_ref().map(ColorOffer::preferring),
         }
     }
 
@@ -474,6 +479,21 @@ impl Worker {
     }
 }
 
+const DROP_FLAG_VERSION: (u32, u32, u32) = (1, 5, 81);
+
+fn drops_unmatched_properties(version: &str) -> bool {
+    let mut parts = version
+        .split('.')
+        .map(|part| part.trim().parse::<u32>().unwrap_or(0));
+    let parsed = (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    );
+
+    parsed >= DROP_FLAG_VERSION
+}
+
 fn as_pods(params: &[Vec<u8>]) -> Result<Vec<&Pod>, CaptureError> {
     params
         .iter()
@@ -500,10 +520,14 @@ fn run_worker(
         },
     )?;
 
-    let params = setup.options.enum_formats()?;
+    let mut options = setup.options;
+    if !drops_unmatched_properties(&library_version()) {
+        options.color_preference = None;
+    }
+    let params = options.enum_formats()?;
     let held = Rc::new(RefCell::new(HeldBuffers::default()));
     let worker = Worker {
-        options: setup.options,
+        options,
         format: None,
         publisher: setup.publisher,
         cursor_publisher: setup.cursor_publisher,
@@ -546,4 +570,33 @@ fn run_worker(
     let _ = started.send(Ok(()));
     mainloop.run();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colour_is_offered_only_where_unmatched_properties_are_dropped() {
+        assert!(drops_unmatched_properties("1.6.10"));
+        assert!(drops_unmatched_properties("1.5.81"));
+        assert!(!drops_unmatched_properties("1.5.80"));
+        assert!(!drops_unmatched_properties("1.4.9"));
+        assert!(!drops_unmatched_properties("0.3.65"));
+        assert!(!drops_unmatched_properties(""));
+    }
+
+    #[test]
+    fn stream_options_prefer_the_stream_colour() {
+        let mut video = VideoConfig::default();
+        video.color.transfer = rusplay_core::TransferFunction::Pq;
+
+        let options = StreamOptions::new(&CaptureConfig::default(), &video);
+
+        assert_eq!(options.color_preference, Some(video.color));
+        assert_eq!(
+            options.request().color,
+            Some(ColorOffer::preferring(&video.color))
+        );
+    }
 }

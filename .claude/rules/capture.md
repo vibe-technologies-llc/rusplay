@@ -46,9 +46,21 @@ paths:
   primaries become `ColorPrimaries::Custom` from the `Chromaticities` constants in core. A value
   with no model (other gamma curves, log, SMPTE ST 428) fails negotiation with
   `TransferUnsupported` or `PrimariesUnsupported` rather than being guessed. PipeWire has no
-  mastering display or content light level metadata, so those stay unset (`capture-hdr-negotiation`
-  in `docs/FEATURES.md`). The enum formats do not constrain the colour properties, so a producer's
-  choice passes through; a 10-bit `xBGR_210LE` surface is HDR only when the producer says so.
+  mastering display or content light level metadata, so those stay unset (`capture-hdr-metadata`
+  in `docs/FEATURES.md`).
+- Every `EnumFormat` offers `transferFunction` and `colorPrimaries` as `Id` enum choices
+  (`ColorOffer` from `StreamOptions::color_preference`, which `StreamOptions::new` sets to
+  `video.color`): the stream's own transfer and primaries first (BT.2020 for custom primaries
+  under PQ/HLG, BT.709 otherwise), then every other id `describe_color` can model
+  (`DESCRIBABLE_TRANSFERS`, `DESCRIBABLE_PRIMARIES`), so an HDR-capable compositor picks the
+  stream's encoding and a producer's fixed choice is never refused. The properties carry
+  `SPA_POD_PROP_FLAG_DROP` (`PROP_FLAG_DROP`, defined locally because older headers lack it): a
+  producer that does not describe its colour drops them in the intersection instead of having
+  our default copied into the negotiated format, which would label an sRGB surface as the
+  stream's transfer. The flag exists from PipeWire 1.5.81, so on an older library
+  (`pw_get_library_version`, `drops_unmatched_properties`) the offer is left out and the producer's
+  description passes through unconstrained. An unfixated colour choice in a negotiated format
+  reads as its default. A 10-bit `xBGR_210LE` surface is HDR only when the producer says so.
 - Shared-memory frames are copied out of the mapped buffer (`MAP_BUFFERS`) as `stride × height`
   bytes from the chunk offset, and the buffer is requeued at once. Buffers whose chunk is empty or
   flagged corrupted (cursor-only updates) produce no frame. Frame timestamps are microseconds
@@ -103,10 +115,12 @@ paths:
   keeps the stale bitmap when the newer update has none, so a shape change is never lost to
   coalescing. On the wire the update becomes `rusplay_protocol::CursorMessage` on
   `StreamKind::Cursor`.
-- `tests/live.rs` holds `#[ignore]`d tests. Four run an in-process PipeWire video source and
+- `tests/live.rs` holds `#[ignore]`d tests. Five run an in-process PipeWire video source and
   capture from it (needs only a PipeWire daemon): shared memory, DMA-BUF (fake dma-bufs backed by
   temp files, exercising modifier fixation and lease release across a dozen frames) and the
-  `prefer_dmabuf = false` path, plus cursor metadata (bitmap sent once, then position only). One
+  `prefer_dmabuf = false` path, plus cursor metadata (bitmap sent once, then position only) and
+  colour: an undescribed source is captured as sRGB/BT.709 although the default stream prefers
+  BT.709 (the drop flag at work), and a source describing PQ/BT.2020 is captured as that. One
   goes through the real portal picker.
 - The cursor defaults to `Metadata` so it can be drawn on the client at full rate and without
   compression artefacts. `Embedded` and `Hidden` are options.
