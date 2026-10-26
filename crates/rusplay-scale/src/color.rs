@@ -24,7 +24,7 @@ pub use crate::color::{
 };
 use crate::{
     Reconfigured, ScaleError,
-    gpu::{self, ScalePipelines, buffer_group, uniform_buffer},
+    gpu::{self, BOUNDARY_TABLE_FORMAT, ScalePipelines, buffer_group, uniform_buffer},
     scaler::GroupCache,
 };
 
@@ -38,6 +38,9 @@ pub(crate) const BOUNDARY_UPPER_TOLERANCE: f64 = 0.002;
 pub(crate) const BOUNDARY_RAMP_CENTRE: f64 = 0.5;
 pub(crate) const BOUNDARY_REACH: f64 = 3.0;
 pub(crate) const BOUNDARY_HEADROOM: f64 = 1.25;
+pub(crate) const BOUNDARY_TABLE_HUES: u32 = 2048;
+pub(crate) const BOUNDARY_TABLE_LIGHTNESS: u32 = 512;
+const UNUSED_BOUNDARY_TABLE: u32 = 2;
 const CHROMA_LIMIT_SAMPLES: u32 = 32;
 const CHROMA_LIMIT_HEADROOM: f64 = 1.2;
 pub(crate) const COMPRESSION_POWER: f64 = 1.2;
@@ -237,6 +240,7 @@ pub struct ColorPlan {
     pub(crate) tone_itp_to_lms: Matrix3,
     pub(crate) target_chroma_limit: f64,
     pub(crate) source_chroma_limit: f64,
+    pub(crate) boundary_lightness: f64,
 }
 
 impl ColorPlan {
@@ -341,9 +345,9 @@ impl ColorPlan {
             tone_itp_to_lms: inverse(tone_lms_to_itp)?,
             target_chroma_limit: 0.0,
             source_chroma_limit: 0.0,
+            boundary_lightness: 0.0,
         };
-        plan.target_chroma_limit = plan.chroma_limit(inverse(work_to_target)?);
-        plan.source_chroma_limit = plan.chroma_limit(source_to_work);
+        plan.measure_boundary()?;
 
         Ok(plan)
     }
@@ -352,6 +356,23 @@ impl ColorPlan {
         let lms = self.xyz_to_lms.apply(xyz);
 
         self.lms_to_lab.apply(self.space.shape(lms, self.pq_scale))
+    }
+
+    fn measure_boundary(&mut self) -> Result<(), ScaleError> {
+        let target_to_work = inverse(self.work_to_target)?;
+
+        self.target_chroma_limit = self.chroma_limit(target_to_work);
+        self.source_chroma_limit = self.chroma_limit(self.source_to_work);
+        self.boundary_lightness = self.lab(target_to_work.apply([self.target_peak; 3]))[0];
+        Ok(())
+    }
+
+    fn boundary_table_size(&self) -> (u32, u32) {
+        if self.path == MappingPath::Perceptual {
+            (BOUNDARY_TABLE_HUES, BOUNDARY_TABLE_LIGHTNESS)
+        } else {
+            (UNUSED_BOUNDARY_TABLE, UNUSED_BOUNDARY_TABLE)
+        }
     }
 
     fn chroma_limit(&self, rgb_to_work: Matrix3) -> f64 {
@@ -459,7 +480,7 @@ impl ColorPlan {
         words.extend([
             float(self.target_chroma_limit),
             float(self.source_chroma_limit),
-            0,
+            float(self.boundary_lightness),
             0,
         ]);
         words.extend([
@@ -497,6 +518,10 @@ fn float(value: f64) -> u32 {
 struct MapperBuffers {
     map_group: wgpu::BindGroup,
     analysis_group: wgpu::BindGroup,
+    boundary_store_group: wgpu::BindGroup,
+    boundary_params_group: wgpu::BindGroup,
+    boundary_size: (u32, u32),
+    boundary_baked: bool,
     tone_state: wgpu::Buffer,
 }
 
@@ -514,22 +539,79 @@ impl MapperBuffers {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let boundary_size = plan.boundary_table_size();
+        let boundary = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("rusplay-color-boundary"),
+                size: wgpu::Extent3d {
+                    width: boundary_size.0,
+                    height: boundary_size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: BOUNDARY_TABLE_FORMAT,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
-            map_group: buffer_group(
-                device,
-                "rusplay-color-map",
-                &pipelines.color.params_layout,
-                &[&params, &tone_state],
-            ),
+            map_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rusplay-color-map"),
+                layout: &pipelines.color.params_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: tone_state.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&boundary),
+                    },
+                ],
+            }),
             analysis_group: buffer_group(
                 device,
                 "rusplay-color-analysis",
                 &pipelines.color.analysis_layout,
                 &[&params, &tone_state, &histogram],
             ),
+            boundary_store_group: gpu::view_group(
+                device,
+                &pipelines.color.boundary_store_layout,
+                &boundary,
+            ),
+            boundary_params_group: buffer_group(
+                device,
+                "rusplay-color-boundary-params",
+                &pipelines.color.boundary_params_layout,
+                &[&params],
+            ),
+            boundary_baked: plan.path != MappingPath::Perceptual,
+            boundary_size,
             tone_state,
         }
+    }
+
+    fn encode_boundary(&mut self, pipelines: &ScalePipelines, encoder: &mut wgpu::CommandEncoder) {
+        if self.boundary_baked {
+            return;
+        }
+
+        gpu::dispatch(
+            encoder,
+            "rusplay-color-boundary-bake",
+            &pipelines.color.boundary_bake,
+            &[&self.boundary_store_group, &self.boundary_params_group],
+            self.boundary_size,
+        );
+        self.boundary_baked = true;
     }
 }
 
@@ -606,6 +688,7 @@ impl ColorMapper {
         let source_size = source.texture().size();
         let size = target.texture().size();
 
+        self.buffers.encode_boundary(pipelines, encoder);
         if self
             .plan
             .tone

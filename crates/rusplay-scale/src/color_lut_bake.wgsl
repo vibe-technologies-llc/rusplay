@@ -10,6 +10,7 @@ struct LutBake {
 @group(0) @binding(0) var lut_store: texture_storage_3d<rgba16float, write>;
 @group(1) @binding(0) var<uniform> params: ColorParams;
 @group(1) @binding(1) var<storage, read> state: ToneState;
+@group(1) @binding(2) var boundary_table: texture_2d<f32>;
 @group(2) @binding(0) var<uniform> bake: LutBake;
 
 @compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)

@@ -111,6 +111,12 @@ const COLOR_LUT_BAKE_SHADER: &str = concat!(
     include_str!("color_lut_bake.wgsl")
 );
 
+const COLOR_BOUNDARY_BAKE_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_boundary_bake.wgsl")
+);
 const COLOR_HISTOGRAM_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("color_common.wgsl"),
@@ -145,6 +151,7 @@ const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
+const BOUNDARY_BAKE_WORKGROUP: (u32, u32) = (16, 4);
 const LINEARISE_WORKGROUP: (u32, u32) = (8, 8);
 const HISTOGRAM_WORKGROUP: (u32, u32) = (16, 16);
 const PEAK_WORKGROUP: (u32, u32) = (1, 1);
@@ -156,6 +163,7 @@ pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 pub(crate) const LUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+pub(crate) const BOUNDARY_TABLE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ShaderPass {
@@ -248,6 +256,28 @@ pub(crate) struct ColorPipelines {
     pub lut_store_layout: wgpu::BindGroupLayout,
     pub lut_bake_layout: wgpu::BindGroupLayout,
     pub lut_bake: ShaderPass,
+    pub boundary_store_layout: wgpu::BindGroupLayout,
+    pub boundary_params_layout: wgpu::BindGroupLayout,
+    pub boundary_bake: ShaderPass,
+}
+
+fn gamut_constants() -> [(&'static str, f64); 11] {
+    [
+        ("BOUNDARY_COARSE_STEPS", f64::from(BOUNDARY_COARSE_STEPS)),
+        (
+            "BOUNDARY_APPROACH_STEPS",
+            f64::from(BOUNDARY_APPROACH_STEPS),
+        ),
+        ("BOUNDARY_WINDOW_STEPS", f64::from(BOUNDARY_WINDOW_STEPS)),
+        ("BOUNDARY_WINDOW_START", BOUNDARY_WINDOW_START),
+        ("BOUNDARY_SUBSTEPS", f64::from(BOUNDARY_SUBSTEPS)),
+        ("BOUNDARY_LOWER_TOLERANCE", BOUNDARY_LOWER_TOLERANCE),
+        ("BOUNDARY_UPPER_TOLERANCE", BOUNDARY_UPPER_TOLERANCE),
+        ("BOUNDARY_RAMP_CENTRE", BOUNDARY_RAMP_CENTRE),
+        ("BOUNDARY_REACH", BOUNDARY_REACH),
+        ("BOUNDARY_HEADROOM", BOUNDARY_HEADROOM),
+        ("COMPRESSION_POWER", COMPRESSION_POWER),
+    ]
 }
 
 impl ColorPipelines {
@@ -259,7 +289,7 @@ impl ColorPipelines {
         let params_layout = layout(
             device,
             "rusplay-color-params",
-            &[uniform_entry(0), storage_buffer_entry(1)],
+            &[uniform_entry(0), storage_buffer_entry(1), texture_entry(2)],
         );
         let analysis_layout = layout(
             device,
@@ -270,22 +300,7 @@ impl ColorPipelines {
                 writable_storage_buffer_entry(2),
             ],
         );
-        let gamut_constants = [
-            ("BOUNDARY_COARSE_STEPS", f64::from(BOUNDARY_COARSE_STEPS)),
-            (
-                "BOUNDARY_APPROACH_STEPS",
-                f64::from(BOUNDARY_APPROACH_STEPS),
-            ),
-            ("BOUNDARY_WINDOW_STEPS", f64::from(BOUNDARY_WINDOW_STEPS)),
-            ("BOUNDARY_WINDOW_START", BOUNDARY_WINDOW_START),
-            ("BOUNDARY_SUBSTEPS", f64::from(BOUNDARY_SUBSTEPS)),
-            ("BOUNDARY_LOWER_TOLERANCE", BOUNDARY_LOWER_TOLERANCE),
-            ("BOUNDARY_UPPER_TOLERANCE", BOUNDARY_UPPER_TOLERANCE),
-            ("BOUNDARY_RAMP_CENTRE", BOUNDARY_RAMP_CENTRE),
-            ("BOUNDARY_REACH", BOUNDARY_REACH),
-            ("BOUNDARY_HEADROOM", BOUNDARY_HEADROOM),
-            ("COMPRESSION_POWER", COMPRESSION_POWER),
-        ];
+        let gamut_constants = gamut_constants();
         let map = compute_pipeline(
             device,
             "rusplay-color-map",
@@ -308,6 +323,22 @@ impl ColorPipelines {
             COLOR_LUT_BAKE_SHADER,
             "bake_lut",
             LUT_BAKE_WORKGROUP,
+            &gamut_constants,
+        );
+        let boundary_store_layout = layout(
+            device,
+            "rusplay-color-boundary-store",
+            &[storage_texture_entry(0, BOUNDARY_TABLE_FORMAT)],
+        );
+        let boundary_params_layout =
+            layout(device, "rusplay-color-boundary-params", &[uniform_entry(0)]);
+        let boundary_bake = compute_pipeline(
+            device,
+            "rusplay-color-boundary-bake",
+            &[&boundary_store_layout, &boundary_params_layout],
+            COLOR_BOUNDARY_BAKE_SHADER,
+            "bake_boundary",
+            BOUNDARY_BAKE_WORKGROUP,
             &gamut_constants,
         );
         let bins = [("HISTOGRAM_BINS", f64::from(HISTOGRAM_BINS))];
@@ -339,6 +370,9 @@ impl ColorPipelines {
             lut_store_layout,
             lut_bake_layout,
             lut_bake,
+            boundary_store_layout,
+            boundary_params_layout,
+            boundary_bake,
         }
     }
 }

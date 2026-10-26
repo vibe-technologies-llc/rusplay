@@ -2,6 +2,7 @@
 @group(1) @binding(0) var destination: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(0) var<uniform> params: ColorParams;
 @group(2) @binding(1) var<storage, read> state: ToneState;
+@group(2) @binding(2) var boundary_table: texture_2d<f32>;
 
 @compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn map_color(@builtin(global_invocation_id) id: vec3<u32>) {

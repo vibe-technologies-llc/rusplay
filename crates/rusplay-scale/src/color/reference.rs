@@ -1,10 +1,13 @@
+use std::f64::consts::TAU;
+
 use rusplay_core::{HdrLevels, Matrix3, pq_from_nits, pq_to_nits};
 
 use crate::color::{
     BOUNDARY_APPROACH_STEPS, BOUNDARY_COARSE_STEPS, BOUNDARY_HEADROOM, BOUNDARY_LOWER_TOLERANCE,
-    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_UPPER_TOLERANCE,
-    BOUNDARY_WINDOW_START, BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS,
-    MappingPath, ToneCurve, ToneStage, WorkingSpace,
+    BOUNDARY_RAMP_CENTRE, BOUNDARY_REACH, BOUNDARY_SUBSTEPS, BOUNDARY_TABLE_HUES,
+    BOUNDARY_TABLE_LIGHTNESS, BOUNDARY_UPPER_TOLERANCE, BOUNDARY_WINDOW_START,
+    BOUNDARY_WINDOW_STEPS, COMPRESSION_POWER, ColorPlan, HISTOGRAM_BINS, MappingPath, ToneCurve,
+    ToneStage, WorkingSpace,
 };
 
 const GAMUT_EPSILON: f64 = 1.0e-5;
@@ -315,6 +318,58 @@ pub(crate) fn chroma_boundary(
     )
 }
 
+fn boundary_node(plan: &ColorPlan, column: u32, row: u32) -> [f64; 2] {
+    let lightness =
+        plan.boundary_lightness * f64::from(row) / f64::from(BOUNDARY_TABLE_LIGHTNESS - 1);
+    let angle = TAU * f64::from(column) / f64::from(BOUNDARY_TABLE_HUES);
+    let hue = [angle.cos(), angle.sin()];
+
+    [
+        chroma_boundary(
+            plan,
+            lightness,
+            hue,
+            &plan.work_to_target,
+            plan.target_chroma_limit,
+        ),
+        chroma_boundary(
+            plan,
+            lightness,
+            hue,
+            &plan.work_to_source,
+            plan.source_chroma_limit,
+        ),
+    ]
+}
+
+pub(crate) fn boundary_limits(plan: &ColorPlan, lightness: f64, angle: f64) -> [f64; 2] {
+    let last_row = BOUNDARY_TABLE_LIGHTNESS - 1;
+    let rows = (lightness / plan.boundary_lightness).clamp(0.0, 1.0) * f64::from(last_row);
+    let columns = (angle / TAU).rem_euclid(1.0) * f64::from(BOUNDARY_TABLE_HUES);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (row, column) = (
+        (rows as u32).min(last_row - 1),
+        (columns as u32).min(BOUNDARY_TABLE_HUES - 1),
+    );
+    let next = (column + 1) % BOUNDARY_TABLE_HUES;
+    let (across, up) = (columns - f64::from(column), rows - f64::from(row));
+    let mix = |from: [f64; 2], to: [f64; 2], amount: f64| {
+        [0, 1].map(|limit| from[limit] + amount * (to[limit] - from[limit]))
+    };
+    let low = mix(
+        boundary_node(plan, column, row),
+        boundary_node(plan, next, row),
+        across,
+    );
+    let high = mix(
+        boundary_node(plan, column, row + 1),
+        boundary_node(plan, next, row + 1),
+        across,
+    );
+
+    mix(low, high, up)
+}
+
 pub(crate) fn compress_chroma(chroma: f64, target_limit: f64, source_limit: f64, knee: f64) -> f64 {
     if target_limit <= 0.0 {
         return 0.0;
@@ -348,23 +403,10 @@ fn perceptual(plan: &ColorPlan, work: [f64; 3]) -> [f64; 3] {
     }
 
     let hue = [a / chroma, b / chroma];
-    let target_limit = chroma_boundary(
-        plan,
-        lightness,
-        hue,
-        &plan.work_to_target,
-        plan.target_chroma_limit,
-    );
+    let [target_limit, source_limit] = boundary_limits(plan, lightness, b.atan2(a));
     if chroma <= plan.knee * target_limit {
         return clamp(plan.work_to_target.apply(work), peak);
     }
-    let source_limit = chroma_boundary(
-        plan,
-        lightness,
-        hue,
-        &plan.work_to_source,
-        plan.source_chroma_limit,
-    );
     let mapped = compress_chroma(chroma, target_limit, source_limit, plan.knee);
 
     clamp(

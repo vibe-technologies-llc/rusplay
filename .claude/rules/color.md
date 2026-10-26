@@ -149,11 +149,12 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   `WorkingSpace::Oklab` otherwise. ICtCp uses the BT.2100 LMS matrix composed with the derived
   XYZ to BT.2020 matrix, PQ on absolute luminance (the target white times the relative value);
   Oklab's XYZ to LMS rows are normalised so D65 lands exactly on the neutral axis. Lightness and
-  hue are held; for the colour's (lightness, hue) `chroma_boundary` finds the target gamut's
-  boundary chroma `T` along the constant-lightness, constant-hue ray, returns the colour
-  unchanged if `C <= knee * T`, and otherwise finds the source gamut's boundary `S` the same way
-  and compresses with the ACES reference gamut compression curve (power `COMPRESSION_POWER` =
-  1.2) so `knee * T` keeps slope 1 and `S` lands exactly on `T`. A colour beyond `S` is clipped
+  hue are held; for the colour's (lightness, hue) the pass reads the target gamut's boundary
+  chroma `T` along the constant-lightness, constant-hue ray from the boundary table (below),
+  returns the colour unchanged if `C <= knee * T`, and otherwise takes the source gamut's
+  boundary `S` from the same texel and compresses with the ACES reference gamut compression
+  curve (power `COMPRESSION_POWER` = 1.2) so `knee * T` keeps slope 1 and `S` lands exactly on
+  `T`. A colour beyond `S` is clipped
   to `T`, and the result is clamped to the target cube, which also absorbs the boundary's soft
   margin. `knee` is `GamutMapping::knee`, default 0.8, validated into `0..1`.
 - The boundary is a soft first exit, continuous in lightness and hue. A ray can graze a face of
@@ -174,8 +175,7 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   inner exit, every transition continuous. The boundary stays steep where the fold is (the
   inner exit itself races toward the outer one near the tangency), up to about 9% of the peak
   per 10-bit code in blue to magenta gradients (`color-perceptual-fold-steepness` in
-  `docs/BUGS.md`). Each channel along the ray is a cubic Hermite
-  segment between exact samples with analytic derivatives (the PQ or cube derivative through
+  `docs/BUGS.md`). Each channel along the ray is a cubic Hermite segment between exact samples with analytic derivatives (the PQ or cube derivative through
   `lab_to_lms`, composed with the target or source matrix), integrated at
   `BOUNDARY_SUBSTEPS` = 4 points per segment with the crossing found by linear interpolation; a
   segment whose Bernstein hull is inside is taken whole, and the integral stops once the weight
@@ -187,6 +187,17 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   `chroma_limits`) are 1.2 × the largest chroma on a 33² grid of each cube face. Where the
   boundary is steep, f32 noise moves the GPU result by up to three `rgba16float` steps from the
   f64 reference.
+- `chroma_boundary` runs per node of a per-plan boundary table, never per pixel: an `rg32float`
+  texture of (`T`, `S`) over `BOUNDARY_TABLE_HUES` = 2048 hues by `BOUNDARY_TABLE_LIGHTNESS` =
+  512 lightness rows from 0 to the target peak grey's lightness (`ColorPlan::boundary_lightness`,
+  `chroma_limits.z`; brighter colours read the last row, where `T` is 0). `color_boundary_bake.wgsl`
+  fills it in the first `ColorMapper::encode` or `ColorLut::encode_bake` after the plan changes
+  (about 0.26 ms, once), and `boundary_limits` reads it bilinearly with the hue wrapping, as four
+  `textureLoad`s because `rg32float` is not filterable. A plan that is not `Perceptual` gets a
+  2x2 table that is never baked. The f64 reference interpolates the same nodes, each computed
+  exactly. Against the exact boundary per pixel the table adds mean 0.005 to 0.03, p99 0.1 to
+  0.24 and at most 1.1 to 2.7 ΔE_ITP at the cusps (CPU emulation over the LUT test codes);
+  lightness resolution dominates, 256 rows gave 5 to 8 at the cusps.
 - Tone mapping runs in the same dispatch, before gamut mapping (`color_tone.wgsl`), when the
   source is HDR and either its peak exceeds the target's display peak (`peak_nits` for an HDR
   target, the reference white for SDR) or dynamic peak detection is on; `ColorPlan::tone`
@@ -216,7 +227,7 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   (`ColorMapper::tone_state`), written once from the CPU for a static curve and by the peak
   pass for a dynamic one, so nothing is read back and the frame path never waits.
   Reconfiguring resets the state.
-- `color/reference.rs` is the f64 mirror of the shader. Tests check that greys and colours
+- `color/reference.rs` is the f64 mirror of the shader, boundary table included. Tests check that greys and colours
   below the knee pass through, that BT.2020 primaries and secondaries map onto the P3 boundary
   with lightness held, hue within 1° and a hue-only ΔE_ITP below 1 (ICtCp), that chroma
   compression is monotonic and ends on the boundary, the desaturate and highlight semantics,
@@ -226,7 +237,9 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   must shrink 8x when refined 256x, which the old bisection failed in 39 of 84 sweeps; the
   grazing codes (0.28125, 0.23338, 0.546875) and green + 0.0005 map within 0.02 (0.722 and
   0.712 blue, against 0.777 and 0.683 before) on CPU and GPU; mapped chroma grows
-  monotonically through the fold; and the GPU follows the reference along the gradients. Tone tests check BT.2390 against its reference points (the
+  monotonically through the fold; the GPU follows the reference along the gradients; and the
+  table's `T` stays within 0.2% of the chroma limit of the exact boundary at p99 (at most 6%,
+  at the cusps). Tone tests check BT.2390 against its reference points (the
   4000 to 1000 cd/m² maxLum 0.83298 and KS 0.74947, identity below KS, slope 1 at the knee,
   source peak onto target peak, the black lift), that every operator is monotonic and lands on
   the target peak, that hue is held and chroma scales with the intensity ratio, that the
@@ -234,13 +247,13 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   for every operator, and the dynamic state machine (first frame, smoothing, scene cut)
   against `reference::detect_peak`.
 - Cost at 3840x2160 on an RX 9070 (`bench.rs`, a per-pixel noise pattern that keeps every wave
-  on the slow path): perceptual 1.8 ms SDR and 2.9 ms HDR (PQ with its derivative at
-  every ray sample), relative 0.23 ms; the soft boundary costs about 1.4x (HDR) to 2x (SDR)
-  the bisection it replaced. BT.2390 tone mapping adds about 0.1 ms and dynamic peak detection
-  about 0.18 ms. A whole 10-bit 4:2:0 BT.2020 PQ frame (unpack, `Lineariser`, perceptual BT.2390
-  `ColorMapper`) is 3.8 ms; through the LUT below it is 0.58 ms at 65³ (0.61 ms at 97³,
-  0.63 ms at 129³), against 0.27 ms for the unpack alone, plus a one-off bake of about 0.22
-  ms (0.45, 0.85).
+  on the slow path): perceptual 0.35 ms SDR and 0.33 ms HDR, against 2.9 ms when every pixel
+  ran the soft boundary search and 2.0 ms for the bisection before it; relative 0.24 ms.
+  BT.2390 tone mapping adds about 0.1 ms and dynamic peak detection about 0.2 ms. A whole
+  10-bit 4:2:0 BT.2020 PQ frame (unpack, `Lineariser`, perceptual BT.2390 `ColorMapper`) is
+  0.83 ms; through the LUT below it is 0.57 ms at 65³ (0.61 ms at 97³, 0.63 ms at 129³),
+  against 0.27 ms for the unpack alone, plus a one-off bake of about 0.38 ms with the boundary
+  table (0.42, 0.59).
 - `ColorLut` (`color/lut.rs`, `color_lut_bake.wgsl`, `color_lut_storage.wgsl`,
   `color_lut_sample.wgsl`) bakes linearisation, tone mapping and gamut mapping into one
   `size`³ `rgba16float` 3D texture indexed by the frame's encoded R'G'B' (the PQ, HLG or SDR
@@ -266,12 +279,16 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 - LUT accuracy against the analytic passes (`color/lut/tests.rs`: 2^17 random R'G'B' codes plus
   saturated BT.2020 primaries and secondaries from 1 to 4000 cd/m², 4:4:4 12-bit, ΔE_ITP per
   BT.2124, codes with every channel below 0.03 left out as sub-display black): at 65³ greys and
-  smooth mappings (linearise only, SDR relative) are within 0.8; gamut-mapped HDR is mean
-  0.11 to 0.23, p99 1.0 to 2.6, with isolated maxima of 15 to 37 at the gamut cusps (the
-  continuous boundary barely moved these: the error is the lattice interpolating across the
-  boundary's cusps and folds, not a jump). 97³ halves p99 (at most 1.5). About 0.1 to 0.2 of the mean is the analytic
-  path's own `rgba16float` intermediate, which the fused pass does not have. Because p99 exceeds
-  one JND near the gamut boundary, the analytic passes stay the default.
+  smooth mappings (linearise only, SDR relative) are within 0.8; perceptual is mean 0.11 to
+  0.23, p99 0.9 to 2.5, with isolated maxima of 16 to 23 at the gamut cusps, which the lattice
+  interpolates across (neither the continuous boundary nor the table moved these). 97³ gives
+  p99 0.56 to 1.34; 129³ gives p99 0.42 to 0.93, within one JND, with maxima of 10 to 20. A
+  polar lattice (lightness, chroma and hue of the working space, final conversion analytic) of
+  65x65x256 is no better, p99 1.3 to 2.1 in a CPU emulation, because the cusps are kinks in
+  lightness as much as in hue. About 0.1 to 0.2 of the mean is the analytic path's own
+  `rgba16float` intermediate, which the fused pass does not have. The analytic passes stay the
+  default: with the boundary table they cost 0.26 ms a frame more than the 65³ LUT and 0.2 ms
+  more than 129³, and have no cusp errors.
 - Config: `color.tone_mapping.operator` (`bt2390`), `dynamic_peak` (false), `peak_percentile`
   (99.995), `smoothing_frames` (20) and `scene_threshold_db` (3.0);
   `color.gamut_mapping.mode` (default `perceptual`) and `knee` (0.8);
@@ -401,8 +418,9 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
 - Stages are fused into as few dispatches as possible. The colour stages (2 to 4) can be baked
   into a 3D LUT (`rgba16float`, 65³ by default, tetrahedral interpolation) fused into the
   unpack, rebuilt only when the source or target description changes (`ColorLut` above,
-  opt-in through `color.processing.method`). The analytic shader stays the reference and the
-  default; `client-color-lut-boundary` in `docs/PERFORMANCE.md` is what it takes to flip it.
+  opt-in through `color.processing.method`). The analytic shader, with its baked boundary table,
+  stays the reference and the default; `client-color-lut-boundary` in `docs/PERFORMANCE.md`
+  weighs flipping it.
 - Math is f32 on the GPU with `rgba16float` intermediates. CPU references in f64 check every
   stage. Tests cover in-gamut colours passing through unchanged, BT.2020 primaries landing on the
   P3 boundary with hue preserved (ΔE_ITP bound), the BT.2390 curve matching the spec's reference

@@ -21,6 +21,7 @@ const MIN_BOUND_DISTANCE: f32 = 1.0e-6;
 const ACHROMATIC_CHROMA: f32 = 1.0e-6;
 const MIN_COMPRESSION_LIMIT: f32 = 1.0001;
 const UNREACHABLE: f32 = 3.0e38;
+const FULL_TURN: f32 = 6.283185307179586;
 
 struct RaySample {
     value: vec3<f32>,
@@ -212,6 +213,25 @@ fn chroma_boundary(lightness: f32, hue: vec2<f32>, to_rgb: Rows, peak: f32, limi
     return soft_exit(ray, bounds, grey, window);
 }
 
+fn boundary_node(column: u32, row: u32) -> vec2<f32> {
+    return textureLoad(boundary_table, vec2<u32>(column, row), 0).xy;
+}
+
+fn boundary_limits(lightness: f32, hue: vec2<f32>) -> vec2<f32> {
+    let size = textureDimensions(boundary_table);
+    let rows = clamp(lightness / params.chroma_limits.z, 0.0, 1.0) * f32(size.y - 1u);
+    let turns = atan2(hue.y, hue.x) / FULL_TURN;
+    let columns = (turns - floor(turns)) * f32(size.x);
+    let row = min(u32(rows), size.y - 2u);
+    let column = min(u32(columns), size.x - 1u);
+    let next = (column + 1u) % size.x;
+    let across = columns - f32(column);
+    let up = rows - f32(row);
+    let low = mix(boundary_node(column, row), boundary_node(next, row), across);
+    let high = mix(boundary_node(column, row + 1u), boundary_node(next, row + 1u), across);
+    return mix(low, high, up);
+}
+
 fn compress_chroma(chroma: f32, target_limit: f32, source_limit: f32, knee: f32) -> f32 {
     if target_limit <= 0.0 {
         return 0.0;
@@ -238,13 +258,12 @@ fn perceptual(work: vec3<f32>, peak: f32) -> vec3<f32> {
     }
 
     let hue = lab.yz / chroma;
-    let target_limit = chroma_boundary(lab.x, hue, params.work_to_target, peak, params.chroma_limits.x);
+    let limits = boundary_limits(lab.x, hue);
     let knee = params.levels.y;
-    if chroma <= knee * target_limit {
+    if chroma <= knee * limits.x {
         return clamp(apply(params.work_to_target, work), vec3<f32>(0.0), vec3<f32>(peak));
     }
-    let source_limit = chroma_boundary(lab.x, hue, params.work_to_source, peak, params.chroma_limits.y);
-    let mapped = compress_chroma(chroma, target_limit, source_limit, knee);
+    let mapped = compress_chroma(chroma, limits.x, limits.y, knee);
     let rgb = apply(params.work_to_target, lab_to_xyz(vec3<f32>(lab.x, hue * mapped)));
     return clamp(rgb, vec3<f32>(0.0), vec3<f32>(peak));
 }

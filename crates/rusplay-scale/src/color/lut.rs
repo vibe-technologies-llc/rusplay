@@ -205,6 +205,9 @@ impl ColorLut {
         }
 
         let size = self.settings.size;
+        self.resources
+            .mapper
+            .encode_boundary(&self.pipelines, encoder);
         gpu::dispatch_layers(
             encoder,
             "rusplay-color-lut-bake",

@@ -1,7 +1,7 @@
 use rusplay_core::{ColorPrimaries, GamutMapMode, pq_to_nits};
 
 use super::{
-    tests::{hdr, map_on_gpu, max_difference, polar, sdr, settings},
+    tests::{hdr, map_on_gpu, max_difference, polar, sdr, settings, unit_hash},
     *,
 };
 use crate::{
@@ -19,6 +19,9 @@ const MAX_CHROMA_STEP: f64 = 0.004;
 const CHROMA_STEPS: u32 = 400;
 const FOLD_HUES: std::ops::Range<u32> = 320..336;
 const FOLD_HUE_SUBDIVISION: u32 = 8;
+const TABLE_SAMPLES: u32 = 4096;
+const MAX_TABLE_P99: f64 = 0.002;
+const MAX_TABLE_ERROR: f64 = 0.06;
 
 fn pq_4000_to_srgb() -> ColorPlan {
     ColorPlan::new(&settings(
@@ -335,4 +338,39 @@ fn gpu_maps_neighbouring_grazing_codes_alike() {
         max_difference(outputs[0], expected) < MAX_NEIGHBOUR_STEP,
         "{outputs:?} vs {expected:?}"
     );
+}
+
+#[test]
+fn the_boundary_table_tracks_the_exact_boundary() {
+    for plan in folding_plans() {
+        let mut errors: Vec<f64> = (0..TABLE_SAMPLES)
+            .map(|index| {
+                let lightness = plan.boundary_lightness * unit_hash(index, 0);
+                let angle = std::f64::consts::TAU * unit_hash(index, 1);
+                let [table, _] = reference::boundary_limits(&plan, lightness, angle);
+                let exact = reference::chroma_boundary(
+                    &plan,
+                    lightness,
+                    [angle.cos(), angle.sin()],
+                    &plan.work_to_target,
+                    plan.target_chroma_limit,
+                );
+                (table - exact).abs() / plan.target_chroma_limit
+            })
+            .collect();
+        errors.sort_by(f64::total_cmp);
+
+        let p99 = errors[errors.len() * 99 / 100];
+        let worst = errors[errors.len() - 1];
+        assert!(
+            p99 <= MAX_TABLE_P99,
+            "{:?}: p99 {p99} of the chroma limit",
+            plan.space()
+        );
+        assert!(
+            worst <= MAX_TABLE_ERROR,
+            "{:?}: {worst} of the chroma limit",
+            plan.space()
+        );
+    }
 }
