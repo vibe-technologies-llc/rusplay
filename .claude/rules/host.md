@@ -134,9 +134,12 @@ paths:
   - `rusplay-host-input` (only with a feed) receives the datagrams the control stage forwards
     once the `Hello` is answered (earlier ones are dropped), reads them with `InputPacket::read`
     and `InputSequence::admit` (a fresh sequence per session), decodes each record with
-    `InputEvent::decode` and injects it. A malformed datagram or record counts in
-    `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection in
-    `input_failures` without ending the session, since a paused device or a closed compositor
+    `InputRecord::decode` and injects it; an event goes straight to the target, a state record
+    is turned into the events that bring the host to the client's held state
+    (`HeldInput::reconcile`, `input_events_repaired`) and those are injected. A failed injection
+    is not recorded as held, so the next snapshot tries again. A malformed datagram or record
+    counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
+    in `input_failures` without ending the session, since a paused device or a closed compositor
     seat must not take the video down. Every 4 ms it calls `InputTarget::service` and sends each
     `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
     window drops the command (`rumble_dropped`), because the client caps every effect length. On
@@ -153,8 +156,9 @@ paths:
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
-  `Hello`, rumble back as control messages, held input released when the session ends, failing
-  injections counted, no feed ignores input) and `src/input.rs` unit-tests the datagram handling
+  `Hello`, a snapshot repairing a stuck key, rumble back as control messages, held input released
+  when the session ends, failing injections counted, no feed ignores input) and `src/input.rs`
+  unit-tests the datagram handling
   and the injector thread. `src/tests/media.rs` covers the
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
@@ -168,5 +172,6 @@ paths:
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins
   slot may drop the opening keyframe. The same test sends a key through the client's
-  `InputHandle` and checks it reaches the host's recording target, and that the host releases it
-  when the stream ends.
+  `InputHandle` (with a short `input.snapshot_interval_ms`) and checks it reaches the host's
+  recording target, that snapshots arrive, and that the host releases the key when the stream
+  ends.

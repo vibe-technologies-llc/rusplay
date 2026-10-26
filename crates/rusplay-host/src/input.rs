@@ -9,7 +9,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_input::{HeldInput, InputError, InputEvent, RumbleCommand};
+use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
@@ -181,6 +181,7 @@ struct InputStage<'a> {
     outbox: &'a ControlOutbox,
     sequence: InputSequence,
     held: HeldInput,
+    repairs: Vec<InputEvent>,
     commands: Vec<RumbleCommand>,
 }
 
@@ -191,6 +192,7 @@ impl<'a> InputStage<'a> {
             outbox,
             sequence: InputSequence::new(),
             held: HeldInput::new(),
+            repairs: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -238,25 +240,48 @@ impl<'a> InputStage<'a> {
 
     fn apply_section(&mut self, target: &mut dyn InputTarget, records: InputRecords<'_>) {
         for bytes in records {
-            let decoded = bytes.ok().and_then(|bytes| InputEvent::decode(bytes).ok());
+            let decoded = bytes.ok().and_then(|bytes| InputRecord::decode(bytes).ok());
 
             match decoded {
-                Some(event) => self.inject(target, event),
+                Some(record) => self.apply(target, record),
                 None => self.shared.counters.malformed_datagrams.increment(),
             }
         }
     }
 
-    fn inject(&mut self, target: &mut dyn InputTarget, event: InputEvent) {
-        let counters = &self.shared.counters;
-
-        match target.inject(event) {
-            Ok(()) => {
-                self.held.observe(&event);
-                counters.input_events.increment();
+    fn apply(&mut self, target: &mut dyn InputTarget, record: InputRecord) {
+        match record {
+            InputRecord::Event(event) => {
+                self.inject(target, event);
             }
-            Err(_) => counters.input_failures.increment(),
+            InputRecord::State(state) => {
+                self.shared.counters.input_state_records.increment();
+
+                let mut events = std::mem::take(&mut self.repairs);
+                events.clear();
+                self.held.reconcile(&state, &mut events);
+                for event in events.drain(..) {
+                    if self.inject(target, event) {
+                        self.shared.counters.input_events_repaired.increment();
+                    }
+                }
+                self.repairs = events;
+            }
         }
+    }
+
+    fn inject(&mut self, target: &mut dyn InputTarget, event: InputEvent) -> bool {
+        let counters = &self.shared.counters;
+        let injected = target.inject(event).is_ok();
+
+        if injected {
+            self.held.observe(&event);
+            counters.input_events.increment();
+        } else {
+            counters.input_failures.increment();
+        }
+
+        injected
     }
 
     fn service(&mut self, target: &mut dyn InputTarget) -> Result<(), HostError> {
@@ -306,7 +331,7 @@ impl<'a> InputStage<'a> {
 mod tests {
     use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 
-    use rusplay_input::GamepadEvent;
+    use rusplay_input::{GamepadButton, GamepadEvent};
     use rusplay_net::{ControlChannel, ControlConfig, Transport, TransportOptions};
     use rusplay_protocol::push_input_record;
 
@@ -371,18 +396,18 @@ mod tests {
         InputEvent::Key { keycode, pressed }
     }
 
-    fn section(events: &[InputEvent]) -> Vec<u8> {
+    fn section(records: &[InputRecord]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut encoded = Vec::new();
-        for event in events {
+        for record in records {
             encoded.clear();
-            event.encode_into(&mut encoded);
+            record.encode_into(&mut encoded);
             push_input_record(&mut out, &encoded).unwrap();
         }
         out
     }
 
-    fn datagram(sequence: u32, current: &[InputEvent], previous: &[InputEvent]) -> Vec<u8> {
+    fn datagram(sequence: u32, current: &[InputRecord], previous: &[InputRecord]) -> Vec<u8> {
         let current = section(current);
         let previous = section(previous);
         let mut out = Vec::new();
@@ -394,6 +419,20 @@ mod tests {
         .write(&mut out)
         .unwrap();
         out
+    }
+
+    fn event(event: InputEvent) -> InputRecord {
+        InputRecord::Event(event)
+    }
+
+    fn snapshot_of(events: &[InputEvent]) -> Vec<InputRecord> {
+        let mut held = HeldInput::new();
+        for event in events {
+            held.observe(event);
+        }
+        let mut records = Vec::new();
+        held.snapshot(&mut records);
+        records.into_iter().map(InputRecord::State).collect()
     }
 
     struct ThreadBound {
@@ -486,9 +525,9 @@ mod tests {
 
         stage.apply_datagram(
             &mut target,
-            &datagram(0, &[key(30, true), key(31, true)], &[]),
+            &datagram(0, &[event(key(30, true)), event(key(31, true))], &[]),
         );
-        stage.apply_datagram(&mut target, &datagram(1, &[key(30, false)], &[]));
+        stage.apply_datagram(&mut target, &datagram(1, &[event(key(30, false))], &[]));
 
         assert_eq!(
             target.events,
@@ -504,8 +543,11 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = Recorder::default();
 
-        stage.apply_datagram(&mut target, &datagram(0, &[key(1, true)], &[]));
-        stage.apply_datagram(&mut target, &datagram(2, &[key(3, true)], &[key(2, true)]));
+        stage.apply_datagram(&mut target, &datagram(0, &[event(key(1, true))], &[]));
+        stage.apply_datagram(
+            &mut target,
+            &datagram(2, &[event(key(3, true))], &[event(key(2, true))]),
+        );
 
         assert_eq!(
             target.events,
@@ -519,12 +561,88 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = Recorder::default();
 
-        stage.apply_datagram(&mut target, &datagram(5, &[key(1, true)], &[]));
-        stage.apply_datagram(&mut target, &datagram(5, &[key(1, true)], &[]));
-        stage.apply_datagram(&mut target, &datagram(4, &[key(2, true)], &[]));
+        stage.apply_datagram(&mut target, &datagram(5, &[event(key(1, true))], &[]));
+        stage.apply_datagram(&mut target, &datagram(5, &[event(key(1, true))], &[]));
+        stage.apply_datagram(&mut target, &datagram(4, &[event(key(2, true))], &[]));
 
         assert_eq!(target.events, vec![key(1, true)]);
         assert_eq!(rig.stats().input_packets_stale, 2);
+    }
+
+    #[test]
+    fn a_snapshot_releases_a_key_whose_release_was_lost_twice() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+
+        stage.apply_datagram(&mut target, &datagram(0, &[event(key(30, true))], &[]));
+        stage.apply_datagram(&mut target, &datagram(3, &snapshot_of(&[]), &[]));
+
+        assert_eq!(target.events, vec![key(30, true), key(30, false)]);
+        assert_eq!(rig.stats().input_events_repaired, 1);
+        assert_eq!(rig.stats().input_state_records, 3);
+    }
+
+    #[test]
+    fn a_snapshot_presses_a_key_whose_press_was_lost_and_builds_pads() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let pad = |event| InputEvent::Gamepad { slot: 1, event };
+        let records = snapshot_of(&[
+            key(57, true),
+            pad(GamepadEvent::Connected),
+            pad(GamepadEvent::Button {
+                button: GamepadButton::SOUTH,
+                pressed: true,
+            }),
+        ]);
+
+        stage.apply_datagram(&mut target, &datagram(0, &records, &[]));
+
+        assert_eq!(
+            target.events,
+            vec![
+                key(57, true),
+                pad(GamepadEvent::Connected),
+                pad(GamepadEvent::Button {
+                    button: GamepadButton::SOUTH,
+                    pressed: true,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agreeing_snapshot_injects_nothing() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+
+        stage.apply_datagram(&mut target, &datagram(0, &[event(key(30, true))], &[]));
+        stage.apply_datagram(
+            &mut target,
+            &datagram(1, &snapshot_of(&[key(30, true)]), &[]),
+        );
+
+        assert_eq!(target.events, vec![key(30, true)]);
+        assert_eq!(rig.stats().input_events_repaired, 0);
+    }
+
+    #[test]
+    fn a_failed_release_is_retried_by_the_next_snapshot() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+
+        stage.apply_datagram(&mut target, &datagram(0, &[event(key(30, true))], &[]));
+        target.failing = true;
+        stage.apply_datagram(&mut target, &datagram(1, &[event(key(30, false))], &[]));
+        target.failing = false;
+        stage.apply_datagram(&mut target, &datagram(2, &snapshot_of(&[]), &[]));
+
+        assert_eq!(target.events, vec![key(30, true), key(30, false)]);
+        assert_eq!(rig.stats().input_failures, 1);
     }
 
     #[test]
@@ -535,7 +653,7 @@ mod tests {
         let mut current = Vec::new();
         push_input_record(&mut current, &[200]).unwrap();
         let mut good = Vec::new();
-        key(9, true).encode_into(&mut good);
+        event(key(9, true)).encode_into(&mut good);
         push_input_record(&mut current, &good).unwrap();
         let mut bytes = Vec::new();
         InputPacket {
@@ -564,15 +682,15 @@ mod tests {
             &datagram(
                 0,
                 &[
-                    key(30, true),
-                    InputEvent::PointerButton {
+                    event(key(30, true)),
+                    event(InputEvent::PointerButton {
                         button: 0x110,
                         pressed: true,
-                    },
-                    InputEvent::Gamepad {
+                    }),
+                    event(InputEvent::Gamepad {
                         slot: 2,
                         event: GamepadEvent::Connected,
-                    },
+                    }),
                 ],
                 &[],
             ),

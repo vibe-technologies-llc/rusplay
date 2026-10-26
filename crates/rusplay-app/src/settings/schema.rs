@@ -926,6 +926,14 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Input,
+        "Tuning",
+        "input.snapshot_interval_ms",
+        "Held-input snapshot interval (0 = off)",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Input,
         "Forwarding",
         "input.accept_remote",
         "Inject the client's input on the host",

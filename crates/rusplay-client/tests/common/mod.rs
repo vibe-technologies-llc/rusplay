@@ -23,7 +23,7 @@ use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, PixelFormat,
     Resolution, TransferFunction,
 };
-use rusplay_input::InputEvent;
+use rusplay_input::{InputEvent, InputRecord, StateRecord};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
     PairingTiming, Transport, TransportOptions, pair_as_host,
@@ -162,7 +162,7 @@ impl Default for HostOptions {
 pub struct TestHost {
     pub address: SocketAddr,
     pub received: Arc<Mutex<Vec<ControlMessage>>>,
-    pub input: Arc<Mutex<Vec<InputEvent>>>,
+    pub input: Arc<Mutex<Vec<InputRecord>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -206,13 +206,42 @@ impl TestHost {
     }
 
     pub fn input_events(&self) -> Vec<InputEvent> {
-        self.input.lock().clone()
+        self.input
+            .lock()
+            .iter()
+            .filter_map(|record| match record {
+                InputRecord::Event(event) => Some(*event),
+                InputRecord::State(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn state_records(&self) -> Vec<StateRecord> {
+        self.input
+            .lock()
+            .iter()
+            .filter_map(|record| match record {
+                InputRecord::State(state) => Some(*state),
+                InputRecord::Event(_) => None,
+            })
+            .collect()
+    }
+
+    pub fn wait_for_state(&self, timeout: Duration, wanted: impl Fn(&StateRecord) -> bool) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.state_records().iter().any(&wanted) {
+                return true;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        false
     }
 
     pub fn wait_for_input(&self, timeout: Duration, count: usize) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if self.input.lock().len() >= count {
+            if self.input_events().len() >= count {
                 return true;
             }
             thread::sleep(POLL_INTERVAL);
@@ -303,11 +332,11 @@ impl Extras {
     }
 }
 
-fn record_input(datagram: &[u8], sequence: &mut InputSequence, input: &Mutex<Vec<InputEvent>>) {
+fn record_input(datagram: &[u8], sequence: &mut InputSequence, input: &Mutex<Vec<InputRecord>>) {
     let packet = InputPacket::read(datagram).unwrap();
     let decode = |records: rusplay_protocol::InputRecords<'_>| {
         records
-            .map(|record| InputEvent::decode(record.unwrap()).unwrap())
+            .map(|record| InputRecord::decode(record.unwrap()).unwrap())
             .collect::<Vec<_>>()
     };
 
@@ -356,7 +385,7 @@ fn serve(
     network: &NetworkConfig,
     options: &HostOptions,
     received: &Mutex<Vec<ControlMessage>>,
-    input: &Mutex<Vec<InputEvent>>,
+    input: &Mutex<Vec<InputRecord>>,
     stop: &AtomicBool,
 ) {
     let mut responder = PairingResponder::new(pin(), network.pairing_max_attempts);

@@ -1,4 +1,4 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent};
+use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, StateRecord};
 
 pub const MAX_PADS: usize = 16;
 pub const PAD_AXES: usize = 6;
@@ -56,6 +56,12 @@ impl KeySet {
         } else {
             self.remove(code);
         }
+    }
+
+    fn difference(&self, other: &Self) -> impl Iterator<Item = u32> + '_ {
+        let other = *other;
+
+        self.iter().filter(move |code| !other.contains(*code))
     }
 }
 
@@ -158,15 +164,43 @@ impl HeldInput {
         }
     }
 
+    pub fn snapshot(&self, out: &mut Vec<StateRecord>) {
+        out.push(StateRecord::Keys(self.keys));
+        out.push(StateRecord::Buttons(self.buttons));
+        out.push(StateRecord::Pads(self.connected_mask()));
+
+        for (slot, pad) in (0u8..).zip(&self.pads) {
+            if let Some(state) = pad {
+                out.push(StateRecord::Pad {
+                    slot,
+                    state: *state,
+                });
+            }
+        }
+    }
+
+    pub fn reconcile(&self, record: &StateRecord, out: &mut Vec<InputEvent>) {
+        match record {
+            StateRecord::Keys(target) => diff_keys(&self.keys, target, out, |keycode, pressed| {
+                InputEvent::Key { keycode, pressed }
+            }),
+            StateRecord::Buttons(target) => {
+                diff_keys(&self.buttons, target, out, |button, pressed| {
+                    InputEvent::PointerButton { button, pressed }
+                });
+            }
+            StateRecord::Pads(mask) => self.reconcile_connections(*mask, out),
+            StateRecord::Pad { slot, state } => self.reconcile_pad(*slot, state, out),
+        }
+    }
+
     pub fn release_all(&self, out: &mut Vec<InputEvent>) {
-        out.extend(self.keys.iter().map(|keycode| InputEvent::Key {
-            keycode,
-            pressed: false,
-        }));
-        out.extend(self.buttons.iter().map(|button| InputEvent::PointerButton {
-            button,
-            pressed: false,
-        }));
+        diff_keys(&self.keys, &KeySet::default(), out, |keycode, pressed| {
+            InputEvent::Key { keycode, pressed }
+        });
+        diff_keys(&self.buttons, &KeySet::default(), out, |button, pressed| {
+            InputEvent::PointerButton { button, pressed }
+        });
 
         for (slot, pad) in (0u8..).zip(&self.pads) {
             if pad.is_some() {
@@ -174,6 +208,83 @@ impl HeldInput {
             }
         }
     }
+
+    fn connected_mask(&self) -> u16 {
+        self.pads
+            .iter()
+            .enumerate()
+            .filter(|(_, pad)| pad.is_some())
+            .fold(0, |mask, (slot, _)| mask | (1 << slot))
+    }
+
+    fn reconcile_connections(&self, mask: u16, out: &mut Vec<InputEvent>) {
+        let held = self.connected_mask();
+
+        for slot in 0..MAX_PADS {
+            let bit = 1u16 << slot;
+            let Ok(slot) = u8::try_from(slot) else {
+                continue;
+            };
+
+            if held & bit != 0 && mask & bit == 0 {
+                out.push(pad_event(slot, GamepadEvent::Disconnected));
+            }
+            if held & bit == 0 && mask & bit != 0 {
+                out.push(pad_event(slot, GamepadEvent::Connected));
+            }
+        }
+    }
+
+    fn reconcile_pad(&self, slot: u8, target: &PadState, out: &mut Vec<InputEvent>) {
+        let Some(entry) = self.pads.get(usize::from(slot)) else {
+            return;
+        };
+
+        if entry.is_none() {
+            out.push(pad_event(slot, GamepadEvent::Connected));
+        }
+        let current = entry.unwrap_or_default();
+
+        let changed = current.buttons ^ target.buttons;
+        let released = changed & current.buttons;
+        let pressed = changed & target.buttons;
+        for (mask, held) in [(released, false), (pressed, true)] {
+            for id in (0..u16::BITS).filter(|id| mask & (1 << id) != 0) {
+                let Ok(id) = u16::try_from(id) else {
+                    continue;
+                };
+                out.push(pad_event(
+                    slot,
+                    GamepadEvent::Button {
+                        button: GamepadButton(id),
+                        pressed: held,
+                    },
+                ));
+            }
+        }
+
+        for (id, (have, want)) in (0u8..).zip(current.axes.iter().zip(&target.axes)) {
+            if have.to_bits() != want.to_bits() {
+                out.push(pad_event(
+                    slot,
+                    GamepadEvent::Axis {
+                        axis: GamepadAxis(id),
+                        value: *want,
+                    },
+                ));
+            }
+        }
+    }
+}
+
+fn diff_keys(
+    held: &KeySet,
+    target: &KeySet,
+    out: &mut Vec<InputEvent>,
+    event: impl Fn(u32, bool) -> InputEvent,
+) {
+    out.extend(held.difference(target).map(|code| event(code, false)));
+    out.extend(target.difference(held).map(|code| event(code, true)));
 }
 
 fn pad_event(slot: u8, event: GamepadEvent) -> InputEvent {
@@ -216,6 +327,23 @@ mod tests {
             held.observe(event);
         }
         held
+    }
+
+    fn converge(host: &mut HeldInput, client: &HeldInput) -> Vec<InputEvent> {
+        let mut records = Vec::new();
+        client.snapshot(&mut records);
+
+        let mut applied = Vec::new();
+        for record in &records {
+            let mut events = Vec::new();
+            host.reconcile(record, &mut events);
+            for event in &events {
+                host.observe(event);
+            }
+            applied.extend(events);
+        }
+
+        applied
     }
 
     #[test]
@@ -290,6 +418,82 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_releases_a_key_the_host_still_holds() {
+        let mut host = held(&[key(30, true), key(31, true)]);
+        let client = held(&[key(31, true)]);
+
+        let applied = converge(&mut host, &client);
+
+        assert_eq!(applied, vec![key(30, false)]);
+        assert_eq!(host, client);
+    }
+
+    #[test]
+    fn a_snapshot_presses_a_key_the_host_never_saw_go_down() {
+        let mut host = HeldInput::new();
+        let client = held(&[click(0x110, true), key(57, true)]);
+
+        let applied = converge(&mut host, &client);
+
+        assert_eq!(applied, vec![key(57, true), click(0x110, true)]);
+        assert_eq!(host, client);
+    }
+
+    #[test]
+    fn a_snapshot_that_matches_changes_nothing() {
+        let client = held(&[
+            key(30, true),
+            pad(0, GamepadEvent::Connected),
+            press(0, GamepadButton::SOUTH),
+            axis(0, GamepadAxis::LEFT_TRIGGER, 0.25),
+        ]);
+        let mut host = client.clone();
+
+        assert_eq!(converge(&mut host, &client), Vec::new());
+    }
+
+    #[test]
+    fn a_snapshot_connects_disconnects_and_repairs_pads() {
+        let mut host = held(&[
+            pad(0, GamepadEvent::Connected),
+            press(0, GamepadButton::SOUTH),
+            axis(0, GamepadAxis::LEFT_X, 1.0),
+            pad(2, GamepadEvent::Connected),
+        ]);
+        let client = held(&[
+            pad(0, GamepadEvent::Connected),
+            press(0, GamepadButton::EAST),
+            axis(0, GamepadAxis::LEFT_X, -0.5),
+            pad(3, GamepadEvent::Connected),
+            press(3, GamepadButton::NORTH),
+        ]);
+
+        let applied = converge(&mut host, &client);
+
+        assert_eq!(host, client);
+        assert!(applied.contains(&pad(2, GamepadEvent::Disconnected)));
+        assert!(applied.contains(&pad(3, GamepadEvent::Connected)));
+        assert!(applied.contains(&axis(0, GamepadAxis::LEFT_X, -0.5)));
+        assert!(applied.contains(&pad(
+            0,
+            GamepadEvent::Button {
+                button: GamepadButton::SOUTH,
+                pressed: false
+            }
+        )));
+    }
+
+    #[test]
+    fn releases_are_ordered_before_presses() {
+        let mut host = held(&[key(1, true)]);
+        let client = held(&[key(2, true)]);
+
+        let applied = converge(&mut host, &client);
+
+        assert_eq!(applied, vec![key(1, false), key(2, true)]);
+    }
+
+    #[test]
     fn releasing_everything_lifts_keys_buttons_and_pads() {
         let state = held(&[
             key(30, true),
@@ -314,5 +518,21 @@ mod tests {
             ]
         );
         assert!(after.is_idle());
+    }
+
+    #[test]
+    fn an_idle_snapshot_still_names_every_scope() {
+        let mut records = Vec::new();
+
+        HeldInput::new().snapshot(&mut records);
+
+        assert_eq!(
+            records,
+            vec![
+                StateRecord::Keys(KeySet::default()),
+                StateRecord::Buttons(KeySet::default()),
+                StateRecord::Pads(0),
+            ]
+        );
     }
 }

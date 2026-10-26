@@ -25,7 +25,8 @@ paths:
   caller-owned buffer, `encoded_len` sizes it, `decode` takes exactly one event). Any other length,
   tag or boolean value is its own `Wire*` error. Gamepad events nest a second tag. The protocol
   crate wraps these bytes in a message and owns versioning; the layout changes only together with
-  a protocol version bump.
+  a protocol version bump. `record` adds the state records of the snapshot (below) and
+  `InputRecord`, the decoder for either.
 
 ## Host injection (`libei` feature)
 
@@ -220,8 +221,23 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   `SplitSink`, which routes gamepad events to `UinputGamepads` and the rest to `LibeiInjector`.
 - The client sends one extra datagram with an empty `current` `input.resend_delay_ms` after any
   datagram that changed key, button or pad-button state (`0` disables), so a lost final release
-  is recovered even when nothing follows. Two datagrams lost in a row still lose events; see
-  `input-double-loss-stuck-key` in `docs/BUGS.md`.
+  is recovered even when nothing follows.
+- Two datagrams lost in a row would still lose events, so every `input.snapshot_interval_ms`
+  (default 1000, `0` disables) the client also sends its held state as `StateRecord`s in an
+  ordinary datagram of the same sequence, repeated by the next datagram's `previous` section like
+  any other. A record decodes through `InputRecord::decode`, which tells events from state by the
+  tag byte (events use 0 to 5, state records 16 to 19). Each state record replaces one whole
+  scope, so a snapshot split across datagrams, or a lost half of it, never undoes the other half:
+  `Keys` and `Buttons` carry a `KeySet` bitset (96 bytes over evdev codes below 768), `Pads`
+  the mask of connected slots (disconnect the others, connect the missing) and one `Pad` per
+  connected slot its button mask and six axes (`PAD_AXES`). `HeldInput::snapshot` writes them,
+  from the events the client's input stage sent. The host applies a state record with
+  `HeldInput::reconcile`, which turns the difference from what the host injected into events,
+  releases before presses, and injects them like any other event (`input_events_repaired`
+  counts them), so a lost release or press is repaired within one interval and a snapshot that
+  agrees with the host injects nothing. State records with a pad slot of 16 or more, or a
+  non-finite axis, are malformed. Keys and buttons above evdev code 767 cannot be held-tracked.
+  The record layout changed together with `ProtocolVersion::CURRENT` 10.
 - Gamepad `Connected` and `Disconnected` events create and drop the host's virtual pads, so the
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,
@@ -233,6 +249,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   is answered. Its target is the `SplitSink` of `LibeiInjector` and `UinputGamepads`, whose
   `service` drives the injector's connection and `UinputGamepads::poll_rumble` every 4 ms, and
   every `RumbleCommand` leaves as one `ControlMessage::Rumble`. `HeldInput` tracks what the host
-  injected successfully (keys and buttons as `KeySet` bitsets over evdev codes below 768, pads as
-  `PadState`), so that when the session ends for any reason `HeldInput::release_all` lifts every
-  key and button and disconnects every pad the client left held.
+  injected successfully (the client's input stage tracks what it sent the same way; keys and
+  buttons are `KeySet` bitsets over evdev codes below 768, pads are `PadState`), so that when the
+  session ends for any reason `HeldInput::release_all` lifts every key and button and disconnects
+  every pad the client left held.

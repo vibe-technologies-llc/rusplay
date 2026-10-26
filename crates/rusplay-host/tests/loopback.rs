@@ -44,6 +44,8 @@ const CURSOR_TARGET_X: i32 = 77;
 const CURSOR_SIZE: u32 = 4;
 const CURSOR_FILL: u8 = 211;
 const HELD_KEY: u32 = 30;
+const SNAPSHOT_INTERVAL_MS: u16 = 40;
+const SNAPSHOTS_TO_SEE: u64 = 2;
 
 #[derive(Clone, Default)]
 struct RecordedInput(Arc<Mutex<Vec<InputEvent>>>);
@@ -176,6 +178,7 @@ fn client_config() -> Config {
     config.video.codec = Codec::H264;
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = u8::MAX;
+    config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
     config
 }
 
@@ -235,7 +238,9 @@ fn press_held_key(stream: &ClientStream, injected: &RecordedInput, deadline: Ins
         pressed: true,
     });
 
-    while Instant::now() < deadline && injected.0.lock().is_empty() {
+    while Instant::now() < deadline
+        && (injected.0.lock().is_empty() || stream.stats().input_snapshots_sent < SNAPSHOTS_TO_SEE)
+    {
         thread::sleep(Duration::from_millis(5));
     }
 }
@@ -339,7 +344,8 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     assert_eq!(client_stats.audio_decode_errors, 0);
     assert!(loudest > TONE_AMPLITUDE / 2.0);
     assert_held_key_pressed_then_released(&injected);
-    assert!(host_stats.input_events >= 1);
+    assert!(client_stats.input_snapshots_sent >= SNAPSHOTS_TO_SEE);
+    assert!(host_stats.input_state_records >= 3);
     assert_eq!(cursor_state.x, CURSOR_TARGET_X);
     assert_eq!(cursor_state.y, CURSOR_TARGET_X / 2);
     let image = cursor_state.image.unwrap();

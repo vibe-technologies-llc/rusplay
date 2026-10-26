@@ -25,10 +25,11 @@ paths:
 - Input travels on `StreamKind::Input` as `InputPacket`: the header `sequence` counts datagrams
   and the payload is a big-endian `u16` length of the `current` section, the `current` section and
   the `previous` section (the preceding datagram's `current`), each a run of `[len u8][record]`.
-  The records are opaque to the protocol crate (`rusplay-input`'s `InputEvent` bytes).
+  The records are opaque to the protocol crate (`rusplay-input`'s `InputRecord` bytes: an
+  `InputEvent`, or a `StateRecord` of the periodic held-state snapshot).
   `InputSequence::admit` tells the receiver whether to drop a datagram, apply `current`, or apply
   `previous` and `current`, in serial-number arithmetic. Input is unreliable on purpose, with
-  that one-datagram redundancy as its only loss repair. See `input.md` for the full contract.
+  that one-datagram redundancy and the periodic snapshot as its only loss repair. See `input.md` for the full contract.
 - Loss is handled per frame: Reed-Solomon FEC shards (`FecScheme`, overhead from
   `network.fec_overhead_percent`) recover small losses, and an unrecoverable frame triggers a
   `RequestKeyframe`/intra-refresh request instead of retransmission.

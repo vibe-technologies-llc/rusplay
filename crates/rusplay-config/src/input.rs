@@ -40,6 +40,7 @@ pub struct InputConfig {
     pub release_chord: ReleaseChord,
     pub rumble_max_ms: u16,
     pub resend_delay_ms: u16,
+    pub snapshot_interval_ms: u16,
     pub accept_remote: bool,
 }
 
@@ -56,6 +57,7 @@ impl Default for InputConfig {
             release_chord: ReleaseChord::default(),
             rumble_max_ms: 5000,
             resend_delay_ms: 8,
+            snapshot_interval_ms: 1000,
             accept_remote: true,
         }
     }
@@ -139,12 +141,21 @@ mod tests {
     }
 
     #[test]
-    fn remote_input_ships_on_and_can_be_turned_off() {
-        let off: InputConfig = toml::from_str("accept_remote = false").unwrap();
+    fn snapshot_and_remote_input_defaults_ship_on() {
+        let config: InputConfig = toml::from_str("").unwrap();
 
-        assert!(InputConfig::default().accept_remote);
-        assert!(!off.accept_remote);
-        assert!(off.validate().is_ok());
+        assert_eq!(config.snapshot_interval_ms, 1000);
+        assert!(config.accept_remote);
+    }
+
+    #[test]
+    fn snapshot_and_remote_input_can_be_turned_off() {
+        let config: InputConfig =
+            toml::from_str("snapshot_interval_ms = 0\naccept_remote = false").unwrap();
+
+        assert_eq!(config.snapshot_interval_ms, 0);
+        assert!(!config.accept_remote);
+        assert!(config.validate().is_ok());
     }
 
     #[test]
