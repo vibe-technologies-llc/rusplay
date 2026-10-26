@@ -7,6 +7,7 @@ mod dmabuf;
 mod error;
 mod gpu;
 mod kernel;
+mod linearise;
 mod polar;
 #[cfg(test)]
 mod reference;
@@ -35,6 +36,7 @@ pub use crate::{
     error::ScaleError,
     gpu::ScalePipelines,
     kernel::{Geometry, Kernel},
+    linearise::{ChannelOrder, LineariseSettings, Lineariser, SourceChannels, TexelPacking},
     scaler::{Reconfigured, ScaleSettings, Scaler},
     sigmoid::Sigmoid,
     table::TapTable,

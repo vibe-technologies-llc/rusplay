@@ -3,7 +3,7 @@ use rusplay_core::{PixelFormat, Resolution, ScaleFilter, TransferFunction};
 use rustix::io::Errno;
 use thiserror::Error;
 
-use crate::{PlaneLayout, dmabuf::fourcc_name};
+use crate::{PlaneLayout, TexelPacking, dmabuf::fourcc_name};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ScaleError {
@@ -21,6 +21,11 @@ pub enum ScaleError {
     UpsampleChromaFilterNotSeparable(ScaleFilter),
     #[error("decoding the {0:?} transfer function to linear light is not supported")]
     LinearOutputTransferUnsupported(TransferFunction),
+    #[error("a {format:?} texture cannot be read as {packing:?} texels")]
+    LineariseSourceFormat {
+        format: wgpu::TextureFormat,
+        packing: TexelPacking,
+    },
     #[error("hdr reference white {0} nits is outside 1..=10000")]
     ReferenceWhiteOutOfRange(u32),
     #[error("hdr peak luminance {0} nits is outside 1..=10000")]

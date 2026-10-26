@@ -25,9 +25,9 @@ const TRANSFER_BT709: u32 = 2;
 const TRANSFER_PQ: u32 = 3;
 const TRANSFER_HLG: u32 = 4;
 const TRANSFER_GAMMA22: u32 = 5;
-const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
-const HLG_REFERENCE_GAMMA: f64 = 1.2;
-const HLG_GAMMA_PER_DECADE: f64 = 0.42;
+pub(crate) const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
+pub(crate) const HLG_REFERENCE_GAMMA: f64 = 1.2;
+pub(crate) const HLG_GAMMA_PER_DECADE: f64 = 0.42;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneLayout {
