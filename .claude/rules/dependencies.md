@@ -62,7 +62,7 @@ paths:
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads on the host and physical gamepads with force feedback on the client,
   `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wayland-protocols`
-  (pointer constraints and relative pointer bindings, `rusplay-input/wayland`), `wgpu`
+  (pointer constraints, relative pointer and, from `staging`, cursor shape bindings, `rusplay-input/wayland`), `wgpu`
   (GPU scaling), `ash` (raw Vulkan for DMA-BUF import in `rusplay-scale`, default features off so
   it loads nothing itself; kept at the version wgpu-hal uses, since handles cross between them),
   `rav1d` for software AV1 decode (default features off; its `asm` feature is only enabled by

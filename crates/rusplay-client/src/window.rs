@@ -9,14 +9,15 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use rusplay_config::{Config, PresentMode};
+use rusplay_config::{Config, InputConfig, PresentMode};
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
+use rusplay_input::{capture::CaptureOptions, wayland::WaylandCapture};
 use rusplay_scale::OutputLight;
 
 pub use crate::window::layout::{LogicalArea, WindowLayout};
 use crate::{
-    ClientError, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
+    ClientError, ClientStream, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
     cursor::CursorWatcher,
     window::{compose::Composer, cursor::CursorLayer, surface::ChildSurface},
 };
@@ -73,6 +74,8 @@ impl FrameSink for WindowSink {
 }
 
 pub struct StreamWindow {
+    target: WaylandTarget,
+    capture: Option<WaylandCapture>,
     gpu: Gpu,
     shared: Arc<Shared>,
     surface: Arc<ChildSurface>,
@@ -137,6 +140,8 @@ impl StreamWindow {
             })?;
 
         Ok(Self {
+            target,
+            capture: None,
             gpu,
             shared,
             surface: child,
@@ -163,6 +168,39 @@ impl StreamWindow {
         self.shared.update(|pending| pending.cursor = Some(cursor));
     }
 
+    pub fn capture_input(
+        &mut self,
+        stream: &ClientStream,
+        input: &InputConfig,
+    ) -> Result<(), ClientError> {
+        if self.capture.is_some() {
+            return Ok(());
+        }
+
+        let handle = stream.input();
+        let capture = unsafe {
+            WaylandCapture::attach(self.target, CaptureOptions::from(input), move |event| {
+                handle.send(event);
+            })
+        }?;
+        capture.set_region(self.layout.map(WindowLayout::region));
+        self.capture = Some(capture);
+
+        Ok(())
+    }
+
+    pub fn is_engaged(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(WaylandCapture::is_engaged)
+    }
+
+    pub fn release(&self) {
+        if let Some(capture) = &self.capture {
+            capture.release();
+        }
+    }
+
     pub fn layout(&self) -> Option<WindowLayout> {
         self.layout
     }
@@ -175,6 +213,9 @@ impl StreamWindow {
         if let Some(layout) = layout {
             self.surface.set_position(layout.x, layout.y)?;
         }
+        if let Some(capture) = &self.capture {
+            capture.set_region(layout.map(WindowLayout::region));
+        }
         self.layout = layout;
         self.shared.update(|pending| pending.layout = layout);
 
@@ -183,6 +224,10 @@ impl StreamWindow {
 
     pub fn is_finished(&self) -> bool {
         self.presenter.as_ref().is_none_or(JoinHandle::is_finished)
+            || self
+                .capture
+                .as_ref()
+                .is_some_and(WaylandCapture::is_finished)
     }
 
     pub fn stop(mut self) -> Result<(), ClientError> {
@@ -190,17 +235,22 @@ impl StreamWindow {
     }
 
     fn shut_down(&mut self) -> Result<(), ClientError> {
+        let captured = self.capture.take().map_or(Ok(()), WaylandCapture::stop);
+
         self.shared.update(|pending| {
             pending.stop = true;
             pending.frame = None;
         });
 
-        match self.presenter.take() {
+        let presented = match self.presenter.take() {
             Some(thread) => thread.join().unwrap_or(Err(ClientError::StagePanicked {
                 stage: Stage::Window,
             })),
             None => Ok(()),
-        }
+        };
+
+        captured?;
+        presented
     }
 }
 

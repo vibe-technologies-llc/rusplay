@@ -192,10 +192,21 @@ Live tests need a Wayland session with the portal and a person to confirm its di
 - Engaging in relative mode requests `lock_pointer` with persistent lifetime (never twice: a
   second constraint on one pointer is a fatal protocol error for the whole connection), and
   releasing destroys it. `engage` and `release` can also be called from the app; they run on the
-  capture thread within one poll interval. The local cursor is left alone: gpui owns the cursor
-  surface, so hiding it is the app's job.
+  capture thread within one poll interval.
+- The local cursor is hidden while engaged, by the capture itself, since gpui offers no hidden
+  cursor style: on engage and on every pointer enter while engaged it calls
+  `wl_pointer.set_cursor(enter serial, null)` on its own pointer object (the cursor belongs to the
+  seat, so this hides gpui's cursor too). On release it sets the `default` shape through
+  `wp_cursor_shape_manager_v1` (bound when offered, versions 1 to 2); without that protocol the
+  cursor stays hidden until gpui next changes its style or the pointer re-enters. gpui may also
+  set its cursor on an enter it handles after ours, which shows the cursor again until the next
+  enter.
 - Events go to the `sink` closure on the capture thread; the client passes
-  `ClientStream::input()`'s `InputHandle`.
+  `ClientStream::input()`'s `InputHandle`. In the app that wiring is
+  `StreamWindow::capture_input` (`client.md`): the capture attaches to gpui's own `wl_surface`
+  (the stream subsurface has an empty input region, so all pointer and keyboard events land
+  there), and `set_layout` keeps `set_region` on the letterboxed picture rectangle in that
+  surface's logical coordinates.
 - Live tests (`#[ignore]`, need a compositor) attach to a plain `wl_surface` of a second
   connection on the same display.
 

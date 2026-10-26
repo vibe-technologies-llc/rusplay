@@ -155,8 +155,16 @@ impl RusplayApp {
         };
 
         let host_name = request.host.name.clone();
-        let stream =
-            cx.new(|cx| StreamView::new(request.host, request.credentials, config, attached, cx));
+        let stream = cx.new(|cx| {
+            StreamView::new(
+                request.host,
+                request.credentials,
+                config,
+                attached,
+                window,
+                cx,
+            )
+        });
         let events = cx.subscribe_in(
             &stream,
             window,
@@ -187,6 +195,12 @@ impl RusplayApp {
             }
         }
         cx.notify();
+    }
+
+    fn input_engaged(&self, cx: &App) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|stream| stream.view.read(cx).is_engaged())
     }
 
     fn end_stream(&mut self, cx: &mut Context<Self>) {
@@ -280,6 +294,9 @@ impl Render for RusplayApp {
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
             .on_action(cx.listener(|this, _: &Quit, _, cx| {
+                if this.input_engaged(cx) {
+                    return;
+                }
                 this.end_stream(cx);
                 cx.quit();
             }))

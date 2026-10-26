@@ -1,4 +1,5 @@
 use rusplay_core::Resolution;
+use rusplay_input::capture::StreamRegion;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogicalArea {
@@ -46,6 +47,15 @@ impl WindowLayout {
             height,
             pixels: Resolution::new(device_pixels(width, scale), device_pixels(height, scale)),
         })
+    }
+
+    pub(crate) fn region(self) -> StreamRegion {
+        StreamRegion {
+            x: f64::from(self.x),
+            y: f64::from(self.y),
+            width: f64::from(self.width),
+            height: f64::from(self.height),
+        }
     }
 }
 
@@ -159,6 +169,18 @@ mod tests {
         assert_eq!(
             WindowLayout::letterbox(area(0.0, 0.0, 100.0, 100.0), 1.0, Resolution::new(0, 0)),
             None
+        );
+    }
+
+    #[test]
+    fn the_input_region_is_the_logical_rectangle() {
+        let layout = WindowLayout::letterbox(area(0.0, 0.0, 1100.0, 700.0), 2.0, HD).unwrap();
+
+        let region = layout.region();
+
+        assert_eq!(
+            (region.x, region.y, region.width, region.height),
+            (0.0, 40.0, 1100.0, 619.0)
         );
     }
 

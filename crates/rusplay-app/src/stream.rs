@@ -1,13 +1,13 @@
 use std::{cell::RefCell, net::SocketAddr, rc::Rc, time::Duration};
 
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, Focusable, Pixels, Task, Window, canvas, div,
-    prelude::*,
+    Bounds, Context, EventEmitter, FocusHandle, Focusable, Pixels, Subscription, Task, Window,
+    canvas, div, prelude::*,
 };
 use rusplay_client::{
     ClientError, ClientStream, Credentials, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
 };
-use rusplay_config::Config;
+use rusplay_config::{Config, InputConfig, ReleaseChord};
 
 use crate::{
     hosts::HostEntry,
@@ -87,8 +87,11 @@ pub struct StreamView {
     phase: Phase,
     live: Rc<RefCell<Live>>,
     format_generation: Option<u32>,
+    input: InputConfig,
+    engaged: bool,
     focus_handle: FocusHandle,
     tasks: Vec<Task<()>>,
+    _activation: Subscription,
 }
 
 impl EventEmitter<StreamEvent> for StreamView {}
@@ -98,12 +101,14 @@ impl StreamView {
         host: HostEntry,
         credentials: Credentials,
         config: Config,
-        window: StreamWindow,
+        stream_window: StreamWindow,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let gpu = window.gpu();
-        let sink = window.sink();
+        let gpu = stream_window.gpu();
+        let sink = stream_window.sink();
         let address = host.address;
+        let input = config.input;
 
         let connecting = cx.background_spawn(async move {
             session::connect(config, address, &credentials, gpu, sink)
@@ -117,17 +122,38 @@ impl StreamView {
             host,
             phase: Phase::Connecting,
             live: Rc::new(RefCell::new(Live {
-                window: Some(window),
+                window: Some(stream_window),
                 ..Live::default()
             })),
             format_generation: None,
+            input,
+            engaged: false,
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
+            _activation: cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.release(cx);
+                }
+            }),
         }
     }
 
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
         self.finish(cx);
+    }
+
+    pub fn is_engaged(&self) -> bool {
+        self.engaged
+    }
+
+    fn release(&mut self, cx: &mut Context<Self>) {
+        if let Some(window) = &self.live.borrow().window {
+            window.release();
+        }
+        if self.engaged {
+            self.engaged = false;
+            cx.notify();
+        }
     }
 
     fn connected(&mut self, result: Result<ClientStream, SessionError>, cx: &mut Context<Self>) {
@@ -162,12 +188,23 @@ impl StreamView {
             }
         }
 
-        {
+        let captured = {
             let mut live = self.live.borrow_mut();
-            if let Some(window) = &live.window {
-                window.follow_cursor(&stream.cursor());
-            }
+            let captured = match &mut live.window {
+                Some(window) => {
+                    window.follow_cursor(&stream.cursor());
+                    window.capture_input(&stream, &self.input)
+                }
+                None => Ok(()),
+            };
             live.stream = Some(stream);
+            captured
+        };
+        if let Err(error) = captured {
+            cx.emit(StreamEvent::Notice(Notice::Failure(format!(
+                "Streaming without input: {}",
+                error_chain(&error)
+            ))));
         }
         self.phase = Phase::Streaming;
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -203,6 +240,17 @@ impl StreamView {
             cx.notify();
         }
 
+        let engaged = self
+            .live
+            .borrow()
+            .window
+            .as_ref()
+            .is_some_and(StreamWindow::is_engaged);
+        if engaged != self.engaged {
+            self.engaged = engaged;
+            cx.notify();
+        }
+
         true
     }
 
@@ -228,9 +276,27 @@ impl StreamView {
     fn status(&self) -> String {
         match self.phase {
             Phase::Connecting => format!("Connecting to {}", self.host.name),
-            Phase::Streaming => format!("Streaming from {}", self.host.name),
+            Phase::Streaming if self.engaged => format!(
+                "Input captured by {}. Press {} to release it",
+                self.host.name,
+                chord_label(self.input.release_chord)
+            ),
+            Phase::Streaming => format!(
+                "Streaming from {}. Click the picture or press {} to capture input",
+                self.host.name,
+                chord_label(self.input.release_chord)
+            ),
             Phase::Ended => format!("Session with {} ended", self.host.name),
         }
+    }
+}
+
+fn chord_label(chord: ReleaseChord) -> &'static str {
+    match chord {
+        ReleaseChord::CtrlAlt => "Ctrl+Alt",
+        ReleaseChord::CtrlShift => "Ctrl+Shift",
+        ReleaseChord::AltShift => "Alt+Shift",
+        ReleaseChord::CtrlAltShift => "Ctrl+Alt+Shift",
     }
 }
 
@@ -282,5 +348,18 @@ impl Render for StreamView {
                     .bg(theme::backdrop())
                     .child(picture),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_release_chord_has_a_label_naming_its_keys() {
+        assert_eq!(chord_label(ReleaseChord::default()), "Ctrl+Alt+Shift");
+        assert_eq!(chord_label(ReleaseChord::CtrlAlt), "Ctrl+Alt");
+        assert_eq!(chord_label(ReleaseChord::CtrlShift), "Ctrl+Shift");
+        assert_eq!(chord_label(ReleaseChord::AltShift), "Alt+Shift");
     }
 }

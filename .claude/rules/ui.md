@@ -65,9 +65,15 @@ paths:
   stream description's resolution, calls `ClientStream::set_target` with the device size and
   `StreamWindow::set_layout` with the rectangle. Doing it in prepaint means the subsurface
   position (applied on the parent's commit) lands with the frame gpui is drawing.
+- Input: once connected, `StreamView` calls `StreamWindow::capture_input` with the config's
+  `input` section; a failure there is reported as a notice and the stream continues without
+  input. A click on the picture or the release chord engages, the chord releases again; the
+  header shows which, naming the chord (`chord_label`). Losing window activation
+  (`observe_window_activation`) releases. `Quit` is ignored while input is engaged, because the
+  keyboard also reaches gpui and `ctrl-q` belongs to the game then.
 - A 50 ms poll on the foreground executor ends the session when any client stage, the window's
   presenter or a layout update failed, and re-renders when a newer stream description arrives so
-  the letterbox follows the stream's aspect. Teardown stops the stream first, then the window, and
+  the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the stream first, then the window, and
   emits `StreamEvent::Ended` with the notice for the status bar.
 
 ## Settings

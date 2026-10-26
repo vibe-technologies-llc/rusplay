@@ -221,6 +221,13 @@ paths:
   picture, via `present::scale_settings`) into a texture of `round(size * target / source)`,
   rebuilt only when the shape or the scale changes. Its origin is
   `round((position - hotspot) * target / source)`, clipped by the picture.
+- Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
+  `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
+  `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`
+  updates it (`WindowLayout::region`, `None` while there is no layout, which drops absolute
+  positions). `is_engaged` and `release` pass through. `is_finished` also reports a capture
+  thread that ended, and `stop` stops the capture first (which releases every held key and
+  button) and then the presenter, returning the capture's error before the presenter's.
 - Surface results: `Timeout`/`Occluded` skip the draw, `Outdated`/`Suboptimal` reconfigure,
   `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
   `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
