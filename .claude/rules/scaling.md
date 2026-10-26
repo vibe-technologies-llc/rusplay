@@ -173,7 +173,14 @@ paths:
 - Formats (`DmaBufFormat`): `XR24`/`AR24` as `Bgra8Unorm`, `XB24`/`AB24` as `Rgba8Unorm`, both with
   an sRGB view (`DmaBufTexture::linear_view`, created with `MUTABLE_FORMAT` and a format list,
   dropped when the modifier refuses it), so the scaler gets linear light from them as from any
-  other source; `XB30`/`AB30` as `Rgb10a2Unorm` (no sRGB view exists). `NV12` and `P010` are
+  other source; `XB30`/`AB30` as `Rgb10a2Unorm` (no sRGB view exists). The formats wgpu has no
+  texture format for are imported as one it has, with `DmaBufFormat::channels` (and
+  `DmaBufTexture::channels`) saying how to read them through `Lineariser`: `XR30`/`AR30` as
+  `Rgb10a2Unorm` with `ChannelOrder::Bgra` (blue in the low bits), `BX24` and `RX24` as
+  `Rgba8Unorm` with no sRGB view (the colour sits in lanes 1 to 3) and `Argb`/`Abgr`, and
+  `RX30`/`BX30` as `R32Uint` with `TexelPacking::Rgb10Alpha2Low` and `Bgra`/`Rgba`. A test
+  imports every RGB format from a udmabuf and checks each texel against the DRM bit layout.
+  `channels` is `None` for `NV12` and `P010`. `NV12` and `P010` are
   imported as two textures, one per plane, each with the buffer's modifier and its own offset and
   pitch: `R8Uint` + `Rg8Uint`, or `R16Uint` + `Rg16Uint` with the 10 bits in the high bits, as
   VAAPI and ffmpeg's Vulkan import do. Integer formats keep the codes exact and need no
