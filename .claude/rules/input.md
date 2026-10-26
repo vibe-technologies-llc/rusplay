@@ -40,7 +40,8 @@ paths:
   answers at once), then everything is non-blocking: `inject` drains the socket, tracks seats and
   devices, binds the capabilities `input.keyboard` and `input.pointer` allow, and sends. It
   answers pings through the `reis` event converter, so it must be called regularly or the server
-  may drop the client; the host calls it from its input loop.
+  may drop the client; `service` runs that pass without an event, and the host calls it from its
+  input loop.
 - Devices start paused. `wait_ready` blocks until the compositor resumes one (the portal dialog
   may still be open). An event with no resumed device offering its capability returns
   `DeviceUnavailable`, and a device paused mid-session simply stops matching until resumed. A
@@ -72,8 +73,14 @@ for screen and input in a single portal session and a single permission dialog:
    `injector.attach_session(session)` keeps the session alive for as long as the injector.
 
 `LibeiInjector::open_standalone` runs steps 1, 3 and 4 for a host that wants input without a
-ScreenCast session of its own. `rusplay-capture` currently opens its own ScreenCast session, so a
-combined session needs `PortalSession` to accept an external one; that is part of `host-input`.
+ScreenCast session of its own. The host runs the combined flow in `rusplay-host/src/portal.rs`
+(`open_portal`): `RemoteDesktopSession::select_devices`, then
+`rusplay_capture::SharedScreencast::select_sources` on `session.session()` (cursor mode and source
+types only, because persistence and the restore token belong to `select_devices` in a RemoteDesktop
+session), then `start_selected`, then `SharedScreencast::open_remote` with the streams the start
+returned and `connect_to_eis`. Its restore token covers both and is stored in the capture
+`RestoreTokenStore`. The absolute pointer maps onto the first stream's `mapping_id`, or onto the
+bounds when the compositor reports none.
 
 Live tests need a Wayland session with the portal and a person to confirm its dialog, so they are
 `#[ignore]`d.
@@ -221,7 +228,11 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   delay_ms, duration_ms }`, a one-to-one copy of `RumbleCommand`, reliable and acknowledged so
   a stop is not lost. The host sends one per `poll_rumble` command. Messages are unordered, which
   is why the client caps every effect at `input.rumble_max_ms`.
-- Host wiring (`host-input` in `docs/FEATURES.md`) therefore needs: a loop that reads
-  `StreamKind::Input` datagrams into `InputSequence`/`InputEvent::decode`/`SplitSink::inject`,
-  a call to `UinputGamepads::poll_rumble` every few milliseconds, and a
-  `ControlMessage::Rumble` per command.
+- The host applies this in its input stage (`host.md`): one `HostSession` input stage per client
+  session, fed the `StreamKind::Input` datagrams the control stage routes to it once the `Hello`
+  is answered. Its target is the `SplitSink` of `LibeiInjector` and `UinputGamepads`, whose
+  `service` drives the injector's connection and `UinputGamepads::poll_rumble` every 4 ms, and
+  every `RumbleCommand` leaves as one `ControlMessage::Rumble`. `HeldInput` tracks what the host
+  injected successfully (keys and buttons as `KeySet` bitsets over evdev codes below 768, pads as
+  `PadState`), so that when the session ends for any reason `HeldInput::release_all` lifts every
+  key and button and disconnects every pad the client left held.

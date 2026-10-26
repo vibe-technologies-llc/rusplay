@@ -925,6 +925,13 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Section::Input,
+        "Forwarding",
+        "input.accept_remote",
+        "Inject the client's input on the host",
+        Kind::Flag,
+    ),
+    field(
         Section::Capture,
         "Source",
         "capture.source",

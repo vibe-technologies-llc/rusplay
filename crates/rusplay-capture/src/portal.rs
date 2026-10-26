@@ -2,10 +2,10 @@ use std::os::fd::OwnedFd;
 
 use ashpd::{
     desktop::{
-        CreateSessionOptions, PersistMode,
+        CreateSessionOptions, PersistMode, Session,
         screencast::{
-            CursorMode as PortalCursorMode, OpenPipeWireRemoteOptions, Screencast,
-            SelectSourcesOptions, SourceType, StartCastOptions,
+            CursorMode as PortalCursorMode, IsScreencastSession, OpenPipeWireRemoteOptions,
+            Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
         },
     },
     enumflags2::BitFlags,
@@ -101,6 +101,53 @@ impl PortalSession {
             restore_token: response.restore_token().map(str::to_owned),
         })
     }
+}
+
+#[derive(Debug)]
+pub struct SharedScreencast {
+    proxy: Screencast,
+}
+
+impl SharedScreencast {
+    pub async fn select_sources(
+        config: &CaptureConfig,
+        session: &Session<impl IsScreencastSession>,
+    ) -> Result<Self, CaptureError> {
+        let proxy = Screencast::new().await?;
+        let sources = SelectSourcesOptions::default()
+            .set_cursor_mode(portal_cursor(config.cursor))
+            .set_sources(portal_sources(config.source))
+            .set_multiple(false);
+        proxy.select_sources(session, sources).await?;
+
+        Ok(Self { proxy })
+    }
+
+    pub async fn open_remote(
+        &self,
+        session: &Session<impl IsScreencastSession>,
+        streams: Vec<PortalStream>,
+        restore_token: Option<String>,
+    ) -> Result<PortalSession, CaptureError> {
+        if streams.is_empty() {
+            return Err(CaptureError::NoStreams);
+        }
+
+        let remote = self
+            .proxy
+            .open_pipe_wire_remote(session, OpenPipeWireRemoteOptions::default())
+            .await?;
+
+        Ok(PortalSession {
+            remote,
+            streams,
+            restore_token,
+        })
+    }
+}
+
+pub fn portal_resolution(width: i32, height: i32) -> Option<Resolution> {
+    resolution_from_portal((width, height))
 }
 
 fn portal_cursor(mode: CursorMode) -> PortalCursorMode {

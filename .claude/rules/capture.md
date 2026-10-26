@@ -17,6 +17,11 @@ paths:
   `$XDG_STATE_HOME/rusplay/restore-token` (ignored unless absolute, per the XDG spec) or
   `~/.local/state/rusplay/restore-token`; it is written to a staging file with mode 0600 and
   renamed into place. With persistence off the store is neither read nor written.
+- `SharedScreencast` joins a ScreenCast to a session another portal owns (any
+  `IsScreencastSession`, today the RemoteDesktop session of `rusplay-input`): `select_sources`
+  sends the cursor mode and source types but not persistence, which a RemoteDesktop session takes
+  at `SelectDevices`, and `open_remote` turns the streams that session's `Start` returned into a
+  `PortalSession` for `PipeWireCapture::from_portal`.
 - PipeWire consumption lives behind the `pipewire` feature (`src/pipewire/`). `PipeWireCapture`
   connects to the portal's remote fd and node id and implements `CaptureSource`. The PipeWire main
   loop runs on its own `rusplay-pipewire` thread; setup errors come back synchronously from

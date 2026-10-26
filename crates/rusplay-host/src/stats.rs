@@ -22,6 +22,12 @@ pub struct HostStats {
     pub audio_overruns: u64,
     pub cursor_messages_sent: u64,
     pub cursor_images_sent: u64,
+    pub input_packets: u64,
+    pub input_packets_stale: u64,
+    pub input_events: u64,
+    pub input_failures: u64,
+    pub rumble_sent: u64,
+    pub rumble_dropped: u64,
 }
 
 #[derive(Debug, Default)]
@@ -67,6 +73,12 @@ pub(crate) struct Counters {
     pub audio_overruns: Counter,
     pub cursor_messages_sent: Counter,
     pub cursor_images_sent: Counter,
+    pub input_packets: Counter,
+    pub input_packets_stale: Counter,
+    pub input_events: Counter,
+    pub input_failures: Counter,
+    pub rumble_sent: Counter,
+    pub rumble_dropped: Counter,
 }
 
 impl Counters {
@@ -92,6 +104,12 @@ impl Counters {
             audio_overruns: self.audio_overruns.get(),
             cursor_messages_sent: self.cursor_messages_sent.get(),
             cursor_images_sent: self.cursor_images_sent.get(),
+            input_packets: self.input_packets.get(),
+            input_packets_stale: self.input_packets_stale.get(),
+            input_events: self.input_events.get(),
+            input_failures: self.input_failures.get(),
+            rumble_sent: self.rumble_sent.get(),
+            rumble_dropped: self.rumble_dropped.get(),
         }
     }
 }

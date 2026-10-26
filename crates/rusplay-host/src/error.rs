@@ -18,6 +18,7 @@ pub enum Stage {
     Control,
     Audio,
     Cursor,
+    Input,
 }
 
 impl Stage {
@@ -29,6 +30,7 @@ impl Stage {
             Self::Control => "control",
             Self::Audio => "audio",
             Self::Cursor => "cursor",
+            Self::Input => "input",
         }
     }
 }
@@ -102,6 +104,8 @@ pub enum HostError {
     CaptureStrideTooSmall { stride: u32, width: u32 },
     #[error("screen capture needs the pipewire feature")]
     CaptureNotCompiled,
+    #[error("remote input needs the input feature, or input.accept_remote turned off")]
+    InputNotCompiled,
     #[error("audio codec {codec} is not compiled into this host")]
     AudioCodecNotCompiled { codec: AudioCodec },
     #[error("the {width}x{height} cursor image does not fit the wire format")]

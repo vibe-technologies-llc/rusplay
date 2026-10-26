@@ -93,8 +93,15 @@ mod portal {
             pollster::block_on(PortalSession::open(capture))?
         };
 
+        feed_from_session(session, config)
+    }
+
+    pub(crate) fn feed_from_session(
+        session: PortalSession,
+        config: &Config,
+    ) -> Result<Arc<CaptureFeed>, HostError> {
         let formats: Vec<_> = UPLOAD_FORMATS.iter().map(|(fourcc, _)| *fourcc).collect();
-        let mut options = StreamOptions::new(capture, &config.video).with_modifiers(
+        let mut options = StreamOptions::new(&config.capture, &config.video).with_modifiers(
             formats
                 .iter()
                 .copied()
@@ -110,6 +117,8 @@ mod portal {
     }
 }
 
+#[cfg(feature = "pipewire")]
+pub(crate) use self::portal::feed_from_session;
 #[cfg(feature = "pipewire")]
 pub use self::portal::open_portal_capture;
 

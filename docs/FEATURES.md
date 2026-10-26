@@ -13,7 +13,6 @@
 - [M, blocked by: app-stream-view] `input-app-attach`: attach `rusplay_input::wayland::WaylandCapture` to the stream window (display and surface pointers from gpui's raw window handles), feed it `ClientStream::input()`, call `set_region` with the letterboxed picture rectangle on every resize, hide the local cursor while engaged, show the release chord and engaged state in the UI, and call `release` when the window loses focus or the stream ends
 
 # Sessions
-- [M] `host-input`: read `StreamKind::Input` datagrams (`InputPacket`, `InputSequence`, `InputEvent::decode`) in `HostSession` into a `SplitSink` of `LibeiInjector` and `UinputGamepads` from one combined RemoteDesktop + ScreenCast portal session, call `UinputGamepads::poll_rumble` from the input loop and send each `RumbleCommand` as `ControlMessage::Rumble`; the contract is in `.claude/rules/input.md`
 - [M] `host-dmabuf-capture`: convert DMA-BUF capture frames on the GPU and let PipeWire negotiate them again; the host asks for shared memory and returns `DmaBufCaptureUnsupported` today
 - [M] `host-ten-bit-capture`: accept the 10-bit `XR30`/`XB30` capture formats, which have no sRGB texture view, by linearising them in a shader before scaling
 - [M] `host-source-color`: linearise and map each capture frame from its `Frame::color` (transfer, primaries, HDR levels) instead of assuming sRGB in `GpuPipeline`, reconfiguring the mapper when the description changes

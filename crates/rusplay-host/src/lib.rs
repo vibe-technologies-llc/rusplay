@@ -7,9 +7,11 @@ mod datagrams;
 mod encode;
 mod error;
 mod gpu;
+mod input;
 mod mailbox;
 mod outbox;
 mod pipeline;
+mod portal;
 mod send;
 mod session;
 mod shared;
@@ -28,6 +30,8 @@ pub use crate::{
     audio::{AudioSource, AudioSourceFactory},
     error::{HostError, Stage},
     gpu::Gpu,
+    input::{InputFeed, InputTarget},
+    portal::{PortalHost, open_portal},
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},
     stats::HostStats,
