@@ -6,6 +6,7 @@ use std::{
 };
 
 use rusplay_capture::{CursorBitmap, CursorUpdate, Received, Subscriber};
+use rusplay_core::Resolution;
 use rusplay_net::{FecScheme, Packetizer, Transport};
 use rusplay_protocol::{CursorImage, CursorMessage, StreamKind};
 
@@ -44,6 +45,7 @@ fn serve(
     let mut changed = state.is_some();
     let mut image_pending = true;
     let mut image_sent_at: Option<Instant> = None;
+    let mut space_sent: Option<Resolution> = None;
     let counters = &links.shared.counters;
 
     while !links.shared.stopped() {
@@ -60,9 +62,14 @@ fn serve(
             Received::Closed => thread::sleep(POLL),
         }
 
-        let Some(current) = state.as_ref().filter(|_| links.shared.streaming()) else {
+        let Some((current, space)) = state
+            .as_ref()
+            .zip(links.feed.capture_size())
+            .filter(|_| links.shared.streaming())
+        else {
             continue;
         };
+        changed |= space_sent != Some(space);
         let now = Instant::now();
         let repeat_due = image_repeat
             .zip(image_sent_at)
@@ -72,7 +79,7 @@ fn serve(
         }
 
         let with_image = (image_pending || repeat_due) && current.bitmap.is_some();
-        let message = message_for(current, with_image)?;
+        let message = message_for(current, space, with_image)?;
         let mut encoded = Vec::with_capacity(message.encoded_len());
         message.encode(&mut encoded)?;
         let datagrams = packetizer.packetize(number, false, &encoded)?;
@@ -80,6 +87,7 @@ fn serve(
 
         number = number.wrapping_add(1);
         changed = false;
+        space_sent = Some(space);
         counters.cursor_messages_sent.increment();
         if with_image {
             image_pending = false;
@@ -91,7 +99,11 @@ fn serve(
     Ok(())
 }
 
-fn message_for(update: &CursorUpdate, with_image: bool) -> Result<CursorMessage, HostError> {
+fn message_for(
+    update: &CursorUpdate,
+    space: Resolution,
+    with_image: bool,
+) -> Result<CursorMessage, HostError> {
     let image = update
         .bitmap
         .as_ref()
@@ -102,6 +114,7 @@ fn message_for(update: &CursorUpdate, with_image: bool) -> Result<CursorMessage,
     Ok(CursorMessage {
         x: update.x,
         y: update.y,
+        space,
         visible: update.visible,
         image,
     })
@@ -127,6 +140,8 @@ fn image_for(bitmap: &CursorBitmap) -> Result<CursorImage, HostError> {
 mod tests {
     use super::*;
 
+    const SPACE: Resolution = Resolution::new(3840, 2160);
+
     fn bitmap(width: u32, hotspot_x: i32) -> CursorBitmap {
         CursorBitmap {
             width,
@@ -148,15 +163,16 @@ mod tests {
 
     #[test]
     fn a_position_message_leaves_the_image_out() {
-        let message = message_for(&update(Some(bitmap(2, 1))), false).unwrap();
+        let message = message_for(&update(Some(bitmap(2, 1))), SPACE, false).unwrap();
 
         assert_eq!((message.x, message.y, message.visible), (3, -4, true));
+        assert_eq!(message.space, SPACE);
         assert_eq!(message.image, None);
     }
 
     #[test]
     fn an_image_message_carries_the_bitmap() {
-        let message = message_for(&update(Some(bitmap(2, 1))), true).unwrap();
+        let message = message_for(&update(Some(bitmap(2, 1))), SPACE, true).unwrap();
 
         assert_eq!(
             message.image,
@@ -189,7 +205,7 @@ mod tests {
 
     #[test]
     fn an_update_without_a_bitmap_has_no_image_even_when_asked() {
-        let message = message_for(&update(None), true).unwrap();
+        let message = message_for(&update(None), SPACE, true).unwrap();
 
         assert_eq!(message.image, None);
     }

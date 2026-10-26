@@ -51,30 +51,30 @@ impl CursorLayer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         cursor: &CursorState,
-        source: Resolution,
         target: Resolution,
     ) -> Result<Option<(wgpu::TextureView, CursorPlacement)>, ClientError> {
         let Some(image) = cursor.image.as_ref().filter(|_| cursor.visible) else {
             return Ok(None);
         };
-        if image.width == 0 || image.height == 0 || source.pixel_count() == 0 {
+        let space = cursor.space;
+        if image.width == 0 || image.height == 0 || space.pixel_count() == 0 {
             return Ok(None);
         }
 
         let size = Resolution::new(
-            scaled_length(u32::from(image.width), source.width, target.width),
-            scaled_length(u32::from(image.height), source.height, target.height),
+            scaled_length(u32::from(image.width), space.width, target.width),
+            scaled_length(u32::from(image.height), space.height, target.height),
         );
         let placement = CursorPlacement {
             origin: [
                 scaled_offset(
                     cursor.x - i32::from(image.hotspot_x),
-                    source.width,
+                    space.width,
                     target.width,
                 ),
                 scaled_offset(
                     cursor.y - i32::from(image.hotspot_y),
-                    source.height,
+                    space.height,
                     target.height,
                 ),
             ],
@@ -264,6 +264,7 @@ mod tests {
         CursorState {
             x: 10,
             y: 20,
+            space: Resolution::new(100, 100),
             visible,
             image: Some(Arc::new(CursorImage {
                 width: 4,
@@ -292,7 +293,6 @@ mod tests {
                 &gpu.queue,
                 &mut encoder,
                 &cursor,
-                Resolution::new(100, 100),
                 Resolution::new(50, 50),
             )
             .unwrap()
@@ -303,7 +303,6 @@ mod tests {
                 &gpu.queue,
                 &mut encoder,
                 &cursor,
-                Resolution::new(100, 100),
                 Resolution::new(100, 100),
             )
             .unwrap()
@@ -337,7 +336,6 @@ mod tests {
                     &gpu.queue,
                     &mut encoder,
                     &cursor,
-                    Resolution::new(100, 100),
                     Resolution::new(50, 50),
                 )
                 .unwrap();

@@ -17,7 +17,8 @@ paths:
   fragmentation.
 - Any change to the header or message encoding bumps `ProtocolVersion::CURRENT`. Peers with
   different versions refuse each other with `VersionMismatch`, with no compatibility shims.
-- The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, a
+- The cursor travels on its own `StreamKind::Cursor` as `CursorMessage`: big-endian position, the
+  `space` (u32 width and height) the position, hotspot and image are measured in, a
   flags byte (visible, has image) and, only when the shape changed, a `CursorImage` (u16 size and
   hotspot, then tightly packed RGBA8). It is latest-wins like video, never queued behind frames.
   The receiver cannot ask for a lost image, so the host repeats it every

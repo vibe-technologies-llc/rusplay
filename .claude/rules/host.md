@@ -80,7 +80,12 @@ paths:
     shape changed, when the session's first message goes out, and again every
     `network.cursor_image_repeat_ms` (0 turns repetition off), which repairs a lost image
     message because the client cannot ask for one; the repeat also fires on an idle cursor. A
-    bitmap wider or taller than 65535 pixels is `CursorImageTooLarge`.
+    bitmap wider or taller than 65535 pixels is `CursorImageTooLarge`. Position, hotspot and
+    bitmap stay in capture pixels, never resampled on the host; every message names that space
+    (`CursorMessage::space`, the size of the latest captured frame, published by the capture
+    stage on the `CaptureFeed` so it survives sessions) and the client scales to the stream. The
+    stage sends nothing until a frame has been captured, and a capture resize counts as a
+    change, so it sends a message even while the cursor sits still.
 - Encode → send is a `sync_channel` of two encoded frames filled with `try_send`. A full queue
   drops the frame without consuming a frame number and forces the next frame to be a keyframe,
   because later frames would reference the dropped one.

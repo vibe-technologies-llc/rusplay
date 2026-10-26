@@ -301,6 +301,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     assert!(client_stats.audio_packets_received > 0);
     assert_eq!(client_stats.audio_decode_errors, 0);
     assert!(loudest > TONE_AMPLITUDE / 2.0);
+    assert_eq!(cursor_state.space, SOURCE);
     assert_eq!(cursor_state.x, CURSOR_TARGET_X);
     assert_eq!(cursor_state.y, CURSOR_TARGET_X / 2);
     let image = cursor_state.image.unwrap();

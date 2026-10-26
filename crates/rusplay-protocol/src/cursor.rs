@@ -1,6 +1,9 @@
+use rusplay_core::Resolution;
+
 use crate::ProtocolError;
 
-const POSITION_SIZE: usize = 9;
+const POSITION_SIZE: usize = 17;
+const FLAGS_AT: usize = 16;
 const IMAGE_HEADER_SIZE: usize = 8;
 const BYTES_PER_PIXEL: usize = 4;
 const VISIBLE: u8 = 1;
@@ -26,6 +29,7 @@ impl CursorImage {
 pub struct CursorMessage {
     pub x: i32,
     pub y: i32,
+    pub space: Resolution,
     pub visible: bool,
     pub image: Option<CursorImage>,
 }
@@ -61,6 +65,8 @@ impl CursorMessage {
         out.reserve(self.encoded_len());
         out.extend_from_slice(&self.x.to_be_bytes());
         out.extend_from_slice(&self.y.to_be_bytes());
+        out.extend_from_slice(&self.space.width.to_be_bytes());
+        out.extend_from_slice(&self.space.height.to_be_bytes());
         out.push(flags);
         if let Some(image) = &self.image {
             for field in [image.width, image.height, image.hotspot_x, image.hotspot_y] {
@@ -81,7 +87,11 @@ impl CursorMessage {
 
         let x = i32::from_be_bytes([position[0], position[1], position[2], position[3]]);
         let y = i32::from_be_bytes([position[4], position[5], position[6], position[7]]);
-        let flags = position[8];
+        let space = Resolution::new(
+            u32::from_be_bytes([position[8], position[9], position[10], position[11]]),
+            u32::from_be_bytes([position[12], position[13], position[14], position[15]]),
+        );
+        let flags = position[FLAGS_AT];
         if flags & !KNOWN_FLAGS != 0 {
             return Err(ProtocolError::UnknownCursorFlags(flags));
         }
@@ -98,6 +108,7 @@ impl CursorMessage {
         Ok(Self {
             x,
             y,
+            space,
             visible: flags & VISIBLE != 0,
             image,
         })
@@ -139,6 +150,7 @@ mod tests {
         CursorMessage {
             x: -12,
             y: 1080,
+            space: Resolution::new(3840, 2160),
             visible: true,
             image: Some(CursorImage {
                 width: 2,
@@ -169,6 +181,7 @@ mod tests {
         let message = CursorMessage {
             x: 5,
             y: 6,
+            space: Resolution::new(1920, 1080),
             visible: false,
             image: None,
         };
@@ -215,6 +228,7 @@ mod tests {
         CursorMessage {
             x: 0,
             y: 0,
+            space: Resolution::new(1, 1),
             visible: true,
             image: None,
         }
@@ -222,7 +236,7 @@ mod tests {
         .unwrap();
 
         let mut unknown_flags = position_only.clone();
-        unknown_flags[8] = 0x80;
+        unknown_flags[FLAGS_AT] = 0x80;
         let mut trailing = position_only.clone();
         trailing.push(0);
 

@@ -432,7 +432,6 @@ impl Presenter {
                 &self.gpu.queue,
                 &mut encoder,
                 &state,
-                frame.source,
                 layout.pixels,
             )?,
             None => None,

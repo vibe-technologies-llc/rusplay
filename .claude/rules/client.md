@@ -139,9 +139,11 @@ paths:
   `malformed_datagrams`; stale frames are dropped by the reassembler. A lost shape message is repaired
   by the host, which repeats the image every `network.cursor_image_repeat_ms` (`host.md`); the
   client never asks for it.
-- Cursor positions and shapes are taken to be in the stream's resolution (`PresentedFrame::source`,
-  the description's size); the host currently sends capture pixels (`host-cursor-stream-coordinates`
-  in `docs/BUGS.md`). `CursorImage::rgba` is read as sRGB with straight alpha.
+- Every `CursorMessage` carries `space`, the pixel extent its position, hotspot and shape are
+  measured in (the host's capture size), kept in `CursorState::space`. The window scales
+  position, hotspot and shape by `target / space` per axis, so the cursor lands and is sized
+  right whatever the stream resolution is. `CursorImage::rgba` is read as sRGB with straight
+  alpha.
 - The display's colour target comes from the `display` module (`query_target`,
   `resolve_target`), documented in `color.md`; nothing in the session calls it yet
   (`client-color-pipeline`). `tests/display.rs` has an `#[ignore]`d test against the running
@@ -222,9 +224,9 @@ paths:
   linear light. The cursor (`window/cursor.rs`) is uploaded once per shape as `rgba16float`,
   linearised from sRGB and premultiplied on the CPU, and when the picture is scaled it is
   resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
-  picture, via `present::scale_settings`) into a texture of `round(size * target / source)`,
+  picture, via `present::scale_settings`) into a texture of `round(size * target / space)`,
   rebuilt only when the shape or the scale changes. Its origin is
-  `round((position - hotspot) * target / source)`, clipped by the picture.
+  `round((position - hotspot) * target / space)`, clipped by the picture.
 - Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
   `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
   `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`
