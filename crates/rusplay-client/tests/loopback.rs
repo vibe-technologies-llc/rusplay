@@ -17,12 +17,14 @@ use rusplay_client::{
     PresentedFrame,
 };
 use rusplay_core::{ColorRange, ColorSpace, Resolution};
-use rusplay_input::InputEvent;
+use rusplay_input::{InputEvent, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
 
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const LOST_FRAME: u32 = 5;
+const HELD_KEY: u32 = 30;
+const SNAPSHOT_INTERVAL_MS: u16 = 30;
 const AUDIO_PACKETS: u32 = 40;
 const LOST_AUDIO_PACKET: u32 = 12;
 const SAMPLES_PER_PACKET: usize = 240 * 2;
@@ -405,6 +407,42 @@ fn input_events_reach_the_host_in_order() {
         ]
     );
     assert!(stats.input_packets_sent >= 1);
+}
+
+#[test]
+fn held_state_snapshots_reach_the_host() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
+    let session = ClientSession::new(config);
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+
+    stream.input().send(InputEvent::Key {
+        keycode: HELD_KEY,
+        pressed: true,
+    });
+    let held = host.wait_for_state(
+        STREAM_TIMEOUT,
+        |record| matches!(record, StateRecord::Keys(keys) if keys.contains(HELD_KEY)),
+    );
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert!(held);
+    assert!(stats.input_snapshots_sent >= 1);
 }
 
 fn settle(

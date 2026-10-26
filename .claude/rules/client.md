@@ -119,8 +119,11 @@ paths:
   `Transport::max_datagram_len` and sends them straight away. `InputPacketer` is pure: it splits
   a batch into sections of at most half the datagram budget, repeats the previous section in
   every datagram and emits the empty repeat datagram after state changes
-  (`input.resend_delay_ms`). A send error ends the input stage and with it the stream; the gamepad stage never
-  returns an error.
+  (`input.resend_delay_ms`). The stage feeds every event it sends to a `HeldInput` and, every
+  `input.snapshot_interval_ms`, packs its `snapshot` records with `InputPacketer::pack_state`
+  into datagrams of the same sequence (`input_snapshots_sent`), so the host can repair a key
+  whose release was lost with its repeat (`input.md`). A send error ends the input stage and with
+  it the stream; the gamepad stage never returns an error.
 - The gamepad stage drives `PhysicalGamepads` (5 ms poll, which also bounds how long a rumble
   command or a stop waits), sends its events through the same `InputHandle`, and applies
   `RumbleCommand`s from a channel. The receive stage fills that channel from
@@ -160,8 +163,9 @@ paths:
   waiting for (and then carrying the newest) stream description;
   `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
 - The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
-  record decoding a real host uses; the test client config turns `input.gamepads` off so the
-  tests never touch `/dev/input`.
+  record decoding a real host uses (`InputRecord`, so the periodic held-state snapshot arrives as
+  `StateRecord`s that `held_state_snapshots_reach_the_host` looks for); the test client config
+  turns `input.gamepads` off so the tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange followed by a `StreamFormat`
   (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names

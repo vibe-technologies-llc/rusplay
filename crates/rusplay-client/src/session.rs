@@ -24,7 +24,7 @@ use crate::{
     AudioOutput, ClientError, ClientStats, FrameSink, LatestCursor, Stage,
     audio::{self, AudioLinks, EncodedAudio},
     decode::{self, DecodeLinks},
-    input::{self, GamepadLinks, InputHandle, InputLinks, InputStage},
+    input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
     present::{self, PresentLinks, PresentOptions, SharedTarget},
     receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
@@ -368,8 +368,11 @@ impl ClientStream {
             stop: Arc::clone(&self.stop),
             counters: Arc::clone(&self.counters),
         };
-        let resend = Duration::from_millis(u64::from(config.resend_delay_ms));
-        let stage = InputStage::new(transport, host, resend, links);
+        let timing = InputTiming {
+            resend_delay: Duration::from_millis(u64::from(config.resend_delay_ms)),
+            snapshot_interval: Duration::from_millis(u64::from(config.snapshot_interval_ms)),
+        };
+        let stage = InputStage::new(transport, host, timing, links);
 
         self.spawn(Stage::Input, None, move || stage.run())
     }

@@ -139,7 +139,33 @@ paths:
   the two, or they open the real PipeWire monitor. `FrameSource::cursor_feed` is the matching
   cursor seam (`PipeWireCapture` forwards its `cursor_feed`); `rusplay_capture::latest` builds a
   feed for tests.
-- Input injection is not wired: `host-input` in `docs/FEATURES.md`.
+- Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
+  `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
+  `service(&mut Vec<RumbleCommand>)`) behind a mutex that the session's input stage holds for the
+  session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
+  `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
+  holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
+  a request channel, servicing it every 50 ms while no session uses it so the compositor's pings
+  are answered between clients. The injector thread ends when the feed drops.
+  - `rusplay-host-input` (only with a feed) receives the datagrams the control stage forwards
+    once the `Hello` is answered (earlier ones are dropped), reads them with `InputPacket::read`
+    and `InputSequence::admit` (a fresh sequence per session), decodes each record with
+    `InputRecord::decode` and injects it; an event goes straight to the target, a state record
+    is turned into the events that bring the host to the client's held state
+    (`HeldInput::reconcile`, `input_events_repaired`) and those are injected. A failed injection
+    is not recorded as held, so the next snapshot tries again. A malformed datagram or record
+    counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
+    in `input_failures` without ending the session, since a paused device or a closed compositor
+    seat must not take the video down. Every 4 ms it calls `InputTarget::service` and sends each
+    `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
+    window drops the command (`rumble_dropped`), because the client caps every effect length. On
+    the way out it releases whatever `HeldInput` says the client still held.
+  - `open_portal(&Config)` returns a `PortalHost { feed, input }`. With `input.accept_remote` it
+    opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over
+    `SplitSink<LibeiInjector, UinputGamepads>`; a build without the `input` feature (or without
+    `pipewire`) fails with `InputNotCompiled` (`CaptureNotCompiled`), and
+    `input.accept_remote = false` opens the plain ScreenCast session with no feed.
+    `open_portal_capture` stays for callers that want capture only.
 - `src/pipeline/tests.rs` runs `GpuPipeline` up to the encoder input (no encoder) and reads luma
   codes back: a 10-bit PQ capture into a PQ stream keeps its codes and channel order, a PQ
   capture into the default SDR stream lands on the BT.709 code of its luminance, a description
@@ -151,7 +177,12 @@ paths:
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
   (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
-  first frame and again with a newer generation after a resize). `src/tests/media.rs` covers the
+  first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
+  input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
+  `Hello`, a snapshot repairing a stuck key, rumble back as control messages, held input released
+  when the session ends, failing injections counted, no feed ignores input) and `src/input.rs`
+  unit-tests the datagram handling
+  and the injector thread. `src/tests/media.rs` covers the
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
   image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
@@ -163,4 +194,7 @@ paths:
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins
-  slot may drop the opening keyframe.
+  slot may drop the opening keyframe. The same test sends a key through the client's
+  `InputHandle` (with a short `input.snapshot_interval_ms`) and checks it reaches the host's
+  recording target, that snapshots arrive, and that the host releases the key when the stream
+  ends.

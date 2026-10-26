@@ -21,6 +21,7 @@ use crate::{
     control::{ControlLinks, ControlStage},
     cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
+    input::{self, InputFeed, InputLinks},
     outbox::ControlOutbox,
     pipeline::{GpuPipeline, VideoPipeline},
     send::{self, SendLinks, SendOptions},
@@ -36,6 +37,7 @@ pub struct HostSession {
     transport: Arc<Transport>,
     peers: Arc<RwLock<PeerStore>>,
     audio: Option<AudioSourceFactory>,
+    input: Option<Arc<InputFeed>>,
 }
 
 impl fmt::Debug for HostSession {
@@ -46,6 +48,7 @@ impl fmt::Debug for HostSession {
             .field("transport", &self.transport)
             .field("peers", &self.peers)
             .field("audio", &self.audio.is_some())
+            .field("input", &self.input.is_some())
             .finish()
     }
 }
@@ -63,6 +66,7 @@ impl HostSession {
             transport: Arc::new(transport),
             peers: Arc::new(RwLock::new(peers)),
             audio: default_audio_source(),
+            input: None,
         })
     }
 
@@ -75,6 +79,12 @@ impl HostSession {
     #[must_use]
     pub fn without_audio(mut self) -> Self {
         self.audio = None;
+        self
+    }
+
+    #[must_use]
+    pub fn with_input(mut self, feed: Arc<InputFeed>) -> Self {
+        self.input = Some(feed);
         self
     }
 
@@ -126,6 +136,7 @@ impl HostSession {
             Arc::clone(&self.transport),
             client.address(),
         ));
+        let (input_sender, input_datagrams) = mpsc::channel();
         let control = ControlStage::new(
             network,
             ControlLinks {
@@ -134,9 +145,20 @@ impl HostSession {
                 client: client.address(),
                 replay: client.replay().clone(),
                 outbox: Arc::clone(&outbox),
+                input: self.input.is_some().then_some(input_sender),
             },
         );
         stream.spawn(Stage::Control, move || control.run())?;
+
+        if let Some(feed) = &self.input {
+            let links = InputLinks {
+                shared: Arc::clone(&shared),
+                feed: Arc::clone(feed),
+                datagrams: input_datagrams,
+                outbox: Arc::clone(&outbox),
+            };
+            stream.spawn(Stage::Input, move || input::run(&links))?;
+        }
 
         let (output, queue) = mpsc::sync_channel(SEND_QUEUE_FRAMES);
         let send_links = SendLinks {

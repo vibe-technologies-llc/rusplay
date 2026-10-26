@@ -58,7 +58,7 @@ depend only on `host`/`client`/`config`. No crate depends upward, and no media c
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
-| Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,flac` |
+| Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,software-encoders,pipewire,input,flac` |
 | App with decoders | `cargo build --release -p rusplay-app --features vaapi,software` |
 
 Profiles: dev builds at `opt-level = 1`. Release uses thin LTO, one codegen unit, stripped

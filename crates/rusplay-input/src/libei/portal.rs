@@ -98,7 +98,7 @@ impl RemoteDesktopSession {
         &self.session
     }
 
-    pub async fn start(&self, options: &PortalInputOptions) -> Result<StartedPortal, InputError> {
+    pub async fn select_devices(&self, options: &PortalInputOptions) -> Result<(), InputError> {
         let select = SelectDevicesOptions::default()
             .set_devices(options.device_types())
             .set_persist_mode(options.persist_mode())
@@ -110,6 +110,15 @@ impl RemoteDesktopSession {
             .response()
             .map_err(portal(PortalStep::SelectDevices))?;
 
+        Ok(())
+    }
+
+    pub async fn start(&self, options: &PortalInputOptions) -> Result<StartedPortal, InputError> {
+        self.select_devices(options).await?;
+        self.start_selected().await
+    }
+
+    pub async fn start_selected(&self) -> Result<StartedPortal, InputError> {
         let selected = self
             .proxy
             .start(&self.session, None, StartOptions::default())

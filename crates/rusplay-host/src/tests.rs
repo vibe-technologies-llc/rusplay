@@ -1,3 +1,4 @@
+mod input;
 mod media;
 
 use std::{
@@ -294,6 +295,10 @@ impl TestClient {
     fn send(&mut self, message: ControlMessage) {
         self.control.send(message, Instant::now()).unwrap();
         self.control.flush(&self.transport, self.host).unwrap();
+    }
+
+    fn send_datagram(&self, datagram: &[u8]) {
+        self.transport.send_to(datagram, self.host).unwrap();
     }
 
     fn hello(&mut self) {
