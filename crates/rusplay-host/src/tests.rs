@@ -4,7 +4,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
         Arc,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -39,6 +39,14 @@ const WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(2);
 const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
+thread_local! {
+    static STREAM_STARTED: Arc<AtomicBool> = Arc::default();
+}
+
+fn stream_started() -> Arc<AtomicBool> {
+    STREAM_STARTED.with(Arc::clone)
+}
+
 fn network() -> NetworkConfig {
     NetworkConfig {
         bind_address: LOCALHOST,
@@ -67,6 +75,7 @@ struct CountingSource {
     produced: u32,
     resize_after: Option<u32>,
     cursor: Option<Subscriber<CursorUpdate>>,
+    started: Arc<AtomicBool>,
 }
 
 impl FrameSource for CountingSource {
@@ -75,7 +84,7 @@ impl FrameSource for CountingSource {
     }
 
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
-        if self.remaining == 0 {
+        if self.remaining == 0 || !self.started.load(Ordering::Acquire) {
             thread::sleep(timeout);
             return Ok(None);
         }
@@ -109,6 +118,7 @@ fn feed(frames: u32) -> Arc<CaptureFeed> {
         produced: 0,
         resize_after: None,
         cursor: None,
+        started: stream_started(),
     })
 }
 
@@ -118,6 +128,7 @@ fn resizing_feed(frames: u32, after: u32) -> Arc<CaptureFeed> {
         produced: 0,
         resize_after: Some(after),
         cursor: None,
+        started: stream_started(),
     })
 }
 
@@ -127,6 +138,7 @@ fn feed_with_cursor(frames: u32, cursor: Subscriber<CursorUpdate>) -> Arc<Captur
         produced: 0,
         resize_after: None,
         cursor: Some(cursor),
+        started: stream_started(),
     })
 }
 
@@ -220,6 +232,7 @@ struct TestClient {
     cursor_messages: Vec<CursorMessage>,
     messages: Vec<ControlMessage>,
     formats: Vec<(usize, StreamDescription)>,
+    stream_started: Arc<AtomicBool>,
 }
 
 impl TestClient {
@@ -243,6 +256,7 @@ impl TestClient {
             cursor_messages: Vec::new(),
             messages: Vec::new(),
             formats: Vec::new(),
+            stream_started: stream_started(),
         }
     }
 
@@ -321,6 +335,9 @@ impl TestClient {
             }
             for event in control_events.drain(..) {
                 if let ControlEvent::Received(message) = event {
+                    if matches!(message, ControlMessage::Hello { .. }) {
+                        self.stream_started.store(true, Ordering::Release);
+                    }
                     if let ControlMessage::StreamFormat(description) = message {
                         self.formats.push((self.frames.len(), description));
                     }
@@ -502,6 +519,7 @@ fn the_stream_format_is_announced_before_the_first_frame_and_again_on_a_resize()
 #[test]
 fn nothing_streams_before_the_client_says_hello() {
     let fixture = Fixture::new(host_config());
+    stream_started().store(true, Ordering::Release);
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
 

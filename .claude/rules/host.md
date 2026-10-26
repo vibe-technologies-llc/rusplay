@@ -125,7 +125,8 @@ paths:
   feed for tests.
 - Input injection is not wired: `host-input` in `docs/FEATURES.md`.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
-  built from `rusplay-net` primitives, with a `FakePipeline` behind the internal `serve_with`
+  built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
+  received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
   (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/media.rs` covers the
