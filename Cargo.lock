@@ -4810,6 +4810,7 @@ dependencies = [
  "rusplay-client",
  "rusplay-config",
  "rusplay-core",
+ "rusplay-decode",
  "rusplay-encode",
  "rusplay-input",
  "rusplay-net",

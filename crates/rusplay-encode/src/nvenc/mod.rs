@@ -1,7 +1,7 @@
 mod config;
 mod driver;
 mod ffi;
-mod layout;
+pub(crate) mod layout;
 mod params;
 #[cfg(test)]
 mod tests;
@@ -10,7 +10,10 @@ use std::{
     ffi::c_void,
     fs::File,
     io::{Seek, SeekFrom},
-    os::{fd::OwnedFd, unix::fs::MetadataExt},
+    os::{
+        fd::{AsFd, BorrowedFd, OwnedFd},
+        unix::fs::MetadataExt,
+    },
     rc::Rc,
 };
 
@@ -27,11 +30,14 @@ use crate::{
             preset_guid, profile, rate_control_supported, tuning_info,
         },
         driver::{
-            Bitstream, CudaContext, DevicePlane, Driver, Encoder, ExternalBuffer, InputBuffer,
-            LibraryNames, Registration, SYSTEM_LIBRARIES,
+            Bitstream, CudaContext, DevicePlane, Driver, Encoder, ExternalBuffer, ExternalMemory,
+            InputBuffer, LibraryNames, Registration, SYSTEM_LIBRARIES,
         },
         ffi::{Guid, Plain},
-        layout::{LINEAR_MODIFIER, Layout, buffer_format, dma_buf_fourcc, dma_buf_layout, pack},
+        layout::{
+            DmaBufLayout, LINEAR_MODIFIER, Layout, buffer_format, dma_buf_fourcc, dma_buf_layout,
+            pack,
+        },
         params::NvencParams,
     },
     obu,
@@ -204,12 +210,93 @@ impl Device {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportSource {
+    DmaBuf { device: u64, inode: u64 },
+    Opaque { allocation: u64 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImportKey {
-    device: u64,
-    inode: u64,
+    source: ImportSource,
     resolution: Resolution,
     planes: Vec<Plane>,
+}
+
+#[derive(Debug)]
+struct ImportRequest<'a> {
+    fd: BorrowedFd<'a>,
+    planes: &'a [Plane],
+    opaque: Option<OpaqueMemory>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OpaqueMemory {
+    allocation: u64,
+    size: u64,
+    dedicated: bool,
+}
+
+fn import_request(frame: &Frame, format: PixelFormat) -> Result<ImportRequest<'_>, EncodeError> {
+    let request = match &frame.buffer {
+        FrameBuffer::Shm { .. } => {
+            return Err(EncodeError::CpuFrameRequired { backend: BACKEND });
+        }
+        FrameBuffer::DmaBuf {
+            fd,
+            modifier,
+            planes,
+            ..
+        } => {
+            if *modifier != LINEAR_MODIFIER {
+                return Err(EncodeError::DmaBufModifierUnsupported {
+                    backend: BACKEND,
+                    modifier: *modifier,
+                });
+            }
+            ImportRequest {
+                fd: fd.as_fd(),
+                planes,
+                opaque: None,
+            }
+        }
+        FrameBuffer::OpaqueFd {
+            fd,
+            allocation,
+            size,
+            dedicated,
+            planes,
+        } => ImportRequest {
+            fd: fd.as_fd(),
+            planes,
+            opaque: Some(OpaqueMemory {
+                allocation: *allocation,
+                size: *size,
+                dedicated: *dedicated,
+            }),
+        },
+    };
+
+    let expected = dma_buf_fourcc(format);
+    if frame.format != expected {
+        return Err(EncodeError::FrameFormatMismatch {
+            backend: BACKEND,
+            expected,
+            actual: frame.format,
+        });
+    }
+
+    Ok(request)
+}
+
+fn check_opaque_size(opaque: OpaqueMemory, layout: DmaBufLayout) -> Result<(), EncodeError> {
+    if opaque.size < layout.len {
+        return Err(EncodeError::OpaqueFdTooShort {
+            needed: layout.len,
+            actual: opaque.size,
+        });
+    }
+    Ok(())
 }
 
 struct Import {
@@ -308,40 +395,31 @@ impl Session {
         frame: &Frame,
         format: PixelFormat,
     ) -> Result<usize, EncodeError> {
-        let FrameBuffer::DmaBuf {
-            fd,
-            modifier,
-            planes,
-            ..
-        } = &frame.buffer
-        else {
-            return Err(EncodeError::CpuFrameRequired { backend: BACKEND });
-        };
-
-        let expected = dma_buf_fourcc(format);
-        if frame.format != expected {
-            return Err(EncodeError::FrameFormatMismatch {
-                backend: BACKEND,
-                expected,
-                actual: frame.format,
-            });
-        }
-        if *modifier != LINEAR_MODIFIER {
-            return Err(EncodeError::DmaBufModifierUnsupported {
-                backend: BACKEND,
-                modifier: *modifier,
-            });
-        }
-        let layout = dma_buf_layout(format, frame.resolution, planes)?;
+        let request = import_request(frame, format)?;
+        let layout = dma_buf_layout(format, frame.resolution, request.planes)?;
         let buffer_format = buffer_format(format).ok_or_else(|| unsupported(format))?;
 
-        let mut file = File::from(fd.try_clone().map_err(EncodeError::DmaBufInspect)?);
-        let metadata = file.metadata().map_err(EncodeError::DmaBufInspect)?;
+        let mut file = File::from(
+            request
+                .fd
+                .try_clone_to_owned()
+                .map_err(EncodeError::DmaBufInspect)?,
+        );
+        let source = if let Some(opaque) = request.opaque {
+            ImportSource::Opaque {
+                allocation: opaque.allocation,
+            }
+        } else {
+            let metadata = file.metadata().map_err(EncodeError::DmaBufInspect)?;
+            ImportSource::DmaBuf {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            }
+        };
         let key = ImportKey {
-            device: metadata.dev(),
-            inode: metadata.ino(),
+            source,
             resolution: frame.resolution,
-            planes: planes.clone(),
+            planes: request.planes.to_vec(),
         };
 
         if let Some(position) = self.imports.iter().position(|cached| cached.key == key) {
@@ -350,17 +428,29 @@ impl Session {
             return Ok(self.imports.len() - 1);
         }
 
-        let size = file
-            .seek(SeekFrom::End(0))
-            .map_err(EncodeError::DmaBufInspect)?;
-        if size < layout.len {
-            return Err(EncodeError::DmaBufTooShort {
-                needed: layout.len,
-                actual: size,
-            });
-        }
+        let memory = if let Some(opaque) = request.opaque {
+            check_opaque_size(opaque, layout)?;
+            ExternalMemory {
+                size: opaque.size,
+                dedicated: opaque.dedicated,
+            }
+        } else {
+            let size = file
+                .seek(SeekFrom::End(0))
+                .map_err(EncodeError::DmaBufInspect)?;
+            if size < layout.len {
+                return Err(EncodeError::DmaBufTooShort {
+                    needed: layout.len,
+                    actual: size,
+                });
+            }
+            ExternalMemory {
+                size,
+                dedicated: false,
+            }
+        };
 
-        let buffer = ExternalBuffer::import(&device.context, OwnedFd::from(file), size)?;
+        let buffer = ExternalBuffer::import(&device.context, OwnedFd::from(file), memory)?;
         let registration = Registration::register(
             &device.encoder,
             DevicePlane {
@@ -598,7 +688,7 @@ impl VideoEncoder for NvencEncoder {
                 device.encoder.encode(&mut params)?;
                 session.bitstream.read()?
             }
-            FrameBuffer::DmaBuf { .. } => {
+            FrameBuffer::DmaBuf { .. } | FrameBuffer::OpaqueFd { .. } => {
                 let index = session.import(device, frame, settings.format)?;
                 let import = &session.imports[index];
                 let mapped = import.registration.map()?;

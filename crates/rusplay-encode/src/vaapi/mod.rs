@@ -1,7 +1,7 @@
 mod av1;
 mod bits;
 mod ffi;
-mod format;
+pub(crate) mod format;
 mod h264;
 mod hdr;
 mod hevc;
@@ -888,6 +888,9 @@ impl VideoEncoder for VaapiEncoder {
             }
             FrameBuffer::DmaBuf { .. } => {
                 session.import(&device.display, frame, settings.format)?
+            }
+            FrameBuffer::OpaqueFd { .. } => {
+                return Err(EncodeError::OpaqueFdUnsupported { backend: BACKEND });
             }
         };
 

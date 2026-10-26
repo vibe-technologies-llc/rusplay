@@ -123,8 +123,8 @@ paths:
     `capture.dmabuf_fence_timeout_ms` (default 100, 0 only checks); a timeout reads the buffer
     as it is rather than dropping the frame, so a producer whose fences never signal still
     streams, as it did before the wait existed. The GPU wait has no timeout.
-  - The frame, and so its PipeWire buffer lease, is held until the readback wait has seen the GPU
-    finish, and then as the feed's retained frame; the encode stage drops the previous retained
+  - The frame, and so its PipeWire buffer lease, is held until the readback or hand-off wait has
+    seen the GPU finish, and then as the feed's retained frame; the encode stage drops the previous retained
     frame before encoding the next, so a session holds at most three capture buffers.
   - Shared-memory `XR24`/`AR24`/`XB24`/`AB24` and 10-bit `XR30`/`AR30`/`XB30`/`AB30` frames are
     accepted (`UPLOAD_FORMATS` in `src/upload.rs`): they upload with `write_texture` straight into a
@@ -151,12 +151,48 @@ paths:
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
-    `video.pixel_format`, planar, `scaling.downscale.chroma_filter`, left siting, 4-byte rows)
-    writes the `YuvFrame`, which is copied into a `MAP_READ` buffer in the same submission.
-  - The readback is mapped, and its planes are repacked row by row into the reused buffer of the
-    encoder's input `Frame` in the CPU input contract layout (`EncoderPlanes`: luma pitch of the
-    width rounded up to even, chroma pitch half of it when subsampled), which is the one copy out
-    of the GPU. One frame is in flight: upload, convert, read back and encode run back to back.
+    `video.pixel_format`, `scaling.downscale.chroma_filter`, left siting) writes the `YuvFrame`
+    into one of two targets (`Target` in `src/pipeline.rs`): exported memory handed to the encoder
+    on the GPU, or a buffer read back to shared memory.
+  - GPU hand-off (`src/handoff.rs`): with `video.encoder_gpu_handoff` on (default),
+    `Handoff::plan` takes `rusplay_encode::device::device_input` for the backend and format (VAAPI
+    4:2:0 as a DMA-BUF in `NV12`/`P010`/`P012`; NVENC 4:2:0 `NV12`/`P010` and 4:4:4 `YU24`/`Q410` as
+    an opaque fd), and `GpuPipeline::new` keeps it only when `rusplay_scale::can_export` says the
+    device exports that handle type. The converter then writes semi-planar, or `PlanarHigh` (MSB
+    samples) for 4:4:4, with 256-byte rows (`HANDOFF_ROW_ALIGNMENT`) straight into memory from
+    `ColorConverter::create_exported_frame`, once `check_device_layout` has accepted the planes
+    (`Handoff::accepts`; a unit test runs every hardware format at several sizes through it).
+    After the submit the encode thread waits for that submission alone (`PollType::Wait` with its
+    index) and hands the encoder a `Frame` holding a dup of the exported fd: `FrameBuffer::DmaBuf`
+    with the linear modifier and a detached lease, or `FrameBuffer::OpaqueFd` with the
+    allocation's id, size and dedicated flag. That wait is the only CPU stall and it is needed:
+    neither VAAPI nor NVENC's CUDA-pointer input takes a fence, and RADV allocates exported memory
+    explicitly synchronised, so implicit sync on the dma-buf would not hold the VCN back. One frame
+    is in flight: the encoder returns only after reading its input, so the next conversion reuses
+    the same buffer and `repeat` re-encodes it. The exported buffer survives a converter
+    reconfiguration that keeps the layout; VAAPI imports it once (its cache keys by inode), NVENC
+    keys it by the allocation id.
+  - Fallback: the readback path runs for software encoders, for formats without a device input
+    (VAAPI 4:2:2/4:4:4 would need the packed `YUYV`/`AYUV` family, which the converter does not
+    write), with `video.encoder_gpu_handoff` off, and when the device cannot export. The hand-off
+    starts as `HandoffState::Trying`: an export, layout or encode failure before the first
+    handed-off frame has encoded turns it `Off` for the pipeline, and that same frame is converted
+    again into the readback target and encoded from shared memory, so a driver that refuses the
+    import costs one extra conversion. Once a frame has encoded (`Proven`), errors end the session
+    like any other encoder error.
+  - Readback: the converter writes planar with 4-byte rows, the frame is copied into a `MAP_READ`
+    buffer in the same submission, mapped, and its planes are repacked row by row into the reused
+    buffer of the encoder's input `Frame` in the CPU input contract layout (`EncoderPlanes`: luma
+    pitch of the width rounded up to even, chroma pitch half of it when subsampled), which is the
+    one copy out of the GPU. One frame is in flight: upload, convert, read back and encode run
+    back to back.
+  - Measured at 3840x2160 on an RX 9070 XT (radeonsi, VCN 5) from a DMA-BUF `XR24` capture,
+    `GpuPipeline::encode` from import to encoded frame, median of 240 frames with both paths run
+    round robin (`cargo test --release -p rusplay-host --all-features --lib handoff_frame_times --
+    --ignored --nocapture`): 8-bit AV1 and HEVC take 5.4 ms handed off against 9.6 ms read back,
+    10-bit (`P010`) 10.6 ms against 25 to 27 ms, where the readback also pays the CPU shift into
+    `P010`. GPU clocks swing a whole run by up to 2x (one run gave 8-bit AV1 10.9 against 17.1 ms),
+    so only paths timed in the same run compare.
   - The encoder is opened on the first frame and reopened when the stream resolution changes
     (a capture resize with `video.resolution` unset); the new encoder starts with a keyframe and
     keeps the last bitrate hint.
@@ -209,7 +245,11 @@ paths:
   build udmabuf frames: imported `XR24` and `XR30` give the same codes as the same shared-memory
   frames, `XB24` and `BX24` read their channel order, and an unimportable frame requests the
   shared-memory fallback (or fails without one). It returns early without a GPU adapter, and the
-  DMA-BUF tests also without `/dev/udmabuf` or the import feature.
+  DMA-BUF tests also without `/dev/udmabuf` or the import feature. `src/pipeline/tests/handoff.rs`
+  encodes a moving pattern with VAAPI AV1 (8 and 10-bit, at 640x360 and 402x226) once through the
+  hand-off and once through the readback, decodes both with rav1d and requires identical samples
+  (the hand-off must also have stayed on), checks that a failing encoder turns the hand-off off,
+  and holds the ignored 4K timing test; each returns early without the backend and format.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
@@ -224,8 +264,8 @@ paths:
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
   image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
-  synthetic moving box (described as sRGB, as capture describes an undescribed surface), a tone and a moving cursor through `GpuPipeline` with SVT-AV1 and with
-  VAAPI AV1 into the real `rusplay_client::ClientSession` (software decode, a test-only
+  synthetic moving box (described as sRGB, as capture describes an undescribed surface), a tone and a moving cursor through `GpuPipeline` with SVT-AV1 (readback) and with
+  VAAPI AV1 (GPU hand-off) into the real `rusplay_client::ClientSession` (software decode, a test-only
   dev-dependency, configured for H.264 so only the host's `StreamFormat` can make it decode AV1)
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
   amplitude and the final cursor position and image; each returns early without a GPU adapter or

@@ -41,7 +41,7 @@ impl Layout {
     }
 }
 
-pub(super) const fn buffer_format(format: PixelFormat) -> Option<u32> {
+pub(crate) const fn buffer_format(format: PixelFormat) -> Option<u32> {
     match (format.chroma, format.depth) {
         (ChromaSubsampling::Yuv420, BitDepth::Eight) => Some(ffi::BUFFER_FORMAT_NV12),
         (ChromaSubsampling::Yuv420, BitDepth::Ten) => Some(ffi::BUFFER_FORMAT_YUV420_10BIT),
@@ -51,7 +51,7 @@ pub(super) const fn buffer_format(format: PixelFormat) -> Option<u32> {
     }
 }
 
-pub(super) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
+pub(crate) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
     DrmFourcc::from_code(match (format.chroma, format.depth) {
         (ChromaSubsampling::Yuv444, BitDepth::Eight) => *b"YU24",
         (ChromaSubsampling::Yuv444, _) => *b"Q410",
@@ -61,13 +61,13 @@ pub(super) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct DmaBufLayout {
+pub(crate) struct DmaBufLayout {
     pub base: u64,
     pub pitch: u32,
     pub len: u64,
 }
 
-pub(super) fn dma_buf_layout(
+pub(crate) fn dma_buf_layout(
     format: PixelFormat,
     resolution: Resolution,
     planes: &[Plane],

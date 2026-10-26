@@ -67,6 +67,10 @@ pub enum HostError {
     GpuReadback(#[source] wgpu::BufferAsyncError),
     #[error("the mapped readback buffer could not be viewed")]
     GpuMappedRange(#[source] wgpu::MapRangeError),
+    #[error("failed to duplicate the exported frame's file descriptor")]
+    HandoffFdDup(#[source] io::Error),
+    #[error("an exported frame plane starts at byte {0}, past what a frame plane can address")]
+    HandoffPlaneOffset(u64),
     #[error("failed to spawn the {stage} thread")]
     SpawnStage {
         stage: Stage,
@@ -97,6 +101,8 @@ pub enum HostError {
     CaptureBufferTooShort { found: usize, needed: usize },
     #[error("captured frame stride {stride} is narrower than its {width} pixel rows")]
     CaptureStrideTooSmall { stride: u32, width: u32 },
+    #[error("captured frames cannot arrive as opaque gpu memory")]
+    CaptureOpaqueFd,
     #[error("screen capture needs the pipewire feature")]
     CaptureNotCompiled,
     #[error("remote input needs the input feature, or input.accept_remote turned off")]

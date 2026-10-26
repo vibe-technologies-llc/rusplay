@@ -46,7 +46,7 @@ pub enum EncodeError {
     LibraryIncompatible { backend: Backend },
     #[error("the {backend} encoder failed with code {code}")]
     EncodeFailed { backend: Backend, code: i32 },
-    #[error("the {backend} encoder takes CPU frames, not DMA-BUFs")]
+    #[error("the {backend} encoder takes CPU frames, not GPU memory")]
     CpuFrameRequired { backend: Backend },
     #[error(
         "the {backend} encoder expects {} frames, got {}",
@@ -153,6 +153,10 @@ pub enum EncodeError {
     DmaBufStrideUnaligned { stride: u32, alignment: u32 },
     #[error("the DMA-BUF holds {actual} bytes but its planes need {needed}")]
     DmaBufTooShort { needed: u64, actual: u64 },
+    #[error("the {backend} encoder cannot import an opaque Vulkan memory fd")]
+    OpaqueFdUnsupported { backend: Backend },
+    #[error("the opaque memory holds {actual} bytes but its planes need {needed}")]
+    OpaqueFdTooShort { needed: u64, actual: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

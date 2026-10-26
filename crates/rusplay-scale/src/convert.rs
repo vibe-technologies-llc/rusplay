@@ -32,6 +32,7 @@ pub(crate) const HLG_GAMMA_PER_DECADE: f64 = 0.42;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneLayout {
     Planar,
+    PlanarHigh,
     SemiPlanar,
 }
 
@@ -294,7 +295,7 @@ impl FrameLayout {
         let (chroma_width, chroma_height) = chroma_size(resolution, format.chroma);
 
         let shapes: &[(PlaneContent, u32, u32)] = match layout {
-            PlaneLayout::Planar => &[
+            PlaneLayout::Planar | PlaneLayout::PlanarHigh => &[
                 (PlaneContent::Luma, width, height),
                 (PlaneContent::Cb, chroma_width, chroma_height),
                 (PlaneContent::Cr, chroma_width, chroma_height),
@@ -334,7 +335,7 @@ impl FrameLayout {
             depth,
             bytes_per_sample,
             alignment: match (layout, bytes_per_sample) {
-                (PlaneLayout::SemiPlanar, 2) => SampleAlignment::High,
+                (PlaneLayout::SemiPlanar | PlaneLayout::PlanarHigh, 2) => SampleAlignment::High,
                 _ => SampleAlignment::Low,
             },
         })
@@ -880,7 +881,11 @@ mod tests {
             ChromaSubsampling::Yuv444,
         ];
         let depths = [BitDepth::Eight, BitDepth::Ten, BitDepth::Twelve];
-        let layouts = [PlaneLayout::Planar, PlaneLayout::SemiPlanar];
+        let layouts = [
+            PlaneLayout::Planar,
+            PlaneLayout::PlanarHigh,
+            PlaneLayout::SemiPlanar,
+        ];
 
         for (index, ((chroma, depth), layout)) in chromas
             .into_iter()
@@ -1450,6 +1455,13 @@ mod tests {
             PlaneLayout::Planar,
         ))
         .unwrap();
+        let q410 = FrameLayout::new(&settings(
+            (1918, 1080),
+            ChromaSubsampling::Yuv444,
+            BitDepth::Ten,
+            PlaneLayout::PlanarHigh,
+        ))
+        .unwrap();
 
         assert_eq!(nv12.planes.len(), 2);
         assert_eq!(nv12.planes[0].stride, 1920);
@@ -1465,6 +1477,10 @@ mod tests {
         assert_eq!(i422.planes[1].width, 959);
         assert_eq!(i422.planes[1].stride, 2048);
         assert_eq!(i422.planes[2].offset, i422.planes[1].offset + 2048 * 1080);
+        assert_eq!(q410.alignment, SampleAlignment::High);
+        assert_eq!(q410.sample_shift(), 6);
+        assert!(q410.planes.iter().all(|plane| plane.stride == 3840));
+        assert_eq!(q410.planes[2].offset, 2 * 3840 * 1080);
     }
 
     #[test]

@@ -13,7 +13,7 @@ paths:
   | Backend | Codecs | Chroma / depth | Input |
   |---|---|---|---|
   | VAAPI | H.264, HEVC, AV1 | 4:2:0; 4:2:2/4:4:4 HEVC and 4:4:4 AV1 where the driver exposes it; 10-bit HEVC/AV1, 12-bit HEVC | DMA-BUF import, zero copy; CPU frames uploaded |
-  | NVENC | H.264, HEVC, AV1 | 4:2:0; 4:4:4 H.264 (8-bit) and HEVC (8/10-bit) where the GPU reports it; 10-bit HEVC/AV1; no 4:2:2 or 12-bit (SDK 12.2) | linear DMA-BUF as CUDA external memory, zero copy; CPU frames uploaded |
+  | NVENC | H.264, HEVC, AV1 | 4:2:0; 4:4:4 H.264 (8-bit) and HEVC (8/10-bit) where the GPU reports it; 10-bit HEVC/AV1; no 4:2:2 or 12-bit (SDK 12.2) | linear DMA-BUF or opaque Vulkan fd as CUDA external memory, zero copy; CPU frames uploaded |
   | x264 | H.264 | 4:2:0, 4:2:2, 4:4:4 (High 4:2:2 / High 4:4:4 Predictive), 8/10-bit | CPU |
   | x265 | HEVC | 4:2:0, 4:2:2, 4:4:4 (RExt), 8/10/12-bit | CPU |
   | SVT-AV1 | AV1 | 4:2:0 (Main profile) | CPU |
@@ -165,7 +165,10 @@ paths:
   is `FrameFormatMismatch`, a wrong plane count `DmaBufPlaneCount`. Imports are cached, keyed by
   the dma-buf's device and inode, modifier, planes and size (16 entries, least recently used out),
   so the buffers PipeWire recycles are imported once. A `FrameBuffer::Shm` follows the CPU input
-  contract below and is packed into a `VAImage` and put into one upload surface.
+  contract below and is packed into a `VAImage` and put into one upload surface. A
+  `FrameBuffer::OpaqueFd` is `OpaqueFdUnsupported`. The host's GPU hand-off feeds this path with
+  linear `NV12`/`P010`/`P012` exported from RADV (256-byte pitch, chroma right after the luma);
+  radeonsi encodes it bit-identically to the uploaded frame.
 - One frame in flight: `encode` waits for the input surface and reads the coded buffer before it
   returns, so the capture buffer is free again when the call returns. With `video.resolution`
   unset the session opens on the first frame; a later size is `FrameResolutionMismatch`.
@@ -247,8 +250,14 @@ paths:
   fd), mapped whole with `cuExternalMemoryGetMappedBuffer`, and the luma pointer is registered as
   `NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR` with that pitch; each frame maps the registration,
   encodes and unmaps it. Imports are cached like VAAPI's (device and inode, resolution, planes;
-  16 entries, least recently used out). The host pipeline hands the encoder CPU frames today
-  (`host-encoder-gpu-handoff` in `docs/PERFORMANCE.md`).
+  16 entries, least recently used out).
+- A `FrameBuffer::OpaqueFd { fd, allocation, size, dedicated, planes }` (the host's GPU hand-off,
+  Vulkan memory exported as `OPAQUE_FD`, which is the handle type CUDA documents for Vulkan
+  interop) takes the same format and plane checks (`import_request`, unit tested) and is imported
+  with `size` as the allocation size (`OpaqueFdTooShort` below the planes) and
+  `CUDA_EXTERNAL_MEMORY_DEDICATED` when `dedicated` (`ExternalMemory::handle_desc`, unit tested);
+  its cache key is the exporter's `allocation` id, because every opaque fd of a driver may share
+  one inode. Not run on NVIDIA hardware (`encode-nvenc-hardware`).
 - Output: the bitstream buffer is locked after every picture; `keyframe` is the forced IDR or a
   reported `NV_ENC_PIC_TYPE_IDR`. A keyframe is forced (`FORCEIDR | OUTPUT_SPSPPS`) on the first
   frame and on `request_keyframe`. With `video.resolution` unset the session is initialised on the
@@ -263,10 +272,21 @@ paths:
   first-frame resolution, AV1 HDR10 through rav1d) return early without the driver; none has run
   on NVIDIA hardware yet (`encode-nvenc-hardware` in `docs/FEATURES.md`).
 
+## Device input
+
+- `rusplay_encode::device` says what GPU memory a hardware backend takes, always compiled so the
+  host can plan without the backend feature: `device_input(backend, format)` gives the
+  `DeviceMemory` (`DmaBuf` for VAAPI, `OpaqueFd` for NVENC), the `DevicePlanes` (`SemiPlanar` for
+  4:2:0, `Planar` for NVENC 4:4:4; samples above 8 bits sit in the high bits in both) and the
+  fourcc, or `None` (software backends, VAAPI above 4:2:0, whose DMA-BUF formats are packed, and
+  NVENC 4:2:2 and 12-bit). `check_device_layout` checks a plane layout against it: the plane
+  count for VAAPI, `nvenc::layout::dma_buf_layout` for NVENC (`BackendNotCompiled` without the
+  feature). Tests hold both tables to `vaapi::format` and `nvenc::layout`.
+
 ## CPU input contract
 
 Software encoders take a `rusplay_capture::Frame` whose buffer is `FrameBuffer::Shm`. A
-`FrameBuffer::DmaBuf` is `CpuFrameRequired`. The planar layout is fixed by the configured
+`FrameBuffer::DmaBuf` or `OpaqueFd` is `CpuFrameRequired`. The planar layout is fixed by the configured
 `video.pixel_format`, and `format` must match it exactly or the frame is `FrameFormatMismatch`
 (never converted):
 

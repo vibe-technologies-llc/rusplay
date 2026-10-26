@@ -3,7 +3,7 @@ use rusplay_core::{PixelFormat, Resolution, ScaleFilter, TransferFunction};
 use rustix::io::Errno;
 use thiserror::Error;
 
-use crate::{PlaneLayout, TexelPacking, dmabuf::fourcc_name};
+use crate::{MemoryHandle, PlaneLayout, TexelPacking, dmabuf::fourcc_name};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ScaleError {
@@ -142,4 +142,18 @@ pub enum ScaleError {
         found: Resolution,
         needed: Resolution,
     },
+    #[error("the device cannot export {0:?} memory")]
+    MemoryExportUnavailable(MemoryHandle),
+    #[error("memory export needs the vulkan backend")]
+    MemoryExportNeedsVulkan,
+    #[error("vkCreateBuffer failed for an exportable frame")]
+    MemoryExportBufferCreate(#[source] vk::Result),
+    #[error("no memory type can hold an exportable frame")]
+    MemoryExportNoMemoryType,
+    #[error("vkAllocateMemory failed for an exportable frame")]
+    MemoryExportAllocate(#[source] vk::Result),
+    #[error("vkBindBufferMemory failed for an exportable frame")]
+    MemoryExportBind(#[source] vk::Result),
+    #[error("vkGetMemoryFdKHR failed to export a frame")]
+    MemoryExportFd(#[source] vk::Result),
 }

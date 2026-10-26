@@ -88,6 +88,7 @@ pub(super) const AV1_COLOR_RANGE_FULL: u32 = 1;
 
 pub(super) const CUDA_SUCCESS: i32 = 0;
 pub(super) const CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD: u32 = 1;
+pub(super) const CUDA_EXTERNAL_MEMORY_DEDICATED: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(C)]

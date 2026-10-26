@@ -33,6 +33,7 @@ wgpu.workspace = true
 
 [dev-dependencies]
 rusplay-client = { workspace = true, features = ["software"] }
+rusplay-decode = { workspace = true, features = ["software"] }
 rusplay-scale = { workspace = true, features = ["udmabuf"] }
 tempfile.workspace = true
 

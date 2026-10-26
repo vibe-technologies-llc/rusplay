@@ -97,6 +97,10 @@ paths:
   from `HeldBuffers::hold`, and is only requeued on the PipeWire thread, only if no
   `remove_buffer` event dropped it meanwhile and the serial still matches. Frames built outside
   PipeWire (tests, synthetic sources) use `BufferLease::detached()`.
+- `FrameBuffer::OpaqueFd { fd, allocation, size, dedicated, planes }` is never produced by
+  capture: it is the host's GPU hand-off of exported Vulkan memory to NVENC (`host.md`), carried in
+  `Frame` because that is the encoder input type. The host refuses one as a capture frame
+  (`CaptureOpaqueFd`).
 - `PipeWireCapture::shm_fallback` hands out a `ShmFallback` (a shared flag, usable without the
   `pipewire` feature). A consumer that cannot import the DMA-BUF frames calls `request`; the next
   `process` turns `prefer_dmabuf` off and calls `update_params` with the shared-memory

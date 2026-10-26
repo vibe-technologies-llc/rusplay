@@ -1,3 +1,5 @@
+mod handoff;
+
 use std::os::fd::OwnedFd;
 
 use rusplay_capture::{BufferLease, DRM_FORMAT_MOD_LINEAR, DrmFourcc};

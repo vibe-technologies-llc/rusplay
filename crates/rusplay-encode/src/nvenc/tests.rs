@@ -1,9 +1,10 @@
-use std::{io::Cursor, num::NonZeroU32};
+use std::{fs::File, io::Cursor, num::NonZeroU32};
 
 use cros_codecs::codec::{
     h264::parser::{Nalu as H264Nalu, NaluType as H264NaluType},
     h265::parser::{Nalu as H265Nalu, NaluType as H265NaluType},
 };
+use rusplay_capture::{DrmFourcc, Frame, FrameBuffer, Plane};
 use rusplay_config::{
     NvencConfig, RateControl, SoftwareDecoderConfig, VaapiDecoderConfig, VideoConfig,
     VideoEncoderConfig,
@@ -15,13 +16,14 @@ use rusplay_core::{
 use rusplay_decode::{Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
 use crate::{
-    EncodeError, VideoEncoder,
+    Backend, EncodeError, VideoEncoder,
     capabilities::Capabilities,
     hdr::fixtures::{hdr10_color, signalled},
     input::fixtures::yuv_frame,
     nvenc::{
-        NvencEncoder, capabilities_with,
-        driver::{Driver, LibraryNames, SYSTEM_LIBRARIES},
+        NvencEncoder, OpaqueMemory, capabilities_with, check_opaque_size,
+        driver::{Driver, ExternalMemory, LibraryNames, SYSTEM_LIBRARIES},
+        ffi, import_request, layout,
     },
 };
 
@@ -335,4 +337,124 @@ fn unspecified_resolution_follows_the_first_frame() {
         encoder.encode(&other),
         Err(EncodeError::FrameResolutionMismatch { .. })
     ));
+}
+
+fn opaque_frame(format: PixelFormat, resolution: Resolution, size: u64) -> Frame {
+    let pitch = (resolution.width * 2).next_multiple_of(256);
+    let plane_bytes = pitch * resolution.height;
+    let planes = (0..layout::Layout::of(format).planes())
+        .map(|index| Plane {
+            offset: u32::try_from(index).unwrap() * plane_bytes,
+            stride: pitch,
+        })
+        .collect();
+
+    Frame {
+        resolution,
+        format: layout::dma_buf_fourcc(format),
+        color: ColorSpace::default(),
+        timestamp: Timestamp::ZERO,
+        buffer: FrameBuffer::OpaqueFd {
+            fd: File::open("/dev/null").unwrap().into(),
+            allocation: 7,
+            size,
+            dedicated: true,
+            planes,
+        },
+    }
+}
+
+#[test]
+fn opaque_fd_frames_are_imported_with_their_allocation() {
+    for format in [
+        yuv420(BitDepth::Eight),
+        yuv420(BitDepth::Ten),
+        PixelFormat {
+            chroma: ChromaSubsampling::Yuv444,
+            depth: BitDepth::Eight,
+        },
+        PixelFormat {
+            chroma: ChromaSubsampling::Yuv444,
+            depth: BitDepth::Ten,
+        },
+    ] {
+        let frame = opaque_frame(format, RESOLUTION, 4 << 20);
+
+        let request = import_request(&frame, format).unwrap();
+        let layout = layout::dma_buf_layout(format, RESOLUTION, request.planes).unwrap();
+        let opaque = request.opaque.unwrap();
+
+        assert_eq!(
+            opaque,
+            OpaqueMemory {
+                allocation: 7,
+                size: 4 << 20,
+                dedicated: true,
+            }
+        );
+        assert!(check_opaque_size(opaque, layout).is_ok());
+        assert!(matches!(
+            check_opaque_size(
+                OpaqueMemory {
+                    size: layout.len - 1,
+                    ..opaque
+                },
+                layout
+            ),
+            Err(EncodeError::OpaqueFdTooShort { needed, actual })
+                if needed == layout.len && actual == layout.len - 1
+        ));
+    }
+}
+
+#[test]
+fn opaque_fd_frames_of_another_format_are_refused() {
+    let format = yuv420(BitDepth::Eight);
+    let mut frame = opaque_frame(yuv420(BitDepth::Ten), RESOLUTION, 4 << 20);
+
+    let wrong = import_request(&frame, format).unwrap_err();
+    frame.format = layout::dma_buf_fourcc(format);
+    frame.buffer = FrameBuffer::Shm {
+        data: Vec::new(),
+        stride: RESOLUTION.width,
+    };
+    let shm = import_request(&frame, format).unwrap_err();
+
+    assert!(matches!(
+        wrong,
+        EncodeError::FrameFormatMismatch {
+            backend: Backend::Nvenc,
+            expected,
+            actual,
+        } if expected == DrmFourcc::from_code(*b"NV12") && actual == DrmFourcc::from_code(*b"P010")
+    ));
+    assert!(matches!(
+        shm,
+        EncodeError::CpuFrameRequired {
+            backend: Backend::Nvenc
+        }
+    ));
+}
+
+#[test]
+fn dedicated_allocations_are_flagged_to_cuda() {
+    let dedicated = ExternalMemory {
+        size: 1 << 20,
+        dedicated: true,
+    }
+    .handle_desc(5);
+    let shared = ExternalMemory {
+        size: 1 << 20,
+        dedicated: false,
+    }
+    .handle_desc(5);
+
+    assert_eq!(
+        dedicated.handle_type,
+        ffi::CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD
+    );
+    assert_eq!(unsafe { dedicated.handle.fd }, 5);
+    assert_eq!(dedicated.size, 1 << 20);
+    assert_eq!(dedicated.flags, ffi::CUDA_EXTERNAL_MEMORY_DEDICATED);
+    assert_eq!(shared.flags, 0);
 }

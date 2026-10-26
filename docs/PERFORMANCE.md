@@ -1,5 +1,2 @@
 # Video decode
 - [M, blocked by: decode-nvdec-hardware] `decode-nvdec-zero-copy`: hand NVDEC pictures to the client as `DecodedBuffer::DmaBuf` instead of a host copy: copy the mapped surface device to device into a pooled exportable allocation (a DMA-BUF from `cuMemGetHandleForAddressRange`, or a VMM allocation exported as an opaque fd and imported with `VK_KHR_external_memory_fd`), described as linear `NV12`/`P010`/`NV16`/`P210`, so the client imports it like a VAAPI surface. Today every frame is mapped, copied to host memory with `cuMemcpy2D`, deinterleaved and shifted on the CPU and uploaded again by the present stage
-
-# Video encode
-- [L] `host-encoder-gpu-handoff`: hand the host pipeline's converted YUV frame to hardware encoders on the GPU instead of reading it back: allocate the `ColorConverter` output as exportable memory (Vulkan `VK_KHR_external_memory_fd`), give VAAPI the DMA-BUF and NVENC the opaque fd as CUDA external memory, in the NVENC-native layouts `nvenc/layout.rs` checks; today both read back to shared memory and upload again

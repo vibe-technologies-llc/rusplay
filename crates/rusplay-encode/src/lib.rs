@@ -1,5 +1,6 @@
 mod backend;
 mod capabilities;
+pub mod device;
 mod error;
 #[cfg(any(
     feature = "x264",

@@ -550,6 +550,13 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Video,
+        "Encoder",
+        "video.encoder_gpu_handoff",
+        "Hand frames to the encoder on the GPU",
+        Kind::Flag,
+    ),
+    field(
+        Section::Video,
         "Decoder",
         DECODER_BACKEND_PATH,
         "Backend",

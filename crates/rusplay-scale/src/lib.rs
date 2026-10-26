@@ -5,6 +5,7 @@ mod color;
 mod convert;
 mod dmabuf;
 mod error;
+mod export;
 mod gpu;
 mod kernel;
 mod linearise;
@@ -38,6 +39,7 @@ pub use crate::{
         request_fence_wait_device, wait_for_writes,
     },
     error::ScaleError,
+    export::{ExportedFrame, MemoryHandle, can_export},
     gpu::ScalePipelines,
     kernel::{Geometry, Kernel},
     linearise::{ChannelOrder, LineariseSettings, Lineariser, SourceChannels, TexelPacking},

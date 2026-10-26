@@ -31,6 +31,13 @@ pub enum FrameBuffer {
         data: Vec<u8>,
         stride: u32,
     },
+    OpaqueFd {
+        fd: OwnedFd,
+        allocation: u64,
+        size: u64,
+        dedicated: bool,
+        planes: Vec<Plane>,
+    },
 }
 
 #[derive(Debug)]

@@ -390,7 +390,7 @@ pub(crate) fn convert(source: &Image, settings: &ConvertSettings) -> SamplePlane
             .collect()
     };
     match settings.layout {
-        PlaneLayout::Planar => vec![luma, component(0), component(1)],
+        PlaneLayout::Planar | PlaneLayout::PlanarHigh => vec![luma, component(0), component(1)],
         PlaneLayout::SemiPlanar => vec![
             luma,
             chroma

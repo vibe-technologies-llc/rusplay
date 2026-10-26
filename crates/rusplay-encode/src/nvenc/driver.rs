@@ -1,6 +1,6 @@
 use std::{
     ffi::{c_int, c_void},
-    os::fd::{FromRawFd, IntoRawFd, OwnedFd},
+    os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd},
     ptr,
     rc::Rc,
 };
@@ -577,19 +577,36 @@ pub(super) struct ExternalBuffer {
     pointer: ffi::CuDevicePtr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ExternalMemory {
+    pub size: u64,
+    pub dedicated: bool,
+}
+
+impl ExternalMemory {
+    pub(super) fn handle_desc(self, fd: RawFd) -> ffi::ExternalMemoryHandleDesc {
+        let mut handle = ffi::ExternalMemoryHandleDesc::zeroed();
+        handle.handle_type = ffi::CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
+        handle.handle.fd = fd;
+        handle.size = self.size;
+        if self.dedicated {
+            handle.flags = ffi::CUDA_EXTERNAL_MEMORY_DEDICATED;
+        }
+        handle
+    }
+}
+
 impl ExternalBuffer {
     pub(super) fn import(
         context: &Rc<CudaContext>,
         fd: OwnedFd,
-        size: u64,
+        memory: ExternalMemory,
     ) -> Result<Self, EncodeError> {
         let api = &context.driver.cuda;
         let raw = fd.into_raw_fd();
+        let size = memory.size;
 
-        let mut handle = ffi::ExternalMemoryHandleDesc::zeroed();
-        handle.handle_type = ffi::CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
-        handle.handle.fd = raw;
-        handle.size = size;
+        let handle = memory.handle_desc(raw);
 
         let mut memory: ffi::CuExternalMemory = ptr::null_mut();
         let imported = cuda(CudaCall::ImportExternalMemory, unsafe {

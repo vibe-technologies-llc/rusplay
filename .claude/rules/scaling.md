@@ -130,10 +130,11 @@ paths:
   about 1.7 ms per 4K frame on 4:2:0 and 1.0 ms on 4:2:2 on an RX 9070 against 0.3 ms for
   Hermite, so it is an opt-in quality choice.
 - The output is one storage buffer per `YuvFrame`, described by `FrameLayout`: planes
-  `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms) or
-  `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte
+  `Luma, Cb, Cr` (`PlaneLayout::Planar`, I420/I422/I444 and their `p10le`/`p12le` forms, or
+  `PlanarHigh`, the same planes with MSB samples, as DRM `Q410` and NVENC's `YUV444_10BIT` want)
+  or `Luma, CbCr` (`SemiPlanar`, NV12/NV16/NV24 and P010/P210/P410 style). Samples are one byte
   at 8 bits and two little-endian bytes above, `SampleAlignment::High` (MSB, the P010 family)
-  for semi-planar and `Low` (LSB) for planar. Every row stride and so every plane offset is a
+  for semi-planar and `PlanarHigh` and `Low` (LSB) for planar. Every row stride and so every plane offset is a
   multiple of `row_alignment` (a power of two of at least 4, `DEFAULT_ROW_ALIGNMENT` is
   wgpu's 256 so a plane can be copied straight into a texture). Shaders write whole `u32`
   words, one invocation per word, so no atomics are needed and row padding is zero.
@@ -160,6 +161,22 @@ paths:
   (settings must be 4:2:0 `SemiPlanar` at the matching depth, else `DmaBufFormatMismatch`; the
   planes may be larger than the frame, as decoder surfaces are, and are read only up to it). Both
   paths produce identical output, which a test checks bit for bit.
+- `ColorConverter::create_exported_frame(device, MemoryHandle)` (`export.rs`, every Vulkan call in
+  `export/vulkan.rs`) allocates the frame in memory another API can read: a `VkBuffer` with
+  `VkExternalMemoryBufferCreateInfo` for `DMA_BUF_EXT` (`MemoryHandle::DmaBuf`, needs
+  `VULKAN_EXTERNAL_MEMORY_DMA_BUF`) or `OPAQUE_FD` (`MemoryHandle::OpaqueFd`, for CUDA), a
+  dedicated device-local allocation with `VkExportMemoryAllocateInfo`, `vkGetMemoryFdKHR` for the
+  fd, then `hal::vulkan::Buffer::from_raw_managed` and `create_buffer_from_hal`, so wgpu frees
+  buffer and memory with the last use while the fd keeps the memory alive for its importer. The
+  `ExportedFrame` holds the `YuvFrame`, the fd, the allocation size and dedicated flag (which a
+  CUDA import must repeat) and a process-unique `allocation` id. `can_export` checks the
+  extension, Vulkan 1.1 and `vkGetPhysicalDeviceExternalBufferProperties` (`EXPORTABLE`) first;
+  failures are `MemoryExportUnavailable`, `MemoryExportNeedsVulkan` and one `MemoryExport*`
+  variant per Vulkan call. Tests (`export/tests.rs`) convert into an exported and a plain frame
+  and require identical bytes, import the exported `NV12`/`P010` dma-buf back through
+  `DmaBufImporter` and unpack it bit-identically to the buffer, convert into an opaque-fd
+  `PlanarHigh` frame, and check that a device without the dma-buf feature refuses. RADV exports
+  both handle types.
 - DMA-BUF import is `DmaBufImporter` (`dmabuf.rs`, with every Vulkan call in `dmabuf/vulkan.rs`).
   wgpu-hal's own `texture_from_dmabuf_fd` takes one plane only, so the importer creates the
   `VkImage` itself through `ash` (the same 0.38 wgpu-hal uses, so the raw handles it hands out

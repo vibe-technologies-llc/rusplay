@@ -7,6 +7,7 @@ mod datagrams;
 mod encode;
 mod error;
 mod gpu;
+mod handoff;
 mod input;
 mod mailbox;
 mod outbox;

@@ -14,13 +14,14 @@ use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
-    DmaBufImporter, DmaBufPlane, GpuFenceWait, GpuFenceWaiter, InputLight, LineariseSettings,
-    Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, WriteFence, YuvFrame,
-    wait_for_writes,
+    DmaBufImporter, DmaBufPlane, ExportedFrame, GpuFenceWait, GpuFenceWaiter, InputLight,
+    LineariseSettings, Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, WriteFence,
+    YuvFrame, can_export, wait_for_writes,
 };
 
 use crate::{
     Gpu, HostError,
+    handoff::{HANDOFF_ROW_ALIGNMENT, Handoff},
     route::{Route, RouteKey, SourceRead},
     upload::{EncoderPlanes, UploadFormat, check_shm_frame, upload_format_for},
 };
@@ -82,11 +83,49 @@ struct Linear {
     view: wgpu::TextureView,
 }
 
+struct Readback {
+    output: YuvFrame,
+    buffer: wgpu::Buffer,
+    planes: EncoderPlanes,
+}
+
+enum Target {
+    Readback(Readback),
+    Handoff(ExportedFrame),
+}
+
+impl Target {
+    const fn hands_off(&self) -> bool {
+        matches!(self, Self::Handoff(_))
+    }
+
+    fn frame(&self) -> &YuvFrame {
+        match self {
+            Self::Readback(readback) => &readback.output,
+            Self::Handoff(exported) => exported.frame(),
+        }
+    }
+}
+
 struct Conversion {
     converter: ColorConverter,
-    output: YuvFrame,
-    readback: wgpu::Buffer,
-    planes: EncoderPlanes,
+    target: Target,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffState {
+    Off,
+    Trying(Handoff),
+    Proven(Handoff),
+}
+
+impl HandoffState {
+    const fn active(self) -> Option<Handoff> {
+        match self {
+            Self::Off => None,
+            Self::Trying(handoff) | Self::Proven(handoff) => Some(handoff),
+        }
+    }
 }
 
 struct OpenEncoder {
@@ -112,6 +151,7 @@ pub(crate) struct GpuPipeline {
     relineariser: Option<Lineariser>,
     mapper: Option<ColorMapper>,
     conversion: Option<Conversion>,
+    handoff: HandoffState,
     encoder: Option<OpenEncoder>,
     input: Option<Frame>,
     bitrate_kbps: Option<u32>,
@@ -125,6 +165,9 @@ impl GpuPipeline {
             .dmabuf_gpu_fence_wait
             .then(|| GpuFenceWaiter::new(&gpu.device).ok())
             .flatten();
+        let handoff = Handoff::plan(&config)
+            .filter(|handoff| can_export(&gpu.device, handoff.handle()))
+            .map_or(HandoffState::Off, HandoffState::Trying);
 
         Self {
             gpu,
@@ -144,10 +187,16 @@ impl GpuPipeline {
             relineariser: None,
             mapper: None,
             conversion: None,
+            handoff,
             encoder: None,
             input: None,
             bitrate_kbps: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hands_off(&self) -> bool {
+        self.handoff.active().is_some()
     }
 
     fn upload(&mut self, frame: &Frame) -> Result<Option<Source>, HostError> {
@@ -168,6 +217,7 @@ impl GpuPipeline {
                     Ok(None)
                 }
             },
+            FrameBuffer::OpaqueFd { .. } => Err(HostError::CaptureOpaqueFd),
         }
     }
 
@@ -289,7 +339,7 @@ impl GpuPipeline {
         Ok(route)
     }
 
-    fn convert(&mut self, source: &mut Source) -> Result<(), HostError> {
+    fn convert(&mut self, source: &mut Source) -> Result<wgpu::SubmissionIndex, HostError> {
         let route = self.route(source.key)?;
         let capture = source.key.capture;
         let stream = self.config.video.resolution.unwrap_or(capture);
@@ -339,32 +389,115 @@ impl GpuPipeline {
             current = &target.view;
         }
 
-        let settings = convert_settings(&self.config, stream, route.input);
-        let conversion =
-            ensure_conversion(&self.pipelines, device, &mut self.conversion, settings)?;
+        let settings = convert_settings(&self.config, stream, route.input, self.handoff.active());
+        let conversion = match ensure_conversion(
+            &self.pipelines,
+            device,
+            &mut self.conversion,
+            settings,
+            &self.config,
+            self.handoff,
+        ) {
+            Err(_) if matches!(self.handoff, HandoffState::Trying(_)) => {
+                self.handoff = HandoffState::Off;
+                let settings = convert_settings(&self.config, stream, route.input, None);
+                ensure_conversion(
+                    &self.pipelines,
+                    device,
+                    &mut self.conversion,
+                    settings,
+                    &self.config,
+                    HandoffState::Off,
+                )?
+            }
+            result => result?,
+        };
+        let frame = conversion.target.frame();
         conversion
             .converter
-            .encode(device, &mut encoder, current, &conversion.output)?;
-        encoder.copy_buffer_to_buffer(
-            conversion.output.buffer(),
-            0,
-            &conversion.readback,
-            0,
-            conversion.output.layout().size,
-        );
-        self.gpu.queue.submit([encoder.finish()]);
+            .encode(device, &mut encoder, current, frame)?;
+        if let Target::Readback(readback) = &conversion.target {
+            encoder.copy_buffer_to_buffer(
+                readback.output.buffer(),
+                0,
+                &readback.buffer,
+                0,
+                readback.output.layout().size,
+            );
+        }
+        let submission = self.gpu.queue.submit([encoder.finish()]);
         drop(source.fence.take());
+
+        Ok(submission)
+    }
+
+    fn hand_off(
+        &mut self,
+        handoff: Handoff,
+        submission: wgpu::SubmissionIndex,
+        timestamp: Timestamp,
+    ) -> Result<(), HostError> {
+        let Some(Conversion {
+            converter,
+            target: Target::Handoff(exported),
+        }) = &self.conversion
+        else {
+            return Ok(());
+        };
+
+        let resolution = converter.settings().resolution;
+        let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
+        self.gpu
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .map_err(HostError::GpuPoll)?;
+        self.input = Some(frame);
 
         Ok(())
     }
 
+    fn encode_handed_off(
+        &mut self,
+        handoff: Handoff,
+        source: &mut Source,
+        submission: wgpu::SubmissionIndex,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        let handed_off = self
+            .hand_off(handoff, submission, timestamp)
+            .and_then(|()| self.encode_input(keyframe));
+
+        match (handed_off, self.handoff) {
+            (Ok(encoded), HandoffState::Trying(handoff)) => {
+                self.handoff = HandoffState::Proven(handoff);
+                Ok(encoded)
+            }
+            (Err(_), HandoffState::Trying(_)) => {
+                self.handoff = HandoffState::Off;
+                self.input = None;
+                self.convert(source)?;
+                self.read_back(timestamp)?;
+                self.encode_input(keyframe)
+            }
+            (result, _) => result,
+        }
+    }
+
     fn read_back(&mut self, timestamp: Timestamp) -> Result<(), HostError> {
-        let Some(conversion) = &self.conversion else {
+        let Some(Conversion {
+            converter,
+            target: Target::Readback(readback),
+        }) = &self.conversion
+        else {
             return Ok(());
         };
         let (done, mapped) = mpsc::channel();
-        conversion
-            .readback
+        readback
+            .buffer
             .map_async(wgpu::MapMode::Read, .., move |result| {
                 done.send(result).ok();
             });
@@ -376,10 +509,17 @@ impl GpuPipeline {
             result.map_err(HostError::GpuReadback)?;
         }
 
-        let layout = conversion.converter.layout();
-        let settings = conversion.converter.settings();
-        let stride = u32::try_from(conversion.planes.luma_stride).unwrap_or(u32::MAX);
+        let layout = converter.layout();
+        let settings = converter.settings();
+        let stride = u32::try_from(readback.planes.luma_stride).unwrap_or(u32::MAX);
         let color = self.config.video.color;
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|input| !matches!(input.buffer, FrameBuffer::Shm { .. }))
+        {
+            self.input = None;
+        }
         let input = self.input.get_or_insert_with(|| Frame {
             resolution: settings.resolution,
             format: fourcc_for(settings.format),
@@ -395,17 +535,17 @@ impl GpuPipeline {
         input.timestamp = timestamp;
 
         let repacked = {
-            let view = conversion
-                .readback
+            let view = readback
+                .buffer
                 .get_mapped_range(..)
                 .map_err(HostError::GpuMappedRange)?;
             if let FrameBuffer::Shm { data, stride: held } = &mut input.buffer {
-                conversion.planes.repack(layout, &view, data);
+                readback.planes.repack(layout, &view, data);
                 *held = stride;
             }
             Ok(())
         };
-        conversion.readback.unmap();
+        readback.buffer.unmap();
 
         repacked
     }
@@ -442,7 +582,16 @@ impl VideoPipeline for GpuPipeline {
         let Some(mut source) = self.upload(frame)? else {
             return Ok(None);
         };
-        self.convert(&mut source)?;
+        let submission = self.convert(&mut source)?;
+        if let Some(handoff) = self.handoff.active() {
+            return self.encode_handed_off(
+                handoff,
+                &mut source,
+                submission,
+                frame.timestamp,
+                keyframe,
+            );
+        }
         self.read_back(frame.timestamp)?;
         self.encode_input(keyframe)
     }
@@ -610,51 +759,76 @@ fn ensure_conversion<'a>(
     device: &wgpu::Device,
     slot: &'a mut Option<Conversion>,
     settings: ConvertSettings,
+    config: &Config,
+    handoff: HandoffState,
 ) -> Result<&'a mut Conversion, HostError> {
-    let conversion = match slot.take() {
-        Some(conversion) if conversion.converter.settings() == settings => conversion,
-        Some(Conversion { mut converter, .. }) => {
-            converter.configure(device, settings)?;
-            conversion_buffers(device, converter, settings)
+    let handoff = handoff.active();
+    let conversion = if let Some(Conversion {
+        mut converter,
+        target,
+    }) = slot.take()
+    {
+        converter.configure(device, settings)?;
+        if target.frame().layout() == converter.layout() && target.hands_off() == handoff.is_some()
+        {
+            Conversion { converter, target }
+        } else {
+            drop(target);
+            conversion_target(device, converter, settings, config, handoff)?
         }
-        None => {
-            let converter = ColorConverter::new(pipelines, device, settings)?;
-            conversion_buffers(device, converter, settings)
-        }
+    } else {
+        let converter = ColorConverter::new(pipelines, device, settings)?;
+        conversion_target(device, converter, settings, config, handoff)?
     };
 
     Ok(slot.insert(conversion))
 }
 
-fn conversion_buffers(
+fn conversion_target(
     device: &wgpu::Device,
     converter: ColorConverter,
     settings: ConvertSettings,
-) -> Conversion {
-    let output = converter.create_frame(device);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("rusplay-host-readback"),
-        size: converter.layout().size,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let planes = EncoderPlanes::of(converter.layout(), settings.format.chroma);
+    config: &Config,
+    handoff: Option<Handoff>,
+) -> Result<Conversion, HostError> {
+    let target = if let Some(handoff) = handoff {
+        handoff.accepts(config, settings.resolution, converter.layout())?;
+        Target::Handoff(converter.create_exported_frame(device, handoff.handle())?)
+    } else {
+        let output = converter.create_frame(device);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("rusplay-host-readback"),
+            size: converter.layout().size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let planes = EncoderPlanes::of(converter.layout(), settings.format.chroma);
+        Target::Readback(Readback {
+            output,
+            buffer,
+            planes,
+        })
+    };
 
-    Conversion {
-        converter,
-        output,
-        readback,
-        planes,
-    }
+    Ok(Conversion { converter, target })
 }
 
-fn convert_settings(config: &Config, resolution: Resolution, input: InputLight) -> ConvertSettings {
+fn convert_settings(
+    config: &Config,
+    resolution: Resolution,
+    input: InputLight,
+    handoff: Option<Handoff>,
+) -> ConvertSettings {
     let video = &config.video;
+    let (layout, row_alignment) = handoff
+        .map_or((PlaneLayout::Planar, CONVERT_ROW_ALIGNMENT), |handoff| {
+            (handoff.layout(), HANDOFF_ROW_ALIGNMENT)
+        });
 
     ConvertSettings {
         resolution,
         format: video.pixel_format,
-        layout: PlaneLayout::Planar,
+        layout,
         matrix: video.color.matrix_coefficients(),
         range: video.color.range,
         transfer: video.color.transfer,
@@ -662,6 +836,6 @@ fn convert_settings(config: &Config, resolution: Resolution, input: InputLight) 
         input,
         chroma_filter: config.scaling.downscale.chroma_filter,
         chroma_siting: ChromaSiting::Left,
-        row_alignment: CONVERT_ROW_ALIGNMENT,
+        row_alignment,
     }
 }

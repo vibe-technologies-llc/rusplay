@@ -50,11 +50,11 @@ pub(super) const fn surface_format(format: PixelFormat) -> SurfaceFormat {
     }
 }
 
-pub(super) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
+pub(crate) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
     DrmFourcc(surface_format(format).drm_fourcc)
 }
 
-pub(super) const fn dma_buf_planes(format: PixelFormat) -> usize {
+pub(crate) const fn dma_buf_planes(format: PixelFormat) -> usize {
     match format.chroma {
         ChromaSubsampling::Yuv420 => 2,
         ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444 => 1,
