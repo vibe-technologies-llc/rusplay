@@ -47,7 +47,7 @@ impl Endpoint {
             match PacketHeader::read(datagram).unwrap().stream {
                 StreamKind::Control => self
                     .channel
-                    .handle_datagram(datagram, &mut self.events)
+                    .handle_datagram(datagram, now, &mut self.events)
                     .unwrap(),
                 _ => self.media.push(datagram.to_vec()),
             }

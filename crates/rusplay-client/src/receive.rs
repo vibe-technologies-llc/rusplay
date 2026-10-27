@@ -208,6 +208,7 @@ impl ReceiveStage {
             }
 
             self.poll_timeouts(now, &mut pending);
+            self.links.counters.set_rtt(self.control.rtt());
 
             self.handle_audio(&mut pending.audio);
             self.handle_cursor(&mut pending.cursor);
@@ -263,7 +264,7 @@ impl ReceiveStage {
         let accepted = match PacketHeader::parse(datagram) {
             Ok((header, _)) if header.stream == StreamKind::Control => self
                 .control
-                .handle_datagram(datagram, &mut pending.control)
+                .handle_datagram(datagram, now, &mut pending.control)
                 .is_ok(),
             Ok((header, payload)) if header.stream == StreamKind::Fec => {
                 match FecHeader::parse(payload) {

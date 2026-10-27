@@ -104,12 +104,17 @@ impl ControlStage {
             for (datagram, from) in batch.iter() {
                 if from == self.links.client {
                     self.last_heard = now;
-                    self.route(datagram, &mut events)?;
+                    self.route(datagram, now, &mut events)?;
                 } else if let Some(refusal) = busy_reply(datagram) {
                     self.links.transport.send_to(&refusal, from).ok();
                 }
             }
-            self.links.outbox.channel().poll(now, &mut events);
+            let rtt = {
+                let mut channel = self.links.outbox.channel();
+                channel.poll(now, &mut events);
+                channel.rtt()
+            };
+            self.links.shared.counters.set_rtt(rtt);
 
             if self.handle(&mut events, now)? == Flow::Ended {
                 return Ok(());
@@ -151,13 +156,18 @@ impl ControlStage {
         .fold(now + IDLE_WAKE, Instant::min)
     }
 
-    fn route(&mut self, datagram: &[u8], events: &mut Vec<ControlEvent>) -> Result<(), HostError> {
+    fn route(
+        &mut self,
+        datagram: &[u8],
+        now: Instant,
+        events: &mut Vec<ControlEvent>,
+    ) -> Result<(), HostError> {
         let accepted = match PacketHeader::read(datagram).map(|header| header.stream) {
             Ok(StreamKind::Control) => self
                 .links
                 .outbox
                 .channel()
-                .handle_datagram(datagram, events)
+                .handle_datagram(datagram, now, events)
                 .is_ok(),
             Ok(StreamKind::Pairing | StreamKind::Reconnect) => {
                 if let Some(reply) = self.links.replay.answer(datagram) {
@@ -310,7 +320,9 @@ impl ControlStage {
                         .is_ok_and(|header| header.stream == StreamKind::Control)
                 {
                     let mut channel = self.links.outbox.channel();
-                    channel.handle_datagram(datagram, &mut events).ok();
+                    channel
+                        .handle_datagram(datagram, Instant::now(), &mut events)
+                        .ok();
                 }
             }
             self.links

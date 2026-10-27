@@ -2,6 +2,7 @@ mod cli;
 mod discovery;
 mod peers;
 mod responder;
+mod stats;
 
 use std::{
     env,
@@ -143,7 +144,8 @@ fn serve_next(host: &HostSession, gpu: &Gpu, feed: &Arc<CaptureFeed>) -> Result<
         Admission::Reconnected => eprintln!("rusplay-hostd: streaming to {address}"),
     }
 
-    host.serve(&client, gpu.clone(), feed)?.wait()?;
+    let stream = host.serve(&client, gpu.clone(), feed)?;
+    stats::wait_logging(stream, network.stats_log_interval_ms)?;
     eprintln!("rusplay-hostd: {address} left");
     Ok(())
 }

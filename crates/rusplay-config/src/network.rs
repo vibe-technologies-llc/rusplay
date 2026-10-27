@@ -21,7 +21,6 @@ pub struct NetworkConfig {
     pub fec_overhead_percent: u8,
     pub pacing: bool,
     pub pacing_window_percent: u8,
-    pub jitter_buffer_ms: u16,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
     pub control_retransmit_ms: u16,
@@ -37,6 +36,7 @@ pub struct NetworkConfig {
     pub keepalive_interval_ms: u32,
     pub keyframe_request_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
+    pub stats_log_interval_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -48,7 +48,6 @@ impl Default for NetworkConfig {
             fec_overhead_percent: 10,
             pacing: true,
             pacing_window_percent: 50,
-            jitter_buffer_ms: 0,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
             control_retransmit_ms: 50,
@@ -64,6 +63,7 @@ impl Default for NetworkConfig {
             keepalive_interval_ms: 1_000,
             keyframe_request_interval_ms: 100,
             cursor_image_repeat_ms: 1_000,
+            stats_log_interval_ms: 10_000,
         }
     }
 }
@@ -200,6 +200,17 @@ mod tests {
                 peer_timeout_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn stats_log_interval_defaults_to_ten_seconds_and_zero_is_valid() {
+        let silent = NetworkConfig {
+            stats_log_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().stats_log_interval_ms, 10_000);
+        assert!(silent.validate().is_ok());
     }
 
     #[test]

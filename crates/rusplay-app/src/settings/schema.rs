@@ -744,14 +744,6 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
-        "network.jitter_buffer_ms",
-        "Jitter buffer",
-        U16,
-    )
-    .unit("ms"),
-    field(
-        Section::Network,
-        "Transport",
         "network.reassembly_timeout_ms",
         "Reassembly timeout",
         U16,
@@ -854,6 +846,14 @@ pub static FIELDS: &[Field] = &[
         "network.cursor_image_repeat_ms",
         "Cursor image repeat",
         U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.stats_log_interval_ms",
+        "Stats log interval",
+        U32,
     )
     .unit("ms"),
     field(

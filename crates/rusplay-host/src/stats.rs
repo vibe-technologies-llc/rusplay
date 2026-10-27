@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HostStats {
@@ -30,6 +33,7 @@ pub struct HostStats {
     pub input_failures: u64,
     pub rumble_sent: u64,
     pub rumble_dropped: u64,
+    pub rtt: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +87,7 @@ pub(crate) struct Counters {
     pub input_failures: Counter,
     pub rumble_sent: Counter,
     pub rumble_dropped: Counter,
+    rtt_nanos: Counter,
 }
 
 impl Counters {
@@ -116,6 +121,17 @@ impl Counters {
             input_failures: self.input_failures.get(),
             rumble_sent: self.rumble_sent.get(),
             rumble_dropped: self.rumble_dropped.get(),
+            rtt: match self.rtt_nanos.get() {
+                0 => None,
+                nanos => Some(Duration::from_nanos(nanos)),
+            },
         }
+    }
+
+    pub(crate) fn set_rtt(&self, rtt: Option<Duration>) {
+        let nanos = rtt.map_or(0, |rtt| {
+            u64::try_from(rtt.as_nanos()).unwrap_or(u64::MAX).max(1)
+        });
+        self.rtt_nanos.set(nanos);
     }
 }

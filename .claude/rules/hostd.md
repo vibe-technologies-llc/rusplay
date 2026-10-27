@@ -50,9 +50,14 @@ paths:
   the input feed with `with_input`),
   then loops: a fresh PIN from `Pin::generate(network.pairing_pin_digits)` is printed for each
   `network.pairing_timeout_ms` window, `accept` takes a PIN pairing or a remembered client's
-  reconnect, and `serve(..).wait()` streams until the client leaves. An accept timeout or a
+  reconnect, and `serve(..)` streams until the client leaves. An accept timeout or a
   locked PIN just issues a new PIN; an error for which `HostError::is_session_failure` holds is
   printed and the loop goes on; any other error ends the daemon.
+- `stats.rs` drives a session to its end: `wait_logging` polls `HostStream::is_finished` every
+  100 ms, prints a one-line `HostStats` summary (RTT, frame, keyframe, datagram, loss, audio,
+  cursor and input counters) to stderr every `network.stats_log_interval_ms` (default 10000, `0`
+  turns the periodic line off) and always prints a final `session summary` line, read just before
+  `wait` joins the stages, even when the session ends in an error.
 - A useful daemon today is built with
   `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the
