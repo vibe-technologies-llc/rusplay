@@ -26,7 +26,7 @@ pub use crate::{
     },
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
-    input::{InputConfig, PointerMode, ReleaseChord},
+    input::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, ReleaseChord},
     network::NetworkConfig,
     paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,

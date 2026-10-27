@@ -72,9 +72,22 @@ paths:
   header shows which, naming the chord (`chord_label`), and a pointer button next to
   `Disconnect` names the active pointer (`Pointer: auto (relative)`) and cycles
   `input.pointer_mode` for the session on click. Losing window activation
-  (`observe_window_activation`) releases. `Quit` is ignored while input is engaged, because the
-  keyboard also reaches gpui and `ctrl-q` belongs to the game then.
-- A 50 ms poll on the foreground executor ends the session when any client stage, the window's
+  (`observe_window_activation`) releases. `Quit` and `F11` are ignored while input is engaged,
+  because the keyboard also reaches gpui and `ctrl-q` and `F11` belong to the game then; the
+  client hotkeys (`input.md`) are the way to act on the client from there.
+- Fullscreen: the header's `Fullscreen` button, `F11` while not engaged (root action
+  `ToggleFullscreen`) and the fullscreen hotkey all call gpui's `Window::toggle_fullscreen`. The
+  stream view omits its header and the root omits the status bar while the window is fullscreen
+  and a stream exists, so notices are invisible then; the stats toggle and the disconnect hotkey
+  are the controls that remain. A fullscreen switch changes no focus: engagement lives in the
+  capture's `CaptureCore`, the pointer lock and shortcuts inhibitor are bound to the surface, and
+  the layout follows through the canvas prepaint's `set_region`. Engagement is dropped only if the
+  compositor itself moves keyboard focus off the surface (`wl_keyboard.leave`, an inhibitor
+  `inactive` event, or gpui's activation observer), which an `xdg_toplevel.set_fullscreen` does
+  not do on the compositors this was written against; it has not been exercised on a live
+  compositor from this repository.
+- A 50 ms poll on the foreground executor (`spawn_in`, so it can reach the `Window`) runs the
+  client actions queued by the hotkeys, ends the session when any client stage, the window's
   presenter or a layout update failed, and re-renders when a newer stream description arrives so
   the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the stream first, then the window, and
   emits `StreamEvent::Ended` with the notice for the status bar.
@@ -82,7 +95,7 @@ paths:
   `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
   counter deltas into per-second rates and the timing deltas into average and peak client latency
   (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
-  line under the state. Occasional counters (superseded, keyframe requests, decode errors, audio
+  line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
   underruns) appear only while non-zero. The figures are client side only: the end-to-end time
   waits on `stream-capture-timestamps`.
 

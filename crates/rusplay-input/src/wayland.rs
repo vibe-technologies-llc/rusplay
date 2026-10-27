@@ -25,7 +25,7 @@ use wayland_client::{
 
 use crate::{
     InputError, InputEvent,
-    capture::{ActivePointer, CaptureCore, CaptureOptions, StreamRegion},
+    capture::{ActivePointer, CaptureCore, CaptureOptions, ClientAction, StreamRegion},
     wayland::handlers::{Command, State},
 };
 
@@ -116,6 +116,10 @@ impl WaylandCapture {
 
     pub fn is_engaged(&self) -> bool {
         self.core.lock().is_engaged()
+    }
+
+    pub fn take_actions(&self) -> Vec<ClientAction> {
+        self.core.lock().take_actions()
     }
 
     pub fn engage(&self) {

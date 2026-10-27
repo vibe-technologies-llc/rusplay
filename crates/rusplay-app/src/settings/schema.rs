@@ -152,6 +152,11 @@ const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
 const POINTER_MODES: &[&str] = &["absolute", "relative", "auto"];
 const RELEASE_CHORDS: &[&str] = &["ctrl-alt", "ctrl-shift", "alt-shift", "ctrl-alt-shift"];
+const HOTKEY_KEYS: &[&str] = &[
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
+    "t", "u", "v", "w", "x", "y", "z", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
+    "f11", "f12",
+];
 const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
 const SCALE_FILTERS: &[&str] = &[
@@ -936,6 +941,48 @@ pub static FIELDS: &[Field] = &[
         "input.inhibit_shortcuts",
         "Keep the desktop's shortcuts from the stream while engaged",
         Kind::Flag,
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkeys",
+        "Client hotkeys while engaged",
+        Kind::Flag,
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkey_chord",
+        "Hotkey modifiers",
+        Kind::Choice(RELEASE_CHORDS),
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkey_fullscreen",
+        "Fullscreen key",
+        Kind::Choice(HOTKEY_KEYS),
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkey_stats",
+        "Statistics key",
+        Kind::Choice(HOTKEY_KEYS),
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkey_disconnect",
+        "Disconnect key",
+        Kind::Choice(HOTKEY_KEYS),
+    ),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.hotkey_pointer_mode",
+        "Pointer mode key",
+        Kind::Choice(HOTKEY_KEYS),
     ),
     field(
         Section::Input,

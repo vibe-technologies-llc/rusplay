@@ -11,8 +11,8 @@ use gpui::{
     canvas, div, prelude::*,
 };
 use rusplay_client::{
-    ActivePointer, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord, StreamWindow,
-    WindowLayout,
+    ActivePointer, ClientAction, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord,
+    StreamWindow, WindowLayout,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 
@@ -98,6 +98,7 @@ pub struct StreamView {
     input: InputConfig,
     engaged: bool,
     pointer: Option<(PointerMode, ActivePointer)>,
+    show_stats: bool,
     sampler: StatsSampler,
     rates: Option<StreamRates>,
     focus_handle: FocusHandle,
@@ -125,9 +126,10 @@ impl StreamView {
         let connecting = cx.background_spawn(async move {
             session::connect(config, address, &credentials, gpu, sink)
         });
-        let task = cx.spawn(async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             let result = connecting.await;
-            this.update(cx, |this, cx| this.connected(result, cx)).ok();
+            this.update_in(cx, |this, window, cx| this.connected(result, window, cx))
+                .ok();
         });
 
         Self {
@@ -141,6 +143,7 @@ impl StreamView {
             input,
             engaged: false,
             pointer: None,
+            show_stats: true,
             sampler: StatsSampler::new(timings),
             rates: None,
             focus_handle: cx.focus_handle(),
@@ -177,7 +180,25 @@ impl StreamView {
         }
     }
 
-    fn connected(&mut self, result: Result<ClientStream, SessionError>, cx: &mut Context<Self>) {
+    fn toggle_stats(&mut self, cx: &mut Context<Self>) {
+        self.show_stats = !self.show_stats;
+        cx.notify();
+    }
+
+    fn run_action(&mut self, action: ClientAction, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            ClientAction::ToggleFullscreen => window.toggle_fullscreen(),
+            ClientAction::ToggleStats => self.toggle_stats(cx),
+            ClientAction::Disconnect => self.disconnect(cx),
+        }
+    }
+
+    fn connected(
+        &mut self,
+        result: Result<ClientStream, SessionError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.phase != Phase::Connecting {
             return;
         }
@@ -228,10 +249,10 @@ impl StreamView {
             ))));
         }
         self.phase = Phase::Streaming;
-        self.tasks.push(cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL_INTERVAL).await;
-                let running = this.update(cx, Self::poll).unwrap_or(false);
+                let running = this.update_in(cx, Self::poll).unwrap_or(false);
                 if !running {
                     break;
                 }
@@ -240,12 +261,25 @@ impl StreamView {
         cx.notify();
     }
 
-    fn poll(&mut self, cx: &mut Context<Self>) -> bool {
+    fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.phase != Phase::Streaming {
             return false;
         }
         if self.live.borrow().has_ended() {
             self.finish(cx);
+            return false;
+        }
+
+        let actions = self
+            .live
+            .borrow()
+            .window
+            .as_ref()
+            .map_or_else(Vec::new, StreamWindow::take_actions);
+        for action in actions {
+            self.run_action(action, window, cx);
+        }
+        if self.phase != Phase::Streaming {
             return false;
         }
 
@@ -318,9 +352,10 @@ impl StreamView {
         match self.phase {
             Phase::Connecting => format!("Connecting to {}", self.host.name),
             Phase::Streaming if self.engaged => format!(
-                "Input captured by {}. Press {} to release it",
+                "Input captured by {}. Press {} to release it{}",
                 self.host.name,
-                chord_label(self.input.release_chord)
+                chord_label(self.input.release_chord),
+                hotkey_hint(&self.input)
             ),
             Phase::Streaming => format!(
                 "Streaming from {}. Click the picture or press {} to capture input",
@@ -330,6 +365,21 @@ impl StreamView {
             Phase::Ended => format!("Session with {} ended", self.host.name),
         }
     }
+}
+
+fn hotkey_hint(input: &InputConfig) -> String {
+    if !input.hotkeys {
+        return String::new();
+    }
+
+    format!(
+        ", {}+{:?} fullscreen, {:?} statistics, {:?} disconnect, {:?} pointer",
+        chord_label(input.hotkey_chord),
+        input.hotkey_fullscreen,
+        input.hotkey_stats,
+        input.hotkey_disconnect,
+        input.hotkey_pointer_mode
+    )
 }
 
 fn pointer_label(mode: PointerMode, active: ActivePointer) -> String {
@@ -360,7 +410,7 @@ impl Focusable for StreamView {
 }
 
 impl Render for StreamView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let live = Rc::clone(&self.live);
         let picture = canvas(
             move |bounds, window, _| {
@@ -387,7 +437,7 @@ impl Render for StreamView {
                     .flex_col()
                     .gap_1()
                     .child(div().text_color(theme::text()).child(self.status()))
-                    .children(self.rates.map(|rates| {
+                    .children(self.rates.filter(|_| self.show_stats).map(|rates| {
                         div()
                             .text_xs()
                             .text_color(theme::text_muted())
@@ -409,6 +459,23 @@ impl Render for StreamView {
                         .on_click(cx.listener(|this, _, _, _| this.cycle_pointer_mode()))
                     }))
                     .child(
+                        button(
+                            "stats",
+                            if self.show_stats {
+                                "Hide stats"
+                            } else {
+                                "Show stats"
+                            },
+                            ButtonStyle::Quiet,
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
+                    )
+                    .child(
+                        button("fullscreen", "Fullscreen", ButtonStyle::Quiet, true)
+                            .on_click(cx.listener(|_, _, window, _| window.toggle_fullscreen())),
+                    )
+                    .child(
                         button("disconnect", "Disconnect", ButtonStyle::Secondary, true)
                             .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
                     ),
@@ -420,7 +487,7 @@ impl Render for StreamView {
             .flex()
             .flex_col()
             .size_full()
-            .child(header)
+            .children((!window.is_fullscreen()).then_some(header))
             .child(
                 div()
                     .flex_1()
@@ -445,6 +512,21 @@ mod tests {
             pointer_label(PointerMode::Auto, ActivePointer::Absolute),
             "Pointer: auto (absolute)"
         );
+    }
+
+    #[test]
+    fn the_hotkey_hint_names_the_chord_and_each_key_or_vanishes_when_off() {
+        let on = InputConfig::default();
+        let off = InputConfig {
+            hotkeys: false,
+            ..InputConfig::default()
+        };
+
+        assert_eq!(
+            hotkey_hint(&on),
+            ", Ctrl+Alt+F fullscreen, S statistics, D disconnect, P pointer"
+        );
+        assert_eq!(hotkey_hint(&off), "");
     }
 
     #[test]

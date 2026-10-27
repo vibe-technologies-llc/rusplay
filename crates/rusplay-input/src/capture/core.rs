@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_config::{InputConfig, PointerMode, ReleaseChord};
+use rusplay_config::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, ReleaseChord};
 
 use crate::InputEvent;
 
@@ -13,6 +13,8 @@ const KEY_RIGHT_SHIFT: u32 = 54;
 const KEY_LEFT_ALT: u32 = 56;
 const KEY_RIGHT_CTRL: u32 = 97;
 const KEY_RIGHT_ALT: u32 = 100;
+
+const PENDING_ACTION_LIMIT: usize = 8;
 
 const CTRL: [u32; 2] = [KEY_LEFT_CTRL, KEY_RIGHT_CTRL];
 const SHIFT: [u32; 2] = [KEY_LEFT_SHIFT, KEY_RIGHT_SHIFT];
@@ -39,6 +41,83 @@ impl StreamRegion {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hotkeys {
+    pub chord: ChordModifiers,
+    pub fullscreen: u32,
+    pub stats: u32,
+    pub disconnect: u32,
+    pub pointer_mode: u32,
+}
+
+impl From<&InputConfig> for Hotkeys {
+    fn from(config: &InputConfig) -> Self {
+        Self {
+            chord: config.hotkey_chord.modifiers(),
+            fullscreen: keycode(config.hotkey_fullscreen),
+            stats: keycode(config.hotkey_stats),
+            disconnect: keycode(config.hotkey_disconnect),
+            pointer_mode: keycode(config.hotkey_pointer_mode),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientAction {
+    ToggleFullscreen,
+    ToggleStats,
+    Disconnect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hotkey {
+    Client(ClientAction),
+    CyclePointerMode,
+}
+
+const fn keycode(key: HotkeyKey) -> u32 {
+    match key {
+        HotkeyKey::A => 30,
+        HotkeyKey::B => 48,
+        HotkeyKey::C => 46,
+        HotkeyKey::D => 32,
+        HotkeyKey::E => 18,
+        HotkeyKey::F => 33,
+        HotkeyKey::G => 34,
+        HotkeyKey::H => 35,
+        HotkeyKey::I => 23,
+        HotkeyKey::J => 36,
+        HotkeyKey::K => 37,
+        HotkeyKey::L => 38,
+        HotkeyKey::M => 50,
+        HotkeyKey::N => 49,
+        HotkeyKey::O => 24,
+        HotkeyKey::P => 25,
+        HotkeyKey::Q => 16,
+        HotkeyKey::R => 19,
+        HotkeyKey::S => 31,
+        HotkeyKey::T => 20,
+        HotkeyKey::U => 22,
+        HotkeyKey::V => 47,
+        HotkeyKey::W => 17,
+        HotkeyKey::X => 45,
+        HotkeyKey::Y => 21,
+        HotkeyKey::Z => 44,
+        HotkeyKey::F1 => 59,
+        HotkeyKey::F2 => 60,
+        HotkeyKey::F3 => 61,
+        HotkeyKey::F4 => 62,
+        HotkeyKey::F5 => 63,
+        HotkeyKey::F6 => 64,
+        HotkeyKey::F7 => 65,
+        HotkeyKey::F8 => 66,
+        HotkeyKey::F9 => 67,
+        HotkeyKey::F10 => 68,
+        HotkeyKey::F11 => 87,
+        HotkeyKey::F12 => 88,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaptureOptions {
     pub keyboard: bool,
@@ -46,6 +125,7 @@ pub struct CaptureOptions {
     pub pointer_mode: PointerMode,
     pub sensitivity: f64,
     pub chord: ReleaseChord,
+    pub hotkeys: Option<Hotkeys>,
     pub inhibit_shortcuts: bool,
     pub auto_delay: Duration,
 }
@@ -58,6 +138,7 @@ impl From<&InputConfig> for CaptureOptions {
             pointer_mode: config.pointer_mode,
             sensitivity: f64::from(config.pointer_sensitivity),
             chord: config.release_chord,
+            hotkeys: config.hotkeys.then(|| Hotkeys::from(config)),
             inhibit_shortcuts: config.inhibit_shortcuts,
             auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
         }
@@ -98,6 +179,7 @@ pub struct CaptureCore {
     held_buttons: BTreeSet<u32>,
     suppressed_keys: BTreeSet<u32>,
     suppressed_buttons: BTreeSet<u32>,
+    actions: Vec<ClientAction>,
 }
 
 impl CaptureCore {
@@ -121,6 +203,7 @@ impl CaptureCore {
             held_buttons: BTreeSet::new(),
             suppressed_keys: BTreeSet::new(),
             suppressed_buttons: BTreeSet::new(),
+            actions: Vec::new(),
         }
     }
 
@@ -138,6 +221,10 @@ impl CaptureCore {
 
     pub fn active_pointer(&self) -> ActivePointer {
         self.active
+    }
+
+    pub fn take_actions(&mut self) -> Vec<ClientAction> {
+        std::mem::take(&mut self.actions)
     }
 
     pub fn wants_pointer_lock(&self) -> bool {
@@ -278,7 +365,17 @@ impl CaptureCore {
             };
         }
 
-        if !self.engaged || !self.options.keyboard {
+        if !self.engaged {
+            return Transition::Unchanged;
+        }
+
+        if pressed && let Some(hotkey) = self.hotkey_for(keycode) {
+            self.run(hotkey);
+
+            return Transition::Unchanged;
+        }
+
+        if !self.options.keyboard {
             return Transition::Unchanged;
         }
 
@@ -368,22 +465,58 @@ impl CaptureCore {
         self.engaged && self.options.pointer && self.active == pointer
     }
 
-    fn completes_chord(&self, keycode: u32) -> bool {
-        let (ctrl, shift, alt) = match self.options.chord {
-            ReleaseChord::CtrlAlt => (true, false, true),
-            ReleaseChord::CtrlShift => (true, true, false),
-            ReleaseChord::AltShift => (false, true, true),
-            ReleaseChord::CtrlAltShift => (true, true, true),
-        };
-        let groups = [(ctrl, CTRL), (shift, SHIFT), (alt, ALT)];
+    fn hotkey_for(&self, keycode: u32) -> Option<Hotkey> {
+        let hotkeys = self.options.hotkeys?;
+        if !self.holds(hotkeys.chord) {
+            return None;
+        }
+
+        match keycode {
+            key if key == hotkeys.fullscreen => {
+                Some(Hotkey::Client(ClientAction::ToggleFullscreen))
+            }
+            key if key == hotkeys.stats => Some(Hotkey::Client(ClientAction::ToggleStats)),
+            key if key == hotkeys.disconnect => Some(Hotkey::Client(ClientAction::Disconnect)),
+            key if key == hotkeys.pointer_mode => Some(Hotkey::CyclePointerMode),
+            _ => None,
+        }
+    }
+
+    fn run(&mut self, hotkey: Hotkey) {
+        match hotkey {
+            Hotkey::Client(action) => {
+                if self.actions.len() < PENDING_ACTION_LIMIT {
+                    self.actions.push(action);
+                }
+            }
+            Hotkey::CyclePointerMode => self.cycle_mode(),
+        }
+    }
+
+    fn holds(&self, modifiers: ChordModifiers) -> bool {
+        let groups = [
+            (modifiers.ctrl, CTRL),
+            (modifiers.shift, SHIFT),
+            (modifiers.alt, ALT),
+        ];
 
         groups
             .iter()
             .filter(|(required, _)| *required)
             .all(|(_, keys)| keys.iter().any(|key| self.down.contains(key)))
-            && groups
-                .iter()
-                .any(|(required, keys)| *required && keys.contains(&keycode))
+    }
+
+    fn completes_chord(&self, keycode: u32) -> bool {
+        let modifiers = self.options.chord.modifiers();
+        let completing = [
+            (modifiers.ctrl, CTRL),
+            (modifiers.shift, SHIFT),
+            (modifiers.alt, ALT),
+        ]
+        .iter()
+        .any(|(required, keys)| *required && keys.contains(&keycode));
+
+        completing && self.holds(modifiers)
     }
 }
 
@@ -392,6 +525,10 @@ mod tests {
     use super::*;
 
     const KEY_A: u32 = 30;
+    const KEY_S: u32 = 31;
+    const KEY_D: u32 = 32;
+    const KEY_F: u32 = 33;
+    const KEY_P: u32 = 25;
     const BTN_LEFT: u32 = 0x110;
 
     fn options() -> CaptureOptions {
@@ -401,6 +538,7 @@ mod tests {
             pointer_mode: PointerMode::Relative,
             sensitivity: 2.0,
             chord: ReleaseChord::CtrlAlt,
+            hotkeys: None,
             inhibit_shortcuts: true,
             auto_delay: Duration::from_millis(100),
         }
@@ -652,10 +790,150 @@ mod tests {
                 pointer_mode: PointerMode::Absolute,
                 sensitivity: 1.5,
                 chord: ReleaseChord::CtrlAltShift,
+                hotkeys: Some(Hotkeys::from(&config)),
                 inhibit_shortcuts: true,
                 auto_delay: Duration::from_millis(250),
             }
         );
+    }
+
+    #[test]
+    fn hotkeys_are_absent_when_the_config_turns_them_off() {
+        let config = InputConfig {
+            hotkeys: false,
+            ..InputConfig::default()
+        };
+
+        assert_eq!(CaptureOptions::from(&config).hotkeys, None);
+    }
+
+    #[test]
+    fn the_default_hotkeys_map_to_evdev_codes() {
+        let hotkeys = Hotkeys::from(&InputConfig::default());
+
+        assert_eq!(hotkeys.fullscreen, KEY_F);
+        assert_eq!(hotkeys.stats, KEY_S);
+        assert_eq!(hotkeys.disconnect, KEY_D);
+        assert_eq!(hotkeys.pointer_mode, KEY_P);
+        assert_eq!(keycode(HotkeyKey::F11), 87);
+        assert_eq!(keycode(HotkeyKey::A), KEY_A);
+    }
+
+    fn hotkey_options() -> CaptureOptions {
+        CaptureOptions {
+            chord: ReleaseChord::CtrlShift,
+            hotkeys: Some(Hotkeys::from(&InputConfig::default())),
+            ..options()
+        }
+    }
+
+    fn hotkey_core() -> CaptureCore {
+        engaged(hotkey_options())
+    }
+
+    #[test]
+    fn a_hotkey_queues_its_action_and_never_reaches_the_host() {
+        let mut core = hotkey_core();
+        let mut out = Vec::new();
+        core.key(KEY_LEFT_CTRL, true, &mut out);
+        core.key(KEY_LEFT_ALT, true, &mut out);
+        out.clear();
+
+        core.key(KEY_F, true, &mut out);
+        core.key(KEY_F, false, &mut out);
+        core.key(KEY_S, true, &mut out);
+        core.key(KEY_D, true, &mut out);
+
+        assert_eq!(out, Vec::new());
+        assert_eq!(
+            core.take_actions(),
+            vec![
+                ClientAction::ToggleFullscreen,
+                ClientAction::ToggleStats,
+                ClientAction::Disconnect,
+            ]
+        );
+        assert_eq!(core.take_actions(), Vec::new());
+        assert!(core.is_engaged());
+    }
+
+    #[test]
+    fn the_pointer_hotkey_cycles_the_mode_inside_the_core() {
+        let mut core = hotkey_core();
+        let mut out = Vec::new();
+        core.key(KEY_RIGHT_CTRL, true, &mut out);
+        core.key(KEY_RIGHT_ALT, true, &mut out);
+
+        core.key(KEY_P, true, &mut out);
+
+        assert_eq!(core.mode(), PointerMode::Auto);
+        assert_eq!(core.take_actions(), Vec::new());
+    }
+
+    #[test]
+    fn without_the_whole_chord_the_key_is_forwarded() {
+        let mut core = hotkey_core();
+        let mut out = Vec::new();
+
+        core.key(KEY_F, true, &mut out);
+        core.key(KEY_F, false, &mut out);
+        core.key(KEY_LEFT_CTRL, true, &mut out);
+        out.clear();
+        core.key(KEY_S, true, &mut out);
+
+        assert_eq!(out, vec![key(KEY_S, true)]);
+        assert_eq!(core.take_actions(), Vec::new());
+    }
+
+    #[test]
+    fn hotkeys_do_nothing_while_released_or_when_turned_off() {
+        let mut released = CaptureCore::new(hotkey_options());
+        let mut off = engaged(CaptureOptions {
+            hotkeys: None,
+            ..hotkey_options()
+        });
+        let mut out = Vec::new();
+
+        for core in [&mut released, &mut off] {
+            core.key(KEY_LEFT_CTRL, true, &mut out);
+            core.key(KEY_LEFT_ALT, true, &mut out);
+            core.key(KEY_F, true, &mut out);
+        }
+
+        assert_eq!(released.take_actions(), Vec::new());
+        assert_eq!(off.take_actions(), Vec::new());
+        assert!(out.contains(&key(KEY_F, true)));
+    }
+
+    #[test]
+    fn hotkeys_work_while_keyboard_forwarding_is_off() {
+        let mut core = engaged(CaptureOptions {
+            keyboard: false,
+            ..hotkey_options()
+        });
+        let mut out = Vec::new();
+
+        core.key(KEY_LEFT_CTRL, true, &mut out);
+        core.key(KEY_LEFT_ALT, true, &mut out);
+        core.key(KEY_S, true, &mut out);
+
+        assert_eq!(core.take_actions(), vec![ClientAction::ToggleStats]);
+        assert_eq!(out, Vec::new());
+    }
+
+    #[test]
+    fn unanswered_actions_stop_queueing_at_the_limit() {
+        let mut core = hotkey_core();
+        let mut out = Vec::new();
+        core.key(KEY_LEFT_CTRL, true, &mut out);
+        core.key(KEY_LEFT_ALT, true, &mut out);
+
+        for _ in 0..PENDING_ACTION_LIMIT * 2 {
+            core.key(KEY_S, true, &mut out);
+            core.key(KEY_S, false, &mut out);
+        }
+
+        assert_eq!(core.take_actions().len(), PENDING_ACTION_LIMIT);
     }
 
     fn auto_core() -> CaptureCore {
