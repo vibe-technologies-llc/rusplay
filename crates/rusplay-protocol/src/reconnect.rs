@@ -36,6 +36,7 @@ impl fmt::Display for PeerId {
 pub enum ReconnectRejection {
     UnknownPeer = 0,
     Authentication = 1,
+    Busy = 2,
 }
 
 impl TryFrom<u8> for ReconnectRejection {
@@ -45,6 +46,7 @@ impl TryFrom<u8> for ReconnectRejection {
         match value {
             0 => Ok(Self::UnknownPeer),
             1 => Ok(Self::Authentication),
+            2 => Ok(Self::Busy),
             unknown => Err(ProtocolError::UnknownReconnectRejection(unknown)),
         }
     }
@@ -250,6 +252,7 @@ mod tests {
         for reason in [
             ReconnectRejection::UnknownPeer,
             ReconnectRejection::Authentication,
+            ReconnectRejection::Busy,
         ] {
             let message = ReconnectMessage::Rejected { attempt: 9, reason };
             let datagram = message.to_datagram().unwrap();

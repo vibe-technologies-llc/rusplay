@@ -1,4 +1,5 @@
 mod batch;
+mod busy;
 mod control;
 mod discovery;
 mod error;
@@ -14,6 +15,7 @@ mod transport;
 
 pub use crate::{
     batch::RecvBatch,
+    busy::busy_reply,
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},
     discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
     error::NetError,

@@ -5,7 +5,7 @@ use std::{
 };
 
 use rusplay_config::NetworkConfig;
-use rusplay_net::{ControlEvent, NetError, RecvBatch, Transport};
+use rusplay_net::{ControlEvent, NetError, RecvBatch, Transport, busy_reply};
 use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
 
 use crate::{HostError, accept::Replay, outbox::ControlOutbox, shared::Shared};
@@ -105,6 +105,8 @@ impl ControlStage {
                 if from == self.links.client {
                     self.last_heard = now;
                     self.route(datagram, &mut events)?;
+                } else if let Some(refusal) = busy_reply(datagram) {
+                    self.links.transport.send_to(&refusal, from).ok();
                 }
             }
             self.links.outbox.channel().poll(now, &mut events);

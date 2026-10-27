@@ -11,6 +11,7 @@ const TAG_REJECTED: u8 = 4;
 pub enum PairingRejection {
     WrongPin = 0,
     Locked = 1,
+    Busy = 2,
 }
 
 impl TryFrom<u8> for PairingRejection {
@@ -20,6 +21,7 @@ impl TryFrom<u8> for PairingRejection {
         match value {
             0 => Ok(Self::WrongPin),
             1 => Ok(Self::Locked),
+            2 => Ok(Self::Busy),
             unknown => Err(ProtocolError::UnknownPairingRejection(unknown)),
         }
     }
@@ -210,6 +212,20 @@ mod tests {
 
             assert_eq!(PairingMessage::from_datagram(&datagram), Ok(message));
             assert!(datagram.len() <= PairingMessage::MAX_ENCODED_LEN);
+        }
+    }
+
+    #[test]
+    fn every_rejection_reason_round_trips() {
+        for reason in [
+            PairingRejection::WrongPin,
+            PairingRejection::Locked,
+            PairingRejection::Busy,
+        ] {
+            let message = PairingMessage::Rejected { attempt: 9, reason };
+            let datagram = message.to_datagram().unwrap();
+
+            assert_eq!(PairingMessage::from_datagram(&datagram), Ok(message));
         }
     }
 

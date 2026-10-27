@@ -144,6 +144,12 @@ paths:
 - Without a session the transport stays plaintext, which is what tests and unpaired development
   use; refusing to stream before pairing is the session layer's policy. Key material is zeroized on
   drop and never printed by `Debug`.
+- Busy host: `busy_reply` turns a pairing `Start` or a reconnect `Hello` into `Rejected(Busy)`
+  under the same attempt id. The host's control stage sends it to any address but the current
+  client's while a session runs, so a second client fails at once with `PairingRejected` or
+  `ReconnectRejected` instead of timing out. The reply is shorter than the request, is sent
+  best effort (a send failure never ends the session) and is never sent to a datagram that is
+  not a first handshake message.
 - Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
   `Start`s, which only denies pairing and never grants access.
 - A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF
@@ -166,7 +172,8 @@ paths:
   `RwLock<PeerStore>` so a forget applies to the next datagram.
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
   `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
-  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`, `Authentication`).
+  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`,
+  `Authentication`, `Busy`).
   Both proofs and both direction keys are HKDF-SHA256 outputs keyed by the secret and salted with
   peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
   secret and freshness from both sides, a reflected message never verifies, and session keys are

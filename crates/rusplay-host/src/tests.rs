@@ -15,13 +15,13 @@ use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer,
 use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_net::{
-    ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
-    ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport,
-    TransportOptions, pair_as_client, reconnect_as_client,
+    ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
+    Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming,
+    Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
-    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
-    StreamKind,
+    ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection, ProtocolVersion,
+    ReconnectRejection, StreamDescription, StreamKind,
 };
 use tempfile::TempDir;
 
@@ -771,6 +771,48 @@ fn an_unknown_client_cannot_reconnect() {
         accepting.join().unwrap(),
         Err(HostError::AcceptTimeout(_))
     ));
+}
+
+#[test]
+fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(400), fake_factory(&bitrate));
+
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let started = client.pump_until(TestClient::has_hello);
+
+    let second = TestClient::bind(fixture.address);
+    let pairing = pair_as_client(
+        &second.transport,
+        fixture.address,
+        &pin(),
+        PairingTiming::from(&network()),
+    );
+    let reconnecting = reconnect_as_client(
+        &second.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(started);
+    assert!(matches!(
+        pairing,
+        Err(NetError::PairingRejected {
+            reason: PairingRejection::Busy
+        })
+    ));
+    assert!(matches!(
+        reconnecting,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::Busy
+        })
+    ));
+    assert!(client.pump_until(|client| client.frames.len() >= 2));
+    stream.stop().unwrap();
 }
 
 #[test]
