@@ -1,11 +1,11 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
 use rusplay_config::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, ReleaseChord};
 
-use crate::InputEvent;
+use crate::{InputEvent, LockState, MAX_TOUCHES, TouchEvent};
 
 const KEY_LEFT_CTRL: u32 = 29;
 const KEY_LEFT_SHIFT: u32 = 42;
@@ -30,14 +30,23 @@ pub struct StreamRegion {
 
 impl StreamRegion {
     fn normalise(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let (x, y) = self.fraction(x, y)?;
+
+        Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
+    }
+
+    fn normalise_inside(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let (x, y) = self.fraction(x, y)?;
+
+        ((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)).then_some((x, y))
+    }
+
+    fn fraction(&self, x: f64, y: f64) -> Option<(f64, f64)> {
         if self.width <= 0.0 || self.height <= 0.0 {
             return None;
         }
 
-        Some((
-            ((x - self.x) / self.width).clamp(0.0, 1.0),
-            ((y - self.y) / self.height).clamp(0.0, 1.0),
-        ))
+        Some(((x - self.x) / self.width, (y - self.y) / self.height))
     }
 }
 
@@ -119,6 +128,7 @@ const fn keycode(key: HotkeyKey) -> u32 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CaptureOptions {
     pub keyboard: bool,
     pub pointer: bool,
@@ -127,6 +137,8 @@ pub struct CaptureOptions {
     pub chord: ReleaseChord,
     pub hotkeys: Option<Hotkeys>,
     pub inhibit_shortcuts: bool,
+    pub sync_locks: bool,
+    pub touch: bool,
     pub auto_delay: Duration,
 }
 
@@ -140,9 +152,15 @@ impl From<&InputConfig> for CaptureOptions {
             chord: config.release_chord,
             hotkeys: config.hotkeys.then(|| Hotkeys::from(config)),
             inhibit_shortcuts: config.inhibit_shortcuts,
+            sync_locks: config.sync_locks,
+            touch: config.touch,
             auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
         }
     }
+}
+
+fn touch_event(slot: u8, event: TouchEvent) -> InputEvent {
+    InputEvent::Touch { slot, event }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +198,10 @@ pub struct CaptureCore {
     suppressed_keys: BTreeSet<u32>,
     suppressed_buttons: BTreeSet<u32>,
     actions: Vec<ClientAction>,
+    locks: Option<LockState>,
+    locks_sent: Option<LockState>,
+    touches: BTreeMap<i32, u8>,
+    suppressed_touches: BTreeSet<i32>,
 }
 
 impl CaptureCore {
@@ -204,6 +226,10 @@ impl CaptureCore {
             suppressed_keys: BTreeSet::new(),
             suppressed_buttons: BTreeSet::new(),
             actions: Vec::new(),
+            locks: None,
+            locks_sent: None,
+            touches: BTreeMap::new(),
+            suppressed_touches: BTreeSet::new(),
         }
     }
 
@@ -344,10 +370,35 @@ impl CaptureCore {
                     pressed: false,
                 }),
         );
+        out.extend(
+            std::mem::take(&mut self.touches)
+                .into_values()
+                .map(|slot| touch_event(slot, TouchEvent::Up)),
+        );
         self.suppressed_keys.clear();
         self.suppressed_buttons.clear();
+        self.suppressed_touches.clear();
+        self.locks_sent = None;
 
         Transition::Released
+    }
+
+    pub fn set_locks(&mut self, locks: LockState, out: &mut Vec<InputEvent>) {
+        self.locks = Some(locks);
+        self.publish_locks(out);
+    }
+
+    pub fn publish_locks(&mut self, out: &mut Vec<InputEvent>) {
+        let forwards = self.engaged && self.options.keyboard && self.options.sync_locks;
+        let Some(locks) = self
+            .locks
+            .filter(|locks| forwards && Some(*locks) != self.locks_sent)
+        else {
+            return;
+        };
+
+        self.locks_sent = Some(locks);
+        out.push(InputEvent::Locks(locks));
     }
 
     pub fn key(&mut self, keycode: u32, pressed: bool, out: &mut Vec<InputEvent>) -> Transition {
@@ -461,6 +512,64 @@ impl CaptureCore {
         out.push(InputEvent::Scroll { dx, dy });
     }
 
+    pub fn touch_down(&mut self, id: i32, x: f64, y: f64, out: &mut Vec<InputEvent>) {
+        if !self.options.touch || self.touches.contains_key(&id) {
+            return;
+        }
+
+        let inside = self
+            .region
+            .and_then(|region| region.normalise_inside(x, y))
+            .filter(|_| x.is_finite() && y.is_finite());
+        let slot = self.free_touch_slot();
+
+        match (self.engaged, inside, slot) {
+            (true, Some((x, y)), Some(slot)) => {
+                self.touches.insert(id, slot);
+                out.push(touch_event(slot, TouchEvent::Down { x, y }));
+            }
+            _ => {
+                self.suppressed_touches.insert(id);
+            }
+        }
+    }
+
+    pub fn touch_motion(&mut self, id: i32, x: f64, y: f64, out: &mut Vec<InputEvent>) {
+        let Some(slot) = self.touches.get(&id).copied() else {
+            return;
+        };
+
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+
+        if let Some((x, y)) = self.region.and_then(|region| region.normalise(x, y)) {
+            out.push(touch_event(slot, TouchEvent::Motion { x, y }));
+        }
+    }
+
+    pub fn touch_up(&mut self, id: i32, out: &mut Vec<InputEvent>) {
+        self.suppressed_touches.remove(&id);
+        if let Some(slot) = self.touches.remove(&id) {
+            out.push(touch_event(slot, TouchEvent::Up));
+        }
+    }
+
+    pub fn touch_cancel(&mut self, out: &mut Vec<InputEvent>) {
+        self.suppressed_touches.clear();
+        out.extend(
+            std::mem::take(&mut self.touches)
+                .into_values()
+                .map(|slot| touch_event(slot, TouchEvent::Cancel)),
+        );
+    }
+
+    fn free_touch_slot(&self) -> Option<u8> {
+        (0u8..)
+            .take(MAX_TOUCHES)
+            .find(|slot| !self.touches.values().any(|taken| taken == slot))
+    }
+
     fn forwards_pointer(&self, pointer: ActivePointer) -> bool {
         self.engaged && self.options.pointer && self.active == pointer
     }
@@ -540,6 +649,8 @@ mod tests {
             chord: ReleaseChord::CtrlAlt,
             hotkeys: None,
             inhibit_shortcuts: true,
+            sync_locks: true,
+            touch: true,
             auto_delay: Duration::from_millis(100),
         }
     }
@@ -634,6 +745,190 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn locked(caps: bool, num: bool) -> LockState {
+        LockState { caps, num }
+    }
+
+    #[test]
+    fn lock_state_is_published_on_engage_and_on_change_but_not_while_released() {
+        let mut core = CaptureCore::new(options());
+        let mut out = Vec::new();
+
+        core.set_locks(locked(true, false), &mut out);
+        assert_eq!(out, Vec::new());
+
+        core.engage();
+        core.publish_locks(&mut out);
+        core.publish_locks(&mut out);
+        core.set_locks(locked(true, false), &mut out);
+        core.set_locks(locked(true, true), &mut out);
+
+        assert_eq!(
+            out,
+            vec![
+                InputEvent::Locks(locked(true, false)),
+                InputEvent::Locks(locked(true, true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn lock_state_is_published_again_after_a_release_and_re_engage() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        core.set_locks(locked(false, true), &mut out);
+        core.release(&mut out);
+        out.clear();
+
+        core.engage();
+        core.publish_locks(&mut out);
+
+        assert_eq!(out, vec![InputEvent::Locks(locked(false, true))]);
+    }
+
+    #[test]
+    fn lock_state_stays_home_when_syncing_or_the_keyboard_is_off() {
+        let mut out = Vec::new();
+        for options in [
+            CaptureOptions {
+                sync_locks: false,
+                ..options()
+            },
+            CaptureOptions {
+                keyboard: false,
+                ..options()
+            },
+        ] {
+            let mut core = engaged(options);
+
+            core.set_locks(locked(true, true), &mut out);
+        }
+
+        assert_eq!(out, Vec::new());
+    }
+
+    fn with_region(options: CaptureOptions) -> CaptureCore {
+        let mut core = CaptureCore::new(options);
+        core.set_region(Some(StreamRegion {
+            x: 100.0,
+            y: 50.0,
+            width: 200.0,
+            height: 100.0,
+        }));
+
+        core
+    }
+
+    fn touch(slot: u8, event: TouchEvent) -> InputEvent {
+        InputEvent::Touch { slot, event }
+    }
+
+    #[test]
+    fn touching_never_engages_and_nothing_is_forwarded_while_released() {
+        let mut core = with_region(options());
+        let mut out = Vec::new();
+
+        core.touch_down(1, 150.0, 100.0, &mut out);
+        core.touch_motion(1, 160.0, 100.0, &mut out);
+        core.touch_up(1, &mut out);
+
+        assert!(!core.is_engaged());
+        assert_eq!(out, Vec::new());
+    }
+
+    #[test]
+    fn touches_map_to_the_lowest_free_slot_and_normalise_through_the_region() {
+        let mut core = with_region(options());
+        core.engage();
+        let mut out = Vec::new();
+
+        core.touch_down(40, 200.0, 100.0, &mut out);
+        core.touch_down(41, 100.0, 50.0, &mut out);
+        core.touch_motion(40, 300.0, 400.0, &mut out);
+        core.touch_up(40, &mut out);
+        core.touch_down(42, 300.0, 150.0, &mut out);
+
+        assert_eq!(
+            out,
+            vec![
+                touch(0, TouchEvent::Down { x: 0.5, y: 0.5 }),
+                touch(1, TouchEvent::Down { x: 0.0, y: 0.0 }),
+                touch(0, TouchEvent::Motion { x: 1.0, y: 1.0 }),
+                touch(0, TouchEvent::Up),
+                touch(0, TouchEvent::Down { x: 1.0, y: 1.0 }),
+            ]
+        );
+    }
+
+    #[test]
+    fn touches_that_began_before_engaging_or_outside_the_picture_stay_swallowed() {
+        let mut core = with_region(options());
+        let mut out = Vec::new();
+        core.touch_down(1, 150.0, 100.0, &mut out);
+        core.engage();
+
+        core.touch_motion(1, 160.0, 100.0, &mut out);
+        core.touch_down(2, 10.0, 10.0, &mut out);
+        core.touch_motion(2, 150.0, 100.0, &mut out);
+        core.touch_up(1, &mut out);
+        core.touch_up(2, &mut out);
+        core.touch_down(1, 150.0, 100.0, &mut out);
+
+        assert_eq!(out, vec![touch(0, TouchEvent::Down { x: 0.25, y: 0.5 })]);
+    }
+
+    #[test]
+    fn releasing_lifts_held_touches_after_keys_and_buttons() {
+        let mut core = with_region(options());
+        core.engage();
+        let mut out = Vec::new();
+        core.key(KEY_A, true, &mut out);
+        core.touch_down(7, 150.0, 100.0, &mut out);
+        out.clear();
+
+        core.release(&mut out);
+
+        assert_eq!(out, vec![key(KEY_A, false), touch(0, TouchEvent::Up)]);
+    }
+
+    #[test]
+    fn a_cancel_cancels_every_held_touch() {
+        let mut core = with_region(options());
+        core.engage();
+        let mut out = Vec::new();
+        core.touch_down(7, 150.0, 100.0, &mut out);
+        core.touch_down(8, 160.0, 100.0, &mut out);
+        out.clear();
+
+        core.touch_cancel(&mut out);
+        core.touch_up(7, &mut out);
+
+        assert_eq!(
+            out,
+            vec![touch(0, TouchEvent::Cancel), touch(1, TouchEvent::Cancel)]
+        );
+    }
+
+    #[test]
+    fn touch_is_ignored_when_switched_off_or_out_of_slots() {
+        let mut off = with_region(CaptureOptions {
+            touch: false,
+            ..options()
+        });
+        off.engage();
+        let mut crowded = with_region(options());
+        crowded.engage();
+        let mut out = Vec::new();
+
+        off.touch_down(1, 150.0, 100.0, &mut out);
+        assert_eq!(out, Vec::new());
+
+        for id in 0..20 {
+            crowded.touch_down(id, 150.0, 100.0, &mut out);
+        }
+        assert_eq!(out.len(), MAX_TOUCHES);
     }
 
     #[test]
@@ -791,6 +1086,8 @@ mod tests {
                 sensitivity: 1.5,
                 chord: ReleaseChord::CtrlAltShift,
                 hotkeys: Some(Hotkeys::from(&config)),
+                sync_locks: true,
+                touch: true,
                 inhibit_shortcuts: true,
                 auto_delay: Duration::from_millis(250),
             }

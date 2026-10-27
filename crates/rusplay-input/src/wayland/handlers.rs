@@ -6,11 +6,12 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
     globals::{BindError, GlobalList, GlobalListContents},
     protocol::{
-        wl_keyboard::{self, KeyState, WlKeyboard},
+        wl_keyboard::{self, KeyState, KeymapFormat, WlKeyboard},
         wl_pointer::{self, Axis, ButtonState, WlPointer},
         wl_registry::WlRegistry,
         wl_seat::{self, Capability, WlSeat},
         wl_surface::WlSurface,
+        wl_touch::{self, WlTouch},
     },
 };
 use wayland_protocols::wp::{
@@ -33,8 +34,9 @@ use wayland_protocols::wp::{
 };
 
 use crate::{
-    InputError, InputEvent,
+    InputError, InputEvent, LockMasks,
     capture::{CaptureCore, Transition},
+    locks::read_keymap,
 };
 
 const SEAT_VERSIONS: std::ops::RangeInclusive<u32> = 1..=8;
@@ -66,6 +68,7 @@ pub(super) struct State {
     seat: WlSeat,
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
+    touch: Option<WlTouch>,
     constraints: Option<ZwpPointerConstraintsV1>,
     relative_manager: Option<ZwpRelativePointerManagerV1>,
     relative: Option<ZwpRelativePointerV1>,
@@ -77,6 +80,7 @@ pub(super) struct State {
     enter_serial: Option<u32>,
     pointer_focused: bool,
     keyboard_focused: bool,
+    lock_masks: LockMasks,
     scroll: ScrollFrame,
 }
 
@@ -130,6 +134,7 @@ impl State {
             seat,
             pointer: None,
             keyboard: None,
+            touch: None,
             constraints,
             relative_manager,
             relative: None,
@@ -141,6 +146,7 @@ impl State {
             enter_serial: None,
             pointer_focused: false,
             keyboard_focused: false,
+            lock_masks: LockMasks::default(),
             scroll: ScrollFrame::default(),
         })
     }
@@ -200,6 +206,9 @@ impl State {
         if let Some(pointer) = self.pointer.take().filter(|pointer| pointer.version() >= 3) {
             pointer.release();
         }
+        if let Some(touch) = self.touch.take().filter(|touch| touch.version() >= 3) {
+            touch.release();
+        }
         if let Some(keyboard) = self
             .keyboard
             .take()
@@ -226,6 +235,7 @@ impl State {
     fn apply(&mut self, transition: Transition) {
         match transition {
             Transition::Engaged => {
+                self.with_core(CaptureCore::publish_locks);
                 self.sync_pointer_lock();
                 self.inhibit_shortcuts();
                 self.hide_cursor();
@@ -374,6 +384,11 @@ impl Dispatch<WlSeat, ()> for State {
         if capabilities.contains(Capability::Keyboard) && state.keyboard.is_none() {
             state.keyboard = Some(seat.get_keyboard(handle, ()));
         }
+
+        let wants_touch = state.core.lock().options().touch;
+        if capabilities.contains(Capability::Touch) && wants_touch && state.touch.is_none() {
+            state.touch = Some(seat.get_touch(handle, ()));
+        }
     }
 }
 
@@ -456,6 +471,18 @@ impl Dispatch<WlKeyboard, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
+            wl_keyboard::Event::Keymap {
+                format: WEnum::Value(KeymapFormat::XkbV1),
+                fd,
+                size,
+            } => {
+                state.lock_masks = read_keymap(&fd, size)
+                    .map_or_else(LockMasks::default, |text| LockMasks::from_keymap(&text));
+            }
+            wl_keyboard::Event::Modifiers { mods_locked, .. } => {
+                let locks = state.lock_masks.locked(mods_locked);
+                state.with_core(|core, out| core.set_locks(locks, out));
+            }
             wl_keyboard::Event::Enter { surface, .. } if surface == state.surface => {
                 state.keyboard_focused = true;
             }
@@ -474,6 +501,33 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.apply(transition);
                 state.sync_pointer_lock();
             }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlTouch, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlTouch,
+        event: wl_touch::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_touch::Event::Down {
+                surface, id, x, y, ..
+            } if surface == state.surface => {
+                state.with_core(|core, out| core.touch_down(id, x, y, out));
+            }
+            wl_touch::Event::Motion { id, x, y, .. } => {
+                state.with_core(|core, out| core.touch_motion(id, x, y, out));
+            }
+            wl_touch::Event::Up { id, .. } => {
+                state.with_core(|core, out| core.touch_up(id, out));
+            }
+            wl_touch::Event::Cancel => state.with_core(CaptureCore::touch_cancel),
             _ => {}
         }
     }

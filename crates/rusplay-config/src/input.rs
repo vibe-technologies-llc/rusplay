@@ -102,6 +102,7 @@ pub enum HotkeyKey {
 pub struct InputConfig {
     pub keyboard: bool,
     pub pointer: bool,
+    pub touch: bool,
     pub gamepads: bool,
     pub max_gamepads: u8,
     pub pointer_mode: PointerMode,
@@ -116,6 +117,7 @@ pub struct InputConfig {
     pub hotkey_disconnect: HotkeyKey,
     pub hotkey_pointer_mode: HotkeyKey,
     pub inhibit_shortcuts: bool,
+    pub sync_locks: bool,
     pub rumble_max_ms: u16,
     pub resend_delay_ms: u16,
     pub snapshot_interval_ms: u16,
@@ -127,6 +129,7 @@ impl Default for InputConfig {
         Self {
             keyboard: true,
             pointer: true,
+            touch: true,
             gamepads: true,
             max_gamepads: 4,
             pointer_mode: PointerMode::default(),
@@ -141,6 +144,7 @@ impl Default for InputConfig {
             hotkey_disconnect: HotkeyKey::D,
             hotkey_pointer_mode: HotkeyKey::P,
             inhibit_shortcuts: true,
+            sync_locks: true,
             rumble_max_ms: 5000,
             resend_delay_ms: 8,
             snapshot_interval_ms: 1000,
@@ -272,6 +276,24 @@ mod tests {
         assert_eq!(config.pointer_mode, PointerMode::Auto);
         assert_eq!(config.pointer_auto_delay_ms, 250);
         assert_eq!(InputConfig::default().pointer_mode, PointerMode::Absolute);
+    }
+
+    #[test]
+    fn touch_ships_on_and_can_be_turned_off() {
+        let default: InputConfig = toml::from_str("").unwrap();
+        let off: InputConfig = toml::from_str("touch = false").unwrap();
+
+        assert!(default.touch);
+        assert!(!off.touch);
+    }
+
+    #[test]
+    fn lock_sync_ships_on_and_can_be_turned_off() {
+        let default: InputConfig = toml::from_str("").unwrap();
+        let off: InputConfig = toml::from_str("sync_locks = false").unwrap();
+
+        assert!(default.sync_locks);
+        assert!(!off.sync_locks);
     }
 
     #[test]

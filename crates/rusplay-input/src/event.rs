@@ -1,3 +1,5 @@
+use crate::LockState;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GamepadButton(pub u16);
 
@@ -46,6 +48,14 @@ pub enum GamepadEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TouchEvent {
+    Down { x: f64, y: f64 },
+    Motion { x: f64, y: f64 },
+    Up,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputEvent {
     Key { keycode: u32, pressed: bool },
     PointerMotion { dx: f64, dy: f64 },
@@ -53,4 +63,6 @@ pub enum InputEvent {
     PointerButton { button: u32, pressed: bool },
     Scroll { dx: f64, dy: f64 },
     Gamepad { slot: u8, event: GamepadEvent },
+    Locks(LockState),
+    Touch { slot: u8, event: TouchEvent },
 }

@@ -8,8 +8,10 @@ paths:
 
 - `InputEvent` is the wire-neutral model: keys by evdev keycode, pointer motion (relative) and
   position (absolute, normalised to the stream), buttons by evdev button code (`BTN_LEFT` is
-  `0x110`), scroll in wheel notches (1.0 is one detent, positive is down and right), and
-  gamepads by slot.
+  `0x110`), scroll in wheel notches (1.0 is one detent, positive is down and right),
+  gamepads by slot, and touches by slot (`Touch { slot, event }`; `TouchEvent` is `Down` and
+  `Motion` with positions normalised to the stream like `PointerAbsolute`, `Up` and `Cancel`;
+  slots are below `MAX_TOUCHES`, 16, and a larger one is `TouchSlotOutOfRange` on decode).
 - `InputError` carries typed data and is not `Copy`. Backend failures are their own variants
   (`Portal { step, source }`, `EiIo`, `EiProtocol`, `Wayland*`, `Uinput*`, `PhysicalGamepad*`),
   never a message string.
@@ -51,12 +53,29 @@ paths:
 - Each device is put in emulating state lazily (`start_emulating` with an increasing sequence)
   and every injected event is followed by its own `frame` with a `CLOCK_MONOTONIC` microsecond
   timestamp. Emulation is stopped when the injector drops.
-- Keys are sent as evdev keycodes, which are layout independent, so the keymap the EIS server
-  offers is never read. The host's own layout decides the symbols.
+- Keys are sent as evdev keycodes, which are layout independent, so the host's own layout decides
+  the symbols. The keymap the EIS server offers is read only for the lock masks below.
+- Lock sync (`input.sync_locks`, default on, needs `input.keyboard`): `inject(InputEvent::Locks)`
+  records the client's Caps and Num Lock state as `LockSync`'s desire instead of translating it.
+  `EiEvent::KeyboardModifiers` reports the server's locked mask, which `LockMasks` (from the
+  device's xkb keymap, read once at `DeviceAdded`) turns into a `LockState`. When the two differ,
+  `sync_locks` taps `KEY_CAPSLOCK` / `KEY_NUMLOCK` (press and release) for the differing locks and
+  consumes the desire; it runs from `service` and right after a `Locks` inject. Nothing is tapped
+  before the first report, within `LOCK_SETTLE` of an injected lock key (the server's report of
+  that key may still be on its way, and a tap would undo it), or again before the report that
+  answers the last tap. Because the desire is consumed, a person pressing Caps Lock on the host
+  is not fought. `LockSync` is pure and unit-tested.
 - Absolute motion maps onto the bounding box of the regions selected by `AbsoluteTarget`:
   `Bounds` takes every region of the device, `Mapping(id)` only those whose mapping id equals the
   id the ScreenCast stream reported (`PortalStream::mapping_id`). The upper edge maps just inside
   the region, because a point on the far edge lies outside it.
+- Touch (`input.touch`, default on): the portal request adds `DeviceType::Touchscreen`
+  (`PortalInputOptions::touch`, `StartedPortal::touch`) and the injector binds `Touch`. A touchscreen
+  device gets the same `AbsoluteMapper` as an absolute pointer, selected by the same
+  `AbsoluteTarget`, and `Capability::Touch` needs both. The slot goes out as the EI touch id. The
+  injector keeps a `TouchSet` of touches it put down and drops a `Down` for a held slot and a
+  motion, up or cancel for one that is not down (libeis may disconnect a client for those); the set
+  is cleared when a touch device pauses or is removed.
 - Scroll goes out as `ei_scroll.scroll_discrete` in value120 units (`notches * 120`), so wheel
   notches reach games as real wheel steps while fractional notches stay high resolution.
 
@@ -163,6 +182,14 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   modifier of the release chord (`HotkeyChordShadowsRelease`), and rejects one key bound to two
   actions (`HotkeyKeyReused`). Function keys are not defaults because Ctrl+Alt+Fn is the compositor's
   VT switch, which no client can inhibit.
+- Touch (`input.touch`): `CaptureCore::touch_down/motion/up/cancel` take the compositor's touch
+  ids and hand out the lowest free slot below `MAX_TOUCHES`, so the wire only ever sees small
+  slots. A touch never engages (unlike a click): a touch that goes down while released, outside the
+  `StreamRegion`, or with every slot taken is swallowed until it lifts, which also covers fingers
+  that were down when the pointer or chord engaged. Positions are normalised through the region
+  and clamped after the down. `release` lifts held touches with `Up` after the keys and buttons,
+  and `wl_touch.cancel` sends `Cancel` for each. `EventCoalescer` keeps only the latest consecutive
+  motion of one slot.
 - Relative mode forwards `relative_pointer` deltas times `input.pointer_sensitivity` as
   `PointerMotion`. Absolute mode maps surface coordinates through the `StreamRegion` (the
   letterboxed picture rectangle in surface coordinates, set by the app) to `0.0..=1.0`, clamped,
@@ -222,8 +249,17 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   `prepare_read` with a 10 ms poll, so it can be stopped. `WaylandTarget` takes the raw pointers
   so `rusplay-input` does not depend on gpui; the app gets them from gpui's raw window handles.
   The connection must outlive the capture: stop or drop it before the window.
-- It makes its own `wl_pointer`, `wl_keyboard` and relative pointer on the shared seat. Keyboard
-  keys arrive as raw evdev codes (layout independent, no xkb); pointer buttons likewise. Events
+- It makes its own `wl_pointer`, `wl_keyboard`, `wl_touch` (only with `input.touch` and a touch
+  seat; downs count only on the target surface) and relative pointer on the shared seat. Keyboard
+  keys arrive as raw evdev codes (layout independent, no xkb library); pointer buttons likewise.
+  Lock state comes from `wl_keyboard.keymap` and `.modifiers`: the keymap text is read
+  (`locks::read_keymap`, a positional read of the fd) only to find which real modifier the
+  `Caps_Lock` and `Num_Lock` keys map to (`LockMasks::from_keymap` scans the `key <..>` blocks for
+  the keysym and the `modifier_map` lines for the key, no xkb parser), falling back to the standard
+  `Lock` (bit 1) and `Mod2` (bit 4) when the keymap is missing or says nothing; `mods_locked` then
+  gives a `LockState`, which `CaptureCore::set_locks` forwards as `InputEvent::Locks` while engaged
+  (also once on every engage, and again only when it changes; a release forgets what was sent).
+  Events
   count only while the pointer or keyboard focus is on the target surface; keyboard leave
   releases. Scroll uses `axis_value120` when the compositor sends it, else `axis` divided by 10
   per notch, flushed on `frame`.
@@ -281,7 +317,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   (default 1000, `0` disables) the client also sends its held state as `StateRecord`s in an
   ordinary datagram of the same sequence, repeated by the next datagram's `previous` section like
   any other. A record decodes through `InputRecord::decode`, which tells events from state by the
-  tag byte (events use 0 to 5, state records 16 to 19). Each state record replaces one whole
+  tag byte (events use 0 to 10, state records 16 to 21). Each state record replaces one whole
   scope, so a snapshot split across datagrams, or a lost half of it, never undoes the other half:
   `Keys` and `Buttons` carry a `KeySet` bitset (96 bytes over evdev codes below 768), `Pads`
   the mask of connected slots (disconnect the others, connect the missing) and one `Pad` per
@@ -292,7 +328,15 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   counts them), so a lost release or press is repaired within one interval and a snapshot that
   agrees with the host injects nothing. State records with a pad slot of 16 or more, or a
   non-finite axis, are malformed. Keys and buttons above evdev code 767 cannot be held-tracked.
-  The record layout changed together with `ProtocolVersion::CURRENT` 10.
+  `Locks` carries one byte, bit 0 Caps Lock and bit 1 Num Lock (any other bit is
+  `WireInvalidLockBits`); `HeldInput` keeps it as `Option<LockState>`, unknown until the client's
+  capture first reports, and a snapshot only names it once known. The same state also travels as
+  `InputEvent::Locks` (tag 6) on every change, so the snapshot is its repair like for keys;
+  `reconcile` turns a differing `Locks` record into that event, and `release_all` leaves locks
+  alone because a lock is not a stuck key. `Touches` carries the `TouchSet` mask of held slots as
+  a `u16`: `reconcile` lifts the held touches the record lacks and never invents a `Down` (the
+  position is gone), so a lost `Up` is repaired. `ProtocolVersion::CURRENT` 16 added the lock and
+  touch records and events.
 - Gamepad `Connected` and `Disconnected` events create and drop the host's virtual pads, so the
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,
@@ -305,6 +349,6 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   `service` drives the injector's connection and `UinputGamepads::poll_rumble` every 4 ms, and
   every `RumbleCommand` leaves as one `ControlMessage::Rumble`. `HeldInput` tracks what the host
   injected successfully (the client's input stage tracks what it sent the same way; keys and
-  buttons are `KeySet` bitsets over evdev codes below 768, pads are `PadState`), so that when the
-  session ends for any reason `HeldInput::release_all` lifts every key and button and disconnects
-  every pad the client left held.
+  buttons are `KeySet` bitsets over evdev codes below 768, pads are `PadState`, touches a
+  `TouchSet`), so that when the session ends for any reason `HeldInput::release_all` lifts every
+  key, button and touch and disconnects every pad the client left held.

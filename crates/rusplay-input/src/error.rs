@@ -12,6 +12,8 @@ pub enum InputError {
     SinkClosed,
     #[error("gamepad slot {0} is outside the supported range")]
     GamepadSlotOutOfRange(u8),
+    #[error("touch slot {0} is outside the supported range")]
+    TouchSlotOutOfRange(u8),
     #[error("gamepad slot {slot} has no rumble effect {id}")]
     RumbleEffectUnknown { slot: u8, id: i64 },
     #[error("a pointer value is not a finite number")]
@@ -26,6 +28,8 @@ pub enum InputError {
     WireUnknownGamepadTag(u8),
     #[error("an encoded boolean is {0}, not 0 or 1")]
     WireInvalidBool(u8),
+    #[error("an encoded lock state has the unknown bits {0:#04x}")]
+    WireInvalidLockBits(u8),
     #[cfg(feature = "libei")]
     #[error("the {step:?} portal call failed")]
     Portal {
@@ -51,6 +55,9 @@ pub enum InputError {
     #[cfg(feature = "libei")]
     #[error("gamepad events are not handled by the libei sink")]
     GamepadUnsupported,
+    #[cfg(feature = "libei")]
+    #[error("a lock state is applied by the injector, not translated to a request")]
+    LocksNotARequest,
     #[cfg(feature = "wayland")]
     #[error("the {object} handle does not name a live wayland object")]
     WaylandObjectInvalid { object: &'static str },

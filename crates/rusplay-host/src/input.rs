@@ -608,7 +608,7 @@ mod tests {
 
         assert_eq!(target.events, vec![key(30, true), key(30, false)]);
         assert_eq!(rig.stats().input_events_repaired, 1);
-        assert_eq!(rig.stats().input_state_records, 3);
+        assert_eq!(rig.stats().input_state_records, 4);
     }
 
     #[test]
