@@ -10,6 +10,7 @@ mod gpu;
 mod handoff;
 mod input;
 mod mailbox;
+mod microphone;
 mod outbox;
 mod pipeline;
 mod portal;
@@ -33,6 +34,7 @@ pub use crate::{
     error::{HostError, Stage},
     gpu::Gpu,
     input::{InputFeed, InputTarget},
+    microphone::MicrophoneOutputFactory,
     portal::{PortalHost, open_portal},
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},

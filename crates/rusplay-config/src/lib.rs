@@ -18,7 +18,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub use crate::{
-    audio::{AudioConfig, FlacConfig, OpusConfig, OpusFrameDuration},
+    audio::{AudioConfig, FlacConfig, MicrophoneConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
     color::{
         ColorConfig, ColorMethod, ColorProcessingConfig, DisplayOutputConfig, DisplayTargetConfig,

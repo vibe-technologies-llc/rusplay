@@ -23,6 +23,10 @@ paths:
   hotspot, then tightly packed RGBA8). It is latest-wins like video, never queued behind frames.
   The receiver cannot ask for a lost image, so the host repeats it every
   `network.cursor_image_repeat_ms`.
+- The client's microphone travels on `StreamKind::Microphone` exactly like host audio: one Opus
+  packet per frame number counting up from 0, through a `Packetizer` (FEC optional, `Fec`
+  datagrams name it in `FecHeader::protects`), reassembled by the host's microphone stage. It is
+  only sent client to host.
 - Input travels on `StreamKind::Input` as `InputPacket`: the header `sequence` counts datagrams
   and the payload is a big-endian `u16` length of the `current` section, the `current` section and
   the `previous` section (the preceding datagram's `current`), each a run of `[len u8][record]`.

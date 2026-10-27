@@ -19,10 +19,10 @@ use pipewire::{
 };
 use rtrb::Consumer;
 use rusplay_config::AudioConfig;
-use rusplay_core::{AudioCodec, ChannelLayout};
+use rusplay_core::ChannelLayout;
 
 use crate::{
-    AudioError, PcmResampler,
+    AudioError, AudioInput, PcmResampler,
     pw_common::{PipewireThread, StartupSender, format_pod_bytes, negotiated_format, node_latency},
     ring::{RingWriter, sample_ring},
 };
@@ -95,17 +95,18 @@ struct CaptureCallbacks {
     channels: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureTarget {
+    #[default]
+    SinkMonitor,
+    Source,
+}
+
 struct CaptureSettings {
     layout: ChannelLayout,
     rate: u32,
     latency_frames: usize,
-}
-
-fn latency_frames(config: &AudioConfig) -> usize {
-    match config.codec {
-        AudioCodec::Opus => config.opus.frame_duration.samples_at(config.sample_rate),
-        AudioCodec::Flac => usize::from(config.flac.block_size),
-    }
+    target: CaptureTarget,
 }
 
 fn run_capture(
@@ -119,12 +120,20 @@ fn run_capture(
     let context = ContextRc::new(&mainloop, None)?;
     let core = context.connect_rc(None)?;
 
-    let mut props = properties! {
-        *keys::MEDIA_TYPE => "Audio",
-        *keys::MEDIA_CATEGORY => "Capture",
-        *keys::MEDIA_ROLE => "Music",
-        *keys::NODE_NAME => "rusplay-capture",
-        *keys::STREAM_CAPTURE_SINK => "true",
+    let mut props = match settings.target {
+        CaptureTarget::SinkMonitor => properties! {
+            *keys::MEDIA_TYPE => "Audio",
+            *keys::MEDIA_CATEGORY => "Capture",
+            *keys::MEDIA_ROLE => "Music",
+            *keys::NODE_NAME => "rusplay-capture",
+            *keys::STREAM_CAPTURE_SINK => "true",
+        },
+        CaptureTarget::Source => properties! {
+            *keys::MEDIA_TYPE => "Audio",
+            *keys::MEDIA_CATEGORY => "Capture",
+            *keys::MEDIA_ROLE => "Communication",
+            *keys::NODE_NAME => "rusplay-microphone-capture",
+        },
     };
     props.insert(
         *keys::NODE_LATENCY,
@@ -211,6 +220,13 @@ fn run_capture(
     Ok(())
 }
 
+fn thread_name(target: CaptureTarget) -> &'static str {
+    match target {
+        CaptureTarget::SinkMonitor => "rusplay-audio-capture",
+        CaptureTarget::Source => "rusplay-microphone-capture",
+    }
+}
+
 pub struct AudioCapture {
     source: SampleSource,
     thread: PipewireThread,
@@ -221,10 +237,15 @@ pub struct AudioCapture {
 
 impl AudioCapture {
     pub fn start(config: &AudioConfig) -> Result<Self, AudioError> {
+        Self::start_from(config, CaptureTarget::SinkMonitor)
+    }
+
+    pub fn start_from(config: &AudioConfig, target: CaptureTarget) -> Result<Self, AudioError> {
         let settings = CaptureSettings {
             layout: config.channels,
             rate: config.sample_rate.hz(),
-            latency_frames: latency_frames(config),
+            latency_frames: config.frame_samples(),
+            target,
         };
         let channels = usize::from(config.channels.channel_count());
 
@@ -241,12 +262,11 @@ impl AudioCapture {
             channels,
         };
 
-        let (thread, native) =
-            PipewireThread::spawn("rusplay-audio-capture", move |quit, startup| {
-                let mut callbacks = callbacks;
-                callbacks.startup = Some(startup);
-                run_capture(&settings, callbacks, quit)
-            })?;
+        let (thread, native) = PipewireThread::spawn(thread_name(target), move |quit, startup| {
+            let mut callbacks = callbacks;
+            callbacks.startup = Some(startup);
+            run_capture(&settings, callbacks, quit)
+        })?;
 
         let resampler = PcmResampler::new(
             native.rate,
@@ -293,6 +313,16 @@ impl AudioCapture {
             }
             thread::park_timeout(deadline - now);
         }
+    }
+}
+
+impl AudioInput for AudioCapture {
+    fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError> {
+        AudioCapture::read_frame(self, frame, timeout)
+    }
+
+    fn overruns(&self) -> u64 {
+        AudioCapture::overruns(self)
     }
 }
 

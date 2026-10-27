@@ -12,9 +12,10 @@ use std::{
 
 use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
 use parking_lot::Mutex;
+use rusplay_audio::AudioError;
 use rusplay_client::{
-    ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame, OutputLight,
-    Pin, PresentedFrame,
+    AudioInput, ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame,
+    OutputLight, Pin, PresentedFrame,
 };
 use rusplay_core::{ColorPrimaries, ColorRange, ColorSpace, Resolution};
 use rusplay_input::{InputEvent, StateRecord};
@@ -28,6 +29,9 @@ const SNAPSHOT_INTERVAL_MS: u16 = 30;
 const AUDIO_PACKETS: u32 = 40;
 const LOST_AUDIO_PACKET: u32 = 12;
 const SAMPLES_PER_PACKET: usize = 240 * 2;
+const MICROPHONE_PACKETS: usize = 20;
+const MICROPHONE_LEVEL: f32 = 0.25;
+const MICROPHONE_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Seen {
@@ -313,6 +317,102 @@ fn audio_is_decoded_and_a_lost_packet_is_concealed() {
     assert_eq!(stats.audio_decode_errors, 0);
     assert_eq!(samples.len(), expected);
     assert!(samples.iter().any(|sample| *sample != 0.0));
+}
+
+struct ConstantMicrophone {
+    next: std::time::Instant,
+}
+
+impl AudioInput for ConstantMicrophone {
+    fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError> {
+        let wait = self
+            .next
+            .saturating_duration_since(std::time::Instant::now());
+        if wait > timeout {
+            std::thread::sleep(timeout);
+            return Ok(false);
+        }
+        std::thread::sleep(wait);
+
+        frame.fill(MICROPHONE_LEVEL);
+        self.next += MICROPHONE_INTERVAL;
+
+        Ok(true)
+    }
+}
+
+fn microphone_config(enabled: bool) -> rusplay_config::Config {
+    let mut config = common::client_config();
+    config.audio.microphone.enabled = enabled;
+    config
+}
+
+#[test]
+fn the_microphone_is_encoded_numbered_and_sent_to_the_host() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(microphone_config(true));
+
+    let stream = common::connect_with_microphone(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+        Box::new(ConstantMicrophone {
+            next: std::time::Instant::now(),
+        }),
+    )
+    .unwrap();
+    let arrived = host.wait_for_microphone(STREAM_TIMEOUT, MICROPHONE_PACKETS);
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    let frames = host.microphone_frames();
+    assert!(arrived);
+    assert!(stats.microphone_packets_sent >= MICROPHONE_PACKETS as u64);
+    assert!(
+        frames
+            .iter()
+            .zip(0..)
+            .all(|(frame, number)| frame.frame == number)
+    );
+    assert!(frames.len() >= MICROPHONE_PACKETS - 1);
+}
+
+#[test]
+fn a_disabled_microphone_sends_nothing() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(microphone_config(false));
+
+    let stream = common::connect_with_microphone(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+        Box::new(ConstantMicrophone {
+            next: std::time::Instant::now(),
+        }),
+    )
+    .unwrap();
+    let arrived = host.wait_for_microphone(Duration::from_millis(300), 1);
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert!(!arrived);
+    assert_eq!(stats.microphone_packets_sent, 0);
 }
 
 #[test]

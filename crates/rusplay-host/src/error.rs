@@ -17,6 +17,7 @@ pub enum Stage {
     Send,
     Control,
     Audio,
+    Microphone,
     Cursor,
     Input,
 }
@@ -29,6 +30,7 @@ impl Stage {
             Self::Send => "send",
             Self::Control => "control",
             Self::Audio => "audio",
+            Self::Microphone => "microphone",
             Self::Cursor => "cursor",
             Self::Input => "input",
         }
@@ -109,6 +111,10 @@ pub enum HostError {
     InputNotCompiled,
     #[error("audio codec {codec} is not compiled into this host")]
     AudioCodecNotCompiled { codec: AudioCodec },
+    #[error(
+        "the client microphone needs the pipewire feature, or audio.microphone.enabled turned off"
+    )]
+    MicrophoneNotCompiled,
     #[error("the {width}x{height} cursor image does not fit the wire format")]
     CursorImageTooLarge { width: u32, height: u32 },
 }

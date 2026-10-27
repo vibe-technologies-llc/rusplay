@@ -13,15 +13,28 @@ use pipewire::{
 };
 use rtrb::Consumer;
 use rusplay_config::AudioConfig;
-use rusplay_core::{AudioCodec, ChannelLayout};
+use rusplay_core::ChannelLayout;
 
 use crate::{
-    AudioError, PcmResampler,
-    pw_common::{PipewireThread, StartupSender, format_pod_bytes, negotiated_format, node_latency},
+    AudioError, AudioOutput, AudioOutputStats, PcmResampler,
+    pw_common::{
+        NegotiatedFormat, PipewireThread, StartupSender, format_pod_bytes, negotiated_format,
+        node_latency,
+    },
     ring::{RingWriter, sample_ring},
 };
 
 const BYTES_PER_SAMPLE: usize = size_of::<f32>();
+const VIRTUAL_SOURCE_NAME: &str = "rusplay-microphone";
+const VIRTUAL_SOURCE_DESCRIPTION: &str = "Rusplay Microphone";
+const VIRTUAL_SOURCE_CLASS: &str = "Audio/Source";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlaybackTarget {
+    #[default]
+    Device,
+    VirtualSource,
+}
 
 #[derive(Debug, Default)]
 struct PlaybackCounters {
@@ -104,19 +117,14 @@ struct PlaybackCallbacks {
     playout: Playout,
     startup: Option<StartupSender>,
     channels: usize,
+    fixed_format: Option<NegotiatedFormat>,
 }
 
 struct PlaybackSettings {
     layout: ChannelLayout,
     rate: u32,
     latency_frames: usize,
-}
-
-fn latency_frames(config: &AudioConfig) -> usize {
-    match config.codec {
-        AudioCodec::Opus => config.opus.frame_duration.samples_at(config.sample_rate),
-        AudioCodec::Flac => usize::from(config.flac.block_size),
-    }
+    target: PlaybackTarget,
 }
 
 fn run_playback(
@@ -130,11 +138,19 @@ fn run_playback(
     let context = ContextRc::new(&mainloop, None)?;
     let core = context.connect_rc(None)?;
 
-    let mut props = properties! {
-        *keys::MEDIA_TYPE => "Audio",
-        *keys::MEDIA_CATEGORY => "Playback",
-        *keys::MEDIA_ROLE => "Game",
-        *keys::NODE_NAME => "rusplay-playback",
+    let mut props = match settings.target {
+        PlaybackTarget::Device => properties! {
+            *keys::MEDIA_TYPE => "Audio",
+            *keys::MEDIA_CATEGORY => "Playback",
+            *keys::MEDIA_ROLE => "Game",
+            *keys::NODE_NAME => "rusplay-playback",
+        },
+        PlaybackTarget::VirtualSource => properties! {
+            *keys::MEDIA_TYPE => "Audio",
+            *keys::MEDIA_CLASS => VIRTUAL_SOURCE_CLASS,
+            *keys::NODE_NAME => VIRTUAL_SOURCE_NAME,
+            *keys::NODE_DESCRIPTION => VIRTUAL_SOURCE_DESCRIPTION,
+        },
     };
     props.insert(
         *keys::NODE_LATENCY,
@@ -163,12 +179,20 @@ fn run_playback(
             };
             let _ = startup.send(outcome);
         })
-        .state_changed(|_, state, _, new| {
-            if let StreamState::Error(reason) = new
-                && let Some(startup) = state.startup.take()
-            {
-                let _ = startup.send(Err(AudioError::PipeWireStream { reason }));
+        .state_changed(|_, state, _, new| match new {
+            StreamState::Error(reason) => {
+                if let Some(startup) = state.startup.take() {
+                    let _ = startup.send(Err(AudioError::PipeWireStream { reason }));
+                }
             }
+            StreamState::Paused | StreamState::Streaming => {
+                if let Some(format) = state.fixed_format
+                    && let Some(startup) = state.startup.take()
+                {
+                    let _ = startup.send(Ok(format));
+                }
+            }
+            _ => {}
         })
         .process(|stream, state| {
             let Some(mut buffer) = stream.dequeue_buffer() else {
@@ -202,18 +226,27 @@ fn run_playback(
     let pod_bytes = format_pod_bytes(settings.layout, settings.rate)?;
     let pod = Pod::from_bytes(&pod_bytes).ok_or(AudioError::PipeWireFormatEncode)?;
 
-    stream.connect(
-        Direction::Output,
-        None,
-        StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
-        &mut [pod],
-    )?;
+    let flags = match settings.target {
+        PlaybackTarget::Device => {
+            StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS
+        }
+        PlaybackTarget::VirtualSource => StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
+    };
+
+    stream.connect(Direction::Output, None, flags, &mut [pod])?;
 
     let loop_handle = mainloop.clone();
     let _quit = quit.attach(mainloop.loop_(), move |()| loop_handle.quit());
 
     mainloop.run();
     Ok(())
+}
+
+fn thread_name(target: PlaybackTarget) -> &'static str {
+    match target {
+        PlaybackTarget::Device => "rusplay-audio-playback",
+        PlaybackTarget::VirtualSource => "rusplay-microphone-source",
+    }
 }
 
 pub struct AudioPlayback {
@@ -228,10 +261,15 @@ pub struct AudioPlayback {
 
 impl AudioPlayback {
     pub fn start(config: &AudioConfig) -> Result<Self, AudioError> {
+        Self::start_to(config, PlaybackTarget::Device)
+    }
+
+    pub fn start_to(config: &AudioConfig, target: PlaybackTarget) -> Result<Self, AudioError> {
         let settings = PlaybackSettings {
             layout: config.channels,
             rate: config.sample_rate.hz(),
-            latency_frames: latency_frames(config),
+            latency_frames: config.frame_samples(),
+            target,
         };
         let channels = usize::from(config.channels.channel_count());
         let target_frames = settings.rate as usize * config.jitter_buffer_ms as usize / 1000;
@@ -240,18 +278,25 @@ impl AudioPlayback {
         let counters = Arc::new(PlaybackCounters::default());
 
         let playout = Playout::new(consumer, channels, target_frames, Arc::clone(&counters));
+        let fixed_format = match target {
+            PlaybackTarget::Device => None,
+            PlaybackTarget::VirtualSource => Some(NegotiatedFormat {
+                rate: settings.rate,
+                channels,
+            }),
+        };
         let callbacks = PlaybackCallbacks {
             playout,
             startup: None,
             channels,
+            fixed_format,
         };
 
-        let (thread, native) =
-            PipewireThread::spawn("rusplay-audio-playback", move |quit, startup| {
-                let mut callbacks = callbacks;
-                callbacks.startup = Some(startup);
-                run_playback(&settings, callbacks, quit)
-            })?;
+        let (thread, native) = PipewireThread::spawn(thread_name(target), move |quit, startup| {
+            let mut callbacks = callbacks;
+            callbacks.startup = Some(startup);
+            run_playback(&settings, callbacks, quit)
+        })?;
 
         let resampler = PcmResampler::new(
             config.sample_rate.hz(),
@@ -305,6 +350,20 @@ impl AudioPlayback {
         self.overflows += dropped as u64;
 
         Ok(dropped)
+    }
+}
+
+impl AudioOutput for AudioPlayback {
+    fn submit(&mut self, pcm: &[f32]) -> Result<usize, AudioError> {
+        AudioPlayback::submit(self, pcm)
+    }
+
+    fn stats(&self) -> AudioOutputStats {
+        AudioOutputStats {
+            underruns: self.underruns(),
+            trims: self.trims(),
+            overflows: self.overflows(),
+        }
     }
 }
 
@@ -480,5 +539,49 @@ mod live_tests {
 
         assert!(peak > 0.4, "captured peak {peak}");
         assert_eq!(playback.native_rate(), config.sample_rate.hz());
+    }
+
+    #[test]
+    #[ignore = "needs a running PipeWire session and PIPEWIRE_NODE=rusplay-microphone"]
+    fn a_virtual_source_is_heard_by_a_source_capture() {
+        use crate::{AudioCapture, CaptureTarget};
+
+        assert_eq!(
+            std::env::var("PIPEWIRE_NODE").as_deref(),
+            Ok(VIRTUAL_SOURCE_NAME),
+            "set PIPEWIRE_NODE=rusplay-microphone so the capture follows the virtual source"
+        );
+
+        let config = AudioConfig::default().microphone_stream();
+        let frame_samples = config.frame_samples();
+
+        let mut playback = AudioPlayback::start_to(&config, PlaybackTarget::VirtualSource).unwrap();
+        let mut capture = AudioCapture::start_from(&config, CaptureTarget::Source).unwrap();
+
+        let mut sent = 0;
+        let mut peak = 0.0f32;
+        let mut heard = vec![0.0; frame_samples];
+        for _ in 0..400 {
+            let frame: Vec<f32> = (0..frame_samples)
+                .map(|_| {
+                    let phase =
+                        TAU * 997.0 * f32::from(u16::try_from(sent % 48_000).unwrap()) / 48_000.0;
+                    sent += 1;
+                    0.5 * phase.sin()
+                })
+                .collect();
+            playback.submit(&frame).unwrap();
+
+            if capture
+                .read_frame(&mut heard, Duration::from_millis(100))
+                .unwrap()
+            {
+                peak = heard
+                    .iter()
+                    .fold(peak, |peak, sample| peak.max(sample.abs()));
+            }
+        }
+
+        assert!(peak > 0.4, "captured peak {peak}");
     }
 }

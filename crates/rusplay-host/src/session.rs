@@ -22,6 +22,7 @@ use crate::{
     cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
     input::{self, InputFeed, InputLinks},
+    microphone::{self, MicrophoneLinks, MicrophoneOutputFactory, default_microphone_output},
     outbox::ControlOutbox,
     pipeline::{GpuPipeline, VideoPipeline},
     send::{self, SendLinks, SendOptions},
@@ -37,6 +38,7 @@ pub struct HostSession {
     transport: Arc<Transport>,
     peers: Arc<RwLock<PeerStore>>,
     audio: Option<AudioSourceFactory>,
+    microphone: Option<MicrophoneOutputFactory>,
     input: Option<Arc<InputFeed>>,
 }
 
@@ -48,6 +50,7 @@ impl fmt::Debug for HostSession {
             .field("transport", &self.transport)
             .field("peers", &self.peers)
             .field("audio", &self.audio.is_some())
+            .field("microphone", &self.microphone.is_some())
             .field("input", &self.input.is_some())
             .finish()
     }
@@ -66,6 +69,7 @@ impl HostSession {
             transport: Arc::new(transport),
             peers: Arc::new(RwLock::new(peers)),
             audio: default_audio_source(),
+            microphone: default_microphone_output(),
             input: None,
         })
     }
@@ -79,6 +83,18 @@ impl HostSession {
     #[must_use]
     pub fn without_audio(mut self) -> Self {
         self.audio = None;
+        self
+    }
+
+    #[must_use]
+    pub fn with_microphone_output(mut self, factory: MicrophoneOutputFactory) -> Self {
+        self.microphone = Some(factory);
+        self
+    }
+
+    #[must_use]
+    pub fn without_microphone(mut self) -> Self {
+        self.microphone = None;
         self
     }
 
@@ -119,6 +135,17 @@ impl HostSession {
         self.serve_with(client, feed, factory)
     }
 
+    fn microphone_factory(&self) -> Result<Option<MicrophoneOutputFactory>, HostError> {
+        if !self.config.audio.microphone.enabled {
+            return Ok(None);
+        }
+
+        self.microphone
+            .clone()
+            .map(Some)
+            .ok_or(HostError::MicrophoneNotCompiled)
+    }
+
     pub(crate) fn serve_with(
         &self,
         client: &Client,
@@ -139,6 +166,9 @@ impl HostSession {
             client.address(),
         ));
         let (input_sender, input_datagrams) = mpsc::channel();
+        let microphone = self.microphone_factory()?;
+        let (microphone_sender, microphone_datagrams) =
+            mpsc::sync_channel(usize::from(self.config.audio.decode_queue_packets));
         let control = ControlStage::new(
             network,
             ControlLinks {
@@ -148,6 +178,7 @@ impl HostSession {
                 replay: client.replay().clone(),
                 outbox: Arc::clone(&outbox),
                 input: self.input.is_some().then_some(input_sender),
+                microphone: microphone.is_some().then_some(microphone_sender),
             },
         );
         stream.spawn(Stage::Control, move || control.run())?;
@@ -190,6 +221,20 @@ impl HostSession {
             stream.spawn_on(Stage::Audio, Some(CODEC_THREAD_STACK_BYTES), move || {
                 audio::run(audio, &factory, &links)
             })?;
+        }
+
+        if let Some(factory) = microphone {
+            let links = MicrophoneLinks {
+                shared: Arc::clone(&shared),
+                datagrams: microphone_datagrams,
+            };
+            let audio = self.config.audio;
+            let network = self.config.network;
+            stream.spawn_on(
+                Stage::Microphone,
+                Some(CODEC_THREAD_STACK_BYTES),
+                move || microphone::run(audio, &network, &factory, &links),
+            )?;
         }
 
         if let Some(subscriber) = feed.cursor_subscriber() {

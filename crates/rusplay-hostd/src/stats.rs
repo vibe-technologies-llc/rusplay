@@ -48,7 +48,7 @@ pub fn summary(stats: &HostStats) -> String {
         line,
         "rtt {rtt}, frames captured {} encoded {} sent {} dropped {} repeated {}, \
          keyframes {} requested {}, datagrams {}, reported lost {}, undeliverable {}, \
-         malformed {} rejected {}, audio {} overruns {}, cursor {}, input packets {} events {}, \
+         malformed {} rejected {}, audio {} overruns {}, microphone {} lost {} underruns {}, cursor {}, input packets {} events {}, \
          rumble {}",
         stats.frames_captured,
         stats.frames_encoded,
@@ -64,6 +64,9 @@ pub fn summary(stats: &HostStats) -> String {
         stats.rejected_datagrams,
         stats.audio_packets_sent,
         stats.audio_overruns,
+        stats.microphone_packets_received,
+        stats.microphone_packets_lost,
+        stats.microphone_underruns,
         stats.cursor_messages_sent,
         stats.input_packets,
         stats.input_events,

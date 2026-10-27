@@ -29,8 +29,10 @@ paths:
   a few milliseconds). `push` accepts any chunk length and appends whatever whole output chunks
   are ready; equal rates copy straight through. Never a C resampler.
 - PipeWire capture (`AudioCapture`, feature `pipewire`) runs the PipeWire main loop on its own
-  thread (`pw_common::PipewireThread`) and connects an input stream with `stream.capture.sink`
-  set, so it follows the default sink's monitor. It asks for 32-bit float at the configured rate
+  thread (`pw_common::PipewireThread`) and connects an input stream. `CaptureTarget::SinkMonitor`
+  (`AudioCapture::start`) sets `stream.capture.sink`, so it follows the default sink's monitor;
+  `CaptureTarget::Source` (`start_from`) leaves it unset with the `Communication` role, so it
+  follows the default source, the microphone. It asks for 32-bit float at the configured rate
   and channel layout, with explicit channel positions (`channel_positions`) and `node.latency`
   set to one codec frame. The `process` callback only converts bytes to `f32` and pushes whole
   frames into an `rtrb` ring (250 ms); a full ring drops the newest frames and counts them in
@@ -42,10 +44,20 @@ paths:
 - Live PipeWire tests are `#[ignore]`d and run by hand with
   `cargo test -p rusplay-audio --all-features -- --ignored`. `PIPEWIRE_NODE=<sink name>` points
   the capture at another sink, which allows a loopback check against a null sink without sound.
+  `PIPEWIRE_NODE=rusplay-microphone` points a `Source` capture at the virtual microphone for the
+  `playback` loopback test.
 - Playback (`AudioPlayback`, feature `pipewire`) mirrors capture: a PipeWire output stream on its
   own thread whose `process` callback (`Playout::render`) reads an `rtrb` ring and never blocks or
   allocates. `submit` writes decoded frames into the ring, through `PcmResampler` if the stream
   negotiated another rate, and counts frames dropped when the ring is full as `overflows`.
+- `AudioPlayback::start_to(config, PlaybackTarget::VirtualSource)` publishes the stream as a
+  PipeWire `Audio/Source` node (`media.class`, `node.name = rusplay-microphone`) instead of
+  autoconnecting to a sink, which is how the host exposes the client's microphone to games. A
+  source node only negotiates once something captures it, so startup completes when the stream
+  reaches `Paused` and treats the requested rate and channels as the format (nothing converts
+  on this side). With no consumer `process` is not called, the ring fills and drops its newest
+  frames (`overflows`); the first callback after a consumer appears trims the backlog down to the
+  jitter floor, so stale audio never plays.
 - The jitter buffer is `audio.jitter_buffer_ms` (default 10, at most 500). The callback outputs
   silence until at least `max(target, one quantum)` frames are queued, then plays. If it runs dry
   it pads the rest of that quantum with silence, counts an `underrun` and re-buffers up to the
@@ -55,9 +67,23 @@ paths:
   PLC (`decode` with an empty packet) for mono and stereo, `recover` rebuilds the lost frame from
   the in-band FEC of the packet that followed. opus-rs's multistream decoder has no loss path, so
   surround and FLAC conceal with silence.
-- The client consumes these through `AudioDecoder` and `AudioPlayback` and owns the loss policy
-  (see `client.md`): it calls `conceal`/`recover` for the frames missing between two received
-  packet numbers and submits the results in order, so the playback buffer sees a gapless stream.
-- The host consumes `AudioCapture` and the encoders from its audio stage (see `host.md`): one
-  codec frame per `read_frame`, one packet per frame, numbered from 0 once the client is
-  streaming.
+- The loss policy is `ConcealingPlayer` (`player.rs`, no PipeWire needed): it tracks the next
+  expected packet number, bridges a gap of `n` frames with `conceal` for the first `n - 1` and
+  `recover` from the arriving packet for the last, produces at most `audio.max_conceal_ms` worth
+  of frames, discards late and duplicate numbers (serial-number arithmetic, so wrap is
+  transparent), replaces a decode error with one concealed frame, and submits the results in
+  order to an `AudioOutput` (`submit`, `stats`; `AudioPlayback` implements it). Its tallies are
+  `PlayerStats`. Both the client's audio stage and the host's microphone stage drive it.
+- `AudioInput` (`read_frame`, `overruns`) is the capture seam the client's microphone stage
+  reads; `AudioCapture` implements it.
+- The client consumes `AudioDecoder`, `AudioPlayback` and `ConcealingPlayer` for the host's audio
+  (see `client.md`). The host consumes `AudioCapture` and the encoders from its audio stage (see
+  `host.md`): one codec frame per `read_frame`, one packet per frame, numbered from 0 once the
+  client is streaming.
+- The microphone (client to host) reuses all of it with the derived config
+  `AudioConfig::microphone_stream`: Opus, mono, `audio.sample_rate`, with the bitrate, frame
+  duration, in-band FEC, jitter buffer and FEC overhead of `audio.microphone`, and the queue and
+  concealment limits of the main audio. The client captures with `CaptureTarget::Source`, encodes
+  and sends on `StreamKind::Microphone`; the host decodes with `ConcealingPlayer` into an
+  `AudioPlayback` on `PlaybackTarget::VirtualSource`. Opus decoding needs the frame duration, so
+  both ends must use the same `audio.microphone.frame_duration`.

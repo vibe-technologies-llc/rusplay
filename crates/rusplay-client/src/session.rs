@@ -10,7 +10,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusplay_audio::CODEC_THREAD_STACK_BYTES;
+use rusplay_audio::{AudioInput, CODEC_THREAD_STACK_BYTES};
 use rusplay_config::{AudioConfig, Config, InputConfig};
 use rusplay_core::Resolution;
 use rusplay_input::{InputEvent, RumbleCommand, gamepad::PhysicalOptions};
@@ -26,6 +26,7 @@ use crate::{
     decode::{self, DecodeLinks},
     display::resolve_target,
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
+    microphone::{self, MicrophoneLinks, default_microphone},
     name::announced_name,
     present::{self, MappingOptions, PresentLinks, PresentOptions, SharedTarget},
     receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
@@ -81,6 +82,7 @@ impl ClientSession {
             gpu,
             Box::new(sink),
             audio::default_audio_output,
+            default_microphone,
         )
     }
 
@@ -92,7 +94,26 @@ impl ClientSession {
         sink: impl FrameSink,
         output: Option<Box<dyn AudioOutput>>,
     ) -> Result<ClientStream, ClientError> {
-        self.connect_stream(host, credentials, gpu, Box::new(sink), |_| Ok(output))
+        self.connect_with_devices(host, credentials, gpu, sink, output, None)
+    }
+
+    pub fn connect_with_devices(
+        &self,
+        host: SocketAddr,
+        credentials: &Credentials,
+        gpu: Gpu,
+        sink: impl FrameSink,
+        output: Option<Box<dyn AudioOutput>>,
+        microphone: Option<Box<dyn AudioInput>>,
+    ) -> Result<ClientStream, ClientError> {
+        self.connect_stream(
+            host,
+            credentials,
+            gpu,
+            Box::new(sink),
+            |_| Ok(output),
+            |_| Ok(microphone),
+        )
     }
 
     fn connect_stream(
@@ -102,6 +123,7 @@ impl ClientSession {
         gpu: Gpu,
         sink: Box<dyn FrameSink>,
         open_audio: impl FnOnce(&AudioConfig) -> Result<Option<Box<dyn AudioOutput>>, ClientError>,
+        open_microphone: impl FnOnce(&AudioConfig) -> Result<Option<Box<dyn AudioInput>>, ClientError>,
     ) -> Result<ClientStream, ClientError> {
         let network = &self.config.network;
         let transport = Transport::bind(
@@ -155,6 +177,16 @@ impl ClientSession {
             Ok(()) => {
                 if self.config.input.gamepads {
                     stream.spawn_gamepads(&self.config.input, rumble_commands)?;
+                }
+                if self.config.audio.microphone.enabled
+                    && let Some(source) = open_microphone(&self.config.audio)?
+                {
+                    stream.spawn_microphone(
+                        &self.config.audio,
+                        source,
+                        Arc::clone(&transport),
+                        host,
+                    )?;
                 }
                 stream.spawn_input(&self.config.input, transport, host, input_events)?;
                 Ok(stream)
@@ -387,6 +419,45 @@ impl ClientStream {
         let stage = InputStage::new(transport, host, timing, links);
 
         self.spawn(Stage::Input, None, move || stage.run())
+    }
+
+    fn spawn_microphone(
+        &mut self,
+        config: &AudioConfig,
+        source: Box<dyn AudioInput>,
+        transport: Arc<Transport>,
+        host: SocketAddr,
+    ) -> Result<(), ClientError> {
+        let (ready, ready_received) = mpsc::channel();
+        let config = *config;
+        let links = MicrophoneLinks {
+            transport,
+            host,
+            ready,
+            stop: Arc::clone(&self.stop),
+            counters: Arc::clone(&self.counters),
+        };
+
+        self.spawn(
+            Stage::Microphone,
+            Some(CODEC_THREAD_STACK_BYTES),
+            move || microphone::run(&config, source, &links),
+        )?;
+
+        match ready_received.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.stop.store(true, Ordering::Relaxed);
+                self.join().ok();
+                Err(error)
+            }
+            Err(_) => {
+                self.stop.store(true, Ordering::Relaxed);
+                Err(self.join().err().unwrap_or(ClientError::StageNotReady {
+                    stage: Stage::Microphone,
+                }))
+            }
+        }
     }
 
     fn spawn_audio(

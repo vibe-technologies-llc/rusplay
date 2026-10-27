@@ -55,7 +55,10 @@ paths:
     `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
-    the audio and cursor stages wait for.
+    the audio and cursor stages wait for. `StreamKind::Microphone` datagrams, and `Fec` datagrams
+    that protect it, are forwarded after `Hello` with `try_send` to the microphone stage's bounded
+    channel (`audio.decode_queue_packets` datagrams; a full channel counts
+    `microphone_packets_dropped`), so the control stage stays the only socket reader.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the
     client's proof of life and which keeps the client's own `HostSilent` timer quiet on a static
     screen. No `Hello` within `network.handshake_timeout_ms` is `HandshakeTimeout`; nothing from
@@ -72,6 +75,15 @@ paths:
     contract `client.md` describes. It shares nothing with the video path but the stop flag, the
     counters and the socket, so a slow or starved source never delays a video frame; a source
     error ends the session like any other stage.
+  - `rusplay-host-microphone` (only when `audio.microphone.enabled`) runs on a
+    `CODEC_THREAD_STACK_BYTES` stack. It opens an Opus decoder and the output from
+    `AudioConfig::microphone_stream`, reassembles the forwarded datagrams (`Reassembler` for
+    `StreamKind::Microphone`, `network.reassembly_timeout_ms`) and feeds each packet to a
+    `rusplay_audio::ConcealingPlayer` whose output is the virtual `Audio/Source` node (see
+    `audio.md`). Loss, late packets, concealment, decode errors, underruns and overflows are the
+    `microphone_*` counters. An output error ends the session like any other stage. Enabled
+    with no output (no `pipewire` feature, or `without_microphone`) fails the session with
+    `MicrophoneNotCompiled`; disabled, the stage never starts and the datagrams are ignored.
   - `rusplay-host-cursor` (only when the feed has a cursor subscriber) drains the feed's
     `Subscriber<CursorUpdate>`, merging updates with `CursorUpdate::absorb`, and sends each change
     as a `CursorMessage` on `StreamKind::Cursor` through a `Packetizer` without FEC. Messages are
@@ -211,6 +223,11 @@ paths:
   the two, or they open the real PipeWire monitor. `FrameSource::cursor_feed` is the matching
   cursor seam (`PipeWireCapture` forwards its `cursor_feed`); `rusplay_capture::latest` builds a
   feed for tests.
+- `MicrophoneOutputFactory` (`Arc<dyn Fn(&AudioConfig) -> Result<Box<dyn AudioOutput>>>`, called
+  on the microphone thread with the derived mono config) is the microphone seam.
+  `HostSession::bind` installs the virtual-source `AudioPlayback` behind the `pipewire` feature
+  and nothing without it; `with_microphone_output` replaces it and `without_microphone` removes
+  it. Tests that enable the microphone must replace it or they publish a real PipeWire node.
 - Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
   `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
   `service(&mut Vec<RumbleCommand>)`) behind a mutex that the session's input stage holds for the
