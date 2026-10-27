@@ -21,7 +21,12 @@ use rusplay_protocol::{
     StreamKind,
 };
 
-use crate::{ClientError, LatestCursor, audio::EncodedAudio, stats::Counters};
+use crate::{
+    ClientError, LatestCursor,
+    audio::EncodedAudio,
+    bitrate::{BitrateController, BitrateSettings, HintOutbox},
+    stats::Counters,
+};
 
 const RECV_BATCH_DATAGRAMS: usize = 64;
 const IDLE_WAKE: Duration = Duration::from_millis(10);
@@ -89,6 +94,12 @@ impl Resync {
     }
 }
 
+#[derive(Debug)]
+struct Adaptation {
+    controller: BitrateController,
+    outbox: HintOutbox,
+}
+
 #[derive(Debug, Default)]
 struct Pending {
     video: Vec<ReassemblyEvent>,
@@ -129,6 +140,7 @@ pub(crate) struct ReceiveStage {
     links: Links,
     handshake_done: bool,
     resync: Resync,
+    adaptation: Option<Adaptation>,
     started: Instant,
     last_heard: Instant,
 }
@@ -138,9 +150,17 @@ impl ReceiveStage {
         transport: Arc<Transport>,
         host: SocketAddr,
         network: &NetworkConfig,
+        bitrate: Option<BitrateSettings>,
         mut links: Links,
     ) -> Self {
         let now = Instant::now();
+        let adaptation = bitrate.map(|settings| {
+            links.counters.set_bitrate_target(settings.ceiling_kbps);
+            Adaptation {
+                controller: BitrateController::new(settings, now),
+                outbox: HintOutbox::default(),
+            }
+        });
         let limits = ReassemblyLimits::from(network);
         let audio = links.audio_queue.take().map(|queue| AudioIngress {
             reassembler: Reassembler::new(StreamKind::Audio, limits),
@@ -164,6 +184,7 @@ impl ReceiveStage {
             links,
             handshake_done: false,
             resync: Resync::default(),
+            adaptation,
             started: now,
             last_heard: now,
         }
@@ -222,6 +243,7 @@ impl ReceiveStage {
             if self.resync.retry_due(now, self.timing.keyframe_interval) {
                 self.send_keyframe_request(now)?;
             }
+            self.adapt_bitrate(now)?;
 
             self.control.flush(&self.transport, self.host)?;
             self.links
@@ -253,6 +275,9 @@ impl ReceiveStage {
                 .as_ref()
                 .and_then(|audio| audio.reassembler.next_timeout()),
             self.resync.next_retry(self.timing.keyframe_interval),
+            self.adaptation
+                .as_ref()
+                .and_then(|adaptation| adaptation.controller.next_deadline(self.control.rtt())),
             Some(self.last_heard + self.timing.peer_timeout),
         ]
         .into_iter()
@@ -354,6 +379,7 @@ impl ReceiveStage {
                 }
                 ReassemblyEvent::FrameLost { frame } => {
                     counters.frames_lost.increment();
+                    self.congested(now);
                     if !self.resync.predates_last_keyframe(frame) {
                         self.request_keyframe(frame, now)?;
                     }
@@ -363,6 +389,7 @@ impl ReceiveStage {
                     count,
                 } => {
                     counters.packets_missing.add(u64::from(count));
+                    self.congested(now);
                     self.report_loss(first_sequence, count, now)?;
                 }
             }
@@ -379,6 +406,7 @@ impl ReceiveStage {
         self.resync.last_frame = Some(frame.frame);
         if skipped > 0 && skipped.cast_signed() > 0 {
             self.links.counters.frames_lost.add(u64::from(skipped));
+            self.congested(now);
             if !frame.keyframe {
                 self.request_keyframe(frame.frame.wrapping_sub(skipped), now)?;
             }
@@ -415,6 +443,7 @@ impl ReceiveStage {
             Ok(()) => Ok(Flow::Continue),
             Err(TrySendError::Full(_)) => {
                 self.links.counters.frames_dropped.increment();
+                self.congested(now);
                 self.request_keyframe(number, now)?;
                 Ok(Flow::Continue)
             }
@@ -466,10 +495,19 @@ impl ReceiveStage {
                     message: ControlMessage::Hello { .. },
                     ..
                 } if !self.handshake_done => return Err(ClientError::HelloUndeliverable),
-                ControlEvent::Undeliverable { .. } => {
+                ControlEvent::Undeliverable { id, .. } => {
                     self.links.counters.control_undeliverable.increment();
+                    if let Some(adaptation) = &mut self.adaptation {
+                        let current = adaptation.controller.target_kbps();
+                        adaptation.outbox.undeliverable(id, current);
+                    }
                 }
-                ControlEvent::Received(_) | ControlEvent::Acked { .. } => {}
+                ControlEvent::Acked { id } => {
+                    if let Some(adaptation) = &mut self.adaptation {
+                        adaptation.outbox.acked(id);
+                    }
+                }
+                ControlEvent::Received(_) => {}
             }
         }
 
@@ -502,11 +540,50 @@ impl ReceiveStage {
     fn drain_feedback(&mut self, now: Instant) -> Result<(), ClientError> {
         while let Ok(feedback) = self.links.feedback.try_recv() {
             match feedback {
-                Feedback::DecodeFailed { frame } => self.request_keyframe(frame, now)?,
+                Feedback::DecodeFailed { frame } => {
+                    self.congested(now);
+                    self.request_keyframe(frame, now)?;
+                }
             }
         }
 
         Ok(())
+    }
+
+    fn congested(&mut self, now: Instant) {
+        let rtt = self.control.rtt();
+        if let Some(adaptation) = &mut self.adaptation
+            && let Some(kbps) = adaptation.controller.congestion(now, rtt)
+        {
+            adaptation.outbox.queue(kbps);
+        }
+    }
+
+    fn adapt_bitrate(&mut self, now: Instant) -> Result<(), ClientError> {
+        let rtt = self.control.rtt();
+        let Some(adaptation) = &mut self.adaptation else {
+            return Ok(());
+        };
+
+        if let Some(kbps) = adaptation.controller.poll(now, rtt) {
+            adaptation.outbox.queue(kbps);
+        }
+        self.links
+            .counters
+            .set_bitrate_target(adaptation.controller.target_kbps());
+
+        let Some(kbps) = adaptation.outbox.ready() else {
+            return Ok(());
+        };
+        match self.control.send(ControlMessage::BitrateHint { kbps }, now) {
+            Ok(id) => {
+                adaptation.outbox.sent(id);
+                self.links.counters.bitrate_hints_sent.increment();
+                Ok(())
+            }
+            Err(NetError::ControlWindowFull { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn request_keyframe(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
@@ -645,7 +722,9 @@ mod tests {
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };
-            let stage = ReceiveStage::new(Arc::new(transport), host_address, &network, links);
+            let bitrate = BitrateSettings::from_config(&network, 80_000);
+            let stage =
+                ReceiveStage::new(Arc::new(transport), host_address, &network, bitrate, links);
             let stage = thread::spawn(move || stage.run());
 
             Self {
@@ -701,6 +780,25 @@ mod tests {
                 .unwrap()
                 .recv_timeout(WAIT)
                 .expect("an audio packet reaches the queue")
+        }
+
+        fn next_control_message(&self) -> Option<ControlMessage> {
+            let deadline = Instant::now() + WAIT;
+            let mut buf = vec![0; usize::from(self.host.mtu())];
+            while Instant::now() < deadline {
+                let Some((len, _)) = self
+                    .host
+                    .recv_from_timeout(&mut buf, Duration::from_millis(10))
+                    .unwrap()
+                else {
+                    continue;
+                };
+                if let Ok(ControlPacket::Message { message, .. }) = ControlPacket::read(&buf[..len])
+                {
+                    return Some(message);
+                }
+            }
+            None
         }
 
         fn wait_until(&self, condition: impl Fn(&Self) -> bool) -> bool {
@@ -784,6 +882,28 @@ mod tests {
         assert_eq!(second.stream, description(8, 1920));
         assert_eq!(*rig.format.lock(), Some(description(8, 1920)));
         assert!(rig.decode.try_recv().is_err());
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn lost_video_sends_a_lower_bitrate_hint() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        assert_eq!(rig.counters.snapshot().bitrate_target_kbps, Some(80_000));
+        rig.describe(0, description(1, 1280));
+        rig.send(&packetizer.packetize(0, true, &payload(64, 0)).unwrap());
+        rig.next_video();
+        packetizer.packetize(1, false, &payload(64, 1)).unwrap();
+        rig.send(&packetizer.packetize(2, false, &payload(64, 2)).unwrap());
+
+        let hint = std::iter::from_fn(|| rig.next_control_message())
+            .find(|message| matches!(message, ControlMessage::BitrateHint { .. }));
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(hint, Some(ControlMessage::BitrateHint { kbps: 60_000 }));
+        assert_eq!(stats.bitrate_hints_sent, 1);
+        assert_eq!(stats.bitrate_target_kbps, Some(60_000));
         assert!(rig.finish().is_ok());
     }
 

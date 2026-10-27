@@ -18,7 +18,7 @@ use crate::{
     accept::accept,
     audio::{self, AudioLinks, AudioSourceFactory, default_audio_source},
     capture,
-    control::{ControlLinks, ControlStage},
+    control::{ControlLinks, ControlStage, HintPolicy},
     cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
     input::{self, InputFeed, InputLinks},
@@ -139,8 +139,15 @@ impl HostSession {
             client.address(),
         ));
         let (input_sender, input_datagrams) = mpsc::channel();
+        let hints = HintPolicy::from_config(&self.config);
+        if hints != HintPolicy::Ignore {
+            shared
+                .counters
+                .set_bitrate_target(self.config.video.bitrate_kbps);
+        }
         let control = ControlStage::new(
             network,
+            hints,
             ControlLinks {
                 shared: Arc::clone(&shared),
                 transport: Arc::clone(&self.transport),

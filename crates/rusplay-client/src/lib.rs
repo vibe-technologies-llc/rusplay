@@ -1,4 +1,5 @@
 mod audio;
+mod bitrate;
 mod color;
 mod cursor;
 mod decode;

@@ -111,6 +111,18 @@ pub enum ConfigError {
         keepalive_ms: u32,
         peer_timeout_ms: u32,
     },
+    #[error("adaptive bitrate floor must be greater than zero")]
+    ZeroAdaptiveBitrateFloor,
+    #[error("adaptive bitrate step must be greater than zero")]
+    ZeroAdaptiveBitrateStep,
+    #[error("adaptive bitrate window must be greater than zero")]
+    ZeroAdaptiveBitrateWindow,
+    #[error("adaptive bitrate backoff {0}% is outside 1..=90%")]
+    AdaptiveBitrateBackoffOutOfRange(u8),
+    #[error("bitrate hint minimum must be greater than zero")]
+    ZeroBitrateHintMin,
+    #[error("bitrate hint minimum {min_kbps} kbps is above its maximum {max_kbps} kbps")]
+    BitrateHintRangeInverted { min_kbps: u32, max_kbps: u32 },
     #[error("decode queue must hold at least one frame")]
     ZeroDecodeQueue,
     #[error("present frame latency {0} is outside 1..=3")]
@@ -189,6 +201,15 @@ impl ConfigError {
             Self::PacingWindowOutOfRange(_) => Some("network.pacing_window_percent"),
             Self::ZeroKeepaliveInterval | Self::KeepaliveNotBelowPeerTimeout { .. } => {
                 Some("network.keepalive_interval_ms")
+            }
+            Self::ZeroAdaptiveBitrateFloor => Some("network.adaptive_bitrate_floor_kbps"),
+            Self::ZeroAdaptiveBitrateStep => Some("network.adaptive_bitrate_step_kbps"),
+            Self::ZeroAdaptiveBitrateWindow => Some("network.adaptive_bitrate_window_ms"),
+            Self::AdaptiveBitrateBackoffOutOfRange(_) => {
+                Some("network.adaptive_bitrate_backoff_percent")
+            }
+            Self::ZeroBitrateHintMin | Self::BitrateHintRangeInverted { .. } => {
+                Some("network.bitrate_hint_min_kbps")
             }
             Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
             Self::PresentFrameLatencyOutOfRange(_) => Some("video.present_frame_latency"),

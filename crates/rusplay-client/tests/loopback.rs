@@ -241,6 +241,7 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
     let stats = settle(stream, &seen, frames - 1);
 
     let seen = seen.lock().clone();
+    let ceiling_kbps = common::client_config().video.bitrate_kbps;
 
     assert!(stats.frames_lost >= 1);
     assert!(stats.keyframe_requests_sent >= 1);
@@ -250,6 +251,11 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
         ControlMessage::RequestKeyframe { frame } if *frame == LOST_FRAME
+    )));
+    assert!(stats.bitrate_hints_sent >= 1);
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
+        message,
+        ControlMessage::BitrateHint { kbps } if *kbps < ceiling_kbps
     )));
 }
 

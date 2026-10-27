@@ -23,6 +23,7 @@ use rusplay_protocol::StreamDescription;
 use crate::{
     AudioOutput, ClientError, ClientStats, DisplayImage, FrameSink, LatestCursor, Stage,
     audio::{self, AudioLinks, EncodedAudio},
+    bitrate::BitrateSettings,
     decode::{self, DecodeLinks},
     display::resolve_target,
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
@@ -147,7 +148,8 @@ impl ClientSession {
             stop: Arc::clone(&stream.stop),
             counters: Arc::clone(&stream.counters),
         };
-        let receive = ReceiveStage::new(Arc::clone(&transport), host, network, links);
+        let bitrate = BitrateSettings::from_config(network, self.config.video.bitrate_kbps);
+        let receive = ReceiveStage::new(Arc::clone(&transport), host, network, bitrate, links);
         stream.spawn(Stage::Receive, None, move || receive.run())?;
 
         let timeout = Duration::from_millis(u64::from(network.handshake_timeout_ms));

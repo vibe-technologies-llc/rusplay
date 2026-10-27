@@ -116,6 +116,19 @@ impl Default for VideoEncoderConfig {
 }
 
 impl VideoEncoderConfig {
+    pub const fn is_constant_quality(&self) -> bool {
+        matches!(
+            self,
+            Self::Vaapi(VaapiConfig {
+                rate_control: RateControl::ConstantQuality { .. },
+                ..
+            }) | Self::Nvenc(NvencConfig {
+                rate_control: RateControl::ConstantQuality { .. },
+                ..
+            })
+        )
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
             Self::Vaapi(vaapi) => vaapi.rate_control.validate(),

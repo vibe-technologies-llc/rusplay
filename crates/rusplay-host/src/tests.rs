@@ -12,7 +12,7 @@ use std::{
 };
 
 use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
-use rusplay_config::{Config, NetworkConfig};
+use rusplay_config::{Config, NetworkConfig, RateControl, VaapiConfig, VideoEncoderConfig};
 use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
@@ -641,9 +641,64 @@ fn a_bitrate_hint_reaches_the_encoder() {
     let (_, stream) = serving.join().unwrap().unwrap();
     client.send(ControlMessage::BitrateHint { kbps: 12_345 });
     let applied = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 12_345);
+    let stats = stream.stats();
 
     assert!(applied);
-    assert_eq!(stream.stats().bitrate_changes, 1);
+    assert_eq!(stats.bitrate_changes, 1);
+    assert_eq!(stats.bitrate_hints_clamped, 0);
+    assert_eq!(stats.bitrate_target_kbps, Some(12_345));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn bitrate_hints_are_clamped_to_the_configured_range() {
+    let mut config = host_config();
+    config.network.bitrate_hint_min_kbps = 5_000;
+    config.network.bitrate_hint_max_kbps = 40_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert_eq!(stream.stats().bitrate_target_kbps, Some(80_000));
+    client.send(ControlMessage::BitrateHint { kbps: 1 });
+    let floored = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 5_000);
+    client.send(ControlMessage::BitrateHint { kbps: u32::MAX });
+    let capped = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 40_000);
+    let stats = stream.stats();
+
+    assert!(floored);
+    assert!(capped);
+    assert_eq!(stats.bitrate_hints_clamped, 2);
+    assert_eq!(stats.bitrate_target_kbps, Some(40_000));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn bitrate_hints_are_ignored_under_constant_quality() {
+    let mut config = host_config();
+    config.video.encoder = VideoEncoderConfig::Vaapi(VaapiConfig {
+        rate_control: RateControl::DEFAULT_CONSTANT_QUALITY,
+        ..VaapiConfig::default()
+    });
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::BitrateHint { kbps: 12_345 });
+    let counted = client.pump_until(|_| stream.stats().bitrate_hints_ignored == 1);
+    client.pump(Duration::from_millis(50), |_| false);
+    let stats = stream.stats();
+
+    assert!(counted);
+    assert_eq!(bitrate.load(Ordering::Relaxed), 0);
+    assert_eq!(stats.bitrate_changes, 0);
+    assert_eq!(stats.bitrate_target_kbps, None);
     stream.stop().unwrap();
 }
 
