@@ -1,6 +1,7 @@
 mod accept;
 mod audio;
 mod capture;
+mod clock;
 mod control;
 mod cursor;
 mod datagrams;

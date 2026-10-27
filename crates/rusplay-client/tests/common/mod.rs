@@ -30,7 +30,7 @@ use rusplay_net::{
 };
 use rusplay_protocol::{
     ControlMessage, CursorMessage, InputAdmission, InputPacket, InputSequence, PacketHeader,
-    ProtocolVersion, StreamDescription, StreamKind,
+    ProtocolVersion, StreamDescription, StreamKind, VideoFrameHeader,
 };
 
 pub const PIN: &str = "482916";
@@ -48,6 +48,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1);
 const FEC_DATA_SHARDS: u8 = 32;
 const HOST_PAIRING_TIMEOUT_MS: u32 = 3_000;
 const GOODBYE_LINGER: Duration = Duration::from_millis(200);
+pub const HOST_CLOCK_SKEW: Duration = Duration::from_secs(3_600);
 
 pub fn gpu() -> Option<Gpu> {
     static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
@@ -380,6 +381,42 @@ fn gate_open(options: &HostOptions) -> bool {
         .is_none_or(|gate| gate.load(Ordering::Acquire))
 }
 
+fn answer_ping(control: &mut ControlChannel, sent_micros: u64, host_micros: u64) {
+    let pong = ControlMessage::ClockPong {
+        sent_micros,
+        host_micros,
+    };
+    control.send(pong, Instant::now()).ok();
+}
+
+fn send_datagrams(
+    transport: &Transport,
+    client: SocketAddr,
+    datagrams: &[Vec<u8>],
+    frame: u32,
+    drop: &DropRule,
+) {
+    let mut data_index = 0;
+    let mut parity_index = 0;
+    for datagram in datagrams {
+        let parity = PacketHeader::read(datagram).unwrap().stream == StreamKind::Fec;
+        let index = if parity {
+            &mut parity_index
+        } else {
+            &mut data_index
+        };
+        let outgoing = Outgoing {
+            frame,
+            index: *index,
+            parity,
+        };
+        *index += 1;
+        if !drop(outgoing) {
+            transport.send_to(datagram, client).unwrap();
+        }
+    }
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
@@ -414,6 +451,9 @@ fn serve(
     let mut next_send = Instant::now();
     let mut finished_at: Option<Instant> = None;
     let mut live = false;
+    let started = Instant::now();
+    let host_micros = || u64::try_from((started.elapsed() + HOST_CLOCK_SKEW).as_micros()).unwrap();
+    let mut payload = Vec::new();
 
     while !stop.load(Ordering::Relaxed) {
         if let Ok(Some((len, from))) = transport.recv_from_timeout(&mut buf, POLL_INTERVAL)
@@ -442,6 +482,9 @@ fn serve(
                     streaming = true;
                 }
                 ControlMessage::RequestKeyframe { .. } => fixture_index = 0,
+                ControlMessage::ClockPing { sent_micros } => {
+                    answer_ping(&mut control, sent_micros, host_micros());
+                }
                 _ => {}
             }
         }
@@ -453,28 +496,16 @@ fn serve(
 
         if live && next_frame < options.frames && Instant::now() >= next_send {
             let keyframe = fixture_index == 0;
-            let datagrams = packetizer
-                .packetize(next_frame, keyframe, &fixture[fixture_index])
-                .unwrap();
-            let mut data_index = 0;
-            let mut parity_index = 0;
-            for datagram in &datagrams {
-                let parity = PacketHeader::read(datagram).unwrap().stream == StreamKind::Fec;
-                let index = if parity {
-                    &mut parity_index
-                } else {
-                    &mut data_index
-                };
-                let outgoing = Outgoing {
-                    frame: next_frame,
-                    index: *index,
-                    parity,
-                };
-                *index += 1;
-                if !(options.drop)(outgoing) {
-                    transport.send_to(datagram, client).unwrap();
-                }
+            payload.clear();
+            VideoFrameHeader {
+                captured_micros: host_micros(),
             }
+            .write(&mut payload);
+            payload.extend_from_slice(&fixture[fixture_index]);
+            let datagrams = packetizer
+                .packetize(next_frame, keyframe, &payload)
+                .unwrap();
+            send_datagrams(transport, client, &datagrams, next_frame, &options.drop);
 
             next_frame += 1;
             fixture_index = (fixture_index + 1) % fixture.len();

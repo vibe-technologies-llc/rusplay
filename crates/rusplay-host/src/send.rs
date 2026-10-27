@@ -8,7 +8,7 @@ use std::{
 };
 
 use rusplay_net::{FecScheme, Pacer, Packetizer, Transport};
-use rusplay_protocol::StreamKind;
+use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
 use crate::{HostError, encode::Outgoing, shared::Shared};
 
@@ -45,9 +45,13 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
         options.fec,
     )?;
 
+    let mut payload = Vec::new();
+
     while !links.shared.stopped() {
         match links.queue.recv_timeout(IDLE_WAKE) {
-            Ok(outgoing) => send_frame(&mut packetizer, options, &outgoing, links)?,
+            Ok(outgoing) => {
+                send_frame(&mut packetizer, &mut payload, options, &outgoing, links)?;
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -58,15 +62,18 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
 fn send_frame(
     packetizer: &mut Packetizer,
+    payload: &mut Vec<u8>,
     options: SendOptions,
     outgoing: &Outgoing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
-    let datagrams = packetizer.packetize(
-        outgoing.number,
-        outgoing.frame.keyframe,
-        &outgoing.frame.data,
-    )?;
+    payload.clear();
+    VideoFrameHeader {
+        captured_micros: outgoing.captured_micros,
+    }
+    .write(payload);
+    payload.extend_from_slice(&outgoing.frame.data);
+    let datagrams = packetizer.packetize(outgoing.number, outgoing.frame.keyframe, payload)?;
 
     match options.pacing_window {
         Some(window) => send_paced(&datagrams, window, links)?,

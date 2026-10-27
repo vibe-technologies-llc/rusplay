@@ -22,6 +22,7 @@ use rusplay_net::{
 use rusplay_protocol::{
     ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
     ProtocolVersion, ReconnectMessage, ReconnectRejection, StreamDescription, StreamKind,
+    VideoFrameHeader,
 };
 use tempfile::TempDir;
 
@@ -256,6 +257,7 @@ struct TestClient {
     audio: Reassembler,
     cursor: Reassembler,
     frames: Vec<ReceivedFrame>,
+    captures: Vec<u64>,
     audio_packets: Vec<ReassembledFrame>,
     cursor_messages: Vec<CursorMessage>,
     messages: Vec<ControlMessage>,
@@ -280,6 +282,7 @@ impl TestClient {
             audio: Reassembler::new(StreamKind::Audio, ReassemblyLimits::from(&network)),
             cursor: Reassembler::new(StreamKind::Cursor, ReassemblyLimits::from(&network)),
             frames: Vec::new(),
+            captures: Vec::new(),
             audio_packets: Vec::new(),
             cursor_messages: Vec::new(),
             messages: Vec::new(),
@@ -359,10 +362,12 @@ impl TestClient {
 
             for event in events.drain(..) {
                 if let ReassemblyEvent::Frame(frame) = event {
+                    let (header, body) = VideoFrameHeader::parse(&frame.data).unwrap();
+                    self.captures.push(header.captured_micros);
                     self.frames.push(ReceivedFrame {
                         number: frame.frame,
                         keyframe: frame.keyframe,
-                        fill: frame.data[0],
+                        fill: body[0],
                     });
                 }
             }
@@ -527,6 +532,49 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     );
     assert!(stats.frames_sent >= 4);
     assert!(stats.keyframes_sent <= 1 + stats.frames_dropped);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn every_frame_carries_the_stream_time_it_was_captured_at() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let received = client.pump_until(|client| client.captures.len() >= 5);
+
+    assert!(received);
+    assert!(client.captures.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(client.captures.last() > client.captures.first());
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_clock_ping_is_answered_with_the_host_stream_time() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::ClockPing { sent_micros: 42 });
+    let answered = client.pump_until(|client| {
+        client.messages.iter().any(|message| {
+            matches!(
+                message,
+                ControlMessage::ClockPong {
+                    sent_micros: 42,
+                    host_micros
+                } if *host_micros > 0
+            )
+        })
+    });
+
+    assert!(answered);
     stream.stop().unwrap();
 }
 

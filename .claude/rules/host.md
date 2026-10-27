@@ -42,7 +42,10 @@ paths:
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
-    `next_frame` with a 20 ms timeout so it sees the stop flag. It first re-offers the feed's
+    `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
+    session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels
+    with the frame through the mailbox and `Outgoing` to the send stage; a keyframe repeat is
+    stamped when it is produced. It first re-offers the feed's
     retained frame, so a client joining a static screen still gets a picture.
   - `rusplay-host-encode` builds its `VideoPipeline` on its own thread (the encoder is opened
     there) and waits on the mailbox. The mailbox is latest-wins: a newer frame replaces an
@@ -57,7 +60,8 @@ paths:
     description reaches the client ahead of the keyframe it describes. A full control window
     leaves the announcement pending and the control stage sends it on its next pass; an
     undeliverable announcement that is still the latest is sent again.
-  - `rusplay-host-send` owns the video `Packetizer` (created after the keys are installed, FEC
+  - `rusplay-host-send` prefixes each encoded frame with its `VideoFrameHeader` (one reused
+    scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
     `network.pacing_window_percent` of the frame interval in bursts at least 250 µs apart, so a
@@ -65,7 +69,8 @@ paths:
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     answers the client's `Hello` with its own (another version is `VersionMismatch`, after a
     `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
-    the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
+    the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
+    `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
     the audio and cursor stages wait for.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the

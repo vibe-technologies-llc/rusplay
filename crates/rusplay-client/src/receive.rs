@@ -18,10 +18,10 @@ use rusplay_net::{
 };
 use rusplay_protocol::{
     ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
-    StreamKind,
+    StreamKind, VideoFrameHeader,
 };
 
-use crate::{ClientError, LatestCursor, audio::EncodedAudio, stats::Counters};
+use crate::{ClientError, LatestCursor, audio::EncodedAudio, clock::ClockSync, stats::Counters};
 
 const RECV_BATCH_DATAGRAMS: usize = 64;
 const IDLE_WAKE: Duration = Duration::from_millis(10);
@@ -31,6 +31,7 @@ pub(crate) struct EncodedVideo {
     pub frame: EncodedFrame,
     pub number: u32,
     pub stream: StreamDescription,
+    pub captured_micros: u64,
     pub received_at: Instant,
 }
 
@@ -129,7 +130,7 @@ pub(crate) struct ReceiveStage {
     links: Links,
     handshake_done: bool,
     resync: Resync,
-    started: Instant,
+    clock_sync: ClockSync,
     last_heard: Instant,
 }
 
@@ -164,7 +165,7 @@ impl ReceiveStage {
             links,
             handshake_done: false,
             resync: Resync::default(),
-            started: now,
+            clock_sync: ClockSync::new(network.clock_sync_interval_ms, now),
             last_heard: now,
         }
     }
@@ -212,13 +213,14 @@ impl ReceiveStage {
 
             self.handle_audio(&mut pending.audio);
             self.handle_cursor(&mut pending.cursor);
-            let control = self.handle_control(&mut pending.control)?;
+            let control = self.handle_control(&mut pending.control, now)?;
             let reassembly = self.handle_reassembly(&mut pending.video, now)?;
             if reassembly == Flow::Ended || control == Flow::Ended {
                 return Ok(());
             }
 
             self.drain_feedback(now)?;
+            self.send_clock_ping(now)?;
             if self.resync.retry_due(now, self.timing.keyframe_interval) {
                 self.send_keyframe_request(now)?;
             }
@@ -253,6 +255,9 @@ impl ReceiveStage {
                 .as_ref()
                 .and_then(|audio| audio.reassembler.next_timeout()),
             self.resync.next_retry(self.timing.keyframe_interval),
+            self.handshake_done
+                .then(|| self.clock_sync.next_ping())
+                .flatten(),
             Some(self.last_heard + self.timing.peer_timeout),
         ]
         .into_iter()
@@ -399,15 +404,34 @@ impl ReceiveStage {
         }
 
         let number = frame.frame;
+        let Ok((header, _)) = VideoFrameHeader::parse(&frame.data) else {
+            self.links.counters.malformed_datagrams.increment();
+            self.request_keyframe(number, now)?;
+            return Ok(Flow::Continue);
+        };
+        let captured_micros = header.captured_micros;
+        let mut data = frame.data;
+        data.drain(..VideoFrameHeader::SIZE);
+
+        if let Some(latency) = self
+            .links
+            .counters
+            .clock
+            .since_capture(captured_micros, now)
+        {
+            self.links.counters.capture_to_receive.record(latency);
+        }
+
         let video = EncodedVideo {
             frame: EncodedFrame {
                 codec: stream.codec,
-                timestamp: timestamp_since(self.started, now),
+                timestamp: Timestamp::from_micros(captured_micros),
                 keyframe: frame.keyframe,
-                data: frame.data,
+                data,
             },
             number,
             stream,
+            captured_micros,
             received_at: now,
         };
 
@@ -422,7 +446,11 @@ impl ReceiveStage {
         }
     }
 
-    fn handle_control(&mut self, events: &mut Vec<ControlEvent>) -> Result<Flow, ClientError> {
+    fn handle_control(
+        &mut self,
+        events: &mut Vec<ControlEvent>,
+        now: Instant,
+    ) -> Result<Flow, ClientError> {
         let mut flow = Flow::Continue;
 
         for event in events.drain(..) {
@@ -442,6 +470,10 @@ impl ReceiveStage {
                 ControlEvent::Received(ControlMessage::StreamFormat(description)) => {
                     self.describe(description);
                 }
+                ControlEvent::Received(ControlMessage::ClockPong {
+                    sent_micros,
+                    host_micros,
+                }) => self.record_clock(sent_micros, host_micros, now),
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
                 ControlEvent::Received(ControlMessage::Rumble {
                     slot,
@@ -474,6 +506,33 @@ impl ReceiveStage {
         }
 
         Ok(flow)
+    }
+
+    fn send_clock_ping(&mut self, now: Instant) -> Result<(), ClientError> {
+        if !self.handshake_done || !self.clock_sync.ping_due(now) {
+            return Ok(());
+        }
+
+        self.clock_sync.pinged(now);
+        let sent_micros = self.links.counters.clock.local_micros(now).unsigned_abs();
+        match self
+            .control
+            .send(ControlMessage::ClockPing { sent_micros }, now)
+        {
+            Ok(_) | Err(NetError::ControlWindowFull { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn record_clock(&mut self, sent_micros: u64, host_micros: u64, now: Instant) {
+        let clock = &self.links.counters.clock;
+        let (Ok(sent), Ok(host)) = (i64::try_from(sent_micros), i64::try_from(host_micros)) else {
+            return;
+        };
+
+        if let Some(offset) = self.clock_sync.record(sent, host, clock.local_micros(now)) {
+            clock.set_offset(offset);
+        }
     }
 
     fn describe(&mut self, description: StreamDescription) {
@@ -570,12 +629,6 @@ impl ReceiveStage {
             self.control.flush(&self.transport, self.host).ok();
         }
     }
-}
-
-fn timestamp_since(started: Instant, now: Instant) -> Timestamp {
-    let micros = now.saturating_duration_since(started).as_micros();
-
-    Timestamp::from_micros(u64::try_from(micros).unwrap_or(u64::MAX))
 }
 
 #[cfg(test)]
@@ -735,6 +788,13 @@ mod tests {
             .collect()
     }
 
+    fn video_frame(captured_micros: u64, len: usize, seed: u8) -> Vec<u8> {
+        let mut frame = Vec::new();
+        VideoFrameHeader { captured_micros }.write(&mut frame);
+        frame.extend(payload(len, seed));
+        frame
+    }
+
     fn cursor_bytes(message: &CursorMessage) -> Vec<u8> {
         let mut bytes = Vec::new();
         message.encode(&mut bytes).unwrap();
@@ -766,16 +826,28 @@ mod tests {
         let rig = Rig::start(None);
         let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
 
-        rig.send(&packetizer.packetize(0, true, &payload(64, 0)).unwrap());
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(0, 64, 0))
+                .unwrap(),
+        );
         assert!(rig.wait_until(|rig| rig.counters.snapshot().frames_skipped == 1));
         rig.describe(0, description(7, 1280));
         assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 1));
-        rig.send(&packetizer.packetize(1, true, &payload(64, 1)).unwrap());
+        rig.send(
+            &packetizer
+                .packetize(1, true, &video_frame(1_000, 64, 1))
+                .unwrap(),
+        );
         let first = rig.next_video();
         rig.describe(1, description(6, 640));
         rig.describe(2, description(8, 1920));
         assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 2));
-        rig.send(&packetizer.packetize(2, false, &payload(64, 2)).unwrap());
+        rig.send(
+            &packetizer
+                .packetize(2, false, &video_frame(2_000, 64, 2))
+                .unwrap(),
+        );
         let second = rig.next_video();
 
         assert_eq!(first.number, 1);
@@ -784,6 +856,57 @@ mod tests {
         assert_eq!(second.stream, description(8, 1920));
         assert_eq!(*rig.format.lock(), Some(description(8, 1920)));
         assert!(rig.decode.try_recv().is_err());
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn video_frames_carry_their_capture_time_and_lose_the_header() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(123_456, 64, 3))
+                .unwrap(),
+        );
+        let video = rig.next_video();
+
+        assert_eq!(video.captured_micros, 123_456);
+        assert_eq!(video.frame.timestamp, Timestamp::from_micros(123_456));
+        assert_eq!(video.frame.data, payload(64, 3));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_video_frame_too_short_for_its_header_is_malformed_and_asks_for_a_keyframe() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.send(&packetizer.packetize(0, true, &[1, 2, 3]).unwrap());
+
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().malformed_datagrams == 1));
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().keyframe_requests_sent == 1));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_clock_pong_sets_the_host_clock_offset() {
+        let rig = Rig::start(None);
+        let pong = ControlPacket::Message {
+            id: 0,
+            message: ControlMessage::ClockPong {
+                sent_micros: 0,
+                host_micros: 5_000_000,
+            },
+        };
+
+        rig.send(&[pong.to_datagram().unwrap()]);
+
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().clock_offset_micros.is_some()));
+        let offset = rig.counters.snapshot().clock_offset_micros.unwrap();
+        assert!((4_000_000..=5_000_000).contains(&offset));
         assert!(rig.finish().is_ok());
     }
 
@@ -803,7 +926,11 @@ mod tests {
         rig.describe(2, av1);
         assert!(matches!(rig.next_input(), DecodeInput::Open(Codec::Av1)));
 
-        rig.send(&packetizer.packetize(0, true, &payload(64, 0)).unwrap());
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(0, 64, 0))
+                .unwrap(),
+        );
         assert!(matches!(rig.next_input(), DecodeInput::Video(_)));
         assert!(rig.decode.try_recv().is_err());
         assert!(rig.finish().is_ok());

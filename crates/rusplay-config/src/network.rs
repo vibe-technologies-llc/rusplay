@@ -38,6 +38,7 @@ pub struct NetworkConfig {
     pub keyframe_request_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
     pub stats_log_interval_ms: u32,
+    pub clock_sync_interval_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -66,6 +67,7 @@ impl Default for NetworkConfig {
             keyframe_request_interval_ms: 100,
             cursor_image_repeat_ms: 1_000,
             stats_log_interval_ms: 10_000,
+            clock_sync_interval_ms: 1_000,
         }
     }
 }
@@ -206,6 +208,17 @@ mod tests {
                 peer_timeout_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn clock_sync_defaults_to_one_second_and_zero_turns_it_off() {
+        let off = NetworkConfig {
+            clock_sync_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().clock_sync_interval_ms, 1_000);
+        assert!(off.validate().is_ok());
     }
 
     #[test]

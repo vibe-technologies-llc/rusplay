@@ -866,6 +866,14 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Session",
+        "network.clock_sync_interval_ms",
+        "Clock sync interval",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
         "Peers",
         "peers.host_name",
         "Host name",

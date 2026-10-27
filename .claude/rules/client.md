@@ -58,9 +58,20 @@ paths:
   full queue drops the `Open` and the first frame opens the decoder as before. The decoder is also
   reopened when a frame's description names another codec; an open failure ends the stream with
   `Decode`, and `connect` does not wait for it.
-- Encoded frames carry the receive time since stream start as their `Timestamp`, since video
-  packets have no timestamp field. `PresentedFrame` has `received_at`, `decoded_at` and
-  `submitted_at` instants for latency accounting.
+- Encoded frames carry the host's capture time (`VideoFrameHeader`, stripped by the receive
+  stage) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
+  `PresentedFrame::captured`. `PresentedFrame` also has `received_at`, `decoded_at` and
+  `submitted_at` instants.
+- Latency (`clock.rs`): `ClockSync` (receive-owned, sans-IO) turns `ClockPong`s into a host minus
+  client offset (`networking.md`) and publishes it in `HostClock`, which lives in `Counters` so the
+  receive, decode and present threads read it. `HostClock::since_capture(captured, at)` maps a
+  client `Instant` onto the host stream clock and returns the elapsed time, never negative and
+  `None` until the first pong. Each stage records into a smoothed `Gauge` (gain 1/8, single
+  writer): `ClientStats::capture_to_receive` at reassembly, `capture_to_decode` when the decoder
+  returns the picture, `capture_to_present` when the present stage hands the frame to the sink.
+  `clock_offset_micros` is the current offset. The first pong arrives within a round trip of the
+  handshake; frames before it carry no figure. The test host's clock is skewed by an hour so the
+  loopback test fails if the offset is ignored.
 - Present runs on the app's `Gpu` (device and queue): CPU planes are written row by row into the
   `RgbConverter` upload buffer through `Queue::write_buffer_with` (the one unavoidable copy for
   software decode), unpacked to `rgba16float` at the source resolution, taken through the colour

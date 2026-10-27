@@ -6,17 +6,18 @@ use std::{
     },
 };
 
-use rusplay_capture::Frame;
-
-use crate::{link::ClientLink, mailbox::Mailbox, stats::Counters};
+use crate::{
+    capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox, stats::Counters,
+};
 
 #[derive(Debug)]
 pub(crate) struct Shared {
     stop: AtomicBool,
     streaming: AtomicBool,
     pub client: Arc<ClientLink>,
+    pub clock: StreamClock,
     pub counters: Counters,
-    pub mailbox: Mailbox<Frame>,
+    pub mailbox: Mailbox<Captured>,
 }
 
 impl Shared {
@@ -25,6 +26,7 @@ impl Shared {
             stop: AtomicBool::new(false),
             streaming: AtomicBool::new(false),
             client: Arc::new(ClientLink::new(client)),
+            clock: StreamClock::start(),
             counters: Counters::default(),
             mailbox: Mailbox::new(),
         }

@@ -327,6 +327,13 @@ impl ControlStage {
                 ControlEvent::Received(ControlMessage::BitrateHint { kbps }) => {
                     shared.mailbox.set_bitrate(kbps);
                 }
+                ControlEvent::Received(ControlMessage::ClockPing { sent_micros }) => {
+                    let pong = ControlMessage::ClockPong {
+                        sent_micros,
+                        host_micros: shared.clock.micros(),
+                    };
+                    self.send(pong, now)?;
+                }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
                 ControlEvent::Undeliverable {
                     message: ControlMessage::Hello { .. },
@@ -345,7 +352,8 @@ impl ControlStage {
                 ControlEvent::Received(
                     ControlMessage::Keepalive
                     | ControlMessage::Rumble { .. }
-                    | ControlMessage::StreamFormat(_),
+                    | ControlMessage::StreamFormat(_)
+                    | ControlMessage::ClockPong { .. },
                 )
                 | ControlEvent::Acked { .. } => {}
             }
