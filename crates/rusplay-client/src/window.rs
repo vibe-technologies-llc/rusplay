@@ -13,10 +13,15 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use rusplay_config::{Config, DisplayOutputConfig, DisplayTargetConfig, InputConfig, PresentMode};
+use rusplay_config::{
+    Config, DisplayOutputConfig, DisplayTargetConfig, InputConfig, PointerMode, PresentMode,
+};
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
-use rusplay_input::{capture::CaptureOptions, wayland::WaylandCapture};
+use rusplay_input::{
+    capture::{ActivePointer, CaptureOptions},
+    wayland::{HostCursorObserver, WaylandCapture},
+};
 use rusplay_scale::ColorVolume;
 
 pub use crate::window::layout::{LogicalArea, WindowLayout};
@@ -74,6 +79,26 @@ impl Shared {
 impl CursorWatcher for Shared {
     fn changed(&self) {
         self.update(|_| ());
+    }
+}
+
+#[derive(Debug)]
+struct PointerFollower {
+    cursor: LatestCursor,
+    observer: HostCursorObserver,
+    last_visible: Mutex<Option<bool>>,
+}
+
+impl CursorWatcher for PointerFollower {
+    fn changed(&self) {
+        let Some(visible) = self.cursor.latest().map(|cursor| cursor.visible) else {
+            return;
+        };
+
+        let mut last = self.last_visible.lock();
+        if last.replace(visible) != Some(visible) {
+            self.observer.observe(visible);
+        }
     }
 }
 
@@ -229,6 +254,17 @@ impl StreamWindow {
             })
         }?;
         capture.set_region(self.layout.map(WindowLayout::region));
+
+        let follower = Arc::new(PointerFollower {
+            cursor: stream.cursor(),
+            observer: capture.host_cursor_observer(),
+            last_visible: Mutex::new(None),
+        });
+        stream
+            .cursor()
+            .watch(Arc::clone(&follower) as Arc<dyn CursorWatcher>);
+        follower.changed();
+
         self.capture = Some(capture);
 
         Ok(())
@@ -238,6 +274,26 @@ impl StreamWindow {
         self.capture
             .as_ref()
             .is_some_and(WaylandCapture::is_engaged)
+    }
+
+    pub fn pointer_mode(&self) -> Option<PointerMode> {
+        self.capture.as_ref().map(WaylandCapture::pointer_mode)
+    }
+
+    pub fn cycle_pointer_mode(&self) {
+        if let Some(capture) = &self.capture {
+            capture.cycle_pointer_mode();
+        }
+    }
+
+    pub fn active_pointer(&self) -> Option<ActivePointer> {
+        self.capture.as_ref().map(WaylandCapture::active_pointer)
+    }
+
+    pub fn set_pointer_mode(&self, mode: PointerMode) {
+        if let Some(capture) = &self.capture {
+            capture.set_pointer_mode(mode);
+        }
     }
 
     pub fn release(&self) {

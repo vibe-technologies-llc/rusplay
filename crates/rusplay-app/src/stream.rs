@@ -5,9 +5,10 @@ use gpui::{
     canvas, div, prelude::*,
 };
 use rusplay_client::{
-    ClientError, ClientStream, Credentials, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
+    ActivePointer, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord, StreamWindow,
+    WindowLayout,
 };
-use rusplay_config::{Config, InputConfig, ReleaseChord};
+use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 
 use crate::{
     hosts::HostEntry,
@@ -89,6 +90,7 @@ pub struct StreamView {
     format_generation: Option<u32>,
     input: InputConfig,
     engaged: bool,
+    pointer: Option<(PointerMode, ActivePointer)>,
     focus_handle: FocusHandle,
     tasks: Vec<Task<()>>,
     _activation: Subscription,
@@ -128,6 +130,7 @@ impl StreamView {
             format_generation: None,
             input,
             engaged: false,
+            pointer: None,
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
             _activation: cx.observe_window_activation(window, |this, window, cx| {
@@ -153,6 +156,12 @@ impl StreamView {
         if self.engaged {
             self.engaged = false;
             cx.notify();
+        }
+    }
+
+    fn cycle_pointer_mode(&mut self) {
+        if let Some(window) = &self.live.borrow().window {
+            window.cycle_pointer_mode();
         }
     }
 
@@ -251,6 +260,17 @@ impl StreamView {
             cx.notify();
         }
 
+        let pointer = self
+            .live
+            .borrow()
+            .window
+            .as_ref()
+            .and_then(|window| window.pointer_mode().zip(window.active_pointer()));
+        if pointer != self.pointer {
+            self.pointer = pointer;
+            cx.notify();
+        }
+
         true
     }
 
@@ -288,6 +308,18 @@ impl StreamView {
             ),
             Phase::Ended => format!("Session with {} ended", self.host.name),
         }
+    }
+}
+
+fn pointer_label(mode: PointerMode, active: ActivePointer) -> String {
+    let active = match active {
+        ActivePointer::Absolute => "absolute",
+        ActivePointer::Relative => "relative",
+    };
+
+    match mode {
+        PointerMode::Absolute | PointerMode::Relative => format!("Pointer: {active}"),
+        PointerMode::Auto => format!("Pointer: auto ({active})"),
     }
 }
 
@@ -330,8 +362,23 @@ impl Render for StreamView {
             .bg(theme::surface())
             .child(div().text_color(theme::text()).child(self.status()))
             .child(
-                button("disconnect", "Disconnect", ButtonStyle::Secondary, true)
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .children(self.pointer.map(|(mode, active)| {
+                        button(
+                            "pointer-mode",
+                            pointer_label(mode, active),
+                            ButtonStyle::Quiet,
+                            true,
+                        )
+                        .on_click(cx.listener(|this, _, _, _| this.cycle_pointer_mode()))
+                    }))
+                    .child(
+                        button("disconnect", "Disconnect", ButtonStyle::Secondary, true)
+                            .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                    ),
             );
 
         div()
@@ -354,6 +401,18 @@ impl Render for StreamView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pointer_label_names_the_active_pointer_and_whether_auto_chose_it() {
+        assert_eq!(
+            pointer_label(PointerMode::Relative, ActivePointer::Relative),
+            "Pointer: relative"
+        );
+        assert_eq!(
+            pointer_label(PointerMode::Auto, ActivePointer::Absolute),
+            "Pointer: auto (absolute)"
+        );
+    }
 
     #[test]
     fn every_release_chord_has_a_label_naming_its_keys() {

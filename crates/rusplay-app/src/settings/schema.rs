@@ -150,7 +150,7 @@ const SAMPLE_RATES: &[&str] = &["48000", "96000"];
 const CHANNEL_LAYOUTS: &[&str] = &["mono", "stereo", "5.1", "7.1"];
 const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
-const POINTER_MODES: &[&str] = &["absolute", "relative"];
+const POINTER_MODES: &[&str] = &["absolute", "relative", "auto"];
 const RELEASE_CHORDS: &[&str] = &["ctrl-alt", "ctrl-shift", "alt-shift", "ctrl-alt-shift"];
 const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
@@ -915,6 +915,14 @@ pub static FIELDS: &[Field] = &[
         "Pointer mode",
         Kind::Choice(POINTER_MODES),
     ),
+    field(
+        Section::Input,
+        "Forwarding",
+        "input.pointer_auto_delay_ms",
+        "Auto pointer mode switch delay",
+        U16,
+    )
+    .unit("ms"),
     field(
         Section::Input,
         "Forwarding",

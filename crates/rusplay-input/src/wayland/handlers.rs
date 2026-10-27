@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use parking_lot::Mutex;
 use rusplay_config::PointerMode;
@@ -47,6 +47,9 @@ const VALUE120_PER_NOTCH: f64 = 120.0;
 pub(super) enum Command {
     Engage,
     Release,
+    SetMode(PointerMode),
+    CycleMode,
+    HostCursor { visible: bool },
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -91,7 +94,7 @@ impl State {
                 source: Box::new(source),
             }
         };
-        let relative_mode = core.lock().options().pointer_mode == PointerMode::Relative;
+        let relative_required = core.lock().options().pointer_mode == PointerMode::Relative;
 
         let seat = globals
             .bind::<WlSeat, _, _>(handle, SEAT_VERSIONS, ())
@@ -107,7 +110,7 @@ impl State {
             .bind::<ZwpKeyboardShortcutsInhibitManagerV1, _, _>(handle, CONSTRAINT_VERSIONS, ())
             .ok();
 
-        let (constraints, relative_manager) = if relative_mode {
+        let (constraints, relative_manager) = if relative_required {
             (
                 Some(constraints.map_err(missing("zwp_pointer_constraints_v1"))?),
                 Some(relative_manager.map_err(missing("zwp_relative_pointer_manager_v1"))?),
@@ -115,6 +118,9 @@ impl State {
         } else {
             (constraints.ok(), relative_manager.ok())
         };
+
+        core.lock()
+            .set_relative_available(constraints.is_some() && relative_manager.is_some());
 
         Ok(Self {
             core,
@@ -146,11 +152,30 @@ impl State {
             match command {
                 Command::Engage => core.engage(),
                 Command::Release => core.release(&mut out),
+                Command::SetMode(mode) => {
+                    core.set_mode(mode);
+                    Transition::Unchanged
+                }
+                Command::CycleMode => {
+                    core.cycle_mode();
+                    Transition::Unchanged
+                }
+                Command::HostCursor { visible } => {
+                    core.observe_host_cursor(visible, Instant::now());
+                    Transition::Unchanged
+                }
             }
         };
 
         self.apply(transition);
+        self.sync_pointer_lock();
         self.deliver(out);
+    }
+
+    pub(super) fn tick(&mut self) {
+        if self.core.lock().tick(Instant::now()) {
+            self.sync_pointer_lock();
+        }
     }
 
     pub(super) fn shutdown(&mut self) {
@@ -201,12 +226,12 @@ impl State {
     fn apply(&mut self, transition: Transition) {
         match transition {
             Transition::Engaged => {
-                self.lock_pointer();
+                self.sync_pointer_lock();
                 self.inhibit_shortcuts();
                 self.hide_cursor();
             }
             Transition::Released => {
-                self.unlock_pointer();
+                self.sync_pointer_lock();
                 self.restore_shortcuts();
                 self.restore_cursor();
             }
@@ -214,11 +239,18 @@ impl State {
         }
     }
 
+    fn sync_pointer_lock(&mut self) {
+        let wanted = self.core.lock().wants_pointer_lock();
+
+        match (wanted, self.locked.is_some()) {
+            (true, false) => self.lock_pointer(),
+            (false, true) => self.unlock_pointer(),
+            _ => {}
+        }
+    }
+
     fn lock_pointer(&mut self) {
-        let relative = self.core.lock().options().pointer_mode == PointerMode::Relative;
-        let (Some(constraints), Some(pointer), true, None) =
-            (&self.constraints, &self.pointer, relative, &self.locked)
-        else {
+        let (Some(constraints), Some(pointer)) = (&self.constraints, &self.pointer) else {
             return;
         };
 

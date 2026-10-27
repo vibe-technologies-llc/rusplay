@@ -14,6 +14,7 @@ pub enum PointerMode {
     #[default]
     Absolute,
     Relative,
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -35,6 +36,7 @@ pub struct InputConfig {
     pub gamepads: bool,
     pub max_gamepads: u8,
     pub pointer_mode: PointerMode,
+    pub pointer_auto_delay_ms: u16,
     pub pointer_sensitivity: f32,
     pub gamepad_deadzone: f32,
     pub release_chord: ReleaseChord,
@@ -53,6 +55,7 @@ impl Default for InputConfig {
             gamepads: true,
             max_gamepads: 4,
             pointer_mode: PointerMode::default(),
+            pointer_auto_delay_ms: 250,
             pointer_sensitivity: 1.0,
             gamepad_deadzone: 0.05,
             release_chord: ReleaseChord::default(),
@@ -148,6 +151,15 @@ mod tests {
 
         assert_eq!(config.snapshot_interval_ms, 1000);
         assert!(config.accept_remote);
+    }
+
+    #[test]
+    fn pointer_mode_accepts_auto_with_a_default_delay() {
+        let config: InputConfig = toml::from_str("pointer_mode = \"auto\"").unwrap();
+
+        assert_eq!(config.pointer_mode, PointerMode::Auto);
+        assert_eq!(config.pointer_auto_delay_ms, 250);
+        assert_eq!(InputConfig::default().pointer_mode, PointerMode::Absolute);
     }
 
     #[test]

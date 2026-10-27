@@ -16,6 +16,8 @@ mod testing;
 #[cfg(feature = "window")]
 mod window;
 
+#[cfg(feature = "window")]
+pub use rusplay_input::capture::ActivePointer;
 pub use rusplay_net::{PeerRecord, PeerSecret, Pin};
 pub use rusplay_protocol::{CursorImage, StreamDescription};
 pub use rusplay_scale::{ColorVolume, OutputLight};

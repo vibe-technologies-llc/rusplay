@@ -17,7 +17,8 @@ paths:
   default build pulls in none of them. The host enables the ones it uses when it wires the sinks.
 - The client captures input from its gpui window (`wayland` feature, below) and from physical
   gamepads (`gamepad` feature), with the pointer locked in relative mode or absolute inside the
-  stream rectangle (`input.pointer_mode`).
+  stream rectangle (`input.pointer_mode`: `absolute`, `relative` or `auto`, switchable while
+  streaming).
 - Input goes out the moment it is captured, never batched with media. The only merging is the
   `EventCoalescer` sum of motion deltas that piled up while the previous send was in progress.
 - `wire` gives `InputEvent` a byte encoding for the protocol to carry: one tag byte, then
@@ -152,6 +153,19 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   letterboxed picture rectangle in surface coordinates, set by the app) to `0.0..=1.0`, clamped,
   and drops positions while no valid region is set. `input.keyboard` and `input.pointer` gate each
   device.
+- Which of the two is live is `ActivePointer`, separate from the selected `PointerMode`.
+  `absolute` and `relative` pin it; `auto` follows the host cursor: `observe_host_cursor(visible,
+  now)` (fed from `CursorState::visible`) targets absolute while the host cursor is visible and
+  relative while it is hidden (a game that hides it wants deltas), and `tick(now)` commits the
+  target only after it has held for `input.pointer_auto_delay_ms` (default 250), so a cursor that
+  flickers never switches; repeated observations of the same target keep the first deadline.
+  `auto` starts absolute and stays there while no cursor message has arrived (host
+  `capture.cursor` set to `hidden` or `embedded` sends none). `set_mode` is the manual
+  override: it pins the mode at once and cancels a pending switch, and returning to `auto`
+  adopts the last observed cursor without the delay. `cycle_mode` walks absolute, relative,
+  auto, skipping relative when the compositor lacks the relative-pointer globals
+  (`set_relative_available`), where a request for relative is refused and auto never targets it.
+  `wants_pointer_lock` (engaged and relative active) is the single source for the lock below.
 - `EventCoalescer` merges consecutive `PointerMotion` and `Scroll` deltas, keeps only the latest
   `PointerAbsolute`, and keeps one value per (slot, axis) for pad axes, never across a key,
   button or pad connect or disconnect. Keys and buttons are never merged or reordered.
@@ -188,7 +202,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   `unsafe` because the pointers must stay valid: it wraps gpui's own `wl_display` with
   `Backend::from_foreign_display` (a second event queue on the same connection, so gpui keeps
   working), binds `wl_seat`, `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1`
-  (the last two required only in relative mode) and runs a thread that reads through
+  (the last two always when offered, required only when `input.pointer_mode` is `relative`) and
+  runs a thread that reads through
   `prepare_read` with a 10 ms poll, so it can be stopped. `WaylandTarget` takes the raw pointers
   so `rusplay-input` does not depend on gpui; the app gets them from gpui's raw window handles.
   The connection must outlive the capture: stop or drop it before the window.
@@ -197,10 +212,16 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   count only while the pointer or keyboard focus is on the target surface; keyboard leave
   releases. Scroll uses `axis_value120` when the compositor sends it, else `axis` divided by 10
   per notch, flushed on `frame`.
-- Engaging in relative mode requests `lock_pointer` with persistent lifetime (never twice: a
-  second constraint on one pointer is a fatal protocol error for the whole connection), and
-  releasing destroys it. `engage` and `release` can also be called from the app; they run on the
-  capture thread within one poll interval.
+- The pointer lock follows `wants_pointer_lock` through one function, `sync_pointer_lock`, run
+  after every engage, release, mode command and committed auto switch: it requests `lock_pointer`
+  with persistent lifetime when the lock is wanted and none exists, and destroys it when it is
+  not (never two at once: a second constraint on one pointer is a fatal protocol error for the
+  whole connection). The relative pointer object exists in every mode and its motion is dropped
+  unless relative is active. `engage`, `release`, `set_pointer_mode`, `cycle_pointer_mode` and
+  the `HostCursorObserver` handed out by `host_cursor_observer` are commands to the capture
+  thread, applied within one poll interval, which also calls `tick` each pass.
+  `StreamWindow::capture_input` registers a cursor watcher that feeds the observer on every host
+  cursor change; the app's stream header shows the mode and cycles it on click.
 - Engaging also creates a `zwp_keyboard_shortcuts_inhibitor_v1` on the surface and seat when
   `input.inhibit_shortcuts` (default on) and `input.keyboard` are set and the compositor offers
   `zwp_keyboard_shortcuts_inhibit_manager_v1`, so Super, Alt+Tab and similar reach the host.

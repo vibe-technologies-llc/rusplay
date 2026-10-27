@@ -13,6 +13,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use rusplay_config::PointerMode;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -24,7 +25,7 @@ use wayland_client::{
 
 use crate::{
     InputError, InputEvent,
-    capture::{CaptureCore, CaptureOptions, StreamRegion},
+    capture::{ActivePointer, CaptureCore, CaptureOptions, StreamRegion},
     wayland::handlers::{Command, State},
 };
 
@@ -35,6 +36,17 @@ const THREAD_NAME: &str = "rusplay-wayland-input";
 pub struct WaylandTarget {
     pub display: NonNull<c_void>,
     pub surface: NonNull<c_void>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostCursorObserver {
+    commands: Sender<Command>,
+}
+
+impl HostCursorObserver {
+    pub fn observe(&self, visible: bool) {
+        self.commands.send(Command::HostCursor { visible }).ok();
+    }
 }
 
 pub struct WaylandCapture {
@@ -114,6 +126,28 @@ impl WaylandCapture {
         self.commands.send(Command::Release).ok();
     }
 
+    pub fn set_pointer_mode(&self, mode: PointerMode) {
+        self.commands.send(Command::SetMode(mode)).ok();
+    }
+
+    pub fn cycle_pointer_mode(&self) {
+        self.commands.send(Command::CycleMode).ok();
+    }
+
+    pub fn pointer_mode(&self) -> PointerMode {
+        self.core.lock().mode()
+    }
+
+    pub fn active_pointer(&self) -> ActivePointer {
+        self.core.lock().active_pointer()
+    }
+
+    pub fn host_cursor_observer(&self) -> HostCursorObserver {
+        HostCursorObserver {
+            commands: self.commands.clone(),
+        }
+    }
+
     pub fn is_finished(&self) -> bool {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
@@ -150,6 +184,7 @@ fn serve(
         while let Ok(command) = commands.try_recv() {
             state.command(command);
         }
+        state.tick();
 
         queue
             .dispatch_pending(&mut state)
@@ -306,6 +341,23 @@ mod tests {
         live.capture().release();
         thread::sleep(Duration::from_millis(100));
         assert!(!live.capture().is_engaged());
+        live.stop().unwrap();
+    }
+
+    #[test]
+    #[ignore = "needs a running wayland compositor with pointer constraints"]
+    fn live_pointer_mode_switches_while_engaged_without_a_second_lock() {
+        let mut live = LiveSurface::attach(PointerMode::Relative);
+
+        live.capture().engage();
+        live.capture().set_pointer_mode(PointerMode::Absolute);
+        live.capture().set_pointer_mode(PointerMode::Relative);
+        live.capture().cycle_pointer_mode();
+        thread::sleep(Duration::from_millis(100));
+        assert!(!live.capture().is_finished());
+        assert_eq!(live.capture().pointer_mode(), PointerMode::Auto);
+
+        live.capture().release();
         live.stop().unwrap();
     }
 

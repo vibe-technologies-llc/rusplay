@@ -1,4 +1,7 @@
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 use rusplay_config::{InputConfig, PointerMode, ReleaseChord};
 
@@ -44,6 +47,7 @@ pub struct CaptureOptions {
     pub sensitivity: f64,
     pub chord: ReleaseChord,
     pub inhibit_shortcuts: bool,
+    pub auto_delay: Duration,
 }
 
 impl From<&InputConfig> for CaptureOptions {
@@ -55,6 +59,7 @@ impl From<&InputConfig> for CaptureOptions {
             sensitivity: f64::from(config.pointer_sensitivity),
             chord: config.release_chord,
             inhibit_shortcuts: config.inhibit_shortcuts,
+            auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
         }
     }
 }
@@ -66,9 +71,26 @@ pub enum Transition {
     Released,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivePointer {
+    Absolute,
+    Relative,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingSwitch {
+    target: ActivePointer,
+    since: Instant,
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureCore {
     options: CaptureOptions,
+    mode: PointerMode,
+    active: ActivePointer,
+    relative_available: bool,
+    host_cursor_visible: Option<bool>,
+    pending: Option<PendingSwitch>,
     engaged: bool,
     region: Option<StreamRegion>,
     down: BTreeSet<u32>,
@@ -80,8 +102,18 @@ pub struct CaptureCore {
 
 impl CaptureCore {
     pub fn new(options: CaptureOptions) -> Self {
+        let active = match options.pointer_mode {
+            PointerMode::Relative => ActivePointer::Relative,
+            PointerMode::Absolute | PointerMode::Auto => ActivePointer::Absolute,
+        };
+
         Self {
             options,
+            mode: options.pointer_mode,
+            active,
+            relative_available: true,
+            host_cursor_visible: None,
+            pending: None,
             engaged: false,
             region: None,
             down: BTreeSet::new(),
@@ -100,8 +132,96 @@ impl CaptureCore {
         self.engaged
     }
 
+    pub fn mode(&self) -> PointerMode {
+        self.mode
+    }
+
+    pub fn active_pointer(&self) -> ActivePointer {
+        self.active
+    }
+
+    pub fn wants_pointer_lock(&self) -> bool {
+        self.engaged && self.active == ActivePointer::Relative
+    }
+
     pub fn set_region(&mut self, region: Option<StreamRegion>) {
         self.region = region;
+    }
+
+    pub fn set_relative_available(&mut self, available: bool) {
+        self.relative_available = available;
+        if !available && self.active == ActivePointer::Relative {
+            self.active = ActivePointer::Absolute;
+        }
+        if !available && self.mode == PointerMode::Relative {
+            self.mode = PointerMode::Absolute;
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: PointerMode) -> bool {
+        if mode == PointerMode::Relative && !self.relative_available {
+            return false;
+        }
+
+        self.mode = mode;
+        self.pending = None;
+        match mode {
+            PointerMode::Absolute => self.active = ActivePointer::Absolute,
+            PointerMode::Relative => self.active = ActivePointer::Relative,
+            PointerMode::Auto => {
+                if let Some(visible) = self.host_cursor_visible {
+                    self.active = self.pointer_for_host_cursor(visible);
+                }
+            }
+        }
+
+        true
+    }
+
+    pub fn cycle_mode(&mut self) {
+        let next = match (self.mode, self.relative_available) {
+            (PointerMode::Absolute, true) => PointerMode::Relative,
+            (PointerMode::Absolute, false) | (PointerMode::Relative, _) => PointerMode::Auto,
+            (PointerMode::Auto, _) => PointerMode::Absolute,
+        };
+
+        self.set_mode(next);
+    }
+
+    pub fn observe_host_cursor(&mut self, visible: bool, now: Instant) {
+        self.host_cursor_visible = Some(visible);
+        if self.mode != PointerMode::Auto {
+            return;
+        }
+
+        let target = self.pointer_for_host_cursor(visible);
+        if target == self.active {
+            self.pending = None;
+        } else if self.pending.is_none_or(|pending| pending.target != target) {
+            self.pending = Some(PendingSwitch { target, since: now });
+        }
+    }
+
+    pub fn tick(&mut self, now: Instant) -> bool {
+        let Some(pending) = self.pending else {
+            return false;
+        };
+        if now.saturating_duration_since(pending.since) < self.options.auto_delay {
+            return false;
+        }
+
+        self.pending = None;
+        self.active = pending.target;
+
+        true
+    }
+
+    fn pointer_for_host_cursor(&self, visible: bool) -> ActivePointer {
+        if visible || !self.relative_available {
+            ActivePointer::Absolute
+        } else {
+            ActivePointer::Relative
+        }
     }
 
     pub fn engage(&mut self) -> Transition {
@@ -216,7 +336,7 @@ impl CaptureCore {
     }
 
     pub fn pointer_motion(&mut self, dx: f64, dy: f64, out: &mut Vec<InputEvent>) {
-        if !self.forwards_pointer(PointerMode::Relative) || !dx.is_finite() || !dy.is_finite() {
+        if !self.forwards_pointer(ActivePointer::Relative) || !dx.is_finite() || !dy.is_finite() {
             return;
         }
 
@@ -227,7 +347,7 @@ impl CaptureCore {
     }
 
     pub fn pointer_position(&mut self, x: f64, y: f64, out: &mut Vec<InputEvent>) {
-        if !self.forwards_pointer(PointerMode::Absolute) || !x.is_finite() || !y.is_finite() {
+        if !self.forwards_pointer(ActivePointer::Absolute) || !x.is_finite() || !y.is_finite() {
             return;
         }
 
@@ -244,8 +364,8 @@ impl CaptureCore {
         out.push(InputEvent::Scroll { dx, dy });
     }
 
-    fn forwards_pointer(&self, mode: PointerMode) -> bool {
-        self.engaged && self.options.pointer && self.options.pointer_mode == mode
+    fn forwards_pointer(&self, pointer: ActivePointer) -> bool {
+        self.engaged && self.options.pointer && self.active == pointer
     }
 
     fn completes_chord(&self, keycode: u32) -> bool {
@@ -282,6 +402,7 @@ mod tests {
             sensitivity: 2.0,
             chord: ReleaseChord::CtrlAlt,
             inhibit_shortcuts: true,
+            auto_delay: Duration::from_millis(100),
         }
     }
 
@@ -532,7 +653,179 @@ mod tests {
                 sensitivity: 1.5,
                 chord: ReleaseChord::CtrlAltShift,
                 inhibit_shortcuts: true,
+                auto_delay: Duration::from_millis(250),
             }
         );
+    }
+
+    fn auto_core() -> CaptureCore {
+        engaged(CaptureOptions {
+            pointer_mode: PointerMode::Auto,
+            ..options()
+        })
+    }
+
+    fn forwarded_after_motion_and_position(core: &mut CaptureCore) -> Vec<InputEvent> {
+        let mut out = Vec::new();
+        core.pointer_motion(1.0, 1.0, &mut out);
+        core.pointer_position(10.0, 10.0, &mut out);
+
+        out
+    }
+
+    #[test]
+    fn auto_starts_absolute_and_waits_out_the_delay_before_switching() {
+        let mut core = auto_core();
+        core.set_region(Some(StreamRegion {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        }));
+        let start = Instant::now();
+
+        core.observe_host_cursor(false, start);
+        let early = core.tick(start + Duration::from_millis(99));
+        let early_pointer = core.active_pointer();
+        let switched = core.tick(start + Duration::from_millis(100));
+
+        assert_eq!(core.mode(), PointerMode::Auto);
+        assert!(!early);
+        assert_eq!(early_pointer, ActivePointer::Absolute);
+        assert!(switched);
+        assert_eq!(core.active_pointer(), ActivePointer::Relative);
+        assert_eq!(
+            forwarded_after_motion_and_position(&mut core),
+            vec![InputEvent::PointerMotion { dx: 2.0, dy: 2.0 }]
+        );
+    }
+
+    #[test]
+    fn a_flicker_shorter_than_the_delay_never_switches() {
+        let mut core = auto_core();
+        let start = Instant::now();
+
+        core.observe_host_cursor(false, start);
+        core.observe_host_cursor(true, start + Duration::from_millis(40));
+        let switched = core.tick(start + Duration::from_millis(500));
+
+        assert!(!switched);
+        assert_eq!(core.active_pointer(), ActivePointer::Absolute);
+    }
+
+    #[test]
+    fn repeated_observations_keep_the_first_deadline() {
+        let mut core = auto_core();
+        let start = Instant::now();
+
+        core.observe_host_cursor(false, start);
+        core.observe_host_cursor(false, start + Duration::from_millis(80));
+        let switched = core.tick(start + Duration::from_millis(100));
+
+        assert!(switched);
+        assert_eq!(core.active_pointer(), ActivePointer::Relative);
+    }
+
+    #[test]
+    fn a_manual_mode_overrides_auto_and_ignores_the_host_cursor() {
+        let mut core = auto_core();
+        let start = Instant::now();
+
+        core.set_mode(PointerMode::Absolute);
+        core.observe_host_cursor(false, start);
+        let switched = core.tick(start + Duration::from_secs(5));
+
+        assert!(!switched);
+        assert_eq!(core.mode(), PointerMode::Absolute);
+        assert_eq!(core.active_pointer(), ActivePointer::Absolute);
+    }
+
+    #[test]
+    fn returning_to_auto_adopts_the_last_host_cursor_at_once() {
+        let mut core = engaged(options());
+        core.observe_host_cursor(true, Instant::now());
+
+        core.set_mode(PointerMode::Auto);
+
+        assert_eq!(core.active_pointer(), ActivePointer::Absolute);
+    }
+
+    #[test]
+    fn cycling_walks_absolute_relative_auto() {
+        let mut core = engaged(CaptureOptions {
+            pointer_mode: PointerMode::Absolute,
+            ..options()
+        });
+        let mut seen = Vec::new();
+
+        for _ in 0..4 {
+            core.cycle_mode();
+            seen.push((core.mode(), core.active_pointer()));
+        }
+
+        assert_eq!(
+            seen,
+            vec![
+                (PointerMode::Relative, ActivePointer::Relative),
+                (PointerMode::Auto, ActivePointer::Relative),
+                (PointerMode::Absolute, ActivePointer::Absolute),
+                (PointerMode::Relative, ActivePointer::Relative),
+            ]
+        );
+    }
+
+    #[test]
+    fn cycling_skips_relative_when_it_is_unavailable() {
+        let mut core = engaged(CaptureOptions {
+            pointer_mode: PointerMode::Absolute,
+            ..options()
+        });
+        core.set_relative_available(false);
+        let mut seen = Vec::new();
+
+        for _ in 0..3 {
+            core.cycle_mode();
+            seen.push(core.mode());
+        }
+
+        assert_eq!(
+            seen,
+            vec![PointerMode::Auto, PointerMode::Absolute, PointerMode::Auto]
+        );
+    }
+
+    #[test]
+    fn without_relative_globals_relative_is_refused_and_auto_stays_absolute() {
+        let mut core = auto_core();
+        core.set_relative_available(false);
+        let start = Instant::now();
+
+        let accepted = core.set_mode(PointerMode::Relative);
+        core.observe_host_cursor(false, start);
+        let switched = core.tick(start + Duration::from_secs(5));
+
+        assert!(!accepted);
+        assert!(!switched);
+        assert_eq!(core.active_pointer(), ActivePointer::Absolute);
+    }
+
+    #[test]
+    fn the_pointer_lock_is_wanted_only_while_engaged_and_relative() {
+        let mut core = CaptureCore::new(options());
+        let mut out = Vec::new();
+        let idle = core.wants_pointer_lock();
+
+        core.engage();
+        let relative = core.wants_pointer_lock();
+        core.set_mode(PointerMode::Absolute);
+        let absolute = core.wants_pointer_lock();
+        core.set_mode(PointerMode::Relative);
+        core.release(&mut out);
+        let released = core.wants_pointer_lock();
+
+        assert!(!idle);
+        assert!(relative);
+        assert!(!absolute);
+        assert!(!released);
     }
 }

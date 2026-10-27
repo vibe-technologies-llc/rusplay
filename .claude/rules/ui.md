@@ -68,7 +68,9 @@ paths:
 - Input: once connected, `StreamView` calls `StreamWindow::capture_input` with the config's
   `input` section; a failure there is reported as a notice and the stream continues without
   input. A click on the picture or the release chord engages, the chord releases again; the
-  header shows which, naming the chord (`chord_label`). Losing window activation
+  header shows which, naming the chord (`chord_label`), and a pointer button next to
+  `Disconnect` names the active pointer (`Pointer: auto (relative)`) and cycles
+  `input.pointer_mode` for the session on click. Losing window activation
   (`observe_window_activation`) releases. `Quit` is ignored while input is engaged, because the
   keyboard also reaches gpui and `ctrl-q` belongs to the game then.
 - A 50 ms poll on the foreground executor ends the session when any client stage, the window's
