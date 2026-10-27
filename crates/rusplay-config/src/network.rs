@@ -37,6 +37,7 @@ pub struct NetworkConfig {
     pub keepalive_interval_ms: u32,
     pub keyframe_request_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
+    pub stats_log_interval_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -64,6 +65,7 @@ impl Default for NetworkConfig {
             keepalive_interval_ms: 1_000,
             keyframe_request_interval_ms: 100,
             cursor_image_repeat_ms: 1_000,
+            stats_log_interval_ms: 10_000,
         }
     }
 }
@@ -200,6 +202,17 @@ mod tests {
                 peer_timeout_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn stats_log_interval_defaults_to_ten_seconds_and_zero_is_valid() {
+        let silent = NetworkConfig {
+            stats_log_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().stats_log_interval_ms, 10_000);
+        assert!(silent.validate().is_ok());
     }
 
     #[test]

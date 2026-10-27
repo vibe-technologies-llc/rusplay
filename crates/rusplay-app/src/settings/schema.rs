@@ -858,6 +858,14 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Session",
+        "network.stats_log_interval_ms",
+        "Stats log interval",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
         "Peers",
         "peers.host_name",
         "Host name",
