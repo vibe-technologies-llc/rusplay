@@ -1,4 +1,4 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, StateRecord};
+use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, LockState, StateRecord};
 
 pub const MAX_PADS: usize = 16;
 pub const PAD_AXES: usize = 6;
@@ -109,6 +109,7 @@ pub struct HeldInput {
     keys: KeySet,
     buttons: KeySet,
     pads: [Option<PadState>; MAX_PADS],
+    locks: Option<LockState>,
 }
 
 impl HeldInput {
@@ -128,6 +129,10 @@ impl HeldInput {
         &self.buttons
     }
 
+    pub const fn locks(&self) -> Option<LockState> {
+        self.locks
+    }
+
     pub fn pad(&self, slot: u8) -> Option<&PadState> {
         self.pads.get(usize::from(slot))?.as_ref()
     }
@@ -137,6 +142,7 @@ impl HeldInput {
             InputEvent::Key { keycode, pressed } => self.keys.set(keycode, pressed),
             InputEvent::PointerButton { button, pressed } => self.buttons.set(button, pressed),
             InputEvent::Gamepad { slot, event } => self.observe_pad(slot, event),
+            InputEvent::Locks(locks) => self.locks = Some(locks),
             InputEvent::PointerMotion { .. }
             | InputEvent::PointerAbsolute { .. }
             | InputEvent::Scroll { .. } => {}
@@ -168,6 +174,7 @@ impl HeldInput {
         out.push(StateRecord::Keys(self.keys));
         out.push(StateRecord::Buttons(self.buttons));
         out.push(StateRecord::Pads(self.connected_mask()));
+        out.extend(self.locks.map(StateRecord::Locks));
 
         for (slot, pad) in (0u8..).zip(&self.pads) {
             if let Some(state) = pad {
@@ -191,6 +198,11 @@ impl HeldInput {
             }
             StateRecord::Pads(mask) => self.reconcile_connections(*mask, out),
             StateRecord::Pad { slot, state } => self.reconcile_pad(*slot, state, out),
+            StateRecord::Locks(target) => {
+                if self.locks != Some(*target) {
+                    out.push(InputEvent::Locks(*target));
+                }
+            }
         }
     }
 
@@ -518,6 +530,49 @@ mod tests {
             ]
         );
         assert!(after.is_idle());
+    }
+
+    fn locks(caps: bool, num: bool) -> InputEvent {
+        InputEvent::Locks(LockState { caps, num })
+    }
+
+    #[test]
+    fn lock_state_is_unknown_until_the_client_reports_it() {
+        let mut records = Vec::new();
+        let mut known = HeldInput::new();
+        known.observe(&locks(true, false));
+
+        HeldInput::new().snapshot(&mut records);
+        assert!(!records.iter().any(|r| matches!(r, StateRecord::Locks(_))));
+
+        known.snapshot(&mut records);
+        assert!(records.contains(&StateRecord::Locks(LockState {
+            caps: true,
+            num: false
+        })));
+    }
+
+    #[test]
+    fn a_snapshot_repairs_lock_state_and_leaves_agreement_alone() {
+        let client = held(&[locks(false, true)]);
+        let mut never_told = HeldInput::new();
+        let mut stale = held(&[locks(true, true)]);
+        let mut agreeing = client.clone();
+
+        assert_eq!(converge(&mut never_told, &client), vec![locks(false, true)]);
+        assert_eq!(converge(&mut stale, &client), vec![locks(false, true)]);
+        assert_eq!(converge(&mut agreeing, &client), Vec::new());
+    }
+
+    #[test]
+    fn releasing_everything_leaves_the_locks_alone() {
+        let state = held(&[locks(true, true)]);
+        let mut events = Vec::new();
+
+        state.release_all(&mut events);
+
+        assert_eq!(events, Vec::new());
+        assert!(state.is_idle());
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::{
 
 use rusplay_config::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, ReleaseChord};
 
-use crate::InputEvent;
+use crate::{InputEvent, LockState};
 
 const KEY_LEFT_CTRL: u32 = 29;
 const KEY_LEFT_SHIFT: u32 = 42;
@@ -119,6 +119,7 @@ const fn keycode(key: HotkeyKey) -> u32 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct CaptureOptions {
     pub keyboard: bool,
     pub pointer: bool,
@@ -127,6 +128,7 @@ pub struct CaptureOptions {
     pub chord: ReleaseChord,
     pub hotkeys: Option<Hotkeys>,
     pub inhibit_shortcuts: bool,
+    pub sync_locks: bool,
     pub auto_delay: Duration,
 }
 
@@ -140,6 +142,7 @@ impl From<&InputConfig> for CaptureOptions {
             chord: config.release_chord,
             hotkeys: config.hotkeys.then(|| Hotkeys::from(config)),
             inhibit_shortcuts: config.inhibit_shortcuts,
+            sync_locks: config.sync_locks,
             auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
         }
     }
@@ -180,6 +183,8 @@ pub struct CaptureCore {
     suppressed_keys: BTreeSet<u32>,
     suppressed_buttons: BTreeSet<u32>,
     actions: Vec<ClientAction>,
+    locks: Option<LockState>,
+    locks_sent: Option<LockState>,
 }
 
 impl CaptureCore {
@@ -204,6 +209,8 @@ impl CaptureCore {
             suppressed_keys: BTreeSet::new(),
             suppressed_buttons: BTreeSet::new(),
             actions: Vec::new(),
+            locks: None,
+            locks_sent: None,
         }
     }
 
@@ -346,8 +353,27 @@ impl CaptureCore {
         );
         self.suppressed_keys.clear();
         self.suppressed_buttons.clear();
+        self.locks_sent = None;
 
         Transition::Released
+    }
+
+    pub fn set_locks(&mut self, locks: LockState, out: &mut Vec<InputEvent>) {
+        self.locks = Some(locks);
+        self.publish_locks(out);
+    }
+
+    pub fn publish_locks(&mut self, out: &mut Vec<InputEvent>) {
+        let forwards = self.engaged && self.options.keyboard && self.options.sync_locks;
+        let Some(locks) = self
+            .locks
+            .filter(|locks| forwards && Some(*locks) != self.locks_sent)
+        else {
+            return;
+        };
+
+        self.locks_sent = Some(locks);
+        out.push(InputEvent::Locks(locks));
     }
 
     pub fn key(&mut self, keycode: u32, pressed: bool, out: &mut Vec<InputEvent>) -> Transition {
@@ -540,6 +566,7 @@ mod tests {
             chord: ReleaseChord::CtrlAlt,
             hotkeys: None,
             inhibit_shortcuts: true,
+            sync_locks: true,
             auto_delay: Duration::from_millis(100),
         }
     }
@@ -634,6 +661,68 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn locked(caps: bool, num: bool) -> LockState {
+        LockState { caps, num }
+    }
+
+    #[test]
+    fn lock_state_is_published_on_engage_and_on_change_but_not_while_released() {
+        let mut core = CaptureCore::new(options());
+        let mut out = Vec::new();
+
+        core.set_locks(locked(true, false), &mut out);
+        assert_eq!(out, Vec::new());
+
+        core.engage();
+        core.publish_locks(&mut out);
+        core.publish_locks(&mut out);
+        core.set_locks(locked(true, false), &mut out);
+        core.set_locks(locked(true, true), &mut out);
+
+        assert_eq!(
+            out,
+            vec![
+                InputEvent::Locks(locked(true, false)),
+                InputEvent::Locks(locked(true, true)),
+            ]
+        );
+    }
+
+    #[test]
+    fn lock_state_is_published_again_after_a_release_and_re_engage() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        core.set_locks(locked(false, true), &mut out);
+        core.release(&mut out);
+        out.clear();
+
+        core.engage();
+        core.publish_locks(&mut out);
+
+        assert_eq!(out, vec![InputEvent::Locks(locked(false, true))]);
+    }
+
+    #[test]
+    fn lock_state_stays_home_when_syncing_or_the_keyboard_is_off() {
+        let mut out = Vec::new();
+        for options in [
+            CaptureOptions {
+                sync_locks: false,
+                ..options()
+            },
+            CaptureOptions {
+                keyboard: false,
+                ..options()
+            },
+        ] {
+            let mut core = engaged(options);
+
+            core.set_locks(locked(true, true), &mut out);
+        }
+
+        assert_eq!(out, Vec::new());
     }
 
     #[test]
@@ -791,6 +880,7 @@ mod tests {
                 sensitivity: 1.5,
                 chord: ReleaseChord::CtrlAltShift,
                 hotkeys: Some(Hotkeys::from(&config)),
+                sync_locks: true,
                 inhibit_shortcuts: true,
                 auto_delay: Duration::from_millis(250),
             }

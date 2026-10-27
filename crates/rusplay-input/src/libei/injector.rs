@@ -19,11 +19,12 @@ use rustix::{
 };
 
 use crate::{
-    InputError, InputEvent, InputSink,
+    InputError, InputEvent, InputSink, LockMasks, LockSync,
     libei::{
         AbsoluteMapper, AbsoluteTarget, Capability, EiRequest, MappedRegion, PortalInputOptions,
         Region, RemoteDesktopSession, StartedPortal, translate,
     },
+    locks::read_keymap,
 };
 
 const MICROS_PER_SECOND: u64 = 1_000_000;
@@ -49,6 +50,7 @@ struct DeviceSlot {
     resumed: bool,
     emulating: bool,
     absolute: Option<AbsoluteMapper>,
+    lock_masks: LockMasks,
 }
 
 impl DeviceSlot {
@@ -117,6 +119,8 @@ pub struct LibeiInjector {
     devices: Vec<DeviceSlot>,
     sequence: u32,
     closed: bool,
+    sync_locks: bool,
+    lock_sync: LockSync,
     session: Option<RemoteDesktopSession>,
 }
 
@@ -139,6 +143,8 @@ impl LibeiInjector {
             devices: Vec::new(),
             sequence: 0,
             closed: false,
+            sync_locks: config.sync_locks && config.keyboard,
+            lock_sync: LockSync::new(),
             session: None,
         })
     }
@@ -190,7 +196,8 @@ impl LibeiInjector {
     }
 
     pub fn service(&mut self) -> Result<(), InputError> {
-        self.pump()
+        self.pump()?;
+        self.sync_locks()
     }
 
     pub fn is_ready(&self) -> bool {
@@ -232,12 +239,24 @@ impl LibeiInjector {
             EiEvent::SeatAdded(added) => added.seat.bind_capabilities(self.bound),
             EiEvent::DeviceAdded(added) => {
                 let absolute = self.absolute_mapper(&added.device);
+                let lock_masks = lock_masks_of(&added.device);
                 self.devices.push(DeviceSlot {
                     device: added.device,
                     resumed: false,
                     emulating: false,
                     absolute,
+                    lock_masks,
                 });
+            }
+            EiEvent::KeyboardModifiers(modifiers) => {
+                if let Some(slot) = self
+                    .devices
+                    .iter()
+                    .find(|slot| slot.device == modifiers.device)
+                {
+                    let locks = slot.lock_masks.locked(modifiers.locked);
+                    self.lock_sync.report(locks);
+                }
             }
             EiEvent::DeviceResumed(resumed) => {
                 self.update_slot(&resumed.device, true);
@@ -305,6 +324,32 @@ impl LibeiInjector {
         self.flush()
     }
 
+    fn sync_locks(&mut self) -> Result<(), InputError> {
+        if !self.sync_locks || self.closed {
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        let taps = self.lock_sync.due(now);
+        if taps.is_empty() {
+            return Ok(());
+        }
+
+        self.lock_sync.tapped(now);
+        for code in taps.keycodes() {
+            self.send(EiRequest::Key {
+                code,
+                pressed: true,
+            })?;
+            self.send(EiRequest::Key {
+                code,
+                pressed: false,
+            })?;
+        }
+
+        Ok(())
+    }
+
     fn flush(&self) -> Result<(), InputError> {
         self.context
             .flush()
@@ -314,6 +359,19 @@ impl LibeiInjector {
 
 impl InputSink for LibeiInjector {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
+        if let InputEvent::Locks(locks) = event {
+            self.pump()?;
+            if self.closed {
+                return Err(InputError::SinkClosed);
+            }
+
+            if self.sync_locks {
+                self.lock_sync.desire(locks);
+            }
+
+            return self.sync_locks();
+        }
+
         let request = translate(event)?;
 
         self.pump()?;
@@ -321,7 +379,12 @@ impl InputSink for LibeiInjector {
             return Err(InputError::SinkClosed);
         }
 
-        self.send(request)
+        self.send(request)?;
+        if let EiRequest::Key { code, .. } = request {
+            self.lock_sync.key_injected(code, Instant::now());
+        }
+
+        Ok(())
     }
 }
 
@@ -347,6 +410,14 @@ fn bound_capabilities(config: InputConfig) -> BitFlags<DeviceCapability> {
             | DeviceCapability::Scroll;
     }
     bound
+}
+
+fn lock_masks_of(device: &event::Device) -> LockMasks {
+    device
+        .keymap()
+        .filter(|keymap| keymap.type_ == ei::keyboard::KeymapType::Xkb)
+        .and_then(|keymap| read_keymap(&keymap.fd, keymap.size))
+        .map_or_else(LockMasks::default, |text| LockMasks::from_keymap(&text))
 }
 
 fn device_capability(capability: Capability) -> DeviceCapability {

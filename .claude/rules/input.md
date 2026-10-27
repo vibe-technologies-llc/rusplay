@@ -51,8 +51,18 @@ paths:
 - Each device is put in emulating state lazily (`start_emulating` with an increasing sequence)
   and every injected event is followed by its own `frame` with a `CLOCK_MONOTONIC` microsecond
   timestamp. Emulation is stopped when the injector drops.
-- Keys are sent as evdev keycodes, which are layout independent, so the keymap the EIS server
-  offers is never read. The host's own layout decides the symbols.
+- Keys are sent as evdev keycodes, which are layout independent, so the host's own layout decides
+  the symbols. The keymap the EIS server offers is read only for the lock masks below.
+- Lock sync (`input.sync_locks`, default on, needs `input.keyboard`): `inject(InputEvent::Locks)`
+  records the client's Caps and Num Lock state as `LockSync`'s desire instead of translating it.
+  `EiEvent::KeyboardModifiers` reports the server's locked mask, which `LockMasks` (from the
+  device's xkb keymap, read once at `DeviceAdded`) turns into a `LockState`. When the two differ,
+  `sync_locks` taps `KEY_CAPSLOCK` / `KEY_NUMLOCK` (press and release) for the differing locks and
+  consumes the desire; it runs from `service` and right after a `Locks` inject. Nothing is tapped
+  before the first report, within `LOCK_SETTLE` of an injected lock key (the server's report of
+  that key may still be on its way, and a tap would undo it), or again before the report that
+  answers the last tap. Because the desire is consumed, a person pressing Caps Lock on the host
+  is not fought. `LockSync` is pure and unit-tested.
 - Absolute motion maps onto the bounding box of the regions selected by `AbsoluteTarget`:
   `Bounds` takes every region of the device, `Mapping(id)` only those whose mapping id equals the
   id the ScreenCast stream reported (`PortalStream::mapping_id`). The upper edge maps just inside
@@ -223,7 +233,15 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   so `rusplay-input` does not depend on gpui; the app gets them from gpui's raw window handles.
   The connection must outlive the capture: stop or drop it before the window.
 - It makes its own `wl_pointer`, `wl_keyboard` and relative pointer on the shared seat. Keyboard
-  keys arrive as raw evdev codes (layout independent, no xkb); pointer buttons likewise. Events
+  keys arrive as raw evdev codes (layout independent, no xkb library); pointer buttons likewise.
+  Lock state comes from `wl_keyboard.keymap` and `.modifiers`: the keymap text is read
+  (`locks::read_keymap`, a positional read of the fd) only to find which real modifier the
+  `Caps_Lock` and `Num_Lock` keys map to (`LockMasks::from_keymap` scans the `key <..>` blocks for
+  the keysym and the `modifier_map` lines for the key, no xkb parser), falling back to the standard
+  `Lock` (bit 1) and `Mod2` (bit 4) when the keymap is missing or says nothing; `mods_locked` then
+  gives a `LockState`, which `CaptureCore::set_locks` forwards as `InputEvent::Locks` while engaged
+  (also once on every engage, and again only when it changes; a release forgets what was sent).
+  Events
   count only while the pointer or keyboard focus is on the target surface; keyboard leave
   releases. Scroll uses `axis_value120` when the compositor sends it, else `axis` divided by 10
   per notch, flushed on `frame`.
@@ -281,7 +299,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   (default 1000, `0` disables) the client also sends its held state as `StateRecord`s in an
   ordinary datagram of the same sequence, repeated by the next datagram's `previous` section like
   any other. A record decodes through `InputRecord::decode`, which tells events from state by the
-  tag byte (events use 0 to 5, state records 16 to 19). Each state record replaces one whole
+  tag byte (events use 0 to 6, state records 16 to 20). Each state record replaces one whole
   scope, so a snapshot split across datagrams, or a lost half of it, never undoes the other half:
   `Keys` and `Buttons` carry a `KeySet` bitset (96 bytes over evdev codes below 768), `Pads`
   the mask of connected slots (disconnect the others, connect the missing) and one `Pad` per
@@ -292,7 +310,12 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   counts them), so a lost release or press is repaired within one interval and a snapshot that
   agrees with the host injects nothing. State records with a pad slot of 16 or more, or a
   non-finite axis, are malformed. Keys and buttons above evdev code 767 cannot be held-tracked.
-  The record layout changed together with `ProtocolVersion::CURRENT` 10.
+  `Locks` carries one byte, bit 0 Caps Lock and bit 1 Num Lock (any other bit is
+  `WireInvalidLockBits`); `HeldInput` keeps it as `Option<LockState>`, unknown until the client's
+  capture first reports, and a snapshot only names it once known. The same state also travels as
+  `InputEvent::Locks` (tag 6) on every change, so the snapshot is its repair like for keys;
+  `reconcile` turns a differing `Locks` record into that event, and `release_all` leaves locks
+  alone because a lock is not a stuck key. `ProtocolVersion::CURRENT` 14 added both.
 - Gamepad `Connected` and `Disconnected` events create and drop the host's virtual pads, so the
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,

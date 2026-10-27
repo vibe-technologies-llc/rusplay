@@ -1017,6 +1017,13 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Input,
+        "Forwarding",
+        "input.sync_locks",
+        "Keep Caps Lock and Num Lock in step with the client",
+        Kind::Flag,
+    ),
+    field(
+        Section::Input,
         "Hotkeys",
         "input.hotkeys",
         "Client hotkeys while engaged",

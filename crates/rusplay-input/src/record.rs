@@ -1,5 +1,5 @@
 use crate::{
-    InputError, InputEvent,
+    InputError, InputEvent, LockState,
     held::{KeySet, MAX_PADS, PAD_AXES, PadState},
     wire::Reader,
 };
@@ -8,10 +8,13 @@ const TAG_KEYS: u8 = 16;
 const TAG_BUTTONS: u8 = 17;
 const TAG_PADS: u8 = 18;
 const TAG_PAD: u8 = 19;
+const TAG_LOCKS: u8 = 20;
+const LAST_STATE_TAG: u8 = TAG_LOCKS;
 
 const TAG_LEN: usize = 1;
 const KEY_SET_LEN: usize = KeySet::WORDS * size_of::<u64>();
 const PADS_LEN: usize = size_of::<u16>();
+const LOCKS_LEN: usize = 1;
 const PAD_LEN: usize = 1 + size_of::<u16>() + PAD_AXES * size_of::<f32>();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,6 +23,7 @@ pub enum StateRecord {
     Buttons(KeySet),
     Pads(u16),
     Pad { slot: u8, state: PadState },
+    Locks(LockState),
 }
 
 impl StateRecord {
@@ -31,6 +35,7 @@ impl StateRecord {
                 Self::Keys(_) | Self::Buttons(_) => KEY_SET_LEN,
                 Self::Pads(_) => PADS_LEN,
                 Self::Pad { .. } => PAD_LEN,
+                Self::Locks(_) => LOCKS_LEN,
             }
     }
 
@@ -56,6 +61,10 @@ impl StateRecord {
                 for axis in state.axes {
                     out.extend_from_slice(&axis.to_le_bytes());
                 }
+            }
+            Self::Locks(locks) => {
+                out.push(TAG_LOCKS);
+                out.push(locks.to_bits());
             }
         }
     }
@@ -84,6 +93,7 @@ impl StateRecord {
 
                 Ok(Self::Pad { slot, state })
             }
+            TAG_LOCKS => Ok(Self::Locks(LockState::from_bits(reader.u8()?)?)),
             tag => Err(InputError::WireUnknownTag(tag)),
         }
     }
@@ -136,7 +146,7 @@ impl InputRecord {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, InputError> {
         match bytes.first() {
-            Some(&(TAG_KEYS..=TAG_PAD)) => StateRecord::decode(bytes).map(Self::State),
+            Some(&(TAG_KEYS..=LAST_STATE_TAG)) => StateRecord::decode(bytes).map(Self::State),
             _ => InputEvent::decode(bytes).map(Self::Event),
         }
     }
@@ -186,6 +196,10 @@ mod tests {
         round_trip(StateRecord::Buttons(keys(&[0x110, 0x111])));
         round_trip(StateRecord::Keys(KeySet::default()));
         round_trip(StateRecord::Pads(0b1010_0000_0000_0101));
+        round_trip(StateRecord::Locks(LockState {
+            caps: false,
+            num: true,
+        }));
         round_trip(StateRecord::Pad {
             slot: 15,
             state: PadState {
@@ -252,7 +266,7 @@ mod tests {
             Err(InputError::WireTruncated { .. })
         ));
         assert!(matches!(
-            InputRecord::decode(&[TAG_PAD + 1]),
+            InputRecord::decode(&[LAST_STATE_TAG + 1]),
             Err(InputError::WireUnknownTag(_))
         ));
         assert!(matches!(

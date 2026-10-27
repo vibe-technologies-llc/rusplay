@@ -6,7 +6,7 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
     globals::{BindError, GlobalList, GlobalListContents},
     protocol::{
-        wl_keyboard::{self, KeyState, WlKeyboard},
+        wl_keyboard::{self, KeyState, KeymapFormat, WlKeyboard},
         wl_pointer::{self, Axis, ButtonState, WlPointer},
         wl_registry::WlRegistry,
         wl_seat::{self, Capability, WlSeat},
@@ -33,8 +33,9 @@ use wayland_protocols::wp::{
 };
 
 use crate::{
-    InputError, InputEvent,
+    InputError, InputEvent, LockMasks,
     capture::{CaptureCore, Transition},
+    locks::read_keymap,
 };
 
 const SEAT_VERSIONS: std::ops::RangeInclusive<u32> = 1..=8;
@@ -77,6 +78,7 @@ pub(super) struct State {
     enter_serial: Option<u32>,
     pointer_focused: bool,
     keyboard_focused: bool,
+    lock_masks: LockMasks,
     scroll: ScrollFrame,
 }
 
@@ -141,6 +143,7 @@ impl State {
             enter_serial: None,
             pointer_focused: false,
             keyboard_focused: false,
+            lock_masks: LockMasks::default(),
             scroll: ScrollFrame::default(),
         })
     }
@@ -226,6 +229,7 @@ impl State {
     fn apply(&mut self, transition: Transition) {
         match transition {
             Transition::Engaged => {
+                self.with_core(CaptureCore::publish_locks);
                 self.sync_pointer_lock();
                 self.inhibit_shortcuts();
                 self.hide_cursor();
@@ -456,6 +460,18 @@ impl Dispatch<WlKeyboard, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
+            wl_keyboard::Event::Keymap {
+                format: WEnum::Value(KeymapFormat::XkbV1),
+                fd,
+                size,
+            } => {
+                state.lock_masks = read_keymap(&fd, size)
+                    .map_or_else(LockMasks::default, |text| LockMasks::from_keymap(&text));
+            }
+            wl_keyboard::Event::Modifiers { mods_locked, .. } => {
+                let locks = state.lock_masks.locked(mods_locked);
+                state.with_core(|core, out| core.set_locks(locks, out));
+            }
             wl_keyboard::Event::Enter { surface, .. } if surface == state.surface => {
                 state.keyboard_focused = true;
             }

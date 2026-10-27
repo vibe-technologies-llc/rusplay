@@ -6,6 +6,7 @@ pub mod gamepad;
 mod held;
 #[cfg(feature = "libei")]
 pub mod libei;
+mod locks;
 mod record;
 mod rumble;
 mod sink;
@@ -17,6 +18,7 @@ pub use crate::{
     error::InputError,
     event::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent},
     held::{HeldInput, KeySet, MAX_PADS, PAD_AXES, PadState},
+    locks::{KEY_CAPS_LOCK, KEY_NUM_LOCK, LOCK_SETTLE, LockMasks, LockState, LockSync, LockTaps},
     record::{InputRecord, StateRecord},
     rumble::{MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker},
     sink::SplitSink,

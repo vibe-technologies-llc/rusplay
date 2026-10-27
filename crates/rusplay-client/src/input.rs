@@ -151,7 +151,7 @@ impl InputPacketer {
 
 fn changes_state(event: &InputEvent) -> bool {
     match event {
-        InputEvent::Key { .. } | InputEvent::PointerButton { .. } => true,
+        InputEvent::Key { .. } | InputEvent::PointerButton { .. } | InputEvent::Locks(_) => true,
         InputEvent::Gamepad { event, .. } => !matches!(event, GamepadEvent::Axis { .. }),
         InputEvent::PointerMotion { .. }
         | InputEvent::PointerAbsolute { .. }
@@ -330,7 +330,7 @@ pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_input::{GamepadAxis, GamepadButton};
+    use rusplay_input::{GamepadAxis, GamepadButton, LockState};
     use rusplay_protocol::{InputAdmission, InputSequence, PacketHeader, StreamKind};
 
     use super::*;
@@ -487,6 +487,7 @@ mod tests {
         assert!(changes_state(&press));
         assert!(changes_state(&connected));
         assert!(changes_state(&key(1, false)));
+        assert!(changes_state(&InputEvent::Locks(LockState::default())));
         assert!(!changes_state(&InputEvent::Scroll { dx: 0.0, dy: 1.0 }));
     }
 
@@ -585,6 +586,28 @@ mod tests {
         assert!(without_snapshot.keys().contains(30));
         assert!(with_snapshot.is_idle());
         assert_eq!(with_snapshot, client);
+    }
+
+    #[test]
+    fn a_snapshot_repairs_lock_state_lost_with_its_event() {
+        let mut packeter = InputPacketer::new(BUDGET);
+        let mut client = HeldInput::new();
+        let mut out = Vec::new();
+        let locks = InputEvent::Locks(LockState {
+            caps: true,
+            num: false,
+        });
+        client.observe(&locks);
+        packeter.pack(&[locks], &mut out).unwrap();
+        packeter.pack(&[motion(1.0)], &mut out).unwrap();
+        packeter.pack(&[motion(2.0)], &mut out).unwrap();
+        snapshot_of(&client, &mut packeter, &mut out);
+
+        let without_snapshot = host_view(&out[..3], &[0, 1]);
+        let with_snapshot = host_view(&out, &[0, 1]);
+
+        assert_eq!(without_snapshot.locks(), None);
+        assert_eq!(with_snapshot.locks(), client.locks());
     }
 
     #[test]

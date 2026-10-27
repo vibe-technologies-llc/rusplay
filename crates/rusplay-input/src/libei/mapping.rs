@@ -55,6 +55,7 @@ pub fn translate(event: InputEvent) -> Result<EiRequest, InputError> {
             dy: notches_to_value120(dy)?,
         }),
         InputEvent::Gamepad { .. } => Err(InputError::GamepadUnsupported),
+        InputEvent::Locks(_) => Err(InputError::LocksNotARequest),
     }
 }
 

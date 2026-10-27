@@ -1,4 +1,4 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent};
+use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent, LockState};
 
 const TAG_KEY: u8 = 0;
 const TAG_POINTER_MOTION: u8 = 1;
@@ -6,6 +6,7 @@ const TAG_POINTER_ABSOLUTE: u8 = 2;
 const TAG_POINTER_BUTTON: u8 = 3;
 const TAG_SCROLL: u8 = 4;
 const TAG_GAMEPAD: u8 = 5;
+const TAG_LOCKS: u8 = 6;
 
 const PAD_CONNECTED: u8 = 0;
 const PAD_DISCONNECTED: u8 = 1;
@@ -19,6 +20,7 @@ const F64_LEN: usize = 8;
 const GAMEPAD_HEADER_LEN: usize = 2;
 const PAD_BUTTON_LEN: usize = 2 + BOOL_LEN;
 const PAD_AXIS_LEN: usize = 1 + 4;
+const LOCKS_LEN: usize = 1;
 
 impl InputEvent {
     pub fn encoded_len(&self) -> usize {
@@ -29,6 +31,7 @@ impl InputEvent {
                     2 * F64_LEN
                 }
                 Self::Gamepad { event, .. } => GAMEPAD_HEADER_LEN + gamepad_payload_len(*event),
+                Self::Locks(_) => LOCKS_LEN,
             }
     }
 
@@ -65,6 +68,10 @@ impl InputEvent {
                 out.push(slot);
                 encode_gamepad(event, out);
             }
+            Self::Locks(locks) => {
+                out.push(TAG_LOCKS);
+                out.push(locks.to_bits());
+            }
         }
     }
 
@@ -96,6 +103,7 @@ impl InputEvent {
                 slot: reader.u8()?,
                 event: decode_gamepad(&mut reader)?,
             },
+            TAG_LOCKS => Self::Locks(LockState::from_bits(reader.u8()?)?),
             tag => return Err(InputError::WireUnknownTag(tag)),
         };
 
@@ -261,6 +269,10 @@ mod tests {
                     value: -0.75,
                 },
             },
+            InputEvent::Locks(LockState {
+                caps: true,
+                num: false,
+            }),
         ]
     }
 
@@ -350,6 +362,18 @@ mod tests {
         let result = InputEvent::decode(&[TAG_KEY, 0, 0, 0, 0, 2]);
 
         assert!(matches!(result, Err(InputError::WireInvalidBool(2))));
+    }
+
+    #[test]
+    fn lock_state_uses_one_byte_and_rejects_unknown_bits() {
+        let bytes = round_trip(InputEvent::Locks(LockState {
+            caps: true,
+            num: true,
+        }));
+        let unknown = InputEvent::decode(&[TAG_LOCKS, 4]);
+
+        assert_eq!(bytes, [TAG_LOCKS, 3]);
+        assert!(matches!(unknown, Err(InputError::WireInvalidLockBits(4))));
     }
 
     #[test]
