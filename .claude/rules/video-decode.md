@@ -112,7 +112,12 @@ paths:
     `TOP_FIELD`/`BOTTOM_FIELD` flags for frames with one marked field and the list entries carry
     the field they name. MBAFF frames are frame pictures to the decoder; the driver handles the
     field macroblock pairs. Mesa's VCN builds the reference lists itself from this DPB state, so
-    the field tests double as a check of the driver against the spec.
+    the field tests double as a check of the driver against the spec: Mesa ignores the slice's
+    `RefPicList0/1`, and the firmware also keeps its own marking (it parses
+    `dec_ref_pic_marking`) and per-slot picture state across pictures. When its marking disagrees
+    with `ReferenceFrames` it conceals the picture by copying reference entry 0, and recreating
+    the context drops every earlier reference, so neither re-describing the DPB nor a context
+    reset can work around a firmware marking fault (`decode-vaapi-driver-field-long-term`).
   - `hevc.rs`: POC from the previous TemporalId-0 picture, the short- and long-term RPS (from the
     SPS or the slice), RefPicList construction with `list_entry` modification, dependent slice
     segments, RASL skipping after a random-access IRAP, range-extension buffers
@@ -229,4 +234,6 @@ paths:
   The tests state the expected lists from the spec (alternating parity, sliding window, MMCO,
   `ref_pic_list_modification`, B ordering, pairing, unpaired fields) and every stream runs with
   one packet per field and one per frame. The marking scenarios were also checked against
-  ffmpeg's software decode.
+  ffmpeg's software decode. A scenario the driver gets wrong stays as an `#[ignore]`d test named
+  in its `docs/BUGS.md` item, run with `cargo test -p rusplay-decode --features vaapi --lib --
+  --ignored` to check a driver update.
