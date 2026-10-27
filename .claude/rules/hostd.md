@@ -6,9 +6,21 @@ paths:
 # Headless host binary
 
 - Arguments are parsed with `lexopt` in `cli.rs`: `-c`/`--config <PATH>`, `-h`/`--help`,
-  `-V`/`--version`. No positional arguments. A usage error exits with status 2 after printing the
+  `-V`/`--version`, and the one subcommand `peers list` / `peers forget <ID|NAME>` (below); any
+  other positional word is `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
   chain.
+- `peers` (`peers.rs`) opens the paired-client store (`PeerStore::open_host`, so `peers.host_file`
+  applies) from the same discovered config and exits without touching the GPU, portal or
+  network. `list` prints `<id> <name>` per line (never a secret). `forget` takes a name (exact)
+  or an id (case-insensitive, at least 4 characters of prefix) and refuses no match
+  (`NotFound`) or several (`Ambiguous`) rather than guess. It edits the store file only; a
+  running daemon notices through `PeerStore::is_stale`/`refresh` (a stat of the file's
+  modified time, length and inode), which `accept` checks before every pairing or reconnect
+  datagram, so a forgotten client is refused at its next reconnect attempt and the daemon never
+  rewrites the file from a stale in-memory list. A client already streaming stays until it
+  leaves, and there is no control socket. A store file that fails to parse during a refresh
+  fails the accept window (printed, then a new PIN), never silently keeps the old list.
 - Config path discovery is `discovery.rs`, pure over an `Environment` (`XDG_CONFIG_HOME`, `HOME`)
   and an `exists` predicate so tests need no filesystem. Order: `--config` (used as given, a
   missing file is a read error and not a fallthrough), `$XDG_CONFIG_HOME/rusplay/host.toml`,

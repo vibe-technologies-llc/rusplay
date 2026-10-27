@@ -177,7 +177,10 @@ paths:
   the store, so a crash leaves the old file and a stale permissive staging file is never reused.
   `remember` and `forget` persist before they change the in-memory list, so a failed write changes
   nothing. `forget` is the revocation API; the host shares the store as
-  `RwLock<PeerStore>` so a forget applies to the next datagram.
+  `RwLock<PeerStore>` so a forget applies to the next datagram. Another process can edit the
+  file (`rusplay-hostd peers forget`): `PeerStore::is_stale` compares the file's modified time,
+  length and inode with those recorded at the last load or write, and `refresh` re-reads when
+  they differ, keeping the old records if the new file is corrupt.
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
   `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
   host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`,

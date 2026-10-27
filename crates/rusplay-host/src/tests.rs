@@ -447,7 +447,7 @@ fn complete(reassembler: &mut Reassembler, datagram: &[u8]) -> Vec<ReassembledFr
 }
 
 struct Fixture {
-    _dir: TempDir,
+    dir: TempDir,
     host: Arc<HostSession>,
     address: SocketAddr,
 }
@@ -463,11 +463,7 @@ impl Fixture {
         let host = Arc::new(configure(HostSession::bind(config, store).unwrap()));
         let address = host.local_addr().unwrap();
 
-        Self {
-            _dir: dir,
-            host,
-            address,
-        }
+        Self { dir, host, address }
     }
 
     fn serve(
@@ -820,6 +816,44 @@ fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
     ));
     assert!(client.pump_until(|client| client.frames.len() >= 2));
     stream.stop().unwrap();
+}
+
+#[test]
+fn a_peer_forgotten_in_the_store_file_cannot_reconnect_to_a_running_host() {
+    let mut config = host_config();
+    config.network.pairing_timeout_ms = 1_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    stream.stop().unwrap();
+
+    let mut external = PeerStore::open(fixture.dir.path().join("paired-clients")).unwrap();
+    external.forget(&record.id()).unwrap();
+    let host = Arc::clone(&fixture.host);
+    let accepting = thread::spawn(move || host.accept(None).map(|client| client.admission()));
+
+    let returning = TestClient::bind(fixture.address);
+    let result = reconnect_as_client(
+        &returning.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(matches!(
+        result,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::UnknownPeer
+        })
+    ));
+    assert!(fixture.host.peers().read().is_empty());
+    assert!(matches!(
+        accepting.join().unwrap(),
+        Err(HostError::AcceptTimeout(_))
+    ));
 }
 
 #[test]

@@ -80,10 +80,14 @@ pub(crate) fn accept(
         let datagram = &buf[..len];
         let admitted = match PacketHeader::read(datagram).map(|header| header.stream) {
             Ok(StreamKind::Pairing) => match pairing.as_mut() {
-                Some(responder) => answer_pairing(transport, peers, responder, datagram, from)?,
+                Some(responder) => {
+                    refresh_peers(peers)?;
+                    answer_pairing(transport, peers, responder, datagram, from)?
+                }
                 None => None,
             },
             Ok(StreamKind::Reconnect) => {
+                refresh_peers(peers)?;
                 answer_reconnect(transport, peers, &mut reconnect, datagram, from)?
             }
             _ => None,
@@ -93,6 +97,14 @@ pub(crate) fn accept(
             return Ok(client);
         }
     }
+}
+
+fn refresh_peers(peers: &RwLock<PeerStore>) -> Result<(), HostError> {
+    if peers.read().is_stale() {
+        peers.write().refresh()?;
+    }
+
+    Ok(())
 }
 
 fn answer_pairing(

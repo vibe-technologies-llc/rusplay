@@ -24,6 +24,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 rusplay-net.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

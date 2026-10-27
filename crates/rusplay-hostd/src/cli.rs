@@ -1,12 +1,22 @@
 use std::{ffi::OsString, path::PathBuf};
 
-use lexopt::{Arg, Parser};
+use lexopt::{Arg, Parser, ValueExt};
 use thiserror::Error;
 
 pub const HELP: &str = "\
 Headless Rusplay host
 
 Usage: rusplay-hostd [OPTIONS]
+       rusplay-hostd [OPTIONS] peers list
+       rusplay-hostd [OPTIONS] peers forget <ID|NAME>
+
+Commands:
+  peers list           Print the paired clients, one `<id> <name>` per line
+  peers forget <ID|NAME>
+                       Revoke a paired client by its id (or an unambiguous prefix of at
+                       least 4 characters) or by its exact name. A running daemon notices on
+                       the next pairing or reconnect attempt; a client already streaming
+                       stays until it leaves.
 
 Options:
   -c, --config <PATH>  Read the configuration from PATH
@@ -26,11 +36,33 @@ pub enum CliError {
     Parse(#[from] lexopt::Error),
     #[error("--config was given more than once")]
     ConfigRepeated,
+    #[error("unknown command {0:?}")]
+    UnknownCommand(String),
+    #[error("peers needs an action, list or forget")]
+    PeersActionMissing,
+    #[error("unknown peers action {0:?}")]
+    UnknownPeersAction(String),
+    #[error("peers forget needs an id or a name")]
+    ForgetTargetMissing,
+    #[error("unexpected argument {0:?}")]
+    UnexpectedArgument(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeersAction {
+    List,
+    Forget { target: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    Run { config: Option<PathBuf> },
+    Run {
+        config: Option<PathBuf>,
+    },
+    Peers {
+        config: Option<PathBuf>,
+        action: PeersAction,
+    },
     Help,
     Version,
 }
@@ -42,6 +74,7 @@ where
 {
     let mut parser = Parser::from_args(args);
     let mut config = None;
+    let mut words = Vec::new();
 
     while let Some(arg) = parser.next()? {
         match arg {
@@ -53,11 +86,32 @@ where
                 }
                 config = Some(PathBuf::from(parser.value()?));
             }
+            Arg::Value(word) => words.push(word.string()?),
             other => return Err(other.unexpected().into()),
         }
     }
 
-    Ok(Command::Run { config })
+    let mut words = words.into_iter();
+    let Some(command) = words.next() else {
+        return Ok(Command::Run { config });
+    };
+    if command != "peers" {
+        return Err(CliError::UnknownCommand(command));
+    }
+
+    let action = match words.next().as_deref() {
+        None => return Err(CliError::PeersActionMissing),
+        Some("list") => PeersAction::List,
+        Some("forget") => PeersAction::Forget {
+            target: words.next().ok_or(CliError::ForgetTargetMissing)?,
+        },
+        Some(other) => return Err(CliError::UnknownPeersAction(other.to_owned())),
+    };
+    if let Some(extra) = words.next() {
+        return Err(CliError::UnexpectedArgument(extra));
+    }
+
+    Ok(Command::Peers { config, action })
 }
 
 #[cfg(test)]
@@ -127,12 +181,58 @@ mod tests {
     }
 
     #[test]
-    fn positional_argument_is_an_error() {
+    fn unknown_command_is_an_error() {
         let error = parse_strs(&["host.toml"]).unwrap_err();
 
+        assert!(matches!(error, CliError::UnknownCommand(word) if word == "host.toml"));
+    }
+
+    #[test]
+    fn peers_list_and_forget_parse_with_or_without_a_config() {
+        assert_eq!(
+            parse_strs(&["peers", "list"]).unwrap(),
+            Command::Peers {
+                config: None,
+                action: PeersAction::List
+            }
+        );
+        assert_eq!(
+            parse_strs(&["-c", "a.toml", "peers", "forget", "desk pc"]).unwrap(),
+            Command::Peers {
+                config: Some(PathBuf::from("a.toml")),
+                action: PeersAction::Forget {
+                    target: "desk pc".to_owned()
+                }
+            }
+        );
+        assert_eq!(
+            parse_strs(&["peers", "forget", "ab12", "--config", "a.toml"]).unwrap(),
+            Command::Peers {
+                config: Some(PathBuf::from("a.toml")),
+                action: PeersAction::Forget {
+                    target: "ab12".to_owned()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn incomplete_or_unknown_peers_commands_are_errors() {
         assert!(matches!(
-            error,
-            CliError::Parse(lexopt::Error::UnexpectedArgument(_))
+            parse_strs(&["peers"]),
+            Err(CliError::PeersActionMissing)
+        ));
+        assert!(matches!(
+            parse_strs(&["peers", "forget"]),
+            Err(CliError::ForgetTargetMissing)
+        ));
+        assert!(matches!(
+            parse_strs(&["peers", "rename"]),
+            Err(CliError::UnknownPeersAction(word)) if word == "rename"
+        ));
+        assert!(matches!(
+            parse_strs(&["peers", "list", "extra"]),
+            Err(CliError::UnexpectedArgument(word)) if word == "extra"
         ));
     }
 

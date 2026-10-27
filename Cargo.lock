@@ -4829,6 +4829,7 @@ dependencies = [
  "rusplay-config",
  "rusplay-host",
  "rusplay-net",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
