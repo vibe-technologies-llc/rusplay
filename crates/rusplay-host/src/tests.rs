@@ -20,8 +20,8 @@ use rusplay_net::{
     Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
-    ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection, ProtocolVersion,
-    ReconnectRejection, StreamDescription, StreamKind,
+    ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
+    ProtocolVersion, ReconnectRejection, StreamDescription, StreamKind,
 };
 use tempfile::TempDir;
 
@@ -32,6 +32,7 @@ use crate::{
 };
 
 const PIN: &str = "583014";
+const CLIENT_NAME: &str = "test client";
 const FRAME_SIZE: Resolution = Resolution::new(64, 32);
 const RESIZED: Resolution = Resolution::new(96, 48);
 const FRAME_BYTES: usize = 5_000;
@@ -293,6 +294,7 @@ impl TestClient {
             &client.transport,
             host,
             &pin(),
+            ClientName::new(CLIENT_NAME).unwrap(),
             PairingTiming::from(&network()),
         )
         .unwrap();
@@ -512,6 +514,10 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     assert!(complete);
     assert_eq!(admission, Admission::Paired);
     assert_eq!(fixture.host.peers().read().len(), 1);
+    assert_eq!(
+        fixture.host.peers().read().iter().next().unwrap().name(),
+        CLIENT_NAME
+    );
     assert!(client.frames[0].keyframe);
     assert!(later_keyframes <= stats.frames_dropped);
     assert!(
@@ -789,6 +795,7 @@ fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
         &second.transport,
         fixture.address,
         &pin(),
+        ClientName::EMPTY,
         PairingTiming::from(&network()),
     );
     let reconnecting = reconnect_as_client(

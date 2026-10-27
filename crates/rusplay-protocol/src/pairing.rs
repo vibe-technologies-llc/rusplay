@@ -1,4 +1,4 @@
-use crate::{PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamKind};
+use crate::{ClientName, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamKind};
 
 const TAG_START: u8 = 0;
 const TAG_REPLY: u8 = 1;
@@ -32,6 +32,7 @@ pub enum PairingMessage {
     Start {
         attempt: u32,
         spake: [u8; PairingMessage::SPAKE_LEN],
+        name: ClientName,
     },
     Reply {
         attempt: u32,
@@ -54,7 +55,8 @@ pub enum PairingMessage {
 impl PairingMessage {
     pub const SPAKE_LEN: usize = 33;
     pub const MAC_LEN: usize = 32;
-    pub const MAX_ENCODED_LEN: usize = PacketHeader::SIZE + 1 + 4 + Self::SPAKE_LEN + Self::MAC_LEN;
+    pub const MAX_START_BODY_LEN: usize = Self::SPAKE_LEN + 1 + ClientName::MAX_LEN;
+    pub const MAX_ENCODED_LEN: usize = PacketHeader::SIZE + 1 + 4 + Self::MAX_START_BODY_LEN;
 
     pub const fn attempt(&self) -> u32 {
         match self {
@@ -90,7 +92,11 @@ impl PairingMessage {
         datagram.extend_from_slice(&attempt.to_be_bytes());
 
         match self {
-            Self::Start { spake, .. } => datagram.extend_from_slice(spake),
+            Self::Start { spake, name, .. } => {
+                datagram.extend_from_slice(spake);
+                datagram.push(name.len_byte());
+                datagram.extend_from_slice(name.as_bytes());
+            }
             Self::Reply { spake, confirm, .. } => {
                 datagram.extend_from_slice(spake);
                 datagram.extend_from_slice(confirm);
@@ -128,7 +134,7 @@ impl PairingMessage {
         let attempt = u32::from_be_bytes(*attempt_bytes);
 
         let body_len = match tag {
-            TAG_START => Self::SPAKE_LEN,
+            TAG_START => Self::start_body_len(body, datagram.len())?,
             TAG_REPLY => Self::SPAKE_LEN + Self::MAC_LEN,
             TAG_CONFIRM => Self::MAC_LEN,
             TAG_DONE => 0,
@@ -152,7 +158,8 @@ impl PairingMessage {
         Ok(match tag {
             TAG_START => Self::Start {
                 attempt,
-                spake: fixed(body),
+                spake: fixed(&body[..Self::SPAKE_LEN]),
+                name: ClientName::from_bytes(&body[Self::SPAKE_LEN + 1..])?,
             },
             TAG_REPLY => Self::Reply {
                 attempt,
@@ -172,6 +179,26 @@ impl PairingMessage {
     }
 }
 
+impl PairingMessage {
+    fn start_body_len(body: &[u8], datagram_len: usize) -> Result<usize, ProtocolError> {
+        let Some(&name_len) = body.get(Self::SPAKE_LEN) else {
+            return Err(ProtocolError::BufferTooShort {
+                needed: PacketHeader::SIZE + 5 + Self::SPAKE_LEN + 1,
+                available: datagram_len,
+            });
+        };
+
+        if usize::from(name_len) > ClientName::MAX_LEN {
+            return Err(ProtocolError::ClientNameTooLong {
+                len: usize::from(name_len),
+                max: ClientName::MAX_LEN,
+            });
+        }
+
+        Ok(Self::SPAKE_LEN + 1 + usize::from(name_len))
+    }
+}
+
 fn fixed<const N: usize>(bytes: &[u8]) -> [u8; N] {
     let mut out = [0; N];
     out.copy_from_slice(bytes);
@@ -187,6 +214,7 @@ mod tests {
             PairingMessage::Start {
                 attempt: 0xA1B2_C3D4,
                 spake: [7; PairingMessage::SPAKE_LEN],
+                name: ClientName::new("desk pc").unwrap(),
             },
             PairingMessage::Reply {
                 attempt: 1,
@@ -227,6 +255,63 @@ mod tests {
 
             assert_eq!(PairingMessage::from_datagram(&datagram), Ok(message));
         }
+    }
+
+    #[test]
+    fn the_longest_start_fits_the_maximum_encoding() {
+        let start = PairingMessage::Start {
+            attempt: 1,
+            spake: [7; PairingMessage::SPAKE_LEN],
+            name: ClientName::new(&"n".repeat(ClientName::MAX_LEN)).unwrap(),
+        };
+
+        let datagram = start.to_datagram().unwrap();
+
+        assert_eq!(datagram.len(), PairingMessage::MAX_ENCODED_LEN);
+        assert_eq!(PairingMessage::from_datagram(&datagram), Ok(start));
+    }
+
+    #[test]
+    fn a_start_without_a_name_round_trips() {
+        let start = PairingMessage::Start {
+            attempt: 1,
+            spake: [7; PairingMessage::SPAKE_LEN],
+            name: ClientName::EMPTY,
+        };
+
+        let datagram = start.to_datagram().unwrap();
+
+        assert_eq!(PairingMessage::from_datagram(&datagram), Ok(start));
+    }
+
+    #[test]
+    fn a_start_with_a_bad_name_is_rejected() {
+        let start = PairingMessage::Start {
+            attempt: 1,
+            spake: [7; PairingMessage::SPAKE_LEN],
+            name: ClientName::new("abc").unwrap(),
+        };
+        let name_len_at = PacketHeader::SIZE + 5 + PairingMessage::SPAKE_LEN;
+
+        let mut oversized = start.to_datagram().unwrap();
+        oversized[name_len_at] = 200;
+        let mut control = start.to_datagram().unwrap();
+        control[name_len_at + 1] = b'\n';
+        let mut invalid = start.to_datagram().unwrap();
+        invalid[name_len_at + 1] = 0xff;
+
+        assert_eq!(
+            PairingMessage::from_datagram(&oversized),
+            Err(ProtocolError::ClientNameTooLong { len: 200, max: 64 })
+        );
+        assert_eq!(
+            PairingMessage::from_datagram(&control),
+            Err(ProtocolError::ClientNameControlCharacter)
+        );
+        assert_eq!(
+            PairingMessage::from_datagram(&invalid),
+            Err(ProtocolError::InvalidClientName)
+        );
     }
 
     #[test]

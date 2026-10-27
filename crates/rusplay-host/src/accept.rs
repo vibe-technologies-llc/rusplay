@@ -8,7 +8,7 @@ use rusplay_config::NetworkConfig;
 use rusplay_net::{
     NetError, PairingResponder, PeerRecord, PeerStore, Pin, ReconnectResponder, Transport,
 };
-use rusplay_protocol::{PacketHeader, PeerId, StreamKind};
+use rusplay_protocol::{ClientName, PacketHeader, PeerId, StreamKind};
 
 use crate::HostError;
 
@@ -118,12 +118,12 @@ fn answer_pairing(
         return Ok(None);
     };
 
-    let record = PeerRecord::new(&peer_name(from), outcome.secret).map_err(|source| {
-        HostError::PeerName {
+    let record = PeerRecord::new(&peer_name(outcome.client_name, from), outcome.secret).map_err(
+        |source| HostError::PeerName {
             address: from,
             source,
-        }
-    })?;
+        },
+    )?;
     let peer = record.id();
     peers.write().remember(record)?;
     transport.install_session(&outcome.keys);
@@ -177,8 +177,12 @@ fn answer_reconnect(
     }))
 }
 
-fn peer_name(address: SocketAddr) -> String {
-    format!("client at {}", address.ip())
+fn peer_name(announced: ClientName, address: SocketAddr) -> String {
+    if announced.is_empty() {
+        format!("client at {}", address.ip())
+    } else {
+        announced.as_str().to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -207,10 +211,22 @@ mod tests {
 
         assert!(
             PeerRecord::new(
-                &peer_name(longest),
+                &peer_name(ClientName::EMPTY, longest),
                 rusplay_net::PeerSecret::from_bytes([1; 32])
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_announced_name_replaces_the_address_label() {
+        let address = SocketAddr::new("192.168.1.9".parse().unwrap(), 1);
+        let announced = ClientName::new("desk pc").unwrap();
+
+        assert_eq!(peer_name(announced, address), "desk pc");
+        assert_eq!(
+            peer_name(ClientName::EMPTY, address),
+            "client at 192.168.1.9"
         );
     }
 }

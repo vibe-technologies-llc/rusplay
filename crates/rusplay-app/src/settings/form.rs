@@ -561,6 +561,7 @@ mod tests {
         base.network.bind_address = "192.168.1.5".parse().unwrap();
         base.peers.host_file = Some("/tmp/rusplay-clients".into());
         base.peers.host_name = Some("living room".to_owned());
+        base.peers.client_name = Some("desk".to_owned());
         base.peers.client_file = Some("/tmp/rusplay-hosts".into());
         base.audio.flac.compression_level = 5;
         base.audio.opus.bitrate_kbps = 128;

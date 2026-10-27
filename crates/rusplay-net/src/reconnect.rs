@@ -500,7 +500,7 @@ mod tests {
         thread,
     };
 
-    use rusplay_protocol::StreamKind;
+    use rusplay_protocol::{ClientName, StreamKind};
 
     use super::*;
     use crate::{
@@ -933,7 +933,14 @@ mod tests {
             pair_as_host(&host_transport, &mut responder, pairing_timing).unwrap();
             host_transport
         });
-        let outcome = pair_as_client(&client_transport, host_addr, &pin, pairing_timing).unwrap();
+        let outcome = pair_as_client(
+            &client_transport,
+            host_addr,
+            &pin,
+            ClientName::EMPTY,
+            pairing_timing,
+        )
+        .unwrap();
         let host_transport = paired_host.join().unwrap();
 
         let mut client_store = PeerStore::open(client_path.clone()).unwrap();

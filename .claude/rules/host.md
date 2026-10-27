@@ -12,8 +12,8 @@ paths:
 - `accept(Option<Pin>)` drives `PairingResponder` (only when a PIN is given) and
   `ReconnectResponder` side by side on the same socket, by `StreamKind`, until one completes or
   `network.pairing_timeout_ms` passes (`AcceptTimeout`). A spent PIN budget is
-  `Net(PairingLocked)`. A PIN pairing is remembered in the store as `client at <ip>` before the
-  `Done` goes out. The session keys are installed before the final reply is sent, so the client's
+  `Net(PairingLocked)`. A PIN pairing is remembered in the store under the name the client announced in
+  `Start` (`client at <ip>` when it announced none) before the `Done` goes out. The session keys are installed before the final reply is sent, so the client's
   sealed `Hello` can never arrive first. Instead of `pair_as_host`'s linger, the session keeps
   the client's final handshake datagram (`Confirm` or `Proof`) and its reply (`Replay`), and the
   control stage answers a byte-identical retransmit from it. Any other pairing or reconnect

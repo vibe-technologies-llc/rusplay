@@ -29,7 +29,7 @@ pub fn busy_reply(datagram: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_protocol::PeerId;
+    use rusplay_protocol::{ClientName, PeerId};
 
     use super::*;
 
@@ -38,6 +38,7 @@ mod tests {
         let start = PairingMessage::Start {
             attempt: 7,
             spake: [1; PairingMessage::SPAKE_LEN],
+            name: ClientName::EMPTY,
         }
         .to_datagram()
         .unwrap();

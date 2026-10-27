@@ -5,6 +5,7 @@ mod error;
 mod fec;
 mod header;
 mod input;
+mod name;
 mod pairing;
 mod reconnect;
 mod stream;
@@ -17,6 +18,7 @@ pub use crate::{
     fec::FecHeader,
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},
     input::{InputAdmission, InputPacket, InputRecords, InputSequence, push_input_record},
+    name::ClientName,
     pairing::{PairingMessage, PairingRejection},
     reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
     stream::StreamDescription,

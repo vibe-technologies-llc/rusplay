@@ -119,6 +119,14 @@ paths:
   PIN is never exposed to offline guessing. `PairingMessage` on `StreamKind::Pairing` carries
   `Start` (client key share), `Reply` (host share plus key confirmation), `Confirm` (client key
   confirmation), `Done` and `Rejected`, all tagged with a random per-attempt id.
+- `Start` also carries the client's display name, `ClientName` (`rusplay-protocol`): a `u8`
+  length then at most 64 bytes of UTF-8 without control characters, empty allowed. Decoding
+  validates it, each failure its own `ProtocolError`. It is not part of the SPAKE2 transcript or
+  the confirmations, so it is an unauthenticated display hint: the host stores it as the
+  `PeerRecord` name and never uses it for identity (`PeerId` is the identity). The responder
+  hands it to the caller as `PairingOutcome::client_name`. The client sends `peers.client_name`,
+  else the kernel hostname (`rusplay-client/src/name.rs`), cut to 64 bytes on a character
+  boundary with control characters dropped.
 - The SPAKE2 secret feeds HKDF-SHA256 (salted with the attempt id) into two confirmation keys and
   two ChaCha20-Poly1305 session keys, one per direction. Each side proves it derived the same
   secret (HKDF-based tags over the label, attempt and both key shares, compared in constant time);

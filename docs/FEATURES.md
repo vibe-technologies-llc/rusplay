@@ -17,7 +17,6 @@
 
 # Pairing
 - [S] `hostd-peer-management`: give `rusplay-hostd` `peers list` and `peers forget <id|name>` subcommands over `PeerStore::iter`/`forget`, which is the documented revocation API but is called only from tests; a running daemon reads the store only at bind time, so forgetting has to reach it (reload on change or a control socket) or say it applies on restart
-- [S] `pairing-client-name`: send a client display name in `PairingMessage::Start`, since the host saves every client as `client at <ip>` (`rusplay-host/src/accept.rs`), which goes stale with DHCP and makes `hostd-peer-management` guesswork; it is unauthenticated, so a display hint only, with a protocol version bump
 
 # Client app
 - [M] `app-host-discovery`: list LAN hosts on the Hosts page. `DiscoveryBrowser::scan` (`rusplay-net/src/discovery.rs`) and the hostd responder are shipped, but `rusplay-client` does not re-export the browser and the app never scans, so hosts are only added by typing an IP and the client's `network.discovery_port`/`discovery_group` rows have no effect. Re-export through `rusplay-client`, scan on gpui's background executor (it blocks for its timeout) on page open and on a refresh button, and merge results de-duplicated by address. `Announce` carries no stable host id, so matching a discovered host to a saved pairing needs one (protocol bump) or falls back to name and address
