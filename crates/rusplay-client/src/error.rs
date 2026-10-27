@@ -21,6 +21,7 @@ pub enum Stage {
     Decode,
     Present,
     Audio,
+    Microphone,
     Input,
     Gamepad,
     Window,
@@ -33,6 +34,7 @@ impl Stage {
             Self::Decode => "decode",
             Self::Present => "present",
             Self::Audio => "audio",
+            Self::Microphone => "microphone",
             Self::Input => "input",
             Self::Gamepad => "gamepad",
             Self::Window => "window",
@@ -82,6 +84,8 @@ pub enum ClientError {
     HostSilent(Duration),
     #[error("audio codec {codec} is not compiled into this client")]
     AudioCodecNotCompiled { codec: AudioCodec },
+    #[error("the microphone needs the pipewire feature, or audio.microphone.enabled turned off")]
+    MicrophoneNotCompiled,
     #[error("failed to read the host book {path}")]
     HostBookRead {
         path: PathBuf,

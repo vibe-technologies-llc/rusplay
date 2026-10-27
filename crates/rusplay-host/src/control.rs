@@ -1,7 +1,10 @@
 use std::{
     net::SocketAddr,
     ops::RangeInclusive,
-    sync::{Arc, mpsc::Sender},
+    sync::{
+        Arc,
+        mpsc::{Sender, SyncSender, TrySendError},
+    },
     time::{Duration, Instant},
 };
 
@@ -10,7 +13,9 @@ use rusplay_config::{Config, NetworkConfig};
 use rusplay_net::{
     ControlEvent, NetError, PeerStore, RecvBatch, SessionTakeover, Transport, busy_reply,
 };
-use rusplay_protocol::{ControlMessage, PacketHeader, PeerId, ProtocolVersion, StreamKind};
+use rusplay_protocol::{
+    ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
+};
 
 use crate::{
     HostError,
@@ -22,6 +27,13 @@ use crate::{
 const RECV_BATCH_DATAGRAMS: usize = 32;
 const IDLE_WAKE: Duration = Duration::from_millis(20);
 const GOODBYE_LINGER_RETRANSMITS: u32 = 4;
+
+fn protects_microphone(datagram: &[u8]) -> bool {
+    PacketHeader::parse(datagram)
+        .ok()
+        .and_then(|(_, payload)| FecHeader::parse(payload).ok())
+        .is_some_and(|(fec, _)| fec.protects == StreamKind::Microphone)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Flow {
@@ -82,6 +94,7 @@ pub(crate) struct ControlLinks {
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
     pub input: Option<Sender<Vec<u8>>>,
+    pub microphone: Option<SyncSender<Vec<u8>>>,
 }
 
 pub(crate) struct ControlStage {
@@ -307,6 +320,14 @@ impl ControlStage {
                 }
                 true
             }
+            Ok(StreamKind::Microphone) => {
+                self.forward_microphone(datagram);
+                true
+            }
+            Ok(StreamKind::Fec) if protects_microphone(datagram) => {
+                self.forward_microphone(datagram);
+                true
+            }
             Ok(_) => true,
             Err(_) => false,
         };
@@ -315,6 +336,23 @@ impl ControlStage {
             self.links.shared.counters.malformed_datagrams.increment();
         }
         Ok(())
+    }
+
+    fn forward_microphone(&self, datagram: &[u8]) {
+        if !self.streaming {
+            return;
+        }
+        let Some(microphone) = &self.links.microphone else {
+            return;
+        };
+
+        if let Err(TrySendError::Full(_)) = microphone.try_send(datagram.to_vec()) {
+            self.links
+                .shared
+                .counters
+                .microphone_packets_dropped
+                .increment();
+        }
     }
 
     fn handle(&mut self, events: &mut Vec<ControlEvent>, now: Instant) -> Result<Flow, HostError> {
@@ -486,6 +524,8 @@ fn same_family(first: SocketAddr, second: SocketAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_net::{FecScheme, Packetizer};
+
     use super::*;
 
     #[test]
@@ -495,5 +535,46 @@ mod tests {
 
         assert!(same_family(v4, SocketAddr::from(([10, 0, 0, 2], 9))));
         assert!(!same_family(v4, v6));
+    }
+
+    const MAX_DATAGRAM: usize = 1200;
+    const PARITY_SCHEME: FecScheme = FecScheme::ReedSolomon {
+        data_shards: 2,
+        parity_shards: 1,
+    };
+
+    fn datagrams(stream: StreamKind) -> Vec<Vec<u8>> {
+        Packetizer::new(stream, MAX_DATAGRAM, PARITY_SCHEME)
+            .unwrap()
+            .packetize(0, false, &[7; 3000])
+            .unwrap()
+    }
+
+    fn parity_of(stream: StreamKind) -> Vec<Vec<u8>> {
+        datagrams(stream)
+            .into_iter()
+            .filter(|datagram| {
+                PacketHeader::read(datagram).is_ok_and(|header| header.stream == StreamKind::Fec)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parity_for_the_microphone_is_routed_to_it() {
+        let parity = parity_of(StreamKind::Microphone);
+
+        assert_ne!(parity.len(), 0);
+        assert!(parity.iter().all(|datagram| protects_microphone(datagram)));
+    }
+
+    #[test]
+    fn parity_for_other_streams_and_plain_data_are_not() {
+        let audio = parity_of(StreamKind::Audio);
+        let data = datagrams(StreamKind::Microphone);
+
+        assert_ne!(audio.len(), 0);
+        assert!(audio.iter().all(|datagram| !protects_microphone(datagram)));
+        assert!(!protects_microphone(&data[0]));
+        assert!(!protects_microphone(&[0; 4]));
     }
 }

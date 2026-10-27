@@ -15,8 +15,8 @@ use std::{
 use parking_lot::Mutex;
 use rusplay_audio::{AudioEncoder, CODEC_THREAD_STACK_BYTES, OpusAudioEncoder};
 use rusplay_client::{
-    AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream, Credentials,
-    FrameSink, Gpu, Pin,
+    AudioInput, AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream,
+    Credentials, FrameSink, Gpu, Pin,
 };
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::{
@@ -26,7 +26,8 @@ use rusplay_core::{
 use rusplay_input::{InputEvent, InputRecord, StateRecord};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, FecScheme, Packetizer, PairingResponder,
-    PairingTiming, Transport, TransportOptions, pair_as_host,
+    PairingTiming, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, Transport,
+    TransportOptions, pair_as_host,
 };
 use rusplay_protocol::{
     ControlMessage, CursorMessage, InputAdmission, InputPacket, InputSequence, PacketHeader,
@@ -164,6 +165,7 @@ pub struct TestHost {
     pub address: SocketAddr,
     pub received: Arc<Mutex<Vec<ControlMessage>>>,
     pub input: Arc<Mutex<Vec<InputRecord>>>,
+    pub microphone: Arc<Mutex<Vec<Vec<u8>>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -182,14 +184,21 @@ impl TestHost {
         let address = transport.local_addr().unwrap();
         let received = Arc::new(Mutex::new(Vec::new()));
         let input = Arc::new(Mutex::new(Vec::new()));
+        let microphone = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
 
         let thread = {
             let received = Arc::clone(&received);
             let input = Arc::clone(&input);
+            let microphone = Arc::clone(&microphone);
             let stop = Arc::clone(&stop);
             thread::spawn(move || {
-                serve(&transport, &network, &options, &received, &input, &stop);
+                let sinks = Sinks {
+                    received: &received,
+                    input: &input,
+                    microphone: &microphone,
+                };
+                serve(&transport, &network, &options, &sinks, &stop);
             })
         };
 
@@ -197,6 +206,7 @@ impl TestHost {
             address,
             received,
             input,
+            microphone,
             stop,
             thread: Some(thread),
         }
@@ -215,6 +225,35 @@ impl TestHost {
                 InputRecord::State(_) => None,
             })
             .collect()
+    }
+
+    pub fn microphone_frames(&self) -> Vec<ReassembledFrame> {
+        let mut reassembler = Reassembler::new(StreamKind::Microphone, ReassemblyLimits::default());
+        let mut events = Vec::new();
+        for datagram in self.microphone.lock().iter() {
+            reassembler
+                .push(datagram, Instant::now(), &mut events)
+                .unwrap();
+        }
+
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                ReassemblyEvent::Frame(frame) => Some(frame),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn wait_for_microphone(&self, timeout: Duration, count: usize) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.microphone.lock().len() >= count {
+                return true;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        false
     }
 
     pub fn state_records(&self) -> Vec<StateRecord> {
@@ -269,6 +308,12 @@ impl Drop for TestHost {
             thread.join().ok();
         }
     }
+}
+
+struct Sinks<'a> {
+    received: &'a Mutex<Vec<ControlMessage>>,
+    input: &'a Mutex<Vec<InputRecord>>,
+    microphone: &'a Mutex<Vec<Vec<u8>>>,
 }
 
 struct Extras {
@@ -417,12 +462,30 @@ fn send_datagrams(
     }
 }
 
+fn route(
+    datagram: &[u8],
+    control: &mut ControlChannel,
+    events: &mut Vec<ControlEvent>,
+    input_sequence: &mut InputSequence,
+    sinks: &Sinks<'_>,
+) {
+    match PacketHeader::read(datagram).map(|header| header.stream) {
+        Ok(StreamKind::Control) => {
+            control
+                .handle_datagram(datagram, Instant::now(), events)
+                .ok();
+        }
+        Ok(StreamKind::Input) => record_input(datagram, input_sequence, sinks.input),
+        Ok(StreamKind::Microphone) => sinks.microphone.lock().push(datagram.to_vec()),
+        _ => {}
+    }
+}
+
 fn serve(
     transport: &Transport,
     network: &NetworkConfig,
     options: &HostOptions,
-    received: &Mutex<Vec<ControlMessage>>,
-    input: &Mutex<Vec<InputRecord>>,
+    sinks: &Sinks<'_>,
     stop: &AtomicBool,
 ) {
     let mut responder = PairingResponder::new(pin(), network.pairing_max_attempts);
@@ -459,15 +522,13 @@ fn serve(
         if let Ok(Some((len, from))) = transport.recv_from_timeout(&mut buf, POLL_INTERVAL)
             && from == client
         {
-            match PacketHeader::read(&buf[..len]).map(|header| header.stream) {
-                Ok(StreamKind::Control) => {
-                    control
-                        .handle_datagram(&buf[..len], Instant::now(), &mut events)
-                        .ok();
-                }
-                Ok(StreamKind::Input) => record_input(&buf[..len], &mut input_sequence, input),
-                _ => {}
-            }
+            route(
+                &buf[..len],
+                &mut control,
+                &mut events,
+                &mut input_sequence,
+                sinks,
+            );
         }
         control.poll(Instant::now(), &mut events);
 
@@ -475,7 +536,7 @@ fn serve(
             let ControlEvent::Received(message) = event else {
                 continue;
             };
-            received.lock().push(message);
+            sinks.received.lock().push(message);
             match message {
                 ControlMessage::Hello { .. } => {
                     answer_hello(&mut control, transport, client, !streaming);
@@ -632,6 +693,17 @@ impl AudioOutput for CapturedAudio {
     fn stats(&self) -> AudioOutputStats {
         AudioOutputStats::default()
     }
+}
+
+pub fn connect_with_microphone(
+    session: &ClientSession,
+    host: SocketAddr,
+    credentials: &Credentials,
+    gpu: Gpu,
+    sink: impl FrameSink,
+    microphone: Box<dyn AudioInput>,
+) -> Result<ClientStream, ClientError> {
+    session.connect_with_devices(host, credentials, gpu, sink, None, Some(microphone))
 }
 
 pub fn connect_silent(

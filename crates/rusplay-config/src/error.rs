@@ -145,6 +145,12 @@ pub enum ConfigError {
     ClientNameControlCharacter,
     #[error("audio fec overhead {0}% is above 100%")]
     AudioFecOverheadOutOfRange(u8),
+    #[error("microphone bitrate must be greater than zero")]
+    ZeroMicrophoneBitrate,
+    #[error("microphone jitter buffer {0} ms is above 500 ms")]
+    MicrophoneJitterBufferOutOfRange(u32),
+    #[error("microphone fec overhead {0}% is above 100%")]
+    MicrophoneFecOverheadOutOfRange(u8),
     #[error("software decoder thread count {0} is above 256")]
     DecoderThreadsOutOfRange(u32),
     #[error("fec overhead {0}% is above 100%")]
@@ -229,6 +235,11 @@ impl ConfigError {
             | Self::ClientNameTooLong { .. }
             | Self::ClientNameControlCharacter => Some("peers.client_name"),
             Self::AudioFecOverheadOutOfRange(_) => Some("audio.fec_overhead_percent"),
+            Self::ZeroMicrophoneBitrate => Some("audio.microphone.bitrate_kbps"),
+            Self::MicrophoneJitterBufferOutOfRange(_) => Some("audio.microphone.jitter_buffer_ms"),
+            Self::MicrophoneFecOverheadOutOfRange(_) => {
+                Some("audio.microphone.fec_overhead_percent")
+            }
             Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),
             Self::Read { .. }
             | Self::Parse { .. }

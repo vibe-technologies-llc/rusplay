@@ -21,7 +21,8 @@ paths:
   The host's periodic `Keepalive` only needs the channel's acknowledgement, which every received
   message gets; `rusplay-host` (`.claude/rules/host.md`) is the host side of this contract.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
-  audio output exists and, after the handshake, `-input` and, when `input.gamepads` is on,
+  audio output exists and, after the handshake, `-microphone` when `audio.microphone.enabled`,
+  `-input` and, when `input.gamepads` is on,
   `-gamepad`, each returning `Result<(), ClientError>`. Any stage that ends sets the
   shared stop flag; `ClientStream::wait` and `stop` join them all and return the first error.
   Dropping the stream stops it.
@@ -137,7 +138,8 @@ paths:
   loss is not reported over the control channel and never asks for a keyframe.
 - The audio thread opens the decoder itself (Opus, or FLAC with the `flac` feature; FLAC without
   it is `AudioCodecNotCompiled`) on a `CODEC_THREAD_STACK_BYTES` stack, and `connect` waits for
-  it. `AudioPipeline` is the testable core: it tracks the next expected frame number, and a gap of
+  it. `AudioPipeline` is a thin wrapper that publishes the tallies of
+  `rusplay_audio::ConcealingPlayer` as counters. The player tracks the next expected frame number, and a gap of
   `n` frames is bridged before the arriving packet is decoded. The first `n - 1` lost frames use
   `conceal` (Opus PLC), the last uses `recover` from the arriving packet (in-band FEC); surround
   and FLAC conceal with silence. At most `audio.max_conceal_ms` worth of frames are produced, so a
@@ -147,6 +149,18 @@ paths:
   wrap transparent. Smoothing against network jitter is the output's own buffer
   (`audio.jitter_buffer_ms` in `AudioPlayback`); the pipeline submits each frame as soon as it is
   decoded.
+- Microphone (`microphone.rs`): when `audio.microphone.enabled`, `connect` opens an `AudioInput`
+  once the host answered the hello, so the capture ring holds no stale audio when sending
+  starts. The default (`default_microphone`) is `AudioCapture` on `CaptureTarget::Source` behind
+  the `pipewire` feature and `MicrophoneNotCompiled` without it; `connect_with_devices` takes
+  any `Option<Box<dyn AudioInput>>` (`connect_with_audio` passes none). The stage opens an Opus
+  encoder for `AudioConfig::microphone_stream` on a `CODEC_THREAD_STACK_BYTES` stack, and
+  `connect` waits for it. It reads one frame at a time with a 20 ms timeout so it sees the stop
+  flag, encodes, and sends the packet through a `Packetizer` on `StreamKind::Microphone` with
+  `send_to`, numbered from 0 counting up by one. Nothing queues between capture and socket: a
+  slow stage lets the capture ring drop its newest frames (`microphone_overruns`), and a starved
+  source sends nothing and consumes no number. `MicrophoneEncoder` is the testable core. A
+  source or send error ends the stage and with it the stream.
 - Input (`input.rs`): `ClientStream::input()` returns a cloneable `InputHandle` whose `send`
   queues an `InputEvent` for the input stage. The stage, started once the host answered the
   hello (so gamepad `Connected` events are not lost), owns a clone of the `Arc<Transport>` that
@@ -201,7 +215,8 @@ paths:
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation, queue overflow and video
   waiting for (and then carrying the newest) stream description;
-  `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip.
+  `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip;
+  `microphone.rs` encodes a scripted source and decodes the datagrams back.
 - The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
   record decoding a real host uses (`InputRecord`, so the periodic held-state snapshot arrives as
   `StateRecord`s that `held_state_snapshots_reach_the_host` looks for); the test client config
@@ -212,8 +227,10 @@ paths:
   H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
   datagram, keyframe restarts on `RequestKeyframe`, Opus audio packets every 5 ms with a drop
-  rule and cursor messages. They connect with `connect_with_audio` and a capturing output, so
-  they need no PipeWire, and return early without a GPU adapter.
+  rule and cursor messages. The test host also records `StreamKind::Microphone` datagrams, which
+  the microphone tests reassemble. They connect with `connect_with_audio` (or
+  `connect_with_devices` for a scripted microphone) and a capturing output, so they need no
+  PipeWire, and return early without a GPU adapter.
 - The loopback tests are written to hold on a loaded machine, without timeouts stretched to
   hide a race. The test host sends no `Goodbye`; a test waits until the last frame it sent is
   presented (`settle`) and then stops the client, so nothing is cut off mid-decode. The decode

@@ -8,6 +8,7 @@ mod display;
 mod error;
 mod host_book;
 mod input;
+mod microphone;
 mod name;
 mod present;
 mod receive;
@@ -20,6 +21,7 @@ mod testing;
 #[cfg(feature = "window")]
 mod window;
 
+pub use rusplay_audio::{AudioInput, AudioOutput, AudioOutputStats};
 #[cfg(feature = "window")]
 pub use rusplay_input::capture::{ActivePointer, ClientAction};
 pub use rusplay_net::{
@@ -32,7 +34,7 @@ pub use rusplay_scale::{ColorVolume, OutputLight};
 #[cfg(feature = "window")]
 pub use crate::window::{LogicalArea, StreamWindow, WaylandTarget, WindowLayout, WindowSink};
 pub use crate::{
-    audio::{AudioOutput, AudioOutputStats, default_audio_output},
+    audio::default_audio_output,
     color::FrameColor,
     cursor::{CursorState, LatestCursor},
     display::{
@@ -42,6 +44,7 @@ pub use crate::{
     error::{ClientError, Stage},
     host_book::{HostBook, SavedHost},
     input::InputHandle,
+    microphone::default_microphone,
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},
     stats::ClientStats,

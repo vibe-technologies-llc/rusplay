@@ -709,6 +709,51 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("samples"),
     field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.enabled",
+        "Send microphone",
+        Kind::Flag,
+    ),
+    field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.bitrate_kbps",
+        "Bitrate",
+        U32,
+    )
+    .unit("kbps"),
+    field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.frame_duration",
+        "Frame duration",
+        Kind::Choice(OPUS_FRAME_DURATIONS),
+    ),
+    field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.inband_fec",
+        "In-band FEC",
+        Kind::Flag,
+    ),
+    field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.jitter_buffer_ms",
+        "Jitter buffer",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Audio,
+        "Microphone",
+        "audio.microphone.fec_overhead_percent",
+        "FEC overhead",
+        U8,
+    )
+    .unit("%"),
+    field(
         Section::Network,
         "Socket",
         "network.bind_address",

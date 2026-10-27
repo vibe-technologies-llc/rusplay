@@ -7,42 +7,13 @@ use std::{
     time::Duration,
 };
 
-use rusplay_audio::{AudioDecoder, AudioError, OpusAudioDecoder};
+use rusplay_audio::{AudioDecoder, AudioOutput, ConcealingPlayer, OpusAudioDecoder};
 use rusplay_config::AudioConfig;
 use rusplay_core::AudioCodec;
 
 use crate::{ClientError, stats::Counters};
 
 const IDLE_WAKE: Duration = Duration::from_millis(50);
-const MILLIS_PER_SECOND: usize = 1000;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct AudioOutputStats {
-    pub underruns: u64,
-    pub trims: u64,
-    pub overflows: u64,
-}
-
-pub trait AudioOutput: Send + 'static {
-    fn submit(&mut self, pcm: &[f32]) -> Result<usize, AudioError>;
-
-    fn stats(&self) -> AudioOutputStats;
-}
-
-#[cfg(feature = "pipewire")]
-impl AudioOutput for rusplay_audio::AudioPlayback {
-    fn submit(&mut self, pcm: &[f32]) -> Result<usize, AudioError> {
-        rusplay_audio::AudioPlayback::submit(self, pcm)
-    }
-
-    fn stats(&self) -> AudioOutputStats {
-        AudioOutputStats {
-            underruns: self.underruns(),
-            trims: self.trims(),
-            overflows: self.overflows(),
-        }
-    }
-}
 
 #[cfg(feature = "pipewire")]
 pub fn default_audio_output(
@@ -84,20 +55,8 @@ pub(crate) fn open_decoder(config: &AudioConfig) -> Result<Box<dyn AudioDecoder>
     }
 }
 
-fn frame_samples(config: &AudioConfig) -> usize {
-    match config.codec {
-        AudioCodec::Opus => config.opus.frame_duration.samples_at(config.sample_rate),
-        AudioCodec::Flac => usize::from(config.flac.block_size),
-    }
-}
-
 pub(crate) struct AudioPipeline {
-    decoder: Box<dyn AudioDecoder>,
-    output: Box<dyn AudioOutput>,
-    pcm: Vec<f32>,
-    channels: usize,
-    max_conceal_frames: u32,
-    expected: Option<u32>,
+    player: ConcealingPlayer,
     counters: Arc<Counters>,
 }
 
@@ -108,87 +67,31 @@ impl AudioPipeline {
         config: &AudioConfig,
         counters: Arc<Counters>,
     ) -> Self {
-        let channels = usize::from(config.channels.channel_count());
-        let frame_samples = frame_samples(config).max(1);
-        let conceal_samples = config.sample_rate.hz() as usize * usize::from(config.max_conceal_ms)
-            / MILLIS_PER_SECOND;
-        let max_conceal_frames = u32::try_from(conceal_samples / frame_samples).unwrap_or(u32::MAX);
-
         Self {
-            decoder,
-            output,
-            pcm: vec![0.0; frame_samples * channels],
-            channels,
-            max_conceal_frames,
-            expected: None,
+            player: ConcealingPlayer::new(decoder, output, config),
             counters,
         }
     }
 
     pub(crate) fn process(&mut self, packet: &EncodedAudio) -> Result<(), ClientError> {
-        let gap = self.expected.map_or(0, |expected| {
-            packet.number.wrapping_sub(expected).cast_signed()
-        });
-        if gap < 0 {
-            self.counters.audio_packets_late.increment();
-            return Ok(());
-        }
-        self.expected = Some(packet.number.wrapping_add(1));
+        let result = self.player.process(packet.number, &packet.data);
+        self.publish_stats();
 
-        let lost = gap.cast_unsigned();
-        self.counters.audio_packets_lost.add(u64::from(lost));
-        self.bridge_gap(lost, &packet.data)?;
-        self.decode(packet)?;
-        self.publish_output_stats();
-
-        Ok(())
+        Ok(result?)
     }
 
-    fn bridge_gap(&mut self, lost: u32, next_packet: &[u8]) -> Result<(), ClientError> {
-        for index in 0..lost.min(self.max_conceal_frames) {
-            let produced = if index + 1 == lost {
-                self.counters.audio_frames_recovered.increment();
-                self.decoder.recover(next_packet, &mut self.pcm)
-            } else {
-                self.counters.audio_frames_concealed.increment();
-                self.decoder.conceal(&mut self.pcm)
-            };
+    fn publish_stats(&self) {
+        let player = self.player.stats();
+        let output = self.player.output_stats();
 
-            match produced {
-                Ok(samples) => self.emit(samples)?,
-                Err(_) => self.counters.audio_decode_errors.increment(),
-            }
-        }
-
-        Ok(())
-    }
-
-    fn decode(&mut self, packet: &EncodedAudio) -> Result<(), ClientError> {
-        if let Ok(samples) = self.decoder.decode(&packet.data, &mut self.pcm) {
-            return self.emit(samples);
-        }
-
-        self.counters.audio_decode_errors.increment();
-        if let Ok(samples) = self.decoder.conceal(&mut self.pcm) {
-            self.counters.audio_frames_concealed.increment();
-            self.emit(samples)?;
-        }
-
-        Ok(())
-    }
-
-    fn emit(&mut self, samples: usize) -> Result<(), ClientError> {
-        let len = (samples * self.channels).min(self.pcm.len());
-        self.output.submit(&self.pcm[..len])?;
-
-        Ok(())
-    }
-
-    fn publish_output_stats(&self) {
-        let stats = self.output.stats();
-        self.counters.audio_underruns.set(stats.underruns);
-        self.counters.audio_trims.set(stats.trims);
-        self.counters.audio_overflows.set(stats.overflows);
+        self.counters.audio_packets_late.set(player.late);
+        self.counters.audio_packets_lost.set(player.lost);
+        self.counters.audio_frames_recovered.set(player.recovered);
+        self.counters.audio_frames_concealed.set(player.concealed);
+        self.counters.audio_decode_errors.set(player.decode_errors);
+        self.counters.audio_underruns.set(output.underruns);
+        self.counters.audio_trims.set(output.trims);
+        self.counters.audio_overflows.set(output.overflows);
     }
 }
 
@@ -234,7 +137,9 @@ mod tests {
     use std::thread;
 
     use parking_lot::Mutex;
-    use rusplay_audio::{AudioEncoder, CODEC_THREAD_STACK_BYTES, OpusAudioEncoder};
+    use rusplay_audio::{
+        AudioEncoder, AudioError, AudioOutputStats, CODEC_THREAD_STACK_BYTES, OpusAudioEncoder,
+    };
 
     use super::*;
 

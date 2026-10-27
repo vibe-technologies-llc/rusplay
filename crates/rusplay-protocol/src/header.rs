@@ -4,7 +4,7 @@ use crate::ProtocolError;
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(14);
+    pub const CURRENT: Self = Self(15);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -19,6 +19,7 @@ pub enum StreamKind {
     Discovery = 6,
     Pairing = 7,
     Reconnect = 8,
+    Microphone = 9,
 }
 
 impl TryFrom<u8> for StreamKind {
@@ -35,6 +36,7 @@ impl TryFrom<u8> for StreamKind {
             6 => Ok(Self::Discovery),
             7 => Ok(Self::Pairing),
             8 => Ok(Self::Reconnect),
+            9 => Ok(Self::Microphone),
             unknown => Err(ProtocolError::UnknownStreamKind(unknown)),
         }
     }
@@ -170,6 +172,32 @@ mod tests {
         header.write(&mut buf).unwrap();
 
         assert_eq!(PacketHeader::read(&buf), Ok(header));
+    }
+
+    #[test]
+    fn every_stream_kind_survives_its_tag() {
+        let kinds = [
+            StreamKind::Video,
+            StreamKind::Audio,
+            StreamKind::Input,
+            StreamKind::Control,
+            StreamKind::Fec,
+            StreamKind::Cursor,
+            StreamKind::Discovery,
+            StreamKind::Pairing,
+            StreamKind::Reconnect,
+            StreamKind::Microphone,
+        ];
+
+        for kind in kinds {
+            assert_eq!(StreamKind::try_from(kind as u8), Ok(kind));
+        }
+
+        let first_unknown = u8::try_from(kinds.len()).unwrap();
+        assert_eq!(
+            StreamKind::try_from(first_unknown),
+            Err(ProtocolError::UnknownStreamKind(first_unknown))
+        );
     }
 
     #[test]

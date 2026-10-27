@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 #[cfg(feature = "pipewire")]
 mod capture;
 mod error;
@@ -7,6 +9,7 @@ mod multistream;
 mod opus;
 #[cfg(feature = "pipewire")]
 mod playback;
+mod player;
 #[cfg(feature = "pipewire")]
 mod pw_common;
 mod resample;
@@ -16,10 +19,14 @@ mod ring;
 #[cfg(feature = "flac")]
 pub use crate::flac::{FlacAudioDecoder, FlacAudioEncoder};
 #[cfg(feature = "pipewire")]
-pub use crate::{capture::AudioCapture, playback::AudioPlayback};
+pub use crate::{
+    capture::{AudioCapture, CaptureTarget},
+    playback::{AudioPlayback, PlaybackTarget},
+};
 pub use crate::{
     error::AudioError,
     opus::{OpusAudioDecoder, OpusAudioEncoder},
+    player::{AudioOutput, AudioOutputStats, ConcealingPlayer, PlayerStats},
     resample::PcmResampler,
 };
 
@@ -39,5 +46,13 @@ pub trait AudioDecoder {
     fn recover(&mut self, next_packet: &[u8], pcm: &mut [f32]) -> Result<usize, AudioError> {
         let _ = next_packet;
         self.conceal(pcm)
+    }
+}
+
+pub trait AudioInput: Send + 'static {
+    fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError>;
+
+    fn overruns(&self) -> u64 {
+        0
     }
 }
