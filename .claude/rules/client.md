@@ -261,3 +261,17 @@ paths:
   blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
   and origin, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
   by running the app.
+
+## Host book
+
+- `HostBook` is the client's saved hosts: `SavedHost { name, address, peer }`. It owns the
+  `PeerStore` from `PeerStore::open_client` (secrets, keyed by `PeerId`) and a sibling text file,
+  the store's path with `.book` added (`paired-hosts.book` by default, so `peers.client_file`
+  moves both). The book holds no secret: line one is `rusplay-host-book 1`, then one line per
+  host, `<peer id hex or -> <address> <name>`. Loading refuses a bad header, address, id or name
+  and duplicate addresses or ids with `HostBookCorrupt` and the line number; an id missing from
+  the store loads as unpaired.
+- `save` replaces the whole list: it remembers new or changed pairings in the store, writes the
+  book through `rusplay_net::write_owner_only` (the peer store's `0700` directory, `0600` synced
+  staging file and rename), then forgets store records no host references. A failed write leaves
+  the in-memory list as it was.

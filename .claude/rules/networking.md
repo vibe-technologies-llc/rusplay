@@ -165,6 +165,7 @@ paths:
   `remember` and `forget` persist before they change the in-memory list, so a failed write changes
   nothing. `forget` is the revocation API; the host shares the store as
   `RwLock<PeerStore>` so a forget applies to the next datagram.
+  The write path is `write_owner_only`, shared with the client's host book (`client.md`).
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
   `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
   host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`, `Authentication`).

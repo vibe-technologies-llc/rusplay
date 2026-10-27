@@ -214,46 +214,43 @@ impl PeerStore {
     }
 
     fn persist(&self, records: &[PeerRecord]) -> Result<(), NetError> {
-        let write_error = |source| NetError::PeerStoreWrite {
+        let mut text = render(records);
+        let written = write_owner_only(&self.path, &text);
+        text.zeroize();
+
+        written.map_err(|source| NetError::PeerStoreWrite {
             path: self.path.clone(),
             source,
-        };
-
-        if let Some(parent) = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(OWNER_ONLY_DIRECTORY)
-                .create(parent)
-                .map_err(write_error)?;
-        }
-
-        let staging = self.path.with_extension(STAGING_SUFFIX);
-        match fs::remove_file(&staging) {
-            Err(source) if source.kind() != io::ErrorKind::NotFound => {
-                return Err(write_error(source));
-            }
-            _ => {}
-        }
-
-        let mut text = render(records);
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(OWNER_ONLY_FILE)
-            .open(&staging)
-            .map_err(write_error)?;
-        let written = file
-            .write_all(text.as_bytes())
-            .and_then(|()| file.sync_all());
-        text.zeroize();
-        written.map_err(write_error)?;
-
-        fs::rename(&staging, &self.path).map_err(write_error)
+        })
     }
+}
+
+pub fn write_owner_only(path: &Path, text: &str) -> io::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(OWNER_ONLY_DIRECTORY)
+            .create(parent)?;
+    }
+
+    let staging = path.with_added_extension(STAGING_SUFFIX);
+    match fs::remove_file(&staging) {
+        Err(source) if source.kind() != io::ErrorKind::NotFound => return Err(source),
+        _ => {}
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(OWNER_ONLY_FILE)
+        .open(&staging)?;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()?;
+
+    fs::rename(&staging, path)
 }
 
 fn default_path(

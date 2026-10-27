@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use gpui::{Context, Entity, EventEmitter, Subscription, Task, Window, div, prelude::*, px};
-use rusplay_client::{Credentials, DiscoveredHost, PeerRecord, Pin};
+use rusplay_client::{Credentials, DiscoveredHost, HostBook, PeerRecord, Pin};
 use rusplay_config::ConfigEnvironment;
 
 use crate::{
@@ -23,6 +23,7 @@ pub struct ConnectRequested {
 
 pub struct HostsView {
     hosts: HostList,
+    book: Option<HostBook>,
     environment: ConfigEnvironment,
     scan: Option<Task<()>>,
     name_input: Entity<TextField>,
@@ -35,7 +36,12 @@ impl EventEmitter<NoticeRaised> for HostsView {}
 impl EventEmitter<ConnectRequested> for HostsView {}
 
 impl HostsView {
-    pub fn new(default_port: u16, environment: ConfigEnvironment, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        default_port: u16,
+        environment: ConfigEnvironment,
+        book: Option<HostBook>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let name_input = cx.new(|cx| TextField::new("", "Name (optional)", cx));
         let address_input = cx.new(|cx| TextField::new("", "Address, e.g. 192.168.1.20", cx));
         let pin_input = cx.new(|cx| TextField::new("", "PIN shown by the host", cx));
@@ -53,7 +59,11 @@ impl HostsView {
         });
 
         Self {
-            hosts: HostList::new(default_port),
+            hosts: book.as_ref().map_or_else(
+                || HostList::new(default_port),
+                |book| HostList::from_saved(default_port, book.hosts()),
+            ),
+            book,
             environment,
             scan: None,
             name_input,
@@ -65,6 +75,7 @@ impl HostsView {
 
     pub fn remember_peer(&mut self, address: SocketAddr, peer: PeerRecord, cx: &mut Context<Self>) {
         if self.hosts.remember_peer(address, peer) {
+            self.persist(cx);
             self.pin_input
                 .update(cx, |input, cx| input.set_text("", cx));
             cx.notify();
@@ -93,7 +104,13 @@ impl HostsView {
         self.scan = None;
 
         match result {
-            Ok(found) => self.hosts.merge_discovered(&found),
+            Ok(found) => {
+                let before = self.hosts.saved_hosts();
+                self.hosts.merge_discovered(&found);
+                if self.hosts.saved_hosts() != before {
+                    self.persist(cx);
+                }
+            }
             Err(error) => notify(
                 Notice::Failure(format!("Could not scan for hosts: {}", error_chain(&error))),
                 cx,
@@ -101,6 +118,81 @@ impl HostsView {
         }
 
         cx.notify();
+    }
+
+    fn persist(&mut self, cx: &mut Context<Self>) {
+        let Some(book) = &mut self.book else {
+            return;
+        };
+
+        if let Err(error) = book.save(self.hosts.saved_hosts()) {
+            notify(
+                Notice::Failure(format!(
+                    "Could not save the host book: {}",
+                    error_chain(&error)
+                )),
+                cx,
+            );
+        }
+    }
+
+    fn rename_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.hosts.selected_index() else {
+            return;
+        };
+        let name = self.name_input.read(cx).text().to_owned();
+
+        let result = self.hosts.rename(index, &name);
+        self.name_input
+            .update(cx, |input, cx| input.set_invalid(result.is_err(), cx));
+
+        match result {
+            Ok(()) => {
+                self.name_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+                self.persist(cx);
+            }
+            Err(error) => notify(Notice::Failure(error.to_string()), cx),
+        }
+
+        cx.notify();
+    }
+
+    fn change_selected_address(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.hosts.selected_index() else {
+            return;
+        };
+        let address = self.address_input.read(cx).text().to_owned();
+
+        let result = self.hosts.set_address(index, &address);
+        self.address_input
+            .update(cx, |input, cx| input.set_invalid(result.is_err(), cx));
+
+        match result {
+            Ok(()) => {
+                self.address_input
+                    .update(cx, |input, cx| input.set_text("", cx));
+                self.persist(cx);
+            }
+            Err(error) => notify(Notice::Failure(error.to_string()), cx),
+        }
+
+        cx.notify();
+    }
+
+    fn forget_selected_pairing(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.hosts.selected_index() else {
+            return;
+        };
+
+        if self.hosts.forget_pairing(index) {
+            self.persist(cx);
+            notify(
+                Notice::Info("Forgot the pairing; the host needs a new PIN".to_owned()),
+                cx,
+            );
+            cx.notify();
+        }
     }
 
     fn add_host(&mut self, cx: &mut Context<Self>) {
@@ -117,6 +209,7 @@ impl HostsView {
                     .update(cx, |input, cx| input.set_text("", cx));
                 self.address_input
                     .update(cx, |input, cx| input.set_text("", cx));
+                self.persist(cx);
                 notify(Notice::Info(format!("Added {address}")), cx);
             }
             Err(error) => notify(Notice::Failure(error.to_string()), cx),
@@ -203,10 +296,50 @@ impl HostsView {
                 button(("remove-host", index), "Remove", ButtonStyle::Quiet, true).on_click(
                     cx.listener(move |this, _, _, cx| {
                         this.hosts.remove(index);
+                        this.persist(cx);
                         cx.stop_propagation();
                         cx.notify();
                     }),
                 ),
+            )
+    }
+
+    fn render_selected_actions(
+        can_connect: bool,
+        paired: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::text_muted())
+                    .child("Selected host, using the fields above:"),
+            )
+            .child(
+                button("rename-host", "Rename", ButtonStyle::Secondary, can_connect)
+                    .on_click(cx.listener(|this, _, _, cx| this.rename_selected(cx))),
+            )
+            .child(
+                button(
+                    "change-address",
+                    "Change address",
+                    ButtonStyle::Secondary,
+                    can_connect,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.change_selected_address(cx))),
+            )
+            .child(
+                button(
+                    "forget-pairing",
+                    "Forget pairing",
+                    ButtonStyle::Quiet,
+                    paired,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.forget_selected_pairing(cx))),
             )
     }
 }
@@ -274,6 +407,7 @@ impl Render for HostsView {
                             .on_click(cx.listener(|this, _, _, cx| this.add_host(cx))),
                     ),
             )
+            .child(Self::render_selected_actions(can_connect, paired, cx))
             .child(
                 div()
                     .flex()

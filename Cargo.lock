@@ -4745,6 +4745,7 @@ dependencies = [
  "rusplay-protocol",
  "rusplay-scale",
  "rustix",
+ "tempfile",
  "thiserror 2.0.21",
  "wayland-client",
  "wayland-protocols",

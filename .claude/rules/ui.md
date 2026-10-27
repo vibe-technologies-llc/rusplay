@@ -61,10 +61,22 @@ paths:
   rest as `HostOrigin::Discovered` entries that disappear again when a later scan misses them.
   Pairing turns a discovered entry into an added one. Announces carry no host id, so the name
   match is a hint; pairing authenticates the host.
-- Host entries live only in memory. A host without a remembered pairing
-  needs the PIN the host shows; a successful PIN connect hands back `ClientStream::paired_secret`,
-  which `StreamView` turns into a `PeerRecord` (named after the host entry) and the root stores on
-  the entry, so later connects in the same run use `Credentials::Peer`.
+- Saved hosts live in the client host book (`rusplay_client::HostBook`, `client.md`), opened once
+  at startup from the config's `peers` section; a change to `peers.client_file` applies at the
+  next start. `HostList` maps between entries and `SavedHost`s: `from_saved` at startup and
+  `saved_hosts` (the `HostOrigin::Added` entries) after every change, and `HostsView::persist`
+  saves the book after each add, remove, rename, address change, forget and pairing, and after a
+  scan that moved a saved host. A failed save is a status-bar notice and the in-memory list stays
+  usable. If the book cannot be opened (unreadable or corrupt) the app starts with an empty list
+  and no book, says so in the status bar, and never overwrites the file.
+- A host without a remembered pairing needs the PIN the host shows; a successful PIN connect
+  hands back `ClientStream::paired_secret`, which `StreamView` turns into a `PeerRecord` (named
+  after the host entry) and the root stores on the entry, so later connects use
+  `Credentials::Peer`, also after a restart. `Rename`, `Change address` (both read the Name and
+  Address fields; the pairing is kept, it is keyed by the secret and not the address) and
+  `Forget pairing` act on the selected entry; renaming or re-addressing a discovered entry saves
+  it. Names follow `MAX_PEER_NAME_BYTES` and carry no control characters, since they are written
+  to the book and become the `PeerRecord` name.
 
 ## Stream page
 
