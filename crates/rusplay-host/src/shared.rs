@@ -1,22 +1,32 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
-use rusplay_capture::Frame;
-
-use crate::{mailbox::Mailbox, stats::Counters};
+use crate::{
+    capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox, stats::Counters,
+};
 
 #[derive(Debug)]
 pub(crate) struct Shared {
     stop: AtomicBool,
     streaming: AtomicBool,
+    pub client: Arc<ClientLink>,
+    pub clock: StreamClock,
     pub counters: Counters,
-    pub mailbox: Mailbox<Frame>,
+    pub mailbox: Mailbox<Captured>,
 }
 
 impl Shared {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(client: SocketAddr) -> Self {
         Self {
             stop: AtomicBool::new(false),
             streaming: AtomicBool::new(false),
+            client: Arc::new(ClientLink::new(client)),
+            clock: StreamClock::start(),
             counters: Counters::default(),
             mailbox: Mailbox::new(),
         }
@@ -33,6 +43,11 @@ impl Shared {
     pub(crate) fn start(&self) {
         self.streaming.store(true, Ordering::Release);
         self.mailbox.start();
+    }
+
+    pub(crate) fn suspend(&self) {
+        self.streaming.store(false, Ordering::Release);
+        self.mailbox.suspend();
     }
 
     pub(crate) fn stop(&self) {

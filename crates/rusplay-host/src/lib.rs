@@ -1,6 +1,7 @@
 mod accept;
 mod audio;
 mod capture;
+mod clock;
 mod control;
 mod cursor;
 mod datagrams;
@@ -9,6 +10,7 @@ mod error;
 mod gpu;
 mod handoff;
 mod input;
+mod link;
 mod mailbox;
 mod outbox;
 mod pipeline;

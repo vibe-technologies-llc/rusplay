@@ -6,6 +6,12 @@ use crate::{CaptureFeed, HostError, shared::Shared};
 
 const CAPTURE_POLL: Duration = Duration::from_millis(20);
 
+#[derive(Debug)]
+pub(crate) struct Captured {
+    pub frame: Frame,
+    pub captured_micros: u64,
+}
+
 pub(crate) fn run(feed: &CaptureFeed, shared: &Arc<Shared>) -> Result<(), HostError> {
     let result = capture(feed, shared);
     shared.stop();
@@ -32,7 +38,11 @@ fn capture(feed: &CaptureFeed, shared: &Shared) -> Result<(), HostError> {
 
 fn offer(feed: &CaptureFeed, shared: &Shared, frame: Frame) {
     feed.set_capture_size(frame.resolution);
-    if let Ok(Some(_)) = shared.mailbox.put(frame) {
+    let captured = Captured {
+        frame,
+        captured_micros: shared.clock.micros(),
+    };
+    if let Ok(Some(_)) = shared.mailbox.put(captured) {
         shared.counters.frames_superseded.increment();
     }
 }

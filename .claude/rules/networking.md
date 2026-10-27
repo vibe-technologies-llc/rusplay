@@ -53,6 +53,20 @@ paths:
   buffers and the client's socket from dropping packets. The host spreads each frame over
   `network.pacing_window_percent` (default 50) of the interval, so pacing never delays a frame by
   more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst.
+- Every video frame handed to the `Packetizer` starts with the 8-byte big-endian
+  `VideoFrameHeader`: the capture time in microseconds on the host's stream clock (zero at session
+  start, `rusplay-host`'s `StreamClock`). It is part of the frame, so the first fragment carries it
+  and FEC covers it. The receiver strips it after reassembly and treats a frame shorter than the
+  header as malformed (counted, answered with a keyframe request).
+- `ControlMessage::ClockPing { sent_micros }` (tag 8, client to host) and
+  `ClockPong { sent_micros, host_micros }` (tag 9, host to client) are an NTP-style exchange on the
+  control channel: the client stamps its own clock, the host echoes it with its stream clock at
+  handling time, and the client takes `offset = host - (sent + received) / 2` from the sample with
+  the smallest round trip among the last 8, so a retransmitted or queued sample (large round trip)
+  never wins. The offset is correct to within half the path asymmetry, which on a LAN is well below
+  the latencies it measures. The client pings every 100 ms until the window is full, then every
+  `network.clock_sync_interval_ms` (default 1000, 0 turns the exchange and the latency figures
+  off). It runs on the receive thread's control channel, never on the frame path.
 - `ControlMessage::Keepalive` (tag 5, no body) is sent by the host every
   `network.keepalive_interval_ms` (default 1000, validated below `network.peer_timeout_ms`). Its
   acknowledgement is the host's evidence that the client is alive, and its arrival keeps the
@@ -71,7 +85,7 @@ paths:
   through `Chromaticities::new`, luminance through `Luminance::from_units`), each failure its own
   `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
 - The control channel (hello, keyframe requests, loss reports, bitrate hints, keepalives,
-  stream format, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+  stream format, clock ping and pong, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.
 
 ## Control channel
@@ -164,7 +178,17 @@ paths:
   client's while a session runs, so a second client fails at once with `PairingRejected` or
   `ReconnectRejected` instead of timing out. The reply is shorter than the request, is sent
   best effort (a send failure never ends the session) and is never sent to a datagram that is
-  not a first handshake message.
+  not a first handshake message. A reconnect `Hello` carrying the running session's own
+  `PeerId` is the exception (below).
+- Session takeover: `SessionTakeover` (sans-IO, per running session) wraps a
+  `ReconnectResponder` for the session's `PeerId`. A `Hello` for any other peer, known or not, is
+  `Busy`; a `Hello` for the session's peer runs the full mutual challenge-response against the
+  `PeerStore`, from whichever address it arrives (a restarted client has a new port, a roaming
+  one a new IP). The address of a `Hello` is recorded per attempt and a `Proof` is honoured only
+  from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
+  address alone is never trusted. Only the final `Accepted` yields keys, and only then does the
+  host act (`host.md`). A forged proof is `Rejected(Authentication)` and leaves the session as it
+  was. Takeover stays within one address family, since the packetizers are sized for it.
 - Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
   `Start`s, which only denies pairing and never grants access.
 - A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF

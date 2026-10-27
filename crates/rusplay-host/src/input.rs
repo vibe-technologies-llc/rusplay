@@ -180,6 +180,7 @@ struct InputStage<'a> {
     shared: &'a Shared,
     outbox: &'a ControlOutbox,
     sequence: InputSequence,
+    epoch: u32,
     held: HeldInput,
     repairs: Vec<InputEvent>,
     commands: Vec<RumbleCommand>,
@@ -191,6 +192,7 @@ impl<'a> InputStage<'a> {
             shared,
             outbox,
             sequence: InputSequence::new(),
+            epoch: shared.client.epoch(),
             held: HeldInput::new(),
             repairs: Vec::new(),
             commands: Vec::new(),
@@ -205,6 +207,7 @@ impl<'a> InputStage<'a> {
         while !self.shared.stopped() {
             match datagrams.recv_timeout(SERVICE_INTERVAL) {
                 Ok(datagram) => {
+                    self.follow_client();
                     self.apply_datagram(target, &datagram);
                     while let Ok(next) = datagrams.try_recv() {
                         self.apply_datagram(target, &next);
@@ -218,6 +221,14 @@ impl<'a> InputStage<'a> {
         }
 
         Ok(())
+    }
+
+    fn follow_client(&mut self) {
+        let epoch = self.shared.client.epoch();
+        if epoch != self.epoch {
+            self.epoch = epoch;
+            self.sequence.reset();
+        }
     }
 
     fn apply_datagram(&mut self, target: &mut dyn InputTarget, datagram: &[u8]) {
@@ -373,14 +384,14 @@ mod tests {
             .unwrap();
             let address = transport.local_addr().unwrap();
 
-            Self {
-                shared: Arc::new(Shared::new()),
-                outbox: Arc::new(ControlOutbox::new(
-                    ControlChannel::new(ControlConfig::from(&network)),
-                    Arc::new(transport),
-                    address,
-                )),
-            }
+            let shared = Arc::new(Shared::new(address));
+            let outbox = Arc::new(ControlOutbox::new(
+                ControlChannel::new(ControlConfig::from(&network)),
+                Arc::new(transport),
+                Arc::clone(&shared.client),
+            ));
+
+            Self { shared, outbox }
         }
 
         fn stage(&self) -> InputStage<'_> {
@@ -567,6 +578,23 @@ mod tests {
 
         assert_eq!(target.events, vec![key(1, true)]);
         assert_eq!(rig.stats().input_packets_stale, 2);
+    }
+
+    #[test]
+    fn a_new_client_address_restarts_the_datagram_sequence() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+
+        stage.apply_datagram(&mut target, &datagram(50, &[event(key(1, true))], &[]));
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        stage.follow_client();
+        stage.apply_datagram(&mut target, &datagram(0, &[event(key(2, true))], &[]));
+
+        assert_eq!(target.events, vec![key(1, true), key(2, true)]);
+        assert_eq!(rig.stats().input_packets_stale, 0);
     }
 
     #[test]

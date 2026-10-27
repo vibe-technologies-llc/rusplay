@@ -21,7 +21,8 @@ use rusplay_net::{
 };
 use rusplay_protocol::{
     ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
-    ProtocolVersion, ReconnectRejection, StreamDescription, StreamKind,
+    ProtocolVersion, ReconnectMessage, ReconnectRejection, StreamDescription, StreamKind,
+    VideoFrameHeader,
 };
 use tempfile::TempDir;
 
@@ -256,6 +257,7 @@ struct TestClient {
     audio: Reassembler,
     cursor: Reassembler,
     frames: Vec<ReceivedFrame>,
+    captures: Vec<u64>,
     audio_packets: Vec<ReassembledFrame>,
     cursor_messages: Vec<CursorMessage>,
     messages: Vec<ControlMessage>,
@@ -280,6 +282,7 @@ impl TestClient {
             audio: Reassembler::new(StreamKind::Audio, ReassemblyLimits::from(&network)),
             cursor: Reassembler::new(StreamKind::Cursor, ReassemblyLimits::from(&network)),
             frames: Vec::new(),
+            captures: Vec::new(),
             audio_packets: Vec::new(),
             cursor_messages: Vec::new(),
             messages: Vec::new(),
@@ -359,10 +362,12 @@ impl TestClient {
 
             for event in events.drain(..) {
                 if let ReassemblyEvent::Frame(frame) = event {
+                    let (header, body) = VideoFrameHeader::parse(&frame.data).unwrap();
+                    self.captures.push(header.captured_micros);
                     self.frames.push(ReceivedFrame {
                         number: frame.frame,
                         keyframe: frame.keyframe,
-                        fill: frame.data[0],
+                        fill: body[0],
                     });
                 }
             }
@@ -527,6 +532,49 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     );
     assert!(stats.frames_sent >= 4);
     assert!(stats.keyframes_sent <= 1 + stats.frames_dropped);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn every_frame_carries_the_stream_time_it_was_captured_at() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let received = client.pump_until(|client| client.captures.len() >= 5);
+
+    assert!(received);
+    assert!(client.captures.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(client.captures.last() > client.captures.first());
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_clock_ping_is_answered_with_the_host_stream_time() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::ClockPing { sent_micros: 42 });
+    let answered = client.pump_until(|client| {
+        client.messages.iter().any(|message| {
+            matches!(
+                message,
+                ControlMessage::ClockPong {
+                    sent_micros: 42,
+                    host_micros
+                } if *host_micros > 0
+            )
+        })
+    });
+
+    assert!(answered);
     stream.stop().unwrap();
 }
 
@@ -838,10 +886,11 @@ fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(Some(pin()), feed(400), fake_factory(&bitrate));
 
-    let (mut client, record) = TestClient::pair(fixture.address);
+    let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
     let (_, stream) = serving.join().unwrap().unwrap();
     let started = client.pump_until(TestClient::has_hello);
+    let other = known_peer(&fixture, 9);
 
     let second = TestClient::bind(fixture.address);
     let pairing = pair_as_client(
@@ -854,7 +903,13 @@ fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
     let reconnecting = reconnect_as_client(
         &second.transport,
         fixture.address,
-        &record,
+        &other,
+        ReconnectTiming::from(&network()),
+    );
+    let stranger = reconnect_as_client(
+        &TestClient::bind(fixture.address).transport,
+        fixture.address,
+        &PeerRecord::new("stranger", rusplay_net::PeerSecret::from_bytes([7; 32])).unwrap(),
         ReconnectTiming::from(&network()),
     );
 
@@ -871,7 +926,138 @@ fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
             reason: ReconnectRejection::Busy
         })
     ));
+    assert!(matches!(
+        stranger,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::Busy
+        })
+    ));
     assert!(client.pump_until(|client| client.frames.len() >= 2));
+    assert_eq!(stream.stats().sessions_taken_over, 0);
+    stream.stop().unwrap();
+}
+
+fn known_peer(fixture: &Fixture, byte: u8) -> PeerRecord {
+    let record = PeerRecord::new(
+        "other client",
+        rusplay_net::PeerSecret::from_bytes([byte; 32]),
+    )
+    .unwrap();
+    fixture
+        .host
+        .peers()
+        .write()
+        .remember(record.clone())
+        .unwrap();
+
+    record
+}
+
+fn forged_takeover(fixture: &Fixture, record: &PeerRecord) -> ReconnectRejection {
+    let attacker = TestClient::bind(fixture.address);
+    let attempt = 0x5eed;
+    let hello = ReconnectMessage::Hello {
+        attempt,
+        peer: record.id(),
+        nonce: [3; ReconnectMessage::NONCE_LEN],
+    };
+    attacker.send_datagram(&hello.to_datagram().unwrap());
+
+    let mut buf = vec![0; usize::from(network().mtu)];
+    let (len, _) = attacker
+        .transport
+        .recv_from_timeout(&mut buf, WAIT)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        ReconnectMessage::from_datagram(&buf[..len]),
+        Ok(ReconnectMessage::Challenge { .. })
+    ));
+
+    let proof = ReconnectMessage::Proof {
+        attempt,
+        proof: [9; ReconnectMessage::PROOF_LEN],
+    };
+    attacker.send_datagram(&proof.to_datagram().unwrap());
+    let (len, _) = attacker
+        .transport
+        .recv_from_timeout(&mut buf, WAIT)
+        .unwrap()
+        .unwrap();
+    let Ok(ReconnectMessage::Rejected { reason, .. }) =
+        ReconnectMessage::from_datagram(&buf[..len])
+    else {
+        panic!("expected a rejection");
+    };
+
+    reason
+}
+
+#[test]
+fn the_session_peer_reconnecting_from_a_new_address_takes_the_session_over() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+    let (mut first, record) = TestClient::pair(fixture.address);
+    first.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(first.pump_until(|client| client.has_hello() && client.frames.len() >= 2));
+
+    let mut restarted = TestClient::reconnect(fixture.address, &record);
+    restarted.hello();
+    let resumed = restarted.pump_until(|client| client.has_hello() && client.frames.len() >= 2);
+    first.pump(Duration::from_millis(200), |_| false);
+    let frozen = first.frames.len();
+    first.pump(Duration::from_millis(200), |_| false);
+
+    assert!(resumed);
+    assert_eq!(stream.client(), restarted.transport.local_addr().unwrap());
+    assert_eq!(stream.stats().sessions_taken_over, 1);
+    assert!(restarted.frames[0].keyframe);
+    assert_eq!(
+        restarted.formats.first().map(|(frames, _)| *frames),
+        Some(0)
+    );
+    assert_eq!(first.frames.len(), frozen);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn the_new_client_of_a_taken_over_session_controls_it() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+    let (mut first, record) = TestClient::pair(fixture.address);
+    first.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(first.pump_until(TestClient::has_hello));
+
+    let mut restarted = TestClient::reconnect(fixture.address, &record);
+    restarted.hello();
+    assert!(restarted.pump_until(TestClient::has_hello));
+    restarted.send(ControlMessage::Goodbye);
+
+    assert!(wait_for_end(stream).is_ok());
+}
+
+#[test]
+fn a_takeover_with_a_wrong_proof_is_rejected_and_the_session_is_untouched() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(client.pump_until(|client| client.has_hello() && client.frames.len() >= 2));
+    let address = stream.client();
+
+    let reason = forged_takeover(&fixture, &record);
+    let before = client.frames.len();
+
+    assert_eq!(reason, ReconnectRejection::Authentication);
+    assert!(client.pump_until(|client| client.frames.len() >= before + 2));
+    assert_eq!(stream.client(), address);
+    assert_eq!(stream.stats().sessions_taken_over, 0);
     stream.stop().unwrap();
 }
 

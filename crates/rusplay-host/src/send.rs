@@ -1,5 +1,4 @@
 use std::{
-    net::SocketAddr,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError},
@@ -9,7 +8,7 @@ use std::{
 };
 
 use rusplay_net::{FecScheme, Pacer, Packetizer, Transport};
-use rusplay_protocol::StreamKind;
+use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
 use crate::{HostError, encode::Outgoing, shared::Shared};
 
@@ -28,7 +27,6 @@ pub(crate) struct SendLinks {
     pub shared: Arc<Shared>,
     pub queue: Receiver<Outgoing>,
     pub transport: Arc<Transport>,
-    pub client: SocketAddr,
 }
 
 pub(crate) fn run(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
@@ -41,13 +39,19 @@ pub(crate) fn run(options: SendOptions, links: &SendLinks) -> Result<(), HostErr
 fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
     let mut packetizer = Packetizer::new(
         StreamKind::Video,
-        links.transport.max_datagram_len(&links.client),
+        links
+            .transport
+            .max_datagram_len(&links.shared.client.address()),
         options.fec,
     )?;
 
+    let mut payload = Vec::new();
+
     while !links.shared.stopped() {
         match links.queue.recv_timeout(IDLE_WAKE) {
-            Ok(outgoing) => send_frame(&mut packetizer, options, &outgoing, links)?,
+            Ok(outgoing) => {
+                send_frame(&mut packetizer, &mut payload, options, &outgoing, links)?;
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -58,15 +62,18 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
 fn send_frame(
     packetizer: &mut Packetizer,
+    payload: &mut Vec<u8>,
     options: SendOptions,
     outgoing: &Outgoing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
-    let datagrams = packetizer.packetize(
-        outgoing.number,
-        outgoing.frame.keyframe,
-        &outgoing.frame.data,
-    )?;
+    payload.clear();
+    VideoFrameHeader {
+        captured_micros: outgoing.captured_micros,
+    }
+    .write(payload);
+    payload.extend_from_slice(&outgoing.frame.data);
+    let datagrams = packetizer.packetize(outgoing.number, outgoing.frame.keyframe, payload)?;
 
     match options.pacing_window {
         Some(window) => send_paced(&datagrams, window, links)?,
@@ -111,7 +118,7 @@ fn send_all(datagrams: &[Vec<u8>], links: &SendLinks) -> Result<(), HostError> {
     while sent < datagrams.len() {
         let progress = links
             .transport
-            .send_batch(&datagrams[sent..], links.client)?;
+            .send_batch(&datagrams[sent..], links.shared.client.address())?;
         if progress == 0 {
             thread::yield_now();
         }

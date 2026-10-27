@@ -10,7 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::ScalingConfig;
-use rusplay_core::Resolution;
+use rusplay_core::{Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
     ChromaSiting, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
@@ -229,15 +229,24 @@ impl PresentStage {
         }
         let color = route.output;
 
+        let submitted_at = Instant::now();
         links.counters.frames_presented.increment();
+        if let Some(latency) = links
+            .counters
+            .clock
+            .since_capture(video.captured_micros, submitted_at)
+        {
+            links.counters.capture_to_present.record(latency);
+        }
         links.sink.present(PresentedFrame {
             frame: video.number,
             keyframe: video.keyframe,
             source,
             color,
+            captured: Timestamp::from_micros(video.captured_micros),
             received_at: video.received_at,
             decoded_at: video.decoded_at,
-            submitted_at: Instant::now(),
+            submitted_at,
             texture: output,
         });
 
@@ -579,7 +588,7 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use rusplay_config::{Config, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig};
-    use rusplay_core::{Codec, EncodedFrame, Timestamp};
+    use rusplay_core::{Codec, EncodedFrame};
 
     use super::*;
     use crate::stats::Counters;
@@ -711,6 +720,7 @@ mod tests {
                 number,
                 keyframe: frame.keyframe,
                 color: config.video.color,
+                captured_micros: 0,
                 received_at: Instant::now(),
                 decoded_at: Instant::now(),
             };

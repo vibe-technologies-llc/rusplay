@@ -4,7 +4,7 @@ use std::{
 };
 
 use parking_lot::{Condvar, Mutex};
-use rusplay_core::Resolution;
+use rusplay_core::{Resolution, Timestamp};
 use rusplay_scale::ColorVolume;
 
 use crate::FrameColor;
@@ -15,6 +15,7 @@ pub struct PresentedFrame {
     pub keyframe: bool,
     pub source: Resolution,
     pub color: FrameColor,
+    pub captured: Timestamp,
     pub received_at: Instant,
     pub decoded_at: Instant,
     pub submitted_at: Instant,

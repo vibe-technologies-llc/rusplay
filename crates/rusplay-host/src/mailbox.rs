@@ -9,6 +9,7 @@ pub(crate) struct Closed;
 pub(crate) struct Delivery<T> {
     pub frame: Option<T>,
     pub keyframe_for: Option<u32>,
+    pub keyframe_forced: bool,
     pub bitrate_kbps: Option<u32>,
 }
 
@@ -23,6 +24,7 @@ pub(crate) enum Waited<T> {
 struct State<T> {
     frame: Option<T>,
     keyframe_for: Option<u32>,
+    keyframe_forced: bool,
     bitrate_kbps: Option<u32>,
     started: bool,
     closed: bool,
@@ -31,13 +33,17 @@ struct State<T> {
 impl<T> State<T> {
     fn ready(&self) -> bool {
         self.started
-            && (self.frame.is_some() || self.keyframe_for.is_some() || self.bitrate_kbps.is_some())
+            && (self.frame.is_some()
+                || self.keyframe_for.is_some()
+                || self.keyframe_forced
+                || self.bitrate_kbps.is_some())
     }
 
     fn take(&mut self) -> Delivery<T> {
         Delivery {
             frame: self.frame.take(),
             keyframe_for: self.keyframe_for.take(),
+            keyframe_forced: std::mem::take(&mut self.keyframe_forced),
             bitrate_kbps: self.bitrate_kbps.take(),
         }
     }
@@ -55,6 +61,7 @@ impl<T> Mailbox<T> {
             state: Mutex::new(State {
                 frame: None,
                 keyframe_for: None,
+                keyframe_forced: false,
                 bitrate_kbps: None,
                 started: false,
                 closed: false,
@@ -90,6 +97,13 @@ impl<T> Mailbox<T> {
     pub(crate) fn set_bitrate(&self, kbps: u32) {
         self.state.lock().bitrate_kbps = Some(kbps);
         self.changed.notify_one();
+    }
+
+    pub(crate) fn suspend(&self) {
+        let mut state = self.state.lock();
+        state.started = false;
+        state.keyframe_for = None;
+        state.keyframe_forced = true;
     }
 
     pub(crate) fn start(&self) {
@@ -159,6 +173,7 @@ mod tests {
             Waited::Delivered(Delivery {
                 frame: Some(1),
                 keyframe_for: None,
+                keyframe_forced: false,
                 bitrate_kbps: None,
             })
         );
@@ -194,6 +209,30 @@ mod tests {
             Waited::Delivered(Delivery {
                 frame: None,
                 keyframe_for: Some(5),
+                keyframe_forced: false,
+                bitrate_kbps: None,
+            })
+        );
+    }
+
+    #[test]
+    fn suspending_holds_deliveries_until_the_restart_and_then_forces_a_keyframe() {
+        let mailbox = Mailbox::<u32>::new();
+        mailbox.start();
+        mailbox.request_keyframe(3);
+
+        mailbox.suspend();
+        mailbox.put(4).unwrap();
+        let held = mailbox.wait(SHORT);
+        mailbox.start();
+
+        assert_eq!(held, Waited::Idle);
+        assert_eq!(
+            mailbox.wait(SHORT),
+            Waited::Delivered(Delivery {
+                frame: Some(4),
+                keyframe_for: None,
+                keyframe_forced: true,
                 bitrate_kbps: None,
             })
         );

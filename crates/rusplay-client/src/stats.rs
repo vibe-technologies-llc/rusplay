@@ -3,6 +3,10 @@ use std::{
     time::Duration,
 };
 
+use crate::clock::HostClock;
+
+const SMOOTHING_DIVISOR: u64 = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClientStats {
     pub frames_received: u64,
@@ -43,6 +47,10 @@ pub struct ClientStats {
     pub bitrate_hints_sent: u64,
     pub bitrate_target_kbps: Option<u32>,
     pub rtt: Option<Duration>,
+    pub clock_offset_micros: Option<i64>,
+    pub capture_to_receive: Option<Duration>,
+    pub capture_to_decode: Option<Duration>,
+    pub capture_to_present: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +71,29 @@ impl Counter {
 
     fn get(&self) -> u64 {
         self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Gauge(AtomicU64);
+
+impl Gauge {
+    pub(crate) fn record(&self, sample: Duration) {
+        let nanos = u64::try_from(sample.as_nanos()).unwrap_or(u64::MAX).max(1);
+        let current = self.0.load(Ordering::Relaxed);
+        let smoothed = if current == 0 {
+            nanos
+        } else {
+            current - current / SMOOTHING_DIVISOR + nanos / SMOOTHING_DIVISOR
+        };
+        self.0.store(smoothed, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> Option<Duration> {
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            nanos => Some(Duration::from_nanos(nanos)),
+        }
     }
 }
 
@@ -105,6 +136,10 @@ pub(crate) struct Counters {
     pub gamepad_failures: Counter,
     pub bitrate_hints_sent: Counter,
     bitrate_target_kbps: Counter,
+    pub capture_to_receive: Gauge,
+    pub capture_to_decode: Gauge,
+    pub capture_to_present: Gauge,
+    pub clock: HostClock,
     rtt_nanos: Counter,
 }
 
@@ -155,6 +190,10 @@ impl Counters {
                 0 => None,
                 nanos => Some(Duration::from_nanos(nanos)),
             },
+            clock_offset_micros: self.clock.offset(),
+            capture_to_receive: self.capture_to_receive.get(),
+            capture_to_decode: self.capture_to_decode.get(),
+            capture_to_present: self.capture_to_present.get(),
         }
     }
 
@@ -167,5 +206,23 @@ impl Counters {
             u64::try_from(rtt.as_nanos()).unwrap_or(u64::MAX).max(1)
         });
         self.rtt_nanos.set(nanos);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gauge_is_empty_until_sampled_then_seeds_and_smooths() {
+        let gauge = Gauge::default();
+
+        assert_eq!(gauge.get(), None);
+
+        gauge.record(Duration::from_millis(80));
+        assert_eq!(gauge.get(), Some(Duration::from_millis(80)));
+
+        gauge.record(Duration::from_millis(160));
+        assert_eq!(gauge.get(), Some(Duration::from_millis(90)));
     }
 }

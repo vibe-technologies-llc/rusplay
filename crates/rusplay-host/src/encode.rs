@@ -10,6 +10,7 @@ use rusplay_core::{EncodedFrame, Timestamp};
 
 use crate::{
     CaptureFeed, HostError,
+    capture::Captured,
     mailbox::{Delivery, Waited},
     outbox::ControlOutbox,
     pipeline::{StreamFormat, VideoPipeline},
@@ -24,6 +25,7 @@ pub(crate) type PipelineFactory =
 #[derive(Debug)]
 pub(crate) struct Outgoing {
     pub number: u32,
+    pub captured_micros: u64,
     pub frame: EncodedFrame,
 }
 
@@ -69,12 +71,16 @@ impl EncodeStage {
             let Delivery {
                 frame,
                 keyframe_for,
+                keyframe_forced,
                 bitrate_kbps,
             } = delivery;
 
             if let Some(kbps) = bitrate_kbps {
                 pipeline.set_bitrate(kbps)?;
                 counters.bitrate_changes.increment();
+            }
+            if keyframe_forced {
+                self.force_keyframe = true;
             }
             if let Some(frame) = keyframe_for {
                 counters.keyframe_requests.increment();
@@ -85,17 +91,21 @@ impl EncodeStage {
                 }
             }
 
-            let encoded = match frame {
-                Some(frame) => {
+            let (encoded, captured_micros) = match frame {
+                Some(Captured {
+                    frame,
+                    captured_micros,
+                }) => {
                     drop(links.feed.take_retained());
                     let encoded = pipeline.encode(&frame, self.force_keyframe)?;
                     self.last_input = Some((frame.timestamp, Instant::now()));
                     links.feed.retain(frame);
-                    encoded
+                    (encoded, captured_micros)
                 }
                 None if self.force_keyframe => {
                     counters.frames_repeated.increment();
-                    pipeline.repeat(self.repeat_timestamp(), true)?
+                    let encoded = pipeline.repeat(self.repeat_timestamp(), true)?;
+                    (encoded, links.shared.clock.micros())
                 }
                 None => continue,
             };
@@ -105,7 +115,7 @@ impl EncodeStage {
                 continue;
             };
             self.announce(pipeline.stream_format(), links)?;
-            if !self.forward(encoded, links) {
+            if !self.forward(encoded, captured_micros, links) {
                 return Ok(());
             }
         }
@@ -137,11 +147,15 @@ impl EncodeStage {
         })
     }
 
-    fn forward(&mut self, frame: EncodedFrame, links: &EncodeLinks) -> bool {
+    fn forward(&mut self, frame: EncodedFrame, captured_micros: u64, links: &EncodeLinks) -> bool {
         let number = self.next_number;
         let keyframe = frame.keyframe;
 
-        match links.output.try_send(Outgoing { number, frame }) {
+        match links.output.try_send(Outgoing {
+            number,
+            captured_micros,
+            frame,
+        }) {
             Ok(()) => {
                 self.next_number = number.wrapping_add(1);
                 if keyframe {

@@ -1,10 +1,10 @@
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use parking_lot::{Mutex, MutexGuard};
 use rusplay_net::{ControlChannel, NetError, Transport};
 use rusplay_protocol::{ControlMessage, StreamDescription};
 
-use crate::HostError;
+use crate::{HostError, link::ClientLink};
 
 #[derive(Debug, Default)]
 struct Announcement {
@@ -17,14 +17,14 @@ pub(crate) struct ControlOutbox {
     channel: Mutex<ControlChannel>,
     announcement: Mutex<Announcement>,
     transport: Arc<Transport>,
-    client: SocketAddr,
+    client: Arc<ClientLink>,
 }
 
 impl ControlOutbox {
     pub(crate) fn new(
         channel: ControlChannel,
         transport: Arc<Transport>,
-        client: SocketAddr,
+        client: Arc<ClientLink>,
     ) -> Self {
         Self {
             channel: Mutex::new(channel),
@@ -39,9 +39,24 @@ impl ControlOutbox {
     }
 
     pub(crate) fn flush(&self) -> Result<(), HostError> {
-        self.channel.lock().flush(&self.transport, self.client)?;
+        self.channel
+            .lock()
+            .flush(&self.transport, self.client.address())?;
 
         Ok(())
+    }
+
+    pub(crate) fn reset(&self) {
+        self.channel.lock().reset();
+        self.announcement.lock().unsent = false;
+    }
+
+    pub(crate) fn resend_announcement(&self, now: Instant) -> Result<(), HostError> {
+        let mut announcement = self.announcement.lock();
+        announcement.unsent = announcement.latest.is_some();
+        drop(announcement);
+
+        self.send_announcement(now)
     }
 
     pub(crate) fn announce(&self, description: StreamDescription) -> Result<(), HostError> {
@@ -74,7 +89,7 @@ impl ControlOutbox {
         }
         drop(announcement);
 
-        channel.flush(&self.transport, self.client)?;
+        channel.flush(&self.transport, self.client.address())?;
 
         Ok(())
     }

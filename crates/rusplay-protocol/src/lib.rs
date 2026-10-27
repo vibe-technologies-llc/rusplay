@@ -9,6 +9,7 @@ mod name;
 mod pairing;
 mod reconnect;
 mod stream;
+mod video;
 
 pub use crate::{
     control::{ControlMessage, ControlPacket},
@@ -22,4 +23,5 @@ pub use crate::{
     pairing::{PairingMessage, PairingRejection},
     reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
     stream::StreamDescription,
+    video::VideoFrameHeader,
 };

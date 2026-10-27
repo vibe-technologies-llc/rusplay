@@ -113,6 +113,38 @@ fn frames_arrive_decoded_at_the_source_resolution() {
 }
 
 #[test]
+fn latency_is_measured_from_the_host_capture_time_across_a_skewed_clock() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let (seen, sink) = recorder();
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
+    let stats = settle(stream, &seen, common::DEFAULT_FRAMES - 1);
+
+    let ceiling = Duration::from_secs(2);
+    let offset = stats.clock_offset_micros.unwrap();
+    let skew = i64::try_from(common::HOST_CLOCK_SKEW.as_micros()).unwrap();
+
+    assert!((skew - 2_000_000..=skew + 2_000_000).contains(&offset));
+    assert!(stats.capture_to_receive.unwrap() < ceiling);
+    assert!(stats.capture_to_decode.unwrap() < ceiling);
+    assert!(stats.capture_to_present.unwrap() < ceiling);
+}
+
+#[test]
 fn presented_texture_holds_the_picture() {
     let Some(gpu) = common::gpu() else {
         return;

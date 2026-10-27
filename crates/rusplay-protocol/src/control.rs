@@ -11,6 +11,8 @@ const TAG_GOODBYE: u8 = 4;
 const TAG_KEEPALIVE: u8 = 5;
 const TAG_RUMBLE: u8 = 6;
 const TAG_STREAM_FORMAT: u8 = 7;
+const TAG_CLOCK_PING: u8 = 8;
+const TAG_CLOCK_PONG: u8 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -37,6 +39,13 @@ pub enum ControlMessage {
         duration_ms: u16,
     },
     StreamFormat(StreamDescription),
+    ClockPing {
+        sent_micros: u64,
+    },
+    ClockPong {
+        sent_micros: u64,
+        host_micros: u64,
+    },
 }
 
 impl ControlMessage {
@@ -50,6 +59,8 @@ impl ControlMessage {
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
+            Self::ClockPing { .. } => 9,
+            Self::ClockPong { .. } => 17,
         }
     }
 
@@ -100,6 +111,18 @@ impl ControlMessage {
                 out[6..8].copy_from_slice(&delay_ms.to_be_bytes());
                 out[8..10].copy_from_slice(&duration_ms.to_be_bytes());
             }
+            Self::ClockPing { sent_micros } => {
+                out[0] = TAG_CLOCK_PING;
+                out[1..9].copy_from_slice(&sent_micros.to_be_bytes());
+            }
+            Self::ClockPong {
+                sent_micros,
+                host_micros,
+            } => {
+                out[0] = TAG_CLOCK_PONG;
+                out[1..9].copy_from_slice(&sent_micros.to_be_bytes());
+                out[9..17].copy_from_slice(&host_micros.to_be_bytes());
+            }
             Self::StreamFormat(description) => {
                 let mut body = Vec::with_capacity(len);
                 body.push(TAG_STREAM_FORMAT);
@@ -134,6 +157,8 @@ impl ControlMessage {
             TAG_REPORT_LOSS => 6,
             TAG_GOODBYE | TAG_KEEPALIVE => 0,
             TAG_RUMBLE => 9,
+            TAG_CLOCK_PING => 8,
+            TAG_CLOCK_PONG => 16,
             unknown => return Err(ProtocolError::UnknownControlTag(unknown)),
         };
 
@@ -153,6 +178,19 @@ impl ControlMessage {
         let word =
             |at: usize| u32::from_be_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
 
+        let long = |at: usize| {
+            u64::from_be_bytes([
+                body[at],
+                body[at + 1],
+                body[at + 2],
+                body[at + 3],
+                body[at + 4],
+                body[at + 5],
+                body[at + 6],
+                body[at + 7],
+            ])
+        };
+
         Ok(match tag {
             TAG_HELLO => Self::Hello {
                 version: ProtocolVersion(u16::from_be_bytes([body[0], body[1]])),
@@ -164,6 +202,13 @@ impl ControlMessage {
             },
             TAG_BITRATE_HINT => Self::BitrateHint { kbps: word(0) },
             TAG_KEEPALIVE => Self::Keepalive,
+            TAG_CLOCK_PING => Self::ClockPing {
+                sent_micros: long(0),
+            },
+            TAG_CLOCK_PONG => Self::ClockPong {
+                sent_micros: long(0),
+                host_micros: long(8),
+            },
             TAG_RUMBLE => {
                 let half = |at: usize| u16::from_be_bytes([body[at], body[at + 1]]);
                 Self::Rumble {
@@ -257,7 +302,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 8] {
+    fn every_message() -> [ControlMessage; 10] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -278,6 +323,13 @@ mod tests {
                 duration_ms: 0,
             },
             ControlMessage::StreamFormat(crate::stream::tests::hdr_description()),
+            ControlMessage::ClockPing {
+                sent_micros: 0x0102_0304_0506_0708,
+            },
+            ControlMessage::ClockPong {
+                sent_micros: 1,
+                host_micros: u64::MAX,
+            },
         ]
     }
 
@@ -333,6 +385,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(&buf[..len], [6, 2, 1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn clock_messages_are_big_endian_after_the_tag() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let request_len = ControlMessage::ClockPing {
+            sent_micros: 0x0102_0304_0506_0708,
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(&buf[..request_len], [8, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let reply_len = ControlMessage::ClockPong {
+            sent_micros: 1,
+            host_micros: 2,
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(
+            &buf[..reply_len],
+            [9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        );
     }
 
     #[test]

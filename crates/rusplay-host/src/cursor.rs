@@ -1,5 +1,4 @@
 use std::{
-    net::SocketAddr,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -19,7 +18,6 @@ pub(crate) struct CursorLinks {
     pub feed: Arc<CaptureFeed>,
     pub subscriber: Subscriber<CursorUpdate>,
     pub transport: Arc<Transport>,
-    pub client: SocketAddr,
 }
 
 pub(crate) fn run(image_repeat: Option<Duration>, links: &CursorLinks) -> Result<(), HostError> {
@@ -38,7 +36,9 @@ fn serve(
 ) -> Result<(), HostError> {
     let mut packetizer = Packetizer::new(
         StreamKind::Cursor,
-        links.transport.max_datagram_len(&links.client),
+        links
+            .transport
+            .max_datagram_len(&links.shared.client.address()),
         FecScheme::None,
     )?;
     let mut number = 0u32;
@@ -46,9 +46,19 @@ fn serve(
     let mut image_pending = true;
     let mut image_sent_at: Option<Instant> = None;
     let mut space_sent: Option<Resolution> = None;
+    let mut epoch = links.shared.client.epoch();
     let counters = &links.shared.counters;
 
     while !links.shared.stopped() {
+        let current_epoch = links.shared.client.epoch();
+        if current_epoch != epoch {
+            epoch = current_epoch;
+            changed = true;
+            image_pending = true;
+            image_sent_at = None;
+            space_sent = None;
+        }
+
         match links.subscriber.recv_timeout(POLL) {
             Received::Value(update) => {
                 image_pending |= update.bitmap.is_some();
@@ -83,7 +93,7 @@ fn serve(
         let mut encoded = Vec::with_capacity(message.encoded_len());
         message.encode(&mut encoded)?;
         let datagrams = packetizer.packetize(number, false, &encoded)?;
-        datagrams::send_all(&links.transport, links.client, &datagrams)?;
+        datagrams::send_all(&links.transport, links.shared.client.address(), &datagrams)?;
 
         number = number.wrapping_add(1);
         changed = false;

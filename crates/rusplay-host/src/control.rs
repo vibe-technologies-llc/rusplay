@@ -5,11 +5,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+use parking_lot::RwLock;
 use rusplay_config::{Config, NetworkConfig};
-use rusplay_net::{ControlEvent, NetError, RecvBatch, Transport, busy_reply};
-use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
+use rusplay_net::{
+    ControlEvent, NetError, PeerStore, RecvBatch, SessionTakeover, Transport, busy_reply,
+};
+use rusplay_protocol::{ControlMessage, PacketHeader, PeerId, ProtocolVersion, StreamKind};
 
-use crate::{HostError, accept::Replay, outbox::ControlOutbox, shared::Shared};
+use crate::{
+    HostError,
+    accept::{Replay, refresh_peers},
+    outbox::ControlOutbox,
+    shared::Shared,
+};
 
 const RECV_BATCH_DATAGRAMS: usize = 32;
 const IDLE_WAKE: Duration = Duration::from_millis(20);
@@ -69,7 +77,8 @@ impl HintPolicy {
 pub(crate) struct ControlLinks {
     pub shared: Arc<Shared>,
     pub transport: Arc<Transport>,
-    pub client: SocketAddr,
+    pub peers: Arc<RwLock<PeerStore>>,
+    pub peer: PeerId,
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
     pub input: Option<Sender<Vec<u8>>>,
@@ -79,6 +88,7 @@ pub(crate) struct ControlStage {
     timing: ControlTiming,
     hints: HintPolicy,
     links: ControlLinks,
+    takeover: SessionTakeover,
     streaming: bool,
     started: Instant,
     last_heard: Instant,
@@ -93,6 +103,7 @@ impl ControlStage {
         Self {
             timing,
             hints,
+            takeover: SessionTakeover::new(links.peer),
             links,
             streaming: false,
             started: now,
@@ -128,11 +139,11 @@ impl ControlStage {
             let now = Instant::now();
 
             for (datagram, from) in batch.iter() {
-                if from == self.links.client {
+                if from == self.client() {
                     self.last_heard = now;
-                    self.route(datagram, now, &mut events)?;
-                } else if let Some(refusal) = busy_reply(datagram) {
-                    self.links.transport.send_to(&refusal, from).ok();
+                    self.route(datagram, from, now, &mut events)?;
+                } else {
+                    self.answer_stranger(datagram, from, now, &mut events)?;
                 }
             }
             let rtt = {
@@ -166,6 +177,84 @@ impl ControlStage {
         }
     }
 
+    fn client(&self) -> SocketAddr {
+        self.links.shared.client.address()
+    }
+
+    fn answer_stranger(
+        &mut self,
+        datagram: &[u8],
+        from: SocketAddr,
+        now: Instant,
+        events: &mut Vec<ControlEvent>,
+    ) -> Result<(), HostError> {
+        let reconnecting =
+            PacketHeader::read(datagram).is_ok_and(|header| header.stream == StreamKind::Reconnect);
+
+        if reconnecting && same_family(from, self.client()) {
+            self.take_over(datagram, from, now, events)
+        } else {
+            if let Some(refusal) = busy_reply(datagram) {
+                self.links.transport.send_to(&refusal, from).ok();
+            }
+            Ok(())
+        }
+    }
+
+    fn take_over(
+        &mut self,
+        datagram: &[u8],
+        from: SocketAddr,
+        now: Instant,
+        events: &mut Vec<ControlEvent>,
+    ) -> Result<(), HostError> {
+        refresh_peers(&self.links.peers).ok();
+        let handled = self
+            .takeover
+            .handle(datagram, from, &self.links.peers.read());
+        let output = match handled {
+            Ok(output) => output,
+            Err(NetError::Protocol(_)) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+
+        if let Some(accepted) = &output.accepted {
+            self.links.transport.install_session(&accepted.keys);
+        }
+        if let Some(reply) = &output.reply {
+            self.links.transport.send_to(reply, from).ok();
+        }
+        if output.accepted.is_some() {
+            let replay = Replay {
+                request: datagram.to_vec(),
+                reply: output.reply.unwrap_or_default(),
+            };
+            self.switch_client(from, replay, now, events);
+        }
+
+        Ok(())
+    }
+
+    fn switch_client(
+        &mut self,
+        address: SocketAddr,
+        replay: Replay,
+        now: Instant,
+        events: &mut Vec<ControlEvent>,
+    ) {
+        let shared = &self.links.shared;
+        shared.suspend();
+        shared.client.switch(address);
+        self.links.outbox.reset();
+        shared.counters.sessions_taken_over.increment();
+
+        events.clear();
+        self.links.replay = replay;
+        self.streaming = false;
+        self.started = now;
+        self.last_heard = now;
+    }
+
     fn next_wake(&self, now: Instant) -> Instant {
         let handshake_deadline =
             (!self.streaming).then_some(self.started + self.timing.handshake_timeout);
@@ -185,6 +274,7 @@ impl ControlStage {
     fn route(
         &mut self,
         datagram: &[u8],
+        from: SocketAddr,
         now: Instant,
         events: &mut Vec<ControlEvent>,
     ) -> Result<(), HostError> {
@@ -195,9 +285,17 @@ impl ControlStage {
                 .channel()
                 .handle_datagram(datagram, now, events)
                 .is_ok(),
-            Ok(StreamKind::Pairing | StreamKind::Reconnect) => {
+            Ok(StreamKind::Pairing) => {
                 if let Some(reply) = self.links.replay.answer(datagram) {
-                    self.links.transport.send_to(reply, self.links.client)?;
+                    self.links.transport.send_to(reply, from)?;
+                }
+                true
+            }
+            Ok(StreamKind::Reconnect) => {
+                if let Some(reply) = self.links.replay.answer(datagram) {
+                    self.links.transport.send_to(reply, from)?;
+                } else {
+                    self.take_over(datagram, from, now, events)?;
                 }
                 true
             }
@@ -242,6 +340,7 @@ impl ControlStage {
                     if !self.streaming {
                         self.streaming = true;
                         self.next_keepalive = now + self.timing.keepalive_interval;
+                        self.links.outbox.resend_announcement(now)?;
                         shared.start();
                     }
                 }
@@ -253,6 +352,13 @@ impl ControlStage {
                 }
                 ControlEvent::Received(ControlMessage::BitrateHint { kbps }) => {
                     self.take_hint(kbps);
+                }
+                ControlEvent::Received(ControlMessage::ClockPing { sent_micros }) => {
+                    let pong = ControlMessage::ClockPong {
+                        sent_micros,
+                        host_micros: shared.clock.micros(),
+                    };
+                    self.send(pong, now)?;
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
                 ControlEvent::Undeliverable {
@@ -272,7 +378,8 @@ impl ControlStage {
                 ControlEvent::Received(
                     ControlMessage::Keepalive
                     | ControlMessage::Rumble { .. }
-                    | ControlMessage::StreamFormat(_),
+                    | ControlMessage::StreamFormat(_)
+                    | ControlMessage::ClockPong { .. },
                 )
                 | ControlEvent::Acked { .. } => {}
             }
@@ -355,7 +462,7 @@ impl ControlStage {
                 return;
             }
             for (datagram, from) in batch.iter() {
-                if from == self.links.client
+                if from == self.client()
                     && PacketHeader::read(datagram)
                         .is_ok_and(|header| header.stream == StreamKind::Control)
                 {
@@ -370,5 +477,23 @@ impl ControlStage {
                 .channel()
                 .poll(Instant::now(), &mut events);
         }
+    }
+}
+
+fn same_family(first: SocketAddr, second: SocketAddr) -> bool {
+    first.is_ipv4() == second.is_ipv4()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_takeover_never_changes_the_address_family() {
+        let v4 = SocketAddr::from(([127, 0, 0, 1], 1));
+        let v6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 1));
+
+        assert!(same_family(v4, SocketAddr::from(([10, 0, 0, 2], 9))));
+        assert!(!same_family(v4, v6));
     }
 }

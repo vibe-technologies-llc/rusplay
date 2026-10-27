@@ -24,6 +24,7 @@ pub(crate) struct DecodedVideo {
     pub number: u32,
     pub keyframe: bool,
     pub color: ColorSpace,
+    pub captured_micros: u64,
     pub received_at: Instant,
     pub decoded_at: Instant,
 }
@@ -104,13 +105,22 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
             Ok(Some(picture)) => {
                 links.counters.frames_decoded.increment();
                 let color = picture.color.over(video.stream.color);
+                let decoded_at = Instant::now();
+                if let Some(latency) = links
+                    .counters
+                    .clock
+                    .since_capture(video.captured_micros, decoded_at)
+                {
+                    links.counters.capture_to_decode.record(latency);
+                }
                 let output = DecodedVideo {
                     decoded: picture,
                     number: video.number,
                     keyframe: video.frame.keyframe,
                     color,
+                    captured_micros: video.captured_micros,
                     received_at: video.received_at,
-                    decoded_at: Instant::now(),
+                    decoded_at,
                 };
                 match links.output.put(output) {
                     Ok(Some(superseded)) => {

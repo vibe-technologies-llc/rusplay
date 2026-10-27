@@ -904,6 +904,14 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Session",
+        "network.clock_sync_interval_ms",
+        "Clock sync interval",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate_backoff_percent",
         "Backoff",

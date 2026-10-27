@@ -16,10 +16,22 @@ paths:
   `Start` (`client at <ip>` when it announced none) before the `Done` goes out. The session keys are installed before the final reply is sent, so the client's
   sealed `Hello` can never arrive first. Instead of `pair_as_host`'s linger, the session keeps
   the client's final handshake datagram (`Confirm` or `Proof`) and its reply (`Replay`), and the
-  control stage answers a byte-identical retransmit from it. Any other pairing or reconnect
-  datagram from the client during a session is ignored, and a `Start` or `Hello` from any other
-  address is answered `Rejected(Busy)` (`networking.md`); a restarted client is noticed by the
-  peer timeout.
+  control stage answers a byte-identical retransmit from it. A pairing
+  datagram from the client during a session is ignored, and a `Start` or a `Hello` for another
+  peer from any other address is answered `Rejected(Busy)` (`networking.md`).
+  - Takeover: a reconnect `Hello` for the session's own peer, from any address, runs through
+    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`).
+    Only on the authenticated `Accepted` the stage installs the new session keys, answers, and
+    restarts the session for the new client: `Shared::suspend` (streaming flag off, mailbox held
+    and a keyframe forced), `ClientLink::switch` (the shared client address every stage reads,
+    plus an epoch), `ControlOutbox::reset` (a fresh `ControlChannel`), the `Replay` replaced by
+    the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
+    and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage
+    resends the latest `StreamFormat` before `Shared::start`, so the description precedes the forced
+    keyframe. The input stage resets its `InputSequence` and the cursor stage resends the image
+    when the epoch changes. `HostStats::sessions_taken_over` counts them. The old client is simply
+    dropped: its datagrams no longer unseal. The host has no `Reassembler` of its own to reset;
+    the new client's is fresh.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
@@ -30,7 +42,10 @@ paths:
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
-    `next_frame` with a 20 ms timeout so it sees the stop flag. It first re-offers the feed's
+    `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
+    session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels
+    with the frame through the mailbox and `Outgoing` to the send stage; a keyframe repeat is
+    stamped when it is produced. It first re-offers the feed's
     retained frame, so a client joining a static screen still gets a picture.
   - `rusplay-host-encode` builds its `VideoPipeline` on its own thread (the encoder is opened
     there) and waits on the mailbox. The mailbox is latest-wins: a newer frame replaces an
@@ -45,7 +60,8 @@ paths:
     description reaches the client ahead of the keyframe it describes. A full control window
     leaves the announcement pending and the control stage sends it on its next pass; an
     undeliverable announcement that is still the latest is sent again.
-  - `rusplay-host-send` owns the video `Packetizer` (created after the keys are installed, FEC
+  - `rusplay-host-send` prefixes each encoded frame with its `VideoFrameHeader` (one reused
+    scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
     `network.pacing_window_percent` of the frame interval in bursts at least 250 µs apart, so a
@@ -53,7 +69,8 @@ paths:
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     answers the client's `Hello` with its own (another version is `VersionMismatch`, after a
     `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
-    the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
+    the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
+    `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.
     A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped to
     `network.bitrate_hint_min_kbps..=network.bitrate_hint_max_kbps` (`bitrate_hints_clamped`), or
     ignored (`bitrate_hints_ignored`) when the encoder runs `RateControl::ConstantQuality`, which
@@ -261,7 +278,7 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
-  (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
+  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the

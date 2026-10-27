@@ -46,6 +46,7 @@ pub struct NetworkConfig {
     pub adaptive_bitrate_backoff_percent: u8,
     pub bitrate_hint_min_kbps: u32,
     pub bitrate_hint_max_kbps: u32,
+    pub clock_sync_interval_ms: u32,
 }
 
 impl Default for NetworkConfig {
@@ -81,6 +82,7 @@ impl Default for NetworkConfig {
             adaptive_bitrate_backoff_percent: 25,
             bitrate_hint_min_kbps: 2_000,
             bitrate_hint_max_kbps: 200_000,
+            clock_sync_interval_ms: 1_000,
         }
     }
 }
@@ -258,6 +260,17 @@ mod tests {
                 peer_timeout_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn clock_sync_defaults_to_one_second_and_zero_turns_it_off() {
+        let off = NetworkConfig {
+            clock_sync_interval_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().clock_sync_interval_ms, 1_000);
+        assert!(off.validate().is_ok());
     }
 
     #[test]
