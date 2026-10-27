@@ -43,6 +43,7 @@ paths:
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, no UI types) and `HostsView`, which emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
 | `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
+| `stats` | `TimingSink` (wraps the window's sink and records `PresentedFrame` timings), `StatsSampler` and `StreamRates`; no gpui types |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
 | `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls |
 | `theme` | The colour palette, one function per colour |
@@ -77,6 +78,13 @@ paths:
   presenter or a layout update failed, and re-renders when a newer stream description arrives so
   the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the stream first, then the window, and
   emits `StreamEvent::Ended` with the notice for the status bar.
+- Statistics: the same poll feeds `StatsSampler` with `ClientStream::stats()` and the
+  `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
+  counter deltas into per-second rates and the timing deltas into average and peak client latency
+  (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
+  line under the state. Occasional counters (superseded, keyframe requests, decode errors, audio
+  underruns) appear only while non-zero. The figures are client side only: the end-to-end time
+  waits on `stream-capture-timestamps`.
 
 ## Settings
 

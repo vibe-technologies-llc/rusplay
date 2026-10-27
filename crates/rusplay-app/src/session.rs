@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use gpui::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use rusplay_client::{
-    ClientError, ClientSession, ClientStream, Credentials, Gpu, StreamWindow, WaylandTarget,
-    WindowSink,
+    ClientError, ClientSession, ClientStream, Credentials, FrameSink, Gpu, StreamWindow,
+    WaylandTarget,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
 use thiserror::Error;
@@ -36,7 +36,7 @@ pub fn connect(
     host: SocketAddr,
     credentials: &Credentials,
     gpu: Gpu,
-    sink: WindowSink,
+    sink: impl FrameSink,
 ) -> Result<ClientStream, SessionError> {
     Ok(ClientSession::new(config).connect(host, credentials, gpu, sink)?)
 }

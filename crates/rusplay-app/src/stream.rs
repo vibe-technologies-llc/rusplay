@@ -1,4 +1,10 @@
-use std::{cell::RefCell, net::SocketAddr, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    net::SocketAddr,
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     Bounds, Context, EventEmitter, FocusHandle, Focusable, Pixels, Subscription, Task, Window,
@@ -14,6 +20,7 @@ use crate::{
     hosts::HostEntry,
     notice::{Notice, error_chain},
     session::{self, SessionError},
+    stats::{FrameTimings, StatsSampler, StreamRates, TimingSink},
     theme,
     widgets::controls::{ButtonStyle, button},
 };
@@ -91,6 +98,8 @@ pub struct StreamView {
     input: InputConfig,
     engaged: bool,
     pointer: Option<(PointerMode, ActivePointer)>,
+    sampler: StatsSampler,
+    rates: Option<StreamRates>,
     focus_handle: FocusHandle,
     tasks: Vec<Task<()>>,
     _activation: Subscription,
@@ -108,7 +117,8 @@ impl StreamView {
         cx: &mut Context<Self>,
     ) -> Self {
         let gpu = stream_window.gpu();
-        let sink = stream_window.sink();
+        let timings = Arc::new(FrameTimings::default());
+        let sink = TimingSink::new(stream_window.sink(), Arc::clone(&timings));
         let address = host.address;
         let input = config.input;
 
@@ -131,6 +141,8 @@ impl StreamView {
             input,
             engaged: false,
             pointer: None,
+            sampler: StatsSampler::new(timings),
+            rates: None,
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
             _activation: cx.observe_window_activation(window, |this, window, cx| {
@@ -271,6 +283,15 @@ impl StreamView {
             cx.notify();
         }
 
+        let stats = self.live.borrow().stream.as_ref().map(ClientStream::stats);
+        if let Some(rates) = stats
+            .as_ref()
+            .and_then(|stats| self.sampler.sample(Instant::now(), stats))
+        {
+            self.rates = Some(rates);
+            cx.notify();
+        }
+
         true
     }
 
@@ -360,7 +381,19 @@ impl Render for StreamView {
             .border_b_1()
             .border_color(theme::border())
             .bg(theme::surface())
-            .child(div().text_color(theme::text()).child(self.status()))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_color(theme::text()).child(self.status()))
+                    .children(self.rates.map(|rates| {
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_muted())
+                            .child(rates.summary())
+                    })),
+            )
             .child(
                 div()
                     .flex()
