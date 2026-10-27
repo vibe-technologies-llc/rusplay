@@ -13,21 +13,23 @@ pub(super) const LINEAR_MODIFIER: u64 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Layout {
-    SemiPlanar,
+    SemiPlanar420,
+    SemiPlanar422,
     Planar,
 }
 
 impl Layout {
     pub(super) const fn of(format: PixelFormat) -> Self {
         match format.chroma {
-            ChromaSubsampling::Yuv420 | ChromaSubsampling::Yuv422 => Self::SemiPlanar,
+            ChromaSubsampling::Yuv420 => Self::SemiPlanar420,
+            ChromaSubsampling::Yuv422 => Self::SemiPlanar422,
             ChromaSubsampling::Yuv444 => Self::Planar,
         }
     }
 
     pub(super) const fn planes(self) -> usize {
         match self {
-            Self::SemiPlanar => 2,
+            Self::SemiPlanar420 | Self::SemiPlanar422 => 2,
             Self::Planar => 3,
         }
     }
@@ -35,7 +37,8 @@ impl Layout {
     pub(super) const fn rows(self, height: u32) -> usize {
         let height = height as usize;
         match self {
-            Self::SemiPlanar => height + height.div_ceil(2),
+            Self::SemiPlanar420 => height + height.div_ceil(2),
+            Self::SemiPlanar422 => 2 * height,
             Self::Planar => 3 * height,
         }
     }
@@ -45,6 +48,8 @@ pub(crate) const fn buffer_format(format: PixelFormat) -> Option<u32> {
     match (format.chroma, format.depth) {
         (ChromaSubsampling::Yuv420, BitDepth::Eight) => Some(ffi::BUFFER_FORMAT_NV12),
         (ChromaSubsampling::Yuv420, BitDepth::Ten) => Some(ffi::BUFFER_FORMAT_YUV420_10BIT),
+        (ChromaSubsampling::Yuv422, BitDepth::Eight) => Some(ffi::BUFFER_FORMAT_NV16),
+        (ChromaSubsampling::Yuv422, BitDepth::Ten) => Some(ffi::BUFFER_FORMAT_P210),
         (ChromaSubsampling::Yuv444, BitDepth::Eight) => Some(ffi::BUFFER_FORMAT_YUV444),
         (ChromaSubsampling::Yuv444, BitDepth::Ten) => Some(ffi::BUFFER_FORMAT_YUV444_10BIT),
         _ => None,
@@ -53,10 +58,12 @@ pub(crate) const fn buffer_format(format: PixelFormat) -> Option<u32> {
 
 pub(crate) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
     DrmFourcc::from_code(match (format.chroma, format.depth) {
+        (ChromaSubsampling::Yuv420, BitDepth::Eight) => *b"NV12",
+        (ChromaSubsampling::Yuv420, _) => *b"P010",
+        (ChromaSubsampling::Yuv422, BitDepth::Eight) => *b"NV16",
+        (ChromaSubsampling::Yuv422, _) => *b"P210",
         (ChromaSubsampling::Yuv444, BitDepth::Eight) => *b"YU24",
         (ChromaSubsampling::Yuv444, _) => *b"Q410",
-        (_, BitDepth::Eight) => *b"NV12",
-        (_, _) => *b"P010",
     })
 }
 
@@ -170,7 +177,7 @@ pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], pitch: usize) {
             copy_plane(&cb, data, pitch * height, pitch, wide);
             copy_plane(&cr, data, 2 * pitch * height, pitch, wide);
         }
-        Layout::SemiPlanar => {
+        Layout::SemiPlanar420 | Layout::SemiPlanar422 => {
             let shift = if wide { 16 - 10 } else { 0 };
             let sample_bytes = if wide { 2 } else { 1 };
             for y in 0..cb.rows {
@@ -214,27 +221,77 @@ mod tests {
         let p010 = format(ChromaSubsampling::Yuv420, BitDepth::Ten);
         let yuv444 = format(ChromaSubsampling::Yuv444, BitDepth::Eight);
         let yuv444_10 = format(ChromaSubsampling::Yuv444, BitDepth::Ten);
+        let nv16 = format(ChromaSubsampling::Yuv422, BitDepth::Eight);
+        let p210 = format(ChromaSubsampling::Yuv422, BitDepth::Ten);
 
         assert_eq!(buffer_format(nv12), Some(ffi::BUFFER_FORMAT_NV12));
+        assert_eq!(buffer_format(nv16), Some(ffi::BUFFER_FORMAT_NV16));
+        assert_eq!(buffer_format(p210), Some(ffi::BUFFER_FORMAT_P210));
         assert_eq!(buffer_format(p010), Some(ffi::BUFFER_FORMAT_YUV420_10BIT));
         assert_eq!(buffer_format(yuv444), Some(ffi::BUFFER_FORMAT_YUV444));
         assert_eq!(
             buffer_format(yuv444_10),
             Some(ffi::BUFFER_FORMAT_YUV444_10BIT)
         );
-        assert_eq!(
-            buffer_format(format(ChromaSubsampling::Yuv422, BitDepth::Eight)),
-            None
-        );
-        assert_eq!(
-            buffer_format(format(ChromaSubsampling::Yuv420, BitDepth::Twelve)),
-            None
-        );
+        for chroma in [
+            ChromaSubsampling::Yuv420,
+            ChromaSubsampling::Yuv422,
+            ChromaSubsampling::Yuv444,
+        ] {
+            assert_eq!(buffer_format(format(chroma, BitDepth::Twelve)), None);
+        }
 
         assert_eq!(dma_buf_fourcc(nv12), DrmFourcc::from_code(*b"NV12"));
         assert_eq!(dma_buf_fourcc(p010), DrmFourcc::from_code(*b"P010"));
         assert_eq!(dma_buf_fourcc(yuv444), DrmFourcc::from_code(*b"YU24"));
         assert_eq!(dma_buf_fourcc(yuv444_10), DrmFourcc::from_code(*b"Q410"));
+        assert_eq!(dma_buf_fourcc(nv16), DrmFourcc::from_code(*b"NV16"));
+        assert_eq!(dma_buf_fourcc(p210), DrmFourcc::from_code(*b"P210"));
+    }
+
+    #[test]
+    fn semi_planar_422_carries_a_full_height_chroma_plane() {
+        let nv16 = format(ChromaSubsampling::Yuv422, BitDepth::Eight);
+        let frame = yuv_frame(nv16, SIZE, 4, Timestamp::from_micros(0));
+        let view = YuvFrame::from_frame(&frame, BACKEND, nv16).unwrap();
+        let pitch = 8;
+        let rows = Layout::of(nv16).rows(SIZE.height);
+        let mut data = vec![0xee; pitch * rows];
+
+        pack(&view, &mut data, pitch);
+
+        let [_, cb, cr] = view.planes;
+        let chroma = pitch * 4;
+        assert_eq!(rows, 8);
+        assert_eq!(cb.rows, 4);
+        assert_eq!(data[chroma], cb.data[0]);
+        assert_eq!(data[chroma + 1], cr.data[0]);
+        assert_eq!(data[chroma + 3 * pitch + 4], cb.data[3 * cb.stride + 2]);
+        assert_eq!(data[chroma + 3 * pitch + 5], cr.data[3 * cr.stride + 2]);
+        assert_eq!(&data[chroma + 3 * pitch + 6..], &[0xee, 0xee]);
+    }
+
+    #[test]
+    fn p210_moves_ten_bit_chroma_to_the_most_significant_bits() {
+        let p210 = format(ChromaSubsampling::Yuv422, BitDepth::Ten);
+        let frame = yuv_frame(p210, SIZE, 5, Timestamp::from_micros(0));
+        let view = YuvFrame::from_frame(&frame, BACKEND, p210).unwrap();
+        let pitch = 12;
+        let mut data = vec![0; pitch * Layout::of(p210).rows(SIZE.height)];
+
+        pack(&view, &mut data, pitch);
+
+        let [_, cb, cr] = view.planes;
+        let packed = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]);
+        let chroma = pitch * 4;
+        assert_eq!(data.len(), pitch * 8);
+        assert_eq!(packed(chroma), sample(&cb, true, 0, 0) << 6);
+        assert_eq!(packed(chroma + 2), sample(&cr, true, 0, 0) << 6);
+        assert_eq!(packed(chroma + 3 * pitch + 8), sample(&cb, true, 2, 3) << 6);
+        assert_eq!(
+            packed(chroma + 3 * pitch + 10),
+            sample(&cr, true, 2, 3) << 6
+        );
     }
 
     #[test]
@@ -318,6 +375,18 @@ mod tests {
             }
         );
         assert_eq!(planar.len, 96);
+
+        let p210 = format(ChromaSubsampling::Yuv422, BitDepth::Ten);
+        let semi_422 = dma_buf_layout(p210, SIZE, &[plane(0, 12), plane(48, 12)]).unwrap();
+
+        assert_eq!(
+            semi_422,
+            DmaBufLayout {
+                base: 0,
+                pitch: 12,
+                len: 8 * 12
+            }
+        );
     }
 
     #[test]

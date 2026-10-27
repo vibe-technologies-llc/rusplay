@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_int, c_uint, c_void};
 
-pub(super) const API_MAJOR: u32 = 12;
-pub(super) const API_MINOR: u32 = 2;
+pub(super) const API_MAJOR: u32 = 13;
+pub(super) const API_MINOR: u32 = 0;
 pub(super) const API_VERSION: u32 = API_MAJOR | (API_MINOR << 24);
 pub(super) const MAX_SUPPORTED_VERSION: u32 = (API_MAJOR << 4) | API_MINOR;
 
@@ -50,20 +50,23 @@ pub(super) const BUFFER_FORMAT_NV12: u32 = 0x0000_0001;
 pub(super) const BUFFER_FORMAT_YUV444: u32 = 0x0000_1000;
 pub(super) const BUFFER_FORMAT_YUV420_10BIT: u32 = 0x0001_0000;
 pub(super) const BUFFER_FORMAT_YUV444_10BIT: u32 = 0x0010_0000;
+pub(super) const BUFFER_FORMAT_NV16: u32 = 0x4000_0001;
+pub(super) const BUFFER_FORMAT_P210: u32 = 0x4000_0002;
 
 pub(super) const MEMORY_HEAP_AUTOSELECT: u32 = 0;
 pub(super) const INPUT_RESOURCE_TYPE_CUDADEVICEPTR: u32 = 1;
 pub(super) const BUFFER_USAGE_INPUT_IMAGE: u32 = 0;
 
 pub(super) const CAPS_SUPPORTED_RATECONTROL_MODES: u32 = 1;
-pub(super) const CAPS_WIDTH_MAX: u32 = 12;
-pub(super) const CAPS_HEIGHT_MAX: u32 = 13;
-pub(super) const CAPS_SUPPORT_INTRA_REFRESH: u32 = 22;
-pub(super) const CAPS_SUPPORT_YUV444_ENCODE: u32 = 30;
-pub(super) const CAPS_SUPPORT_TEMPORAL_AQ: u32 = 36;
-pub(super) const CAPS_SUPPORT_10BIT_ENCODE: u32 = 37;
-pub(super) const CAPS_WIDTH_MIN: u32 = 43;
-pub(super) const CAPS_HEIGHT_MIN: u32 = 44;
+pub(super) const CAPS_WIDTH_MAX: u32 = 16;
+pub(super) const CAPS_HEIGHT_MAX: u32 = 17;
+pub(super) const CAPS_SUPPORT_INTRA_REFRESH: u32 = 25;
+pub(super) const CAPS_SUPPORT_YUV444_ENCODE: u32 = 33;
+pub(super) const CAPS_SUPPORT_TEMPORAL_AQ: u32 = 38;
+pub(super) const CAPS_SUPPORT_10BIT_ENCODE: u32 = 39;
+pub(super) const CAPS_WIDTH_MIN: u32 = 45;
+pub(super) const CAPS_HEIGHT_MIN: u32 = 46;
+pub(super) const CAPS_SUPPORT_YUV422_ENCODE: u32 = 59;
 
 pub(super) const TUNING_HIGH_QUALITY: u32 = 1;
 pub(super) const TUNING_LOW_LATENCY: u32 = 2;
@@ -73,6 +76,7 @@ pub(super) const SPLIT_AUTO_MODE: u32 = 0;
 pub(super) const SPLIT_AUTO_FORCED_MODE: u32 = 1;
 pub(super) const SPLIT_TWO_FORCED_MODE: u32 = 2;
 pub(super) const SPLIT_THREE_FORCED_MODE: u32 = 3;
+pub(super) const SPLIT_FOUR_FORCED_MODE: u32 = 4;
 pub(super) const SPLIT_DISABLE_MODE: u32 = 15;
 
 pub(super) const VUI_VIDEO_FORMAT_UNSPECIFIED: u32 = 5;
@@ -81,6 +85,7 @@ pub(super) const BIT_DEPTH_8: u32 = 8;
 pub(super) const BIT_DEPTH_10: u32 = 10;
 
 pub(super) const CHROMA_FORMAT_IDC_420: u32 = 1;
+pub(super) const CHROMA_FORMAT_IDC_422: u32 = 2;
 pub(super) const CHROMA_FORMAT_IDC_444: u32 = 3;
 
 pub(super) const AV1_COLOR_RANGE_STUDIO: u32 = 0;
@@ -133,6 +138,18 @@ pub(super) const H264_PROFILE_HIGH_GUID: Guid = Guid::new(
     0x4f7a,
     0x4b89,
     [0xaf, 0x2a, 0xd5, 0x37, 0xc9, 0x2b, 0xe3, 0x10],
+);
+pub(super) const H264_PROFILE_HIGH_10_GUID: Guid = Guid::new(
+    0x8f0c_337e,
+    0x186c,
+    0x48e9,
+    [0xa6, 0x9d, 0x7a, 0x83, 0x34, 0x08, 0x97, 0x58],
+);
+pub(super) const H264_PROFILE_HIGH_422_GUID: Guid = Guid::new(
+    0xff32_42e9,
+    0x613c,
+    0x4295,
+    [0xa1, 0xe8, 0x2a, 0x7f, 0xe9, 0x4d, 0x81, 0x33],
 );
 pub(super) const H264_PROFILE_HIGH_444_GUID: Guid = Guid::new(
     0x7ac6_63cb,
@@ -270,6 +287,8 @@ pub(super) mod hevc_bits {
         offset: 9,
         width: 2,
     };
+    pub(in crate::nvenc) const OUTPUT_MAX_CLL: BitField = BitField::flag(23);
+    pub(in crate::nvenc) const OUTPUT_MASTERING_DISPLAY: BitField = BitField::flag(24);
 }
 
 pub(super) mod av1_bits {
@@ -281,6 +300,8 @@ pub(super) mod av1_bits {
         offset: 7,
         width: 2,
     };
+    pub(in crate::nvenc) const OUTPUT_MAX_CLL: BitField = BitField::flag(14);
+    pub(in crate::nvenc) const OUTPUT_MASTERING_DISPLAY: BitField = BitField::flag(15);
 }
 
 pub(super) mod initialize_bits {
@@ -330,7 +351,9 @@ pub(super) struct RcParams {
     pub cr_qp_index_offset: i8,
     pub reserved2: u16,
     pub lookahead_level: u32,
-    pub reserved: [u32; 3],
+    pub view_bitrate_ratios: [u8; 7],
+    pub reserved3: u8,
+    pub reserved1: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -386,7 +409,8 @@ pub(super) struct ConfigH264 {
     pub num_ref_l1: u32,
     pub output_bit_depth: u32,
     pub input_bit_depth: u32,
-    pub reserved1: [u32; 265],
+    pub tf_level: u32,
+    pub reserved1: [u32; 264],
     pub reserved2: [*mut c_void; 64],
 }
 
@@ -418,7 +442,9 @@ pub(super) struct ConfigHevc {
     pub disable_deblocking_filter_idc: u32,
     pub output_bit_depth: u32,
     pub input_bit_depth: u32,
-    pub reserved1: [u32; 210],
+    pub num_temporal_layers: u32,
+    pub num_views: u32,
+    pub reserved1: [u32; 208],
     pub reserved2: [*mut c_void; 64],
 }
 
@@ -451,7 +477,10 @@ pub(super) struct ConfigAv1 {
     pub num_bwd_refs: u32,
     pub output_bit_depth: u32,
     pub input_bit_depth: u32,
-    pub reserved1: [u32; 233],
+    pub ltr_num_frames: u32,
+    pub num_temporal_layers: u32,
+    pub tf_level: u32,
+    pub reserved1: [u32; 230],
     pub reserved3: [*mut c_void; 62],
 }
 
@@ -625,6 +654,31 @@ pub(super) struct LockBitstream {
     pub reserved_internal: [u32; 8],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub(super) struct ChromaPoints {
+    pub x: u16,
+    pub y: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub(super) struct MasteringDisplayInfo {
+    pub g: ChromaPoints,
+    pub b: ChromaPoints,
+    pub r: ChromaPoints,
+    pub white_point: ChromaPoints,
+    pub max_luma: u32,
+    pub min_luma: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub(super) struct ContentLightLevel {
+    pub max_content_light_level: u16,
+    pub max_pic_average_light_level: u16,
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct SeiPayload {
@@ -679,8 +733,13 @@ pub(super) struct PicParamsHevc {
     pub reserved: u32,
     pub sei_payload_array: *mut SeiPayload,
     pub time_code: [u32; 8],
-    pub reserved2: [u32; 236],
-    pub reserved3: [*mut c_void; 61],
+    pub num_temporal_layers: u32,
+    pub view_id: u32,
+    pub reference_display_info_3d: *mut c_void,
+    pub max_cll: *mut ContentLightLevel,
+    pub mastering_display: *mut MasteringDisplayInfo,
+    pub reserved2: [u32; 234],
+    pub reserved3: [*mut c_void; 58],
 }
 
 #[derive(Clone, Copy)]
@@ -700,8 +759,14 @@ pub(super) struct PicParamsAv1 {
     pub reserved1: u32,
     pub obu_payload_array: *mut SeiPayload,
     pub film_grain_params: *mut c_void,
-    pub reserved2: [u32; 246],
-    pub reserved3: [*mut c_void; 61],
+    pub ltr_mark_frame_idx: u32,
+    pub ltr_use_frame_bitmap: u32,
+    pub num_temporal_layers: u32,
+    pub reserved4: u32,
+    pub max_cll: *mut ContentLightLevel,
+    pub mastering_display: *mut MasteringDisplayInfo,
+    pub reserved2: [u32; 242],
+    pub reserved3: [*mut c_void; 59],
 }
 
 #[derive(Clone, Copy)]
@@ -764,7 +829,8 @@ pub(super) struct RegisterResource {
     pub buffer_usage: u32,
     pub input_fence_point: *mut c_void,
     pub chroma_offset: [u32; 2],
-    pub reserved1: [u32; 246],
+    pub chroma_offset_in: [u32; 2],
+    pub reserved1: [u32; 244],
     pub reserved2: [*mut c_void; 61],
 }
 
@@ -947,7 +1013,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn struct_sizes_match_the_sdk_12_2_header() {
+    fn struct_sizes_match_the_sdk_13_0_header() {
         assert_eq!(size_of::<Guid>(), 16);
         assert_eq!(size_of::<FunctionList>(), 2552);
         assert_eq!(size_of::<OpenEncodeSessionExParams>(), 1552);
@@ -968,6 +1034,9 @@ mod tests {
         assert_eq!(size_of::<CreateBitstreamBuffer>(), 776);
         assert_eq!(size_of::<LockBitstream>(), 1544);
         assert_eq!(size_of::<SeiPayload>(), 16);
+        assert_eq!(size_of::<ChromaPoints>(), 4);
+        assert_eq!(size_of::<MasteringDisplayInfo>(), 24);
+        assert_eq!(size_of::<ContentLightLevel>(), 4);
         assert_eq!(size_of::<PicParamsH264>(), 1536);
         assert_eq!(size_of::<PicParamsHevc>(), 1536);
         assert_eq!(size_of::<PicParamsAv1>(), 1544);
@@ -997,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn field_offsets_match_the_sdk_12_2_header() {
+    fn config_offsets_match_the_sdk_13_0_header() {
         assert_eq!(offset_of!(OpenEncodeSessionExParams, device), 8);
         assert_eq!(offset_of!(OpenEncodeSessionExParams, api_version), 24);
         assert_eq!(offset_of!(RcParams, average_bit_rate), 20);
@@ -1006,20 +1075,35 @@ mod tests {
         assert_eq!(offset_of!(RcParams, lookahead_depth), 90);
         assert_eq!(offset_of!(RcParams, multi_pass), 100);
         assert_eq!(offset_of!(RcParams, lookahead_level), 112);
+        assert_eq!(offset_of!(RcParams, view_bitrate_ratios), 116);
+        assert_eq!(offset_of!(RcParams, reserved3), 123);
+        assert_eq!(offset_of!(RcParams, reserved1), 124);
         assert_eq!(offset_of!(ConfigH264, level), 4);
         assert_eq!(offset_of!(ConfigH264, intra_refresh_period), 52);
         assert_eq!(offset_of!(ConfigH264, vui), 72);
         assert_eq!(offset_of!(ConfigH264, chroma_format_idc), 192);
         assert_eq!(offset_of!(ConfigH264, input_bit_depth), 216);
+        assert_eq!(offset_of!(ConfigH264, tf_level), 220);
+        assert_eq!(offset_of!(ConfigH264, reserved1), 224);
+        assert_eq!(offset_of!(ConfigH264, reserved2), 1280);
         assert_eq!(offset_of!(ConfigHevc, idr_period), 20);
         assert_eq!(offset_of!(ConfigHevc, vui), 64);
         assert_eq!(offset_of!(ConfigHevc, ltr_trust_mode), 176);
         assert_eq!(offset_of!(ConfigHevc, input_bit_depth), 204);
+        assert_eq!(offset_of!(ConfigHevc, num_temporal_layers), 208);
+        assert_eq!(offset_of!(ConfigHevc, num_views), 212);
+        assert_eq!(offset_of!(ConfigHevc, reserved1), 216);
+        assert_eq!(offset_of!(ConfigHevc, reserved2), 1048);
         assert_eq!(offset_of!(ConfigAv1, idr_period), 20);
         assert_eq!(offset_of!(ConfigAv1, tile_widths), 48);
         assert_eq!(offset_of!(ConfigAv1, color_primaries), 68);
         assert_eq!(offset_of!(ConfigAv1, film_grain_params), 96);
         assert_eq!(offset_of!(ConfigAv1, input_bit_depth), 116);
+        assert_eq!(offset_of!(ConfigAv1, ltr_num_frames), 120);
+        assert_eq!(offset_of!(ConfigAv1, num_temporal_layers), 124);
+        assert_eq!(offset_of!(ConfigAv1, tf_level), 128);
+        assert_eq!(offset_of!(ConfigAv1, reserved1), 132);
+        assert_eq!(offset_of!(ConfigAv1, reserved3), 1056);
         assert_eq!(offset_of!(Config, profile_guid), 4);
         assert_eq!(offset_of!(Config, rc_params), 40);
         assert_eq!(offset_of!(Config, codec), 168);
@@ -1044,6 +1128,10 @@ mod tests {
         assert_eq!(offset_of!(LockBitstream, picture_type), 64);
         assert_eq!(offset_of!(LockBitstream, output_stats_ptr), 120);
         assert_eq!(offset_of!(LockBitstream, reserved_internal), 1512);
+    }
+
+    #[test]
+    fn picture_and_resource_offsets_match_the_sdk_13_0_header() {
         assert_eq!(offset_of!(PicParamsH264, slice_type_data), 24);
         assert_eq!(offset_of!(PicParamsH264, sei_payload_array_cnt), 36);
         assert_eq!(offset_of!(PicParamsH264, sei_payload_array), 40);
@@ -1053,10 +1141,24 @@ mod tests {
         assert_eq!(offset_of!(PicParamsHevc, sei_payload_array_cnt), 56);
         assert_eq!(offset_of!(PicParamsHevc, sei_payload_array), 64);
         assert_eq!(offset_of!(PicParamsHevc, time_code), 72);
+        assert_eq!(offset_of!(PicParamsHevc, num_temporal_layers), 104);
+        assert_eq!(offset_of!(PicParamsHevc, view_id), 108);
+        assert_eq!(offset_of!(PicParamsHevc, reference_display_info_3d), 112);
+        assert_eq!(offset_of!(PicParamsHevc, max_cll), 120);
+        assert_eq!(offset_of!(PicParamsHevc, mastering_display), 128);
+        assert_eq!(offset_of!(PicParamsHevc, reserved2), 136);
+        assert_eq!(offset_of!(PicParamsHevc, reserved3), 1072);
         assert_eq!(offset_of!(PicParamsAv1, tile_widths), 32);
         assert_eq!(offset_of!(PicParamsAv1, obu_payload_array_cnt), 48);
         assert_eq!(offset_of!(PicParamsAv1, obu_payload_array), 56);
         assert_eq!(offset_of!(PicParamsAv1, film_grain_params), 64);
+        assert_eq!(offset_of!(PicParamsAv1, ltr_mark_frame_idx), 72);
+        assert_eq!(offset_of!(PicParamsAv1, num_temporal_layers), 80);
+        assert_eq!(offset_of!(PicParamsAv1, reserved4), 84);
+        assert_eq!(offset_of!(PicParamsAv1, max_cll), 88);
+        assert_eq!(offset_of!(PicParamsAv1, mastering_display), 96);
+        assert_eq!(offset_of!(PicParamsAv1, reserved2), 104);
+        assert_eq!(offset_of!(PicParamsAv1, reserved3), 1072);
         assert_eq!(offset_of!(PicParams, input_time_stamp), 24);
         assert_eq!(offset_of!(PicParams, input_buffer), 40);
         assert_eq!(offset_of!(PicParams, buffer_fmt), 64);
@@ -1070,30 +1172,78 @@ mod tests {
         assert_eq!(offset_of!(RegisterResource, buffer_format), 40);
         assert_eq!(offset_of!(RegisterResource, input_fence_point), 48);
         assert_eq!(offset_of!(RegisterResource, chroma_offset), 56);
+        assert_eq!(offset_of!(RegisterResource, chroma_offset_in), 64);
+        assert_eq!(offset_of!(RegisterResource, reserved1), 72);
+        assert_eq!(offset_of!(RegisterResource, reserved2), 1048);
+        assert_eq!(offset_of!(MasteringDisplayInfo, b), 4);
+        assert_eq!(offset_of!(MasteringDisplayInfo, r), 8);
+        assert_eq!(offset_of!(MasteringDisplayInfo, white_point), 12);
+        assert_eq!(offset_of!(MasteringDisplayInfo, max_luma), 16);
+        assert_eq!(offset_of!(MasteringDisplayInfo, min_luma), 20);
+        assert_eq!(
+            offset_of!(ContentLightLevel, max_pic_average_light_level),
+            2
+        );
         assert_eq!(offset_of!(MapInputResource, input_resource), 8);
         assert_eq!(offset_of!(MapInputResource, mapped_resource), 24);
         assert_eq!(offset_of!(MapInputResource, mapped_buffer_fmt), 32);
     }
 
     #[test]
-    fn struct_versions_match_the_sdk_12_2_macros() {
-        assert_eq!(API_VERSION, 0x0200_000c);
-        assert_eq!(MAX_SUPPORTED_VERSION, 0xc2);
-        assert_eq!(FUNCTION_LIST_VER, 0x7202_000c);
-        assert_eq!(OPEN_ENCODE_SESSION_EX_PARAMS_VER, 0x7201_000c);
-        assert_eq!(CAPS_PARAM_VER, 0x7201_000c);
-        assert_eq!(RC_PARAMS_VER, 0x7201_000c);
-        assert_eq!(CONFIG_VER, 0xf209_000c);
-        assert_eq!(PRESET_CONFIG_VER, 0xf205_000c);
-        assert_eq!(INITIALIZE_PARAMS_VER, 0xf207_000c);
-        assert_eq!(RECONFIGURE_PARAMS_VER, 0xf202_000c);
-        assert_eq!(CREATE_INPUT_BUFFER_VER, 0x7202_000c);
-        assert_eq!(LOCK_INPUT_BUFFER_VER, 0x7201_000c);
-        assert_eq!(CREATE_BITSTREAM_BUFFER_VER, 0x7201_000c);
-        assert_eq!(LOCK_BITSTREAM_VER, 0xf202_000c);
-        assert_eq!(PIC_PARAMS_VER, 0xf207_000c);
-        assert_eq!(REGISTER_RESOURCE_VER, 0x7205_000c);
-        assert_eq!(MAP_INPUT_RESOURCE_VER, 0x7204_000c);
+    fn struct_versions_match_the_sdk_13_0_macros() {
+        assert_eq!(API_VERSION, 0x0000_000d);
+        assert_eq!(MAX_SUPPORTED_VERSION, 0xd0);
+        assert_eq!(FUNCTION_LIST_VER, 0x7002_000d);
+        assert_eq!(OPEN_ENCODE_SESSION_EX_PARAMS_VER, 0x7001_000d);
+        assert_eq!(CAPS_PARAM_VER, 0x7001_000d);
+        assert_eq!(RC_PARAMS_VER, 0x7001_000d);
+        assert_eq!(CONFIG_VER, 0xf009_000d);
+        assert_eq!(PRESET_CONFIG_VER, 0xf005_000d);
+        assert_eq!(INITIALIZE_PARAMS_VER, 0xf007_000d);
+        assert_eq!(RECONFIGURE_PARAMS_VER, 0xf002_000d);
+        assert_eq!(CREATE_INPUT_BUFFER_VER, 0x7002_000d);
+        assert_eq!(LOCK_INPUT_BUFFER_VER, 0x7001_000d);
+        assert_eq!(CREATE_BITSTREAM_BUFFER_VER, 0x7001_000d);
+        assert_eq!(LOCK_BITSTREAM_VER, 0xf002_000d);
+        assert_eq!(PIC_PARAMS_VER, 0xf007_000d);
+        assert_eq!(REGISTER_RESOURCE_VER, 0x7005_000d);
+        assert_eq!(MAP_INPUT_RESOURCE_VER, 0x7004_000d);
+    }
+
+    #[test]
+    fn caps_queries_are_their_position_in_the_sdk_13_0_enum() {
+        assert_eq!(CAPS_SUPPORTED_RATECONTROL_MODES, 1);
+        assert_eq!(CAPS_WIDTH_MAX, 16);
+        assert_eq!(CAPS_HEIGHT_MAX, 17);
+        assert_eq!(CAPS_SUPPORT_INTRA_REFRESH, 25);
+        assert_eq!(CAPS_SUPPORT_YUV444_ENCODE, 33);
+        assert_eq!(CAPS_SUPPORT_TEMPORAL_AQ, 38);
+        assert_eq!(CAPS_SUPPORT_10BIT_ENCODE, 39);
+        assert_eq!(CAPS_WIDTH_MIN, 45);
+        assert_eq!(CAPS_HEIGHT_MIN, 46);
+        assert_eq!(CAPS_SUPPORT_YUV422_ENCODE, 59);
+    }
+
+    #[test]
+    fn sdk_13_0_buffer_formats_and_profiles_match_the_header() {
+        assert_eq!(BUFFER_FORMAT_NV16, 0x4000_0001);
+        assert_eq!(BUFFER_FORMAT_P210, 0x4000_0002);
+        assert_eq!(H264_PROFILE_HIGH_10_GUID.data1, 0x8f0c_337e);
+        assert_eq!(H264_PROFILE_HIGH_422_GUID.data4[7], 0x33);
+        assert_eq!(SPLIT_FOUR_FORCED_MODE, 4);
+    }
+
+    #[test]
+    fn sdk_13_0_hdr_flags_sit_after_the_mv_hevc_and_svc_bits() {
+        let mut hevc = 0;
+        hevc_bits::OUTPUT_MAX_CLL.set(&mut hevc, 1);
+        hevc_bits::OUTPUT_MASTERING_DISPLAY.set(&mut hevc, 1);
+        let mut av1 = 0;
+        av1_bits::OUTPUT_MAX_CLL.set(&mut av1, 1);
+        av1_bits::OUTPUT_MASTERING_DISPLAY.set(&mut av1, 1);
+
+        assert_eq!(hevc, 0b11 << 23);
+        assert_eq!(av1, 0b11 << 14);
     }
 
     #[test]

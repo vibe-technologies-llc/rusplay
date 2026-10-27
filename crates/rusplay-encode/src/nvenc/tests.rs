@@ -370,6 +370,14 @@ fn opaque_fd_frames_are_imported_with_their_allocation() {
         yuv420(BitDepth::Eight),
         yuv420(BitDepth::Ten),
         PixelFormat {
+            chroma: ChromaSubsampling::Yuv422,
+            depth: BitDepth::Eight,
+        },
+        PixelFormat {
+            chroma: ChromaSubsampling::Yuv422,
+            depth: BitDepth::Ten,
+        },
+        PixelFormat {
             chroma: ChromaSubsampling::Yuv444,
             depth: BitDepth::Eight,
         },

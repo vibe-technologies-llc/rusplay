@@ -13,7 +13,7 @@ paths:
   | Backend | Codecs | Chroma / depth | Input |
   |---|---|---|---|
   | VAAPI | H.264, HEVC, AV1 | 4:2:0; 4:2:2/4:4:4 HEVC and 4:4:4 AV1 where the driver exposes it; 10-bit HEVC/AV1, 12-bit HEVC | DMA-BUF import, zero copy; CPU frames uploaded |
-  | NVENC | H.264, HEVC, AV1 | 4:2:0; 4:4:4 H.264 (8-bit) and HEVC (8/10-bit) where the GPU reports it; 10-bit HEVC/AV1; no 4:2:2 or 12-bit (SDK 12.2) | linear DMA-BUF or opaque Vulkan fd as CUDA external memory, zero copy; CPU frames uploaded |
+  | NVENC | H.264, HEVC, AV1 | 4:2:0; 4:2:2 and 4:4:4 H.264/HEVC (8/10-bit) where the GPU reports it (4:2:2 and 10-bit H.264 on Blackwell); 10-bit HEVC/AV1; no 12-bit, no AV1 above 4:2:0 (SDK 13.0) | linear DMA-BUF or opaque Vulkan fd as CUDA external memory, zero copy; CPU frames uploaded |
   | x264 | H.264 | 4:2:0, 4:2:2, 4:4:4 (High 4:2:2 / High 4:4:4 Predictive), 8/10-bit | CPU |
   | x265 | HEVC | 4:2:0, 4:2:2, 4:4:4 (RExt), 8/10/12-bit | CPU |
   | SVT-AV1 | AV1 | 4:2:0 (Main profile) | CPU |
@@ -39,10 +39,12 @@ paths:
 - Every backend signals `video.color` in the bitstream: the H.273 codes and range in the VUI or
   AV1 `color_config`, and, when `video.color.hdr` has them, the ST 2086 mastering display colour
   volume and CTA-861.3 content light level as SEI (H.264/HEVC, payload types 137 and 144) or
-  metadata OBUs (AV1, types 2 and 1) on every keyframe. `src/hdr.rs` turns a `MasteringDisplay`
-  into `St2086` units (G, B, R, white in 0.00002 steps; luminance in 0.0001 cd/m²) and builds the
-  message bodies both hardware backends share: `sei_payload` (ST 2086 order, big-endian),
-  `av1_payload` (R, G, B, white in 0.16, luminance 24.8 and 18.14) and `content_light_payload`.
+  metadata OBUs (AV1, types 2 and 1); VAAPI and NVENC H.264 attach them to every keyframe, NVENC
+  HEVC/AV1 hand them to the driver's native fields (below). `src/hdr.rs` turns a
+  `MasteringDisplay` into `St2086` units (G, B, R, white in 0.00002 steps; luminance in 0.0001
+  cd/m²), converts them to AV1 fixed point with `av1_fixed_point` (0.16 chromaticities, luminance
+  24.8 and 18.14) and builds the message bodies: `sei_payload` (ST 2086 order, big-endian,
+  VAAPI and NVENC H.264), `av1_payload` (R, G, B, white, VAAPI) and `content_light_payload`.
   `src/obu.rs` holds the AV1 temporal delimiter both prepend when the driver output lacks one. Each backend
   has a parameter-mapping test and a test that encodes BT.2020 PQ with Display P3 mastering
   metadata (`hdr::fixtures::hdr10_color`) and decodes it with `rusplay-decode` (VAAPI for
@@ -187,10 +189,12 @@ paths:
 - Nothing is linked at build time. `src/nvenc/driver.rs` loads `libcuda.so.1` and
   `libnvidia-encode.so.1` with `libloading` on every `open` and `capabilities` call (a missing
   library is `LibraryNotFound`, a missing symbol `SymbolMissing`), refuses a driver whose
-  `NvEncodeAPIGetMaxSupportedVersion` is below 12.2 (`DriverTooOld`), fills the function list from
-  `NvEncodeAPICreateInstance` and requires every entry it uses (`DriverFunctionMissing`). The
-  structs in `src/nvenc/ffi.rs` are hand written for SDK 12.2; their sizes, offsets and versions are
-  tested against the header (see `dependencies.md`). Bit fields are `BitField` offsets into the
+  `NvEncodeAPIGetMaxSupportedVersion` is below 13.0 (`DriverTooOld`; driver R570 or newer), fills
+  the function list from `NvEncodeAPICreateInstance` and requires every entry it uses
+  (`DriverFunctionMissing`). The structs in `src/nvenc/ffi.rs` are hand written for SDK 13.0; their
+  sizes, offsets and versions, the `NV_ENC_CAPS` positions and the bit-field positions are tested
+  against the header (see `dependencies.md`). `NV_ENC_CAPS` values are positions in the header's
+  enum, not documented numbers, so a new SDK means recounting them. Bit fields are `BitField` offsets into the
   `u32` that holds them. Errors are `EncodeError::Cuda { call, status }` and
   `EncodeError::Nvenc { call, status }`.
 - Ownership: `Driver` (libraries and function pointers) → `CudaContext` (created with
@@ -200,10 +204,12 @@ paths:
   entry point pushes the context for its duration (`CudaContext::enter`) and pops it after, so the
   encoder can move threads; `NvencEncoder` is `Send` by an `unsafe impl`, like VAAPI.
 - Selection (`Probe`): the profile is a pure function of codec and format (`config::profile`):
-  H.264 High (4:2:0 8-bit) and High 4:4:4 (4:4:4 8-bit); HEVC Main, Main10, and FRExt for 4:4:4
-  8/10-bit; AV1 Main for 4:2:0 8/10-bit. A pair counts when that profile exists, the codec GUID is
-  listed, the NVENC buffer format is among `nvEncGetInputFormats`, and for 4:4:4 and 10-bit
-  `NV_ENC_CAPS_SUPPORT_YUV444_ENCODE` / `_10BIT_ENCODE` are set. A missing codec is
+  H.264 High (4:2:0 8-bit), High 10 (4:2:0 10-bit), High 4:2:2 (4:2:2 8/10-bit) and High 4:4:4
+  (4:4:4 8/10-bit); HEVC Main, Main10, and FRExt for 4:2:2 and 4:4:4 8/10-bit; AV1 Main for 4:2:0
+  8/10-bit. A pair counts when that profile exists, the codec GUID is listed, the NVENC buffer
+  format is among `nvEncGetInputFormats`, and the caps agree: `NV_ENC_CAPS_SUPPORT_YUV422_ENCODE`
+  for 4:2:2, `_YUV444_ENCODE` for 4:4:4, `_10BIT_ENCODE` for 10-bit, each asked of that codec. No
+  GPU generation is assumed: 4:2:2 and 10-bit H.264 appear exactly where the driver reports them. A missing codec is
   `CodecUnsupported`, any other refusal `ChromaUnsupported` (above 4:2:0) or `BitDepthUnsupported`.
   `NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES` gates the rate control (`RateControlUnsupported`) and
   `WIDTH/HEIGHT_MIN/MAX` the resolution (`ResolutionUnsupported`).
@@ -213,7 +219,7 @@ paths:
   `frameIntervalP` 1 (no B-frames), no lookahead, zero reorder delay, one reference, parameter sets
   (or the AV1 sequence header) repeated on every IDR, no AUD. The encoder is synchronous
   (`enableEncodeAsync` 0) with picture-type decision on (`enablePTD` 1), so each `encode` returns the
-  frame it submitted. Chroma goes in `chromaFormatIDC` (1 or 3), depth in `inputBitDepth` and
+  frame it submitted. Chroma goes in `chromaFormatIDC` (1, 2 or 3), depth in `inputBitDepth` and
   `outputBitDepth`; the colour description fills the H.264/HEVC VUI (signal type and colour
   description present, H.273 codes, full-range flag) or the AV1 `colorPrimaries`,
   `transferCharacteristics`, `matrixCoefficients` and `colorRange`; custom primaries fail at open
@@ -230,19 +236,25 @@ paths:
 - `params` keys: `intra-refresh-frames` (`0` turns it off), `spatial-aq` and `temporal-aq`
   (`true`/`false`, `1`/`0`, `on`/`off`; temporal AQ only where the caps report it), `aq-strength`
   (1 to 15), `multipass` (`disabled`, `quarter-resolution`, `full-resolution`) and `split-encode`
-  (`auto`, `auto-forced`, `two`, `three`, `disabled`). Another key is `UnknownParameter`, a bad value
+  (`auto`, `auto-forced`, `two`, `three`, `four`, `disabled`). Another key is `UnknownParameter`, a bad value
   `InvalidParameterValue`, both at open before the driver loads. Lookahead is not offered, since it
   holds frames back.
-- HDR metadata is attached to keyframes only: the SEI payload array of `NV_ENC_PIC_PARAMS_H264`/
-  `_HEVC` (types 137 and 144, bodies from `src/hdr.rs`; NVENC wraps them in one SEI NAL) or the
-  AV1 `obuPayloadArray` (metadata types 2 and 1, AV1 fixed point). SDK 12.2 has no native
-  mastering-display fields.
+- HDR metadata. HEVC and AV1 use SDK 13's native fields: `configure` sets `outputMasteringDisplay`
+  and `outputMaxCll` in `NV_ENC_CONFIG_HEVC`/`_AV1` for whichever of the two `video.color.hdr`
+  has, and every picture points `pMasteringDisplay`/`pMaxCll` of `NV_ENC_PIC_PARAMS_HEVC`/`_AV1`
+  at a `MASTERING_DISPLAY_INFO`/`CONTENT_LIGHT_LEVEL` built once at open (`config::native_hdr`,
+  kept in `NvencEncoder`): HEVC in ST 2086 units, AV1 in AV1 fixed point (`St2086::av1_fixed_point`),
+  as FFmpeg does; the driver writes the SEI or metadata OBUs. The header gives H.264 no native
+  fields, so H.264 keeps the fallback: the SEI payload array of `NV_ENC_PIC_PARAMS_H264` (types 137
+  and 144, bodies from `src/hdr.rs`; NVENC wraps them in one SEI NAL) on keyframes
+  (`config::sei_payloads`).
 - Input. CPU frames follow the CPU input contract and are packed (`layout::pack`) into one
   NVENC-allocated input buffer per session (`nvEncCreateInputBuffer`, locked for the write):
-  `NV12` and `YUV420_10BIT` (P010, samples moved to the top 10 bits) for 4:2:0, `YUV444` and
-  `YUV444_10BIT` (three planes, same MSB alignment) for 4:4:4, chroma right after the luma at
-  `pitch * height`. DMA-BUF frames must be linear (`DmaBufModifierUnsupported` otherwise) and in
-  `NV12`, `P010`, `YU24` or `Q410` (`FrameFormatMismatch`), laid out the way NVENC addresses a
+  `NV12` and `YUV420_10BIT` (P010, samples moved to the top 10 bits) for 4:2:0, `NV16` and `P210`
+  (interleaved chroma at full height, same MSB alignment) for 4:2:2, `YUV444` and `YUV444_10BIT`
+  (three planes, same MSB alignment) for 4:4:4, chroma right after the luma at `pitch * height`.
+  DMA-BUF frames must be linear (`DmaBufModifierUnsupported` otherwise) and in `NV12`, `P010`,
+  `NV16`, `P210`, `YU24` or `Q410` (`FrameFormatMismatch`), laid out the way NVENC addresses a
   CUDA pointer: one pitch for every plane, a multiple of 4, and plane `i` at
   `offset₀ + i * pitch * height` (`DmaBufPlaneCount`, `DmaBufPlaneStride`, `DmaBufPlaneOffset`,
   `DmaBufStrideUnaligned`, `DmaBufTooShort`; `layout::dma_buf_layout`, unit tested). The fd is
@@ -262,9 +274,11 @@ paths:
   reported `NV_ENC_PIC_TYPE_IDR`. A keyframe is forced (`FORCEIDR | OUTPUT_SPSPPS`) on the first
   frame and on `request_keyframe`. With `video.resolution` unset the session is initialised on the
   first frame; a later size is `FrameResolutionMismatch`.
-- Tests: `ffi.rs` checks every struct size, the offsets the backend writes and the struct versions
-  against SDK 12.2; `config.rs` the profile, preset, tuning, rate-control, low-latency, intra
-  refresh, chroma/depth, VUI/AV1 colour, params and HDR payload mapping on zeroed configs;
+- Tests: `ffi.rs` checks every struct size, the offsets the backend writes and every field SDK
+  13.0 added, the struct versions, the caps positions, the new buffer formats and profile GUIDs and
+  the HDR output bits against the SDK 13.0 header; `config.rs` the profile, preset, tuning,
+  rate-control, low-latency, intra refresh, chroma/depth, VUI/AV1 colour, params, H.264 SEI
+  fallback and native HDR mapping on zeroed configs;
   `layout.rs` the packing and the DMA-BUF layout checks; `driver.rs` and `tests.rs` the
   missing-library path (`LibraryNotFound` from both `open` and `capabilities`, and parameter and
   colour errors before any library loads). The hardware tests in `tests.rs` (capabilities against
@@ -279,7 +293,7 @@ paths:
   `DeviceMemory` (`DmaBuf` for VAAPI, `OpaqueFd` for NVENC), the `DevicePlanes` (`SemiPlanar` for
   4:2:0, `Planar` for NVENC 4:4:4; samples above 8 bits sit in the high bits in both) and the
   fourcc, or `None` (software backends, VAAPI above 4:2:0, whose DMA-BUF formats are packed, and
-  NVENC 4:2:2 and 12-bit). `check_device_layout` checks a plane layout against it: the plane
+  NVENC 12-bit). NVENC 4:2:2 is `SemiPlanar` `NV16`/`P210`. `check_device_layout` checks a plane layout against it: the plane
   count for VAAPI, `nvenc::layout::dma_buf_layout` for NVENC (`BackendNotCompiled` without the
   feature). Tests hold both tables to `vaapi::format` and `nvenc::layout`.
 

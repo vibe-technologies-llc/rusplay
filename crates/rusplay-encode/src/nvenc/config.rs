@@ -18,8 +18,6 @@ use crate::{
 
 const SEI_MASTERING_DISPLAY: u32 = 137;
 const SEI_CONTENT_LIGHT: u32 = 144;
-const AV1_METADATA_CONTENT_LIGHT: u32 = 1;
-const AV1_METADATA_MASTERING_DISPLAY: u32 = 2;
 const AV1_QINDEX_PER_QP: u32 = 5;
 const AV1_MAX_QINDEX: u32 = 255;
 
@@ -56,7 +54,13 @@ pub(super) const fn profile(codec: Codec, format: PixelFormat) -> Option<Guid> {
         (Codec::H264, ChromaSubsampling::Yuv420, BitDepth::Eight) => {
             Some(ffi::H264_PROFILE_HIGH_GUID)
         }
-        (Codec::H264, ChromaSubsampling::Yuv444, BitDepth::Eight) => {
+        (Codec::H264, ChromaSubsampling::Yuv420, BitDepth::Ten) => {
+            Some(ffi::H264_PROFILE_HIGH_10_GUID)
+        }
+        (Codec::H264, ChromaSubsampling::Yuv422, BitDepth::Eight | BitDepth::Ten) => {
+            Some(ffi::H264_PROFILE_HIGH_422_GUID)
+        }
+        (Codec::H264, ChromaSubsampling::Yuv444, BitDepth::Eight | BitDepth::Ten) => {
             Some(ffi::H264_PROFILE_HIGH_444_GUID)
         }
         (Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Eight) => {
@@ -65,9 +69,11 @@ pub(super) const fn profile(codec: Codec, format: PixelFormat) -> Option<Guid> {
         (Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Ten) => {
             Some(ffi::HEVC_PROFILE_MAIN10_GUID)
         }
-        (Codec::Hevc, ChromaSubsampling::Yuv444, BitDepth::Eight | BitDepth::Ten) => {
-            Some(ffi::HEVC_PROFILE_FREXT_GUID)
-        }
+        (
+            Codec::Hevc,
+            ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444,
+            BitDepth::Eight | BitDepth::Ten,
+        ) => Some(ffi::HEVC_PROFILE_FREXT_GUID),
         (Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Eight | BitDepth::Ten) => {
             Some(ffi::AV1_PROFILE_MAIN_GUID)
         }
@@ -97,8 +103,9 @@ pub(super) const fn tuning_info(tuning: NvencTuning) -> u32 {
 
 pub(super) const fn chroma_format_idc(format: PixelFormat) -> u32 {
     match format.chroma {
+        ChromaSubsampling::Yuv420 => ffi::CHROMA_FORMAT_IDC_420,
+        ChromaSubsampling::Yuv422 => ffi::CHROMA_FORMAT_IDC_422,
         ChromaSubsampling::Yuv444 => ffi::CHROMA_FORMAT_IDC_444,
-        ChromaSubsampling::Yuv420 | ChromaSubsampling::Yuv422 => ffi::CHROMA_FORMAT_IDC_420,
     }
 }
 
@@ -246,6 +253,8 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
     let idc = chroma_format_idc(settings.format);
     let depth = bit_depth(settings.format);
     let color = &settings.color;
+    let mastering = u32::from(color.hdr.mastering.is_some());
+    let content_light = u32::from(color.hdr.content_light.is_some());
 
     match settings.codec {
         Codec::H264 => {
@@ -270,6 +279,8 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             hevc_bits::OUTPUT_AUD.set(&mut hevc.flags, 0);
             hevc_bits::ENABLE_INTRA_REFRESH.set(&mut hevc.flags, refresh_on);
             hevc_bits::CHROMA_FORMAT_IDC.set(&mut hevc.flags, idc);
+            hevc_bits::OUTPUT_MASTERING_DISPLAY.set(&mut hevc.flags, mastering);
+            hevc_bits::OUTPUT_MAX_CLL.set(&mut hevc.flags, content_light);
             hevc.intra_refresh_period = refresh_period;
             hevc.intra_refresh_cnt = refresh_count;
             hevc.max_num_ref_frames_in_dpb = 1;
@@ -283,6 +294,8 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             av1_bits::REPEAT_SEQ_HDR.set(&mut av1.flags, 1);
             av1_bits::ENABLE_INTRA_REFRESH.set(&mut av1.flags, refresh_on);
             av1_bits::CHROMA_FORMAT_IDC.set(&mut av1.flags, idc);
+            av1_bits::OUTPUT_MASTERING_DISPLAY.set(&mut av1.flags, mastering);
+            av1_bits::OUTPUT_MAX_CLL.set(&mut av1.flags, content_light);
             av1.intra_refresh_period = refresh_period;
             av1.intra_refresh_cnt = refresh_count;
             av1.max_num_ref_frames_in_dpb = 1;
@@ -337,28 +350,78 @@ pub(super) struct Payload {
     pub bytes: Vec<u8>,
 }
 
-pub(super) fn hdr_payloads(codec: Codec, hdr: &HdrLevels) -> Vec<Payload> {
-    let (mastering_kind, light_kind) = match codec {
-        Codec::H264 | Codec::Hevc => (SEI_MASTERING_DISPLAY, SEI_CONTENT_LIGHT),
-        Codec::Av1 => (AV1_METADATA_MASTERING_DISPLAY, AV1_METADATA_CONTENT_LIGHT),
-    };
+pub(super) fn sei_payloads(codec: Codec, hdr: &HdrLevels) -> Vec<Payload> {
+    match codec {
+        Codec::H264 => {}
+        Codec::Hevc | Codec::Av1 => return Vec::new(),
+    }
 
-    let mastering = hdr.mastering.map(|display| {
-        let units = St2086::of(&display);
-        Payload {
-            kind: mastering_kind,
-            bytes: match codec {
-                Codec::H264 | Codec::Hevc => units.sei_payload().to_vec(),
-                Codec::Av1 => units.av1_payload().to_vec(),
-            },
-        }
+    let mastering = hdr.mastering.map(|display| Payload {
+        kind: SEI_MASTERING_DISPLAY,
+        bytes: St2086::of(&display).sei_payload().to_vec(),
     });
     let light = hdr.content_light.map(|light| Payload {
-        kind: light_kind,
+        kind: SEI_CONTENT_LIGHT,
         bytes: content_light_payload(light).to_vec(),
     });
 
     mastering.into_iter().chain(light).collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct NativeHdr {
+    pub mastering: Option<ffi::MasteringDisplayInfo>,
+    pub content_light: Option<ffi::ContentLightLevel>,
+}
+
+impl NativeHdr {
+    pub(super) fn mastering_ptr(&mut self) -> *mut ffi::MasteringDisplayInfo {
+        self.mastering
+            .as_mut()
+            .map_or(ptr::null_mut(), ptr::from_mut)
+    }
+
+    pub(super) fn content_light_ptr(&mut self) -> *mut ffi::ContentLightLevel {
+        self.content_light
+            .as_mut()
+            .map_or(ptr::null_mut(), ptr::from_mut)
+    }
+}
+
+fn mastering_display_info(units: St2086) -> ffi::MasteringDisplayInfo {
+    let point = |[x, y]: [u16; 2]| ffi::ChromaPoints { x, y };
+
+    ffi::MasteringDisplayInfo {
+        g: point(units.green),
+        b: point(units.blue),
+        r: point(units.red),
+        white_point: point(units.white),
+        max_luma: units.max_luminance,
+        min_luma: units.min_luminance,
+    }
+}
+
+pub(super) fn native_hdr(codec: Codec, hdr: &HdrLevels) -> NativeHdr {
+    let units = |display| {
+        let st2086 = St2086::of(&display);
+        match codec {
+            Codec::Av1 => st2086.av1_fixed_point(),
+            Codec::H264 | Codec::Hevc => st2086,
+        }
+    };
+
+    match codec {
+        Codec::H264 => NativeHdr::default(),
+        Codec::Hevc | Codec::Av1 => NativeHdr {
+            mastering: hdr
+                .mastering
+                .map(|display| mastering_display_info(units(display))),
+            content_light: hdr.content_light.map(|light| ffi::ContentLightLevel {
+                max_content_light_level: light.max_cll_nits,
+                max_pic_average_light_level: light.max_fall_nits,
+            }),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -405,16 +468,32 @@ mod tests {
         let yuv444_8 = pixel(ChromaSubsampling::Yuv444, BitDepth::Eight);
         let yuv444_10 = pixel(ChromaSubsampling::Yuv444, BitDepth::Ten);
         let yuv422_8 = pixel(ChromaSubsampling::Yuv422, BitDepth::Eight);
+        let yuv422_10 = pixel(ChromaSubsampling::Yuv422, BitDepth::Ten);
 
         assert_eq!(
             profile(Codec::H264, yuv420_8),
             Some(ffi::H264_PROFILE_HIGH_GUID)
         );
         assert_eq!(
+            profile(Codec::H264, yuv420_10),
+            Some(ffi::H264_PROFILE_HIGH_10_GUID)
+        );
+        assert_eq!(
+            profile(Codec::H264, yuv422_8),
+            Some(ffi::H264_PROFILE_HIGH_422_GUID)
+        );
+        assert_eq!(
+            profile(Codec::H264, yuv422_10),
+            Some(ffi::H264_PROFILE_HIGH_422_GUID)
+        );
+        assert_eq!(
             profile(Codec::H264, yuv444_8),
             Some(ffi::H264_PROFILE_HIGH_444_GUID)
         );
-        assert_eq!(profile(Codec::H264, yuv420_10), None);
+        assert_eq!(
+            profile(Codec::H264, yuv444_10),
+            Some(ffi::H264_PROFILE_HIGH_444_GUID)
+        );
         assert_eq!(
             profile(Codec::Hevc, yuv420_8),
             Some(ffi::HEVC_PROFILE_MAIN_GUID)
@@ -432,12 +511,20 @@ mod tests {
             Some(ffi::HEVC_PROFILE_FREXT_GUID)
         );
         assert_eq!(
+            profile(Codec::Hevc, yuv422_8),
+            Some(ffi::HEVC_PROFILE_FREXT_GUID)
+        );
+        assert_eq!(
+            profile(Codec::Hevc, yuv422_10),
+            Some(ffi::HEVC_PROFILE_FREXT_GUID)
+        );
+        assert_eq!(
             profile(Codec::Av1, yuv420_10),
             Some(ffi::AV1_PROFILE_MAIN_GUID)
         );
         assert_eq!(profile(Codec::Av1, yuv444_8), None);
+        assert_eq!(profile(Codec::Av1, yuv422_8), None);
         for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
-            assert_eq!(profile(codec, yuv422_8), None);
             assert_eq!(
                 profile(codec, pixel(ChromaSubsampling::Yuv420, BitDepth::Twelve)),
                 None
@@ -579,6 +666,7 @@ mod tests {
         let yuv444_10 = pixel(ChromaSubsampling::Yuv444, BitDepth::Ten);
         let yuv420_10 = pixel(ChromaSubsampling::Yuv420, BitDepth::Ten);
         let yuv444_8 = pixel(ChromaSubsampling::Yuv444, BitDepth::Eight);
+        let yuv422_10 = pixel(ChromaSubsampling::Yuv422, BitDepth::Ten);
 
         let hevc = unsafe {
             configured(&settings(Codec::Hevc, yuv444_10), ALL_FEATURES)
@@ -603,6 +691,22 @@ mod tests {
         assert_eq!(av1.output_bit_depth, 10);
         assert_eq!(h264.chroma_format_idc, 3);
         assert_eq!(h264.output_bit_depth, 8);
+
+        let hevc_422 = unsafe {
+            configured(&settings(Codec::Hevc, yuv422_10), ALL_FEATURES)
+                .codec
+                .hevc
+        };
+        let h264_422 = unsafe {
+            configured(&settings(Codec::H264, yuv422_10), ALL_FEATURES)
+                .codec
+                .h264
+        };
+
+        assert_eq!(hevc_bits::CHROMA_FORMAT_IDC.get(hevc_422.flags), 2);
+        assert_eq!(h264_422.chroma_format_idc, 2);
+        assert_eq!(h264_422.input_bit_depth, 10);
+        assert_eq!(h264_422.output_bit_depth, 10);
     }
 
     #[test]
@@ -691,15 +795,17 @@ mod tests {
     }
 
     #[test]
-    fn hdr_metadata_becomes_sei_or_metadata_obu_payloads() {
+    fn h264_hdr_metadata_falls_back_to_sei_payloads() {
         let hdr = hdr10_color().hdr;
 
-        let sei = hdr_payloads(Codec::Hevc, &hdr);
-        let obus = hdr_payloads(Codec::Av1, &hdr);
+        let sei = sei_payloads(Codec::H264, &hdr);
 
         assert_eq!(sei.len(), 2);
         assert_eq!(sei[0].kind, 137);
-        assert_eq!(sei[0].bytes.len(), 24);
+        assert_eq!(
+            sei[0].bytes,
+            St2086::of(&hdr.mastering.unwrap()).sei_payload().to_vec()
+        );
         assert_eq!(
             sei[1],
             Payload {
@@ -707,12 +813,97 @@ mod tests {
                 bytes: vec![0x03, 0xe8, 0x01, 0x90]
             }
         );
-        assert_eq!(obus[0].kind, 2);
-        assert_eq!(obus[1].kind, 1);
+        assert_eq!(native_hdr(Codec::H264, &hdr), NativeHdr::default());
+        assert_eq!(sei_payloads(Codec::H264, &HdrLevels::default()), Vec::new());
+    }
+
+    #[test]
+    fn hevc_and_av1_carry_hdr_metadata_in_the_native_fields() {
+        let hdr = hdr10_color().hdr;
+        let display = hdr.mastering.unwrap();
+        let st2086 = St2086::of(&display);
+        let av1_units = st2086.av1_fixed_point();
+
+        let hevc = native_hdr(Codec::Hevc, &hdr);
+        let av1 = native_hdr(Codec::Av1, &hdr);
+
+        assert_eq!(sei_payloads(Codec::Hevc, &hdr), Vec::new());
+        assert_eq!(sei_payloads(Codec::Av1, &hdr), Vec::new());
         assert_eq!(
-            obus[0].bytes,
-            St2086::of(&hdr.mastering.unwrap()).av1_payload().to_vec()
+            hevc.mastering,
+            Some(ffi::MasteringDisplayInfo {
+                g: ffi::ChromaPoints {
+                    x: st2086.green[0],
+                    y: st2086.green[1]
+                },
+                b: ffi::ChromaPoints {
+                    x: st2086.blue[0],
+                    y: st2086.blue[1]
+                },
+                r: ffi::ChromaPoints {
+                    x: st2086.red[0],
+                    y: st2086.red[1]
+                },
+                white_point: ffi::ChromaPoints {
+                    x: st2086.white[0],
+                    y: st2086.white[1]
+                },
+                max_luma: 10_000_000,
+                min_luma: 50,
+            })
         );
-        assert_eq!(hdr_payloads(Codec::H264, &HdrLevels::default()), Vec::new());
+        assert_eq!(
+            hevc.content_light,
+            Some(ffi::ContentLightLevel {
+                max_content_light_level: 1000,
+                max_pic_average_light_level: 400,
+            })
+        );
+        let av1_mastering = av1.mastering.unwrap();
+        assert_eq!(av1_mastering.r.x, av1_units.red[0]);
+        assert_eq!(av1_mastering.white_point.y, av1_units.white[1]);
+        assert_eq!(av1_mastering.max_luma, 1000 << 8);
+        assert_eq!(av1_mastering.min_luma, av1_units.min_luminance);
+        assert_eq!(av1.content_light, hevc.content_light);
+        assert_eq!(
+            native_hdr(Codec::Hevc, &HdrLevels::default()),
+            NativeHdr::default()
+        );
+    }
+
+    #[test]
+    fn native_hdr_output_is_enabled_only_for_metadata_present() {
+        let mut hdr = settings(Codec::Hevc, pixel(ChromaSubsampling::Yuv420, BitDepth::Ten));
+        hdr.color = hdr10_color();
+
+        let hevc = unsafe { configured(&hdr, ALL_FEATURES).codec.hevc };
+        hdr.codec = Codec::Av1;
+        let av1 = unsafe { configured(&hdr, ALL_FEATURES).codec.av1 };
+        hdr.color.hdr.content_light = None;
+        let av1_without_light = unsafe { configured(&hdr, ALL_FEATURES).codec.av1 };
+        let sdr = unsafe {
+            configured(&settings(Codec::Hevc, PixelFormat::default()), ALL_FEATURES)
+                .codec
+                .hevc
+        };
+
+        assert_eq!(hevc_bits::OUTPUT_MASTERING_DISPLAY.get(hevc.flags), 1);
+        assert_eq!(hevc_bits::OUTPUT_MAX_CLL.get(hevc.flags), 1);
+        assert_eq!(av1_bits::OUTPUT_MASTERING_DISPLAY.get(av1.flags), 1);
+        assert_eq!(av1_bits::OUTPUT_MAX_CLL.get(av1.flags), 1);
+        assert_eq!(av1_bits::OUTPUT_MAX_CLL.get(av1_without_light.flags), 0);
+        assert_eq!(hevc_bits::OUTPUT_MASTERING_DISPLAY.get(sdr.flags), 0);
+        assert_eq!(hevc_bits::OUTPUT_MAX_CLL.get(sdr.flags), 0);
+    }
+
+    #[test]
+    fn native_hdr_pointers_are_null_without_metadata() {
+        let mut empty = NativeHdr::default();
+        let mut full = native_hdr(Codec::Hevc, &hdr10_color().hdr);
+
+        assert!(empty.mastering_ptr().is_null());
+        assert!(empty.content_light_ptr().is_null());
+        assert!(!full.mastering_ptr().is_null());
+        assert!(!full.content_light_ptr().is_null());
     }
 }
