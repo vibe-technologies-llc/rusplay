@@ -99,7 +99,7 @@ pub(crate) fn accept(
     }
 }
 
-fn refresh_peers(peers: &RwLock<PeerStore>) -> Result<(), HostError> {
+pub(crate) fn refresh_peers(peers: &RwLock<PeerStore>) -> Result<(), HostError> {
     if peers.read().is_stale() {
         peers.write().refresh()?;
     }

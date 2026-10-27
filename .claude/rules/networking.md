@@ -164,7 +164,17 @@ paths:
   client's while a session runs, so a second client fails at once with `PairingRejected` or
   `ReconnectRejected` instead of timing out. The reply is shorter than the request, is sent
   best effort (a send failure never ends the session) and is never sent to a datagram that is
-  not a first handshake message.
+  not a first handshake message. A reconnect `Hello` carrying the running session's own
+  `PeerId` is the exception (below).
+- Session takeover: `SessionTakeover` (sans-IO, per running session) wraps a
+  `ReconnectResponder` for the session's `PeerId`. A `Hello` for any other peer, known or not, is
+  `Busy`; a `Hello` for the session's peer runs the full mutual challenge-response against the
+  `PeerStore`, from whichever address it arrives (a restarted client has a new port, a roaming
+  one a new IP). The address of a `Hello` is recorded per attempt and a `Proof` is honoured only
+  from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
+  address alone is never trusted. Only the final `Accepted` yields keys, and only then does the
+  host act (`host.md`). A forged proof is `Rejected(Authentication)` and leaves the session as it
+  was. Takeover stays within one address family, since the packetizers are sized for it.
 - Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
   `Start`s, which only denies pairing and never grants access.
 - A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF

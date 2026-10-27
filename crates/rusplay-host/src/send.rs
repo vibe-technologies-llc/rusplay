@@ -1,5 +1,4 @@
 use std::{
-    net::SocketAddr,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError},
@@ -28,7 +27,6 @@ pub(crate) struct SendLinks {
     pub shared: Arc<Shared>,
     pub queue: Receiver<Outgoing>,
     pub transport: Arc<Transport>,
-    pub client: SocketAddr,
 }
 
 pub(crate) fn run(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
@@ -41,7 +39,9 @@ pub(crate) fn run(options: SendOptions, links: &SendLinks) -> Result<(), HostErr
 fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
     let mut packetizer = Packetizer::new(
         StreamKind::Video,
-        links.transport.max_datagram_len(&links.client),
+        links
+            .transport
+            .max_datagram_len(&links.shared.client.address()),
         options.fec,
     )?;
 
@@ -111,7 +111,7 @@ fn send_all(datagrams: &[Vec<u8>], links: &SendLinks) -> Result<(), HostError> {
     while sent < datagrams.len() {
         let progress = links
             .transport
-            .send_batch(&datagrams[sent..], links.client)?;
+            .send_batch(&datagrams[sent..], links.shared.client.address())?;
         if progress == 0 {
             thread::yield_now();
         }

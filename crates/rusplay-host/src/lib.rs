@@ -9,6 +9,7 @@ mod error;
 mod gpu;
 mod handoff;
 mod input;
+mod link;
 mod mailbox;
 mod outbox;
 mod pipeline;

@@ -69,12 +69,16 @@ impl EncodeStage {
             let Delivery {
                 frame,
                 keyframe_for,
+                keyframe_forced,
                 bitrate_kbps,
             } = delivery;
 
             if let Some(kbps) = bitrate_kbps {
                 pipeline.set_bitrate(kbps)?;
                 counters.bitrate_changes.increment();
+            }
+            if keyframe_forced {
+                self.force_keyframe = true;
             }
             if let Some(frame) = keyframe_for {
                 counters.keyframe_requests.increment();

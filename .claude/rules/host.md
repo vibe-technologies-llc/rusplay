@@ -16,10 +16,22 @@ paths:
   `Start` (`client at <ip>` when it announced none) before the `Done` goes out. The session keys are installed before the final reply is sent, so the client's
   sealed `Hello` can never arrive first. Instead of `pair_as_host`'s linger, the session keeps
   the client's final handshake datagram (`Confirm` or `Proof`) and its reply (`Replay`), and the
-  control stage answers a byte-identical retransmit from it. Any other pairing or reconnect
-  datagram from the client during a session is ignored, and a `Start` or `Hello` from any other
-  address is answered `Rejected(Busy)` (`networking.md`); a restarted client is noticed by the
-  peer timeout.
+  control stage answers a byte-identical retransmit from it. A pairing
+  datagram from the client during a session is ignored, and a `Start` or a `Hello` for another
+  peer from any other address is answered `Rejected(Busy)` (`networking.md`).
+  - Takeover: a reconnect `Hello` for the session's own peer, from any address, runs through
+    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`).
+    Only on the authenticated `Accepted` the stage installs the new session keys, answers, and
+    restarts the session for the new client: `Shared::suspend` (streaming flag off, mailbox held
+    and a keyframe forced), `ClientLink::switch` (the shared client address every stage reads,
+    plus an epoch), `ControlOutbox::reset` (a fresh `ControlChannel`), the `Replay` replaced by
+    the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
+    and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage
+    resends the latest `StreamFormat` before `Shared::start`, so the description precedes the forced
+    keyframe. The input stage resets its `InputSequence` and the cursor stage resends the image
+    when the epoch changes. `HostStats::sessions_taken_over` counts them. The old client is simply
+    dropped: its datagrams no longer unseal. The host has no `Reassembler` of its own to reset;
+    the new client's is fresh.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
@@ -255,7 +267,7 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
-  (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
+  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the

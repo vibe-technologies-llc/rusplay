@@ -11,6 +11,7 @@ mod peers;
 mod reassembly;
 mod reconnect;
 mod session;
+mod takeover;
 mod transport;
 
 pub use crate::{
@@ -37,5 +38,6 @@ pub use crate::{
         ReconnectTiming, reconnect_as_client, reconnect_as_host,
     },
     session::{KEY_LEN, SEALED_OVERHEAD, SessionCipher, SessionKeys, requires_sealing},
+    takeover::SessionTakeover,
     transport::{SocketBuffers, Transport, TransportOptions, max_datagram_len},
 };

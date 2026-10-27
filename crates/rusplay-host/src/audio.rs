@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use rusplay_audio::{AudioEncoder, AudioError, OpusAudioEncoder};
 use rusplay_config::AudioConfig;
@@ -52,7 +52,6 @@ pub(crate) fn default_audio_source() -> Option<AudioSourceFactory> {
 pub(crate) struct AudioLinks {
     pub shared: Arc<Shared>,
     pub transport: Arc<Transport>,
-    pub client: SocketAddr,
 }
 
 pub(crate) fn run(
@@ -87,7 +86,9 @@ fn serve(
     let mut source = factory(config)?;
     let mut packetizer = Packetizer::new(
         StreamKind::Audio,
-        links.transport.max_datagram_len(&links.client),
+        links
+            .transport
+            .max_datagram_len(&links.shared.client.address()),
         FecScheme::for_overhead(FEC_BLOCK_DATA_SHARDS, config.fec_overhead_percent),
     )?;
 
@@ -112,7 +113,7 @@ fn serve(
         }
 
         let datagrams = packetizer.packetize(number, false, &packet[..written])?;
-        datagrams::send_all(&links.transport, links.client, &datagrams)?;
+        datagrams::send_all(&links.transport, links.shared.client.address(), &datagrams)?;
         number = number.wrapping_add(1);
         counters.audio_packets_sent.increment();
     }

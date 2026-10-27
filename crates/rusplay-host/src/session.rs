@@ -126,17 +126,16 @@ impl HostSession {
         factory: PipelineFactory,
     ) -> Result<HostStream, HostError> {
         let network = &self.config.network;
-        let shared = Arc::new(Shared::new());
+        let shared = Arc::new(Shared::new(client.address()));
         let mut stream = HostStream {
             stages: Vec::new(),
             shared: Arc::clone(&shared),
-            client: client.address(),
         };
 
         let outbox = Arc::new(ControlOutbox::new(
             ControlChannel::new(ControlConfig::from(network)),
             Arc::clone(&self.transport),
-            client.address(),
+            Arc::clone(&shared.client),
         ));
         let (input_sender, input_datagrams) = mpsc::channel();
         let control = ControlStage::new(
@@ -144,7 +143,8 @@ impl HostSession {
             ControlLinks {
                 shared: Arc::clone(&shared),
                 transport: Arc::clone(&self.transport),
-                client: client.address(),
+                peers: Arc::clone(&self.peers),
+                peer: client.peer(),
                 replay: client.replay().clone(),
                 outbox: Arc::clone(&outbox),
                 input: self.input.is_some().then_some(input_sender),
@@ -167,7 +167,6 @@ impl HostSession {
             shared: Arc::clone(&shared),
             queue,
             transport: Arc::clone(&self.transport),
-            client: client.address(),
         };
         let options = send_options(&self.config);
         stream.spawn(Stage::Send, move || send::run(options, &send_links))?;
@@ -184,7 +183,6 @@ impl HostSession {
             let links = AudioLinks {
                 shared: Arc::clone(&shared),
                 transport: Arc::clone(&self.transport),
-                client: client.address(),
             };
             let audio = self.config.audio;
             stream.spawn_on(Stage::Audio, Some(CODEC_THREAD_STACK_BYTES), move || {
@@ -198,7 +196,6 @@ impl HostSession {
                 feed: Arc::clone(feed),
                 subscriber,
                 transport: Arc::clone(&self.transport),
-                client: client.address(),
             };
             let repeat = image_repeat(&self.config);
             stream.spawn(Stage::Cursor, move || cursor::run(repeat, &links))?;
@@ -235,12 +232,11 @@ fn send_options(config: &Config) -> SendOptions {
 pub struct HostStream {
     stages: Vec<(Stage, JoinHandle<Result<(), HostError>>)>,
     shared: Arc<Shared>,
-    client: SocketAddr,
 }
 
 impl HostStream {
     pub fn client(&self) -> SocketAddr {
-        self.client
+        self.shared.client.address()
     }
 
     pub fn stats(&self) -> HostStats {
