@@ -10,7 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::NetworkConfig;
-use rusplay_core::{Codec, EncodedFrame, Timestamp};
+use rusplay_core::{Codec, EncodedFrame, FormatSet, Timestamp};
 use rusplay_input::RumbleCommand;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
@@ -131,6 +131,7 @@ pub(crate) struct Links {
 pub(crate) struct ReceiveStage {
     transport: Arc<Transport>,
     host: SocketAddr,
+    decodable: FormatSet,
     stream: Option<StreamDescription>,
     timing: Timing,
     control: ControlChannel,
@@ -149,6 +150,7 @@ impl ReceiveStage {
     pub(crate) fn new(
         transport: Arc<Transport>,
         host: SocketAddr,
+        decodable: FormatSet,
         network: &NetworkConfig,
         bitrate: Option<BitrateSettings>,
         mut links: Links,
@@ -170,6 +172,7 @@ impl ReceiveStage {
         Self {
             transport,
             host,
+            decodable,
             stream: None,
             timing: Timing {
                 peer_timeout: Duration::from_millis(u64::from(network.peer_timeout_ms)),
@@ -204,6 +207,7 @@ impl ReceiveStage {
         self.control.send(
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
+                formats: self.decodable,
             },
             Instant::now(),
         )?;
@@ -456,11 +460,17 @@ impl ReceiveStage {
 
         for event in events.drain(..) {
             match event {
-                ControlEvent::Received(ControlMessage::Hello { version }) => {
+                ControlEvent::Received(ControlMessage::Hello { version, formats }) => {
                     if version != ProtocolVersion::CURRENT {
                         return Err(ClientError::VersionMismatch {
                             ours: ProtocolVersion::CURRENT.0,
                             theirs: version.0,
+                        });
+                    }
+                    if self.decodable.intersection(formats).is_empty() {
+                        return Err(ClientError::NoCommonFormat {
+                            decodable: self.decodable,
+                            encodable: formats,
                         });
                     }
                     if !self.handshake_done {
@@ -663,7 +673,7 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
-    use rusplay_core::{Codec, ColorSpace, PixelFormat, Resolution};
+    use rusplay_core::{Codec, CodecFormat, ColorSpace, PixelFormat, Resolution};
     use rusplay_net::{FecScheme, Packetizer, TransportOptions};
     use rusplay_protocol::{ControlPacket, CursorImage};
 
@@ -723,8 +733,14 @@ mod tests {
                 counters: Arc::clone(&counters),
             };
             let bitrate = BitrateSettings::from_config(&network, 80_000);
-            let stage =
-                ReceiveStage::new(Arc::new(transport), host_address, &network, bitrate, links);
+            let stage = ReceiveStage::new(
+                Arc::new(transport),
+                host_address,
+                FormatSet::ALL,
+                &network,
+                bitrate,
+                links,
+            );
             let stage = thread::spawn(move || stage.run());
 
             Self {
@@ -856,6 +872,7 @@ mod tests {
             resolution: Resolution::new(width, 720),
             format: PixelFormat::default(),
             color: ColorSpace::default(),
+            configured: CodecFormat::new(Codec::Hevc, PixelFormat::default()),
         }
     }
 

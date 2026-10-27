@@ -16,7 +16,10 @@ use rusplay_client::{
     ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame, OutputLight,
     Pin, PresentedFrame,
 };
-use rusplay_core::{ColorPrimaries, ColorRange, ColorSpace, Resolution};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange, ColorSpace,
+    FormatSet, PixelFormat, Resolution,
+};
 use rusplay_input::{InputEvent, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
@@ -278,6 +281,86 @@ fn a_wrong_pin_is_refused_before_streaming() {
     assert!(matches!(
         result,
         Err(ClientError::Net(NetError::PairingAuthentication))
+    ));
+}
+
+fn software_decodable() -> FormatSet {
+    CodecFormat::all()
+        .filter(|format| format.codec == Codec::Av1)
+        .collect()
+}
+
+#[test]
+fn the_hello_names_what_the_client_decodes_and_a_fallback_is_visible() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while stream.stream_format().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let format = stream.stream_format();
+    stream.stop().unwrap();
+
+    let format = format.expect("the host's stream format never arrived");
+    assert!(format.is_fallback());
+    assert_eq!(format.coded().codec, Codec::Av1);
+    assert_eq!(
+        format.configured,
+        CodecFormat::new(
+            Codec::Hevc,
+            PixelFormat {
+                chroma: ChromaSubsampling::Yuv422,
+                depth: BitDepth::Eight,
+            },
+        )
+    );
+    assert!(host.messages().contains(&ControlMessage::Hello {
+        version: rusplay_protocol::ProtocolVersion::CURRENT,
+        formats: software_decodable(),
+    }));
+}
+
+#[test]
+fn a_host_encoding_nothing_the_client_decodes_is_a_specific_error() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let hevc_only = CodecFormat::all()
+        .filter(|format| format.codec == Codec::Hevc)
+        .collect();
+    let host = TestHost::start(HostOptions {
+        encodable: hevc_only,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+
+    let result = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(ClientError::NoCommonFormat { decodable, encodable })
+            if decodable == software_decodable() && encodable == hevc_only
     ));
 }
 

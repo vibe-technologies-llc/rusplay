@@ -80,6 +80,8 @@ pub enum ProtocolError {
     UnknownColorRange(u8),
     #[error("hdr flags {0:#04x} carry unknown bits")]
     UnknownHdrFlags(u8),
+    #[error("format set {0:#010x} carries unknown bits")]
+    UnknownFormatBits(u32),
     #[error("luminance of {0} units of 0.0001 cd/m² exceeds 10000 cd/m²")]
     LuminanceOutOfRange(u32),
 }

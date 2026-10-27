@@ -13,7 +13,8 @@ use std::{
 
 use rusplay_config::NvdecDecoderConfig;
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, SignalledColor, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, CodecFormat, EncodedFrame, FormatSet, PixelFormat,
+    SignalledColor, Timestamp,
 };
 
 use crate::{
@@ -26,7 +27,7 @@ use crate::{
             ParserDisplayInfo, ParserParams, PicParams, ProcParams, ShortRect, SourceDataPacket,
             VideoFormat,
         },
-        format::{StreamFormat, cuda_chroma, cuda_codec},
+        format::{StreamFormat, cuda_chroma, cuda_codec, decodes},
         host::{BufferPool, HostFrame, HostLayout, PooledBuffer, deinterleave, shift_to_low_bits},
     },
 };
@@ -121,6 +122,24 @@ impl VideoDecoder for NvdecDecoder {
 
         self.parser.state().all()
     }
+}
+
+pub(crate) fn capabilities(config: &NvdecDecoderConfig) -> Result<FormatSet, DecodeError> {
+    let driver = Driver::load()?;
+    let context = Context::open(&driver, config.gpu_index)?;
+    let _current = context.make_current()?;
+    let mut formats = FormatSet::EMPTY;
+
+    for format in CodecFormat::all() {
+        if decodes(
+            &decoder_caps(&driver, format.codec, format.format)?,
+            format.format,
+        ) {
+            formats.insert(format);
+        }
+    }
+
+    Ok(formats)
 }
 
 fn decoder_caps(
@@ -537,6 +556,21 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn capabilities_without_the_nvidia_driver_is_a_specific_error() {
+        if open_library(CUDA_LIBRARY).is_ok() {
+            return;
+        }
+
+        assert!(matches!(
+            capabilities(&NvdecDecoderConfig::default()),
+            Err(DecodeError::LibraryUnavailable {
+                library: CUDA_LIBRARY,
+                ..
+            })
+        ));
     }
 
     #[test]

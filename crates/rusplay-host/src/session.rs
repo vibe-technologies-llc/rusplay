@@ -22,8 +22,9 @@ use crate::{
     cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
     input::{self, InputFeed, InputLinks},
+    negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
-    pipeline::{GpuPipeline, VideoPipeline},
+    pipeline::GpuPipelineFactory,
     send::{self, SendLinks, SendOptions},
     shared::Shared,
 };
@@ -110,20 +111,16 @@ impl HostSession {
         gpu: Gpu,
         feed: &Arc<CaptureFeed>,
     ) -> Result<HostStream, HostError> {
-        let config = self.config.clone();
-        let fallback = feed.shm_fallback();
-        let factory: PipelineFactory = Box::new(move || {
-            Ok(Box::new(GpuPipeline::new(gpu, config, fallback)) as Box<dyn VideoPipeline>)
-        });
+        let factory = GpuPipelineFactory::new(gpu, self.config.clone(), feed.shm_fallback());
 
-        self.serve_with(client, feed, factory)
+        self.serve_with(client, feed, Box::new(factory))
     }
 
     pub(crate) fn serve_with(
         &self,
         client: &Client,
         feed: &Arc<CaptureFeed>,
-        factory: PipelineFactory,
+        factory: Box<dyn PipelineFactory>,
     ) -> Result<HostStream, HostError> {
         let network = &self.config.network;
         let shared = Arc::new(Shared::new());
@@ -155,6 +152,7 @@ impl HostSession {
                 replay: client.replay().clone(),
                 outbox: Arc::clone(&outbox),
                 input: self.input.is_some().then_some(input_sender),
+                configured: configured_format(&self.config.video),
             },
         );
         stream.spawn(Stage::Control, move || control.run())?;
@@ -252,6 +250,10 @@ impl HostStream {
 
     pub fn stats(&self) -> HostStats {
         self.shared.counters.snapshot()
+    }
+
+    pub fn format(&self) -> Option<NegotiatedFormat> {
+        self.shared.negotiation.agreed()
     }
 
     pub fn is_finished(&self) -> bool {

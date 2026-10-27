@@ -1,3 +1,5 @@
+use rusplay_core::FormatSet;
+
 use crate::{
     PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription, StreamKind,
     stream::Reader,
@@ -16,6 +18,7 @@ const TAG_STREAM_FORMAT: u8 = 7;
 pub enum ControlMessage {
     Hello {
         version: ProtocolVersion,
+        formats: FormatSet,
     },
     RequestKeyframe {
         frame: u32,
@@ -44,9 +47,8 @@ impl ControlMessage {
 
     pub const fn encoded_len(&self) -> usize {
         match self {
-            Self::Hello { .. } => 3,
             Self::RequestKeyframe { .. } | Self::BitrateHint { .. } => 5,
-            Self::ReportLoss { .. } => 7,
+            Self::Hello { .. } | Self::ReportLoss { .. } => 7,
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
@@ -64,9 +66,10 @@ impl ControlMessage {
         };
 
         match self {
-            Self::Hello { version } => {
+            Self::Hello { version, formats } => {
                 out[0] = TAG_HELLO;
                 out[1..3].copy_from_slice(&version.0.to_be_bytes());
+                out[3..7].copy_from_slice(&formats.bits().to_be_bytes());
             }
             Self::RequestKeyframe { frame } => {
                 out[0] = TAG_REQUEST_KEYFRAME;
@@ -129,9 +132,8 @@ impl ControlMessage {
         }
 
         let body_len = match tag {
-            TAG_HELLO => 2,
             TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT => 4,
-            TAG_REPORT_LOSS => 6,
+            TAG_HELLO | TAG_REPORT_LOSS => 6,
             TAG_GOODBYE | TAG_KEEPALIVE => 0,
             TAG_RUMBLE => 9,
             unknown => return Err(ProtocolError::UnknownControlTag(unknown)),
@@ -154,9 +156,14 @@ impl ControlMessage {
             |at: usize| u32::from_be_bytes([body[at], body[at + 1], body[at + 2], body[at + 3]]);
 
         Ok(match tag {
-            TAG_HELLO => Self::Hello {
-                version: ProtocolVersion(u16::from_be_bytes([body[0], body[1]])),
-            },
+            TAG_HELLO => {
+                let bits = word(2);
+                Self::Hello {
+                    version: ProtocolVersion(u16::from_be_bytes([body[0], body[1]])),
+                    formats: FormatSet::from_bits(bits)
+                        .ok_or(ProtocolError::UnknownFormatBits(bits))?,
+                }
+            }
             TAG_REQUEST_KEYFRAME => Self::RequestKeyframe { frame: word(0) },
             TAG_REPORT_LOSS => Self::ReportLoss {
                 first_sequence: word(0),
@@ -261,6 +268,7 @@ mod tests {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
+                formats: FormatSet::ALL,
             },
             ControlMessage::RequestKeyframe { frame: 0xDEAD_BEEF },
             ControlMessage::ReportLoss {
@@ -366,6 +374,28 @@ mod tests {
         assert_eq!(
             ControlMessage::decode(&[TAG_GOODBYE, 0, 0]),
             Err(ProtocolError::TrailingBytes { extra: 2 })
+        );
+    }
+
+    #[test]
+    fn hello_carries_the_format_set_after_the_version() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let len = ControlMessage::Hello {
+            version: ProtocolVersion(0x0102),
+            formats: FormatSet::from_bits(0x0403_0201).unwrap(),
+        }
+        .encode(&mut buf)
+        .unwrap();
+
+        assert_eq!(&buf[..len], [0, 1, 2, 4, 3, 2, 1]);
+    }
+
+    #[test]
+    fn hello_with_unknown_format_bits_is_rejected() {
+        assert_eq!(
+            ControlMessage::decode(&[TAG_HELLO, 0, 14, 0x80, 0, 0, 0]),
+            Err(ProtocolError::UnknownFormatBits(0x8000_0000))
         );
     }
 

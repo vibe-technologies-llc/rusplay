@@ -1,4 +1,5 @@
 mod av1;
+mod capabilities;
 mod ffi;
 mod h264;
 mod hevc;
@@ -15,6 +16,7 @@ use rusplay_core::{
     Timestamp,
 };
 
+pub(crate) use crate::vaapi::capabilities::probe as capabilities;
 use crate::{
     Backend, DecodeError, DecodedBuffer, DecodedFrame, DmaBufFrame, VideoDecoder,
     vaapi::va::{Display, PoolSurface, Profile, Session, SurfacePool},
@@ -126,17 +128,7 @@ struct StreamFormat {
 
 impl StreamFormat {
     fn rt_format(&self) -> u32 {
-        match (self.pixel_format.chroma, self.pixel_format.depth) {
-            (ChromaSubsampling::Yuv420, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV420,
-            (ChromaSubsampling::Yuv420, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV420_10,
-            (ChromaSubsampling::Yuv420, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV420_12,
-            (ChromaSubsampling::Yuv422, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV422,
-            (ChromaSubsampling::Yuv422, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV422_10,
-            (ChromaSubsampling::Yuv422, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV422_12,
-            (ChromaSubsampling::Yuv444, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV444,
-            (ChromaSubsampling::Yuv444, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV444_10,
-            (ChromaSubsampling::Yuv444, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV444_12,
-        }
+        rt_format(self.pixel_format)
     }
 
     fn unsupported(&self, codec: Codec) -> DecodeError {
@@ -158,6 +150,20 @@ impl StreamFormat {
                 profile: self.profile_idc,
             }
         }
+    }
+}
+
+const fn rt_format(format: PixelFormat) -> u32 {
+    match (format.chroma, format.depth) {
+        (ChromaSubsampling::Yuv420, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV420,
+        (ChromaSubsampling::Yuv420, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV420_10,
+        (ChromaSubsampling::Yuv420, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV420_12,
+        (ChromaSubsampling::Yuv422, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV422,
+        (ChromaSubsampling::Yuv422, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV422_10,
+        (ChromaSubsampling::Yuv422, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV422_12,
+        (ChromaSubsampling::Yuv444, BitDepth::Eight) => ffi::VA_RT_FORMAT_YUV444,
+        (ChromaSubsampling::Yuv444, BitDepth::Ten) => ffi::VA_RT_FORMAT_YUV444_10,
+        (ChromaSubsampling::Yuv444, BitDepth::Twelve) => ffi::VA_RT_FORMAT_YUV444_12,
     }
 }
 

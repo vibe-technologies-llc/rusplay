@@ -181,6 +181,10 @@ impl StreamFormat {
     }
 }
 
+pub(super) fn decodes(caps: &DecodeCaps, format: PixelFormat) -> bool {
+    caps.is_supported != 0 && caps.output_format_mask & SurfaceFormat::of(format).mask_bit() != 0
+}
+
 pub(super) fn unsupported(codec: Codec, format: PixelFormat) -> DecodeError {
     if format.chroma != ChromaSubsampling::Yuv420 {
         DecodeError::ChromaUnsupported {
@@ -245,6 +249,25 @@ mod tests {
             min_height: 144,
             ..DecodeCaps::default()
         }
+    }
+
+    #[test]
+    fn a_format_is_decodable_only_when_supported_with_its_surface() {
+        let ten_bit_420 = PixelFormat {
+            chroma: ChromaSubsampling::Yuv420,
+            depth: BitDepth::Ten,
+        };
+        let p016 = SurfaceFormat::P016.mask_bit();
+
+        assert!(decodes(&caps(p016), ten_bit_420));
+        assert!(!decodes(&caps(SurfaceFormat::Nv12.mask_bit()), ten_bit_420));
+        assert!(!decodes(
+            &DecodeCaps {
+                is_supported: 0,
+                ..caps(p016)
+            },
+            ten_bit_420
+        ));
     }
 
     #[test]

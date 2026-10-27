@@ -2,7 +2,7 @@ use std::{fmt, io, net::SocketAddr, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, DrmFourcc};
-use rusplay_core::AudioCodec;
+use rusplay_core::{AudioCodec, FormatSet};
 use rusplay_encode::{EncodeError, input::fourcc_text};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
@@ -89,6 +89,13 @@ pub enum HostError {
     },
     #[error("client speaks protocol version {theirs}, this host speaks {ours}")]
     VersionMismatch { ours: u16, theirs: u16 },
+    #[error(
+        "the encoder produces {encodable} and the client decodes {decodable}, with no format in common"
+    )]
+    NoCommonFormat {
+        encodable: FormatSet,
+        decodable: FormatSet,
+    },
     #[error("client sent no hello within {0:?}")]
     HandshakeTimeout(Duration),
     #[error("client never acknowledged the hello")]
@@ -122,6 +129,7 @@ impl HostError {
                 | Self::PeerName { .. }
                 | Self::VersionMismatch { .. }
                 | Self::HandshakeTimeout(_)
+                | Self::NoCommonFormat { .. }
                 | Self::HelloUndeliverable
                 | Self::ClientSilent(_)
         )
@@ -137,6 +145,13 @@ mod tests {
         assert!(HostError::ClientSilent(Duration::from_secs(1)).is_session_failure());
         assert!(HostError::Net(NetError::PairingLocked).is_session_failure());
         assert!(!HostError::NoGpuAdapter.is_session_failure());
+        assert!(
+            HostError::NoCommonFormat {
+                encodable: FormatSet::EMPTY,
+                decodable: FormatSet::ALL,
+            }
+            .is_session_failure()
+        );
         assert!(!HostError::Capture(CaptureError::StreamEnded).is_session_failure());
     }
 }

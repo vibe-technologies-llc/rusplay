@@ -20,8 +20,8 @@ use rusplay_client::{
 };
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, PixelFormat,
-    Resolution, TransferFunction,
+    BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange, ColorSpace,
+    FormatSet, PixelFormat, Resolution, TransferFunction,
 };
 use rusplay_input::{InputEvent, InputRecord, StateRecord};
 use rusplay_net::{
@@ -88,6 +88,13 @@ pub fn stream_description() -> StreamDescription {
             range: ColorRange::Full,
             ..ColorSpace::default()
         },
+        configured: CodecFormat::new(
+            Codec::Hevc,
+            PixelFormat {
+                chroma: ChromaSubsampling::Yuv422,
+                depth: BitDepth::Eight,
+            },
+        ),
     }
 }
 
@@ -143,6 +150,7 @@ pub struct HostOptions {
     pub audio_drop: Box<dyn Fn(u32) -> bool + Send>,
     pub cursor: Vec<CursorMessage>,
     pub gate: Option<Arc<AtomicBool>>,
+    pub encodable: FormatSet,
 }
 
 impl Default for HostOptions {
@@ -155,6 +163,7 @@ impl Default for HostOptions {
             audio_drop: Box::new(|_| false),
             cursor: Vec::new(),
             gate: None,
+            encodable: FormatSet::ALL,
         }
     }
 }
@@ -355,10 +364,12 @@ fn answer_hello(
     control: &mut ControlChannel,
     transport: &Transport,
     client: SocketAddr,
+    options: &HostOptions,
     describe: bool,
 ) {
     let hello = ControlMessage::Hello {
         version: ProtocolVersion::CURRENT,
+        formats: options.encodable,
     };
 
     control.send(hello, Instant::now()).ok();
@@ -438,7 +449,7 @@ fn serve(
             received.lock().push(message);
             match message {
                 ControlMessage::Hello { .. } => {
-                    answer_hello(&mut control, transport, client, !streaming);
+                    answer_hello(&mut control, transport, client, options, !streaming);
                     streaming = true;
                 }
                 ControlMessage::RequestKeyframe { .. } => fixture_index = 0,

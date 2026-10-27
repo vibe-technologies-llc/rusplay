@@ -1,5 +1,6 @@
 mod audio;
 mod color;
+mod format;
 mod media;
 mod scale;
 mod time;
@@ -12,6 +13,7 @@ pub use color::{
     MatrixCoefficients, SignalledColor, ToneMapOperator, TransferFunction, WhiteAdaptation,
     bradford_adaptation, pq_from_nits, pq_to_nits,
 };
+pub use format::{CodecFormat, FormatSet};
 pub use media::EncodedFrame;
 pub use scale::ScaleFilter;
 pub use time::Timestamp;

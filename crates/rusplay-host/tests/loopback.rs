@@ -9,16 +9,16 @@ use parking_lot::Mutex;
 use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, CursorBitmap, CursorUpdate, Publisher, Subscriber, latest};
 use rusplay_client::{
-    AudioOutput, AudioOutputStats, ClientSession, ClientStream, Credentials, LatestFrame,
-    PresentedFrame,
+    AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream, Credentials,
+    LatestFrame, PresentedFrame,
 };
 use rusplay_config::{
     Config, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VideoDecoderConfig,
-    VideoEncoderConfig,
+    VideoEncoderConfig, X265Config,
 };
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
-    TransferFunction,
+    BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorSpace, PixelFormat, Resolution,
+    Timestamp, TransferFunction,
 };
 use rusplay_host::{
     AudioSource, CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostError,
@@ -445,4 +445,115 @@ fn f16_to_f32(bits: u16) -> f32 {
         0 => mantissa * 2f32.powi(-24),
         _ => (1.0 + mantissa / 1024.0) * 2f32.powi(exponent - 15),
     }
+}
+
+fn moving_box_feed() -> Arc<CaptureFeed> {
+    let (_publisher, subscriber) = latest();
+
+    CaptureFeed::new(MovingBox {
+        index: 0,
+        cursor: subscriber,
+    })
+}
+
+fn client_gpu(gpu: &Gpu) -> rusplay_client::Gpu {
+    rusplay_client::Gpu {
+        device: gpu.device.clone(),
+        queue: gpu.queue.clone(),
+    }
+}
+
+fn encodes_anything(config: &Config) -> bool {
+    rusplay_encode::capabilities(&config.video.encoder)
+        .is_ok_and(|capabilities| !capabilities.format_set().is_empty())
+}
+
+#[test]
+fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
+    let mut config = host_config(VideoEncoderConfig::SvtAv1(SvtAv1Config::default()));
+    let configured = CodecFormat::new(
+        Codec::Av1,
+        PixelFormat {
+            chroma: ChromaSubsampling::Yuv444,
+            depth: BitDepth::Eight,
+        },
+    );
+    config.video.pixel_format = configured.format;
+    let fallback = CodecFormat::new(
+        Codec::Av1,
+        PixelFormat {
+            chroma: SVT_AV1_MIN_CHROMA,
+            depth: BitDepth::Eight,
+        },
+    );
+    let encodes_fallback = rusplay_encode::capabilities(&config.video.encoder).is_ok_and(|caps| {
+        caps.supports(fallback.codec, fallback.format)
+            && !caps.supports(configured.codec, configured.format)
+    });
+    if !encodes_fallback {
+        return;
+    }
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let host = bind_host(config, &dir, &RecordedInput::default());
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+    let session = ClientSession::new(client_config());
+
+    let stream = session
+        .connect_with_audio(
+            address,
+            &Credentials::Pin(Pin::parse(PIN).unwrap()),
+            client_gpu(&gpu),
+            LatestFrame::new(),
+            None,
+        )
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    while stream.stream_format().is_none() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let described = stream.stream_format();
+    stream.stop().unwrap();
+    serving.join().unwrap().unwrap();
+
+    let described = described.expect("the host never described the stream");
+    assert!(described.is_fallback());
+    assert_eq!(described.coded(), fallback);
+    assert_eq!(described.configured, configured);
+}
+
+#[test]
+fn a_host_and_client_without_a_shared_format_both_refuse() {
+    let config = host_config(VideoEncoderConfig::X265(X265Config::default()));
+    if !encodes_anything(&config) {
+        return;
+    }
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let host = bind_host(config, &dir, &RecordedInput::default());
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+    let session = ClientSession::new(client_config());
+
+    let connected = session.connect_with_audio(
+        address,
+        &Credentials::Pin(Pin::parse(PIN).unwrap()),
+        client_gpu(&gpu),
+        LatestFrame::new(),
+        None,
+    );
+    let served = serving.join().unwrap();
+
+    assert!(matches!(
+        connected,
+        Err(ClientError::NoCommonFormat { decodable, encodable })
+            if decodable.iter().all(|format| format.codec == Codec::Av1)
+                && encodable.iter().all(|format| format.codec == Codec::Hevc)
+    ));
+    assert!(matches!(served, Err(HostError::NoCommonFormat { .. })));
 }

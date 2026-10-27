@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusplay_capture::Frame;
 
-use crate::{mailbox::Mailbox, stats::Counters};
+use crate::{mailbox::Mailbox, negotiate::Negotiation, stats::Counters};
 
 #[derive(Debug)]
 pub(crate) struct Shared {
@@ -10,6 +10,7 @@ pub(crate) struct Shared {
     streaming: AtomicBool,
     pub counters: Counters,
     pub mailbox: Mailbox<Frame>,
+    pub negotiation: Negotiation,
 }
 
 impl Shared {
@@ -19,6 +20,7 @@ impl Shared {
             streaming: AtomicBool::new(false),
             counters: Counters::default(),
             mailbox: Mailbox::new(),
+            negotiation: Negotiation::default(),
         }
     }
 

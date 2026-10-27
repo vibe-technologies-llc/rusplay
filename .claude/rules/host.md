@@ -32,8 +32,12 @@ paths:
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It first re-offers the feed's
     retained frame, so a client joining a static screen still gets a picture.
-  - `rusplay-host-encode` builds its `VideoPipeline` on its own thread (the encoder is opened
-    there) and waits on the mailbox. The mailbox is latest-wins: a newer frame replaces an
+  - `rusplay-host-encode` runs the `PipelineFactory` on its own thread: `encodable` first
+    (`GpuPipelineFactory` runs `rusplay_encode::capabilities` for `video.encoder` and builds the
+    `ScalePipelines` while the handshake is still in flight) and offers the set on
+    `Shared::negotiation`, then waits for the control stage's `NegotiatedFormat` and `build`s the
+    `VideoPipeline` for the chosen codec and pixel format (the encoder is opened there, lazily on
+    the first frame), and waits on the mailbox. The mailbox is latest-wins: a newer frame replaces an
     unconsumed one (`frames_superseded`), and nothing is delivered before the client's `Hello`,
     so the first encoded frame is a keyframe the client will see. Each consumed frame is moved
     into the feed as the retained frame, never copied.
@@ -51,8 +55,13 @@ paths:
     `network.pacing_window_percent` of the frame interval in bursts at least 250 µs apart, so a
     frame never waits behind the previous one's pacing for long.
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
-    answers the client's `Hello` with its own (another version is `VersionMismatch`, after a
-    `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
+    keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
+    encode stage has offered its encodable set, then answers with its own `Hello` carrying that
+    set and negotiates (`src/negotiate.rs`, the order in `networking.md`): the agreed
+    `NegotiatedFormat` goes to `Shared::negotiation` before the mailbox starts, and
+    `HostStream::format` exposes it (`rusplay-hostd` logs it once, naming both formats on a
+    fallback). No shared format answers the `Hello`, says `Goodbye` and ends the session with
+    `NoCommonFormat`, a session failure. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
     A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped to
     `network.bitrate_hint_min_kbps..=network.bitrate_hint_max_kbps` (`bitrate_hints_clamped`), or
@@ -261,7 +270,7 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
-  (pairing, reconnect, `Hello` gating, keyframe repeat and suppression, bitrate hints, `Goodbye`
+  (pairing, reconnect, `Hello` gating, format negotiation with fallback and with no overlap, keyframe repeat and suppression, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
@@ -276,7 +285,9 @@ paths:
   VAAPI AV1 (GPU hand-off) into the real `rusplay_client::ClientSession` (software decode, a test-only
   dev-dependency, configured for H.264 so only the host's `StreamFormat` can make it decode AV1)
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
-  amplitude and the final cursor position and image; each returns early without a GPU adapter or
+  amplitude and the final cursor position and image. Two more cover negotiation end to end:
+  SVT-AV1 configured for 4:4:4 falls back to 4:2:0 and the client's description shows it, and
+  an x265 host against the AV1-only software client fails with `NoCommonFormat` on both ends. Each returns early without a GPU adapter or
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins

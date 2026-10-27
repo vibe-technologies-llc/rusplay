@@ -544,6 +544,7 @@ mod tests {
         a.send(
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
+                formats: rusplay_core::FormatSet::ALL,
             },
             Instant::now(),
         )

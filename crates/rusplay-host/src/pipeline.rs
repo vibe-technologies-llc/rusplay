@@ -9,7 +9,9 @@ use std::{
 
 use rusplay_capture::{Frame, FrameBuffer, Plane, ShmFallback};
 use rusplay_config::Config;
-use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
+use rusplay_core::{
+    Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution, Timestamp,
+};
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
@@ -21,6 +23,7 @@ use rusplay_scale::{
 
 use crate::{
     Gpu, HostError,
+    encode::PipelineFactory,
     handoff::{HANDOFF_ROW_ALIGNMENT, Handoff},
     route::{Route, RouteKey, SourceRead},
     upload::{EncoderPlanes, UploadFormat, check_shm_frame, upload_format_for},
@@ -38,13 +41,18 @@ pub(crate) struct StreamFormat {
 }
 
 impl StreamFormat {
-    pub(crate) const fn describe(self, generation: u32) -> StreamDescription {
+    pub(crate) const fn describe(
+        self,
+        generation: u32,
+        configured: CodecFormat,
+    ) -> StreamDescription {
         StreamDescription {
             generation,
             codec: self.codec,
             resolution: self.resolution,
             format: self.format,
             color: self.color,
+            configured,
         }
     }
 }
@@ -157,9 +165,63 @@ pub(crate) struct GpuPipeline {
     bitrate_kbps: Option<u32>,
 }
 
+pub(crate) struct GpuPipelineFactory {
+    gpu: Gpu,
+    config: Config,
+    fallback: Option<ShmFallback>,
+    pipelines: Option<ScalePipelines>,
+}
+
+impl GpuPipelineFactory {
+    pub(crate) fn new(gpu: Gpu, config: Config, fallback: Option<ShmFallback>) -> Self {
+        Self {
+            gpu,
+            config,
+            fallback,
+            pipelines: None,
+        }
+    }
+}
+
+impl PipelineFactory for GpuPipelineFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        let capabilities = rusplay_encode::capabilities(&self.config.video.encoder)?;
+        self.pipelines = Some(ScalePipelines::new(&self.gpu.device));
+
+        Ok(capabilities.format_set())
+    }
+
+    fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
+        let Self {
+            gpu,
+            mut config,
+            fallback,
+            pipelines,
+        } = *self;
+        config.video.codec = format.codec;
+        config.video.pixel_format = format.format;
+        let pipelines = pipelines.unwrap_or_else(|| ScalePipelines::new(&gpu.device));
+
+        Ok(Box::new(GpuPipeline::with_pipelines(
+            gpu, config, fallback, pipelines,
+        )))
+    }
+}
+
 impl GpuPipeline {
+    #[cfg(test)]
     pub(crate) fn new(gpu: Gpu, config: Config, fallback: Option<ShmFallback>) -> Self {
         let pipelines = ScalePipelines::new(&gpu.device);
+
+        Self::with_pipelines(gpu, config, fallback, pipelines)
+    }
+
+    fn with_pipelines(
+        gpu: Gpu,
+        config: Config,
+        fallback: Option<ShmFallback>,
+        pipelines: ScalePipelines,
+    ) -> Self {
         let fence_waiter = config
             .capture
             .dmabuf_gpu_fence_wait
