@@ -54,6 +54,12 @@ paths:
     answers the client's `Hello` with its own (another version is `VersionMismatch`, after a
     `Goodbye`), then starts the mailbox. `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a client `Goodbye` ends the session cleanly.
+    A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped to
+    `network.bitrate_hint_min_kbps..=network.bitrate_hint_max_kbps` (`bitrate_hints_clamped`), or
+    ignored (`bitrate_hints_ignored`) when the encoder runs `RateControl::ConstantQuality`, which
+    has no bitrate to steer. `HostStats::bitrate_target_kbps` is the bitrate in force:
+    `video.bitrate_kbps` at session start, then the last applied hint; `None` under constant
+    quality.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
     the audio and cursor stages wait for.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the

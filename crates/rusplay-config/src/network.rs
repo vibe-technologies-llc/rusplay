@@ -11,6 +11,7 @@ const MTU_RANGE: RangeInclusive<u16> = 576..=9000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
 const PACING_WINDOW_RANGE: RangeInclusive<u8> = 1..=100;
+const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -38,6 +39,13 @@ pub struct NetworkConfig {
     pub keyframe_request_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
     pub stats_log_interval_ms: u32,
+    pub adaptive_bitrate: bool,
+    pub adaptive_bitrate_floor_kbps: u32,
+    pub adaptive_bitrate_step_kbps: u32,
+    pub adaptive_bitrate_window_ms: u32,
+    pub adaptive_bitrate_backoff_percent: u8,
+    pub bitrate_hint_min_kbps: u32,
+    pub bitrate_hint_max_kbps: u32,
 }
 
 impl Default for NetworkConfig {
@@ -66,6 +74,13 @@ impl Default for NetworkConfig {
             keyframe_request_interval_ms: 100,
             cursor_image_repeat_ms: 1_000,
             stats_log_interval_ms: 10_000,
+            adaptive_bitrate: true,
+            adaptive_bitrate_floor_kbps: 10_000,
+            adaptive_bitrate_step_kbps: 2_000,
+            adaptive_bitrate_window_ms: 1_000,
+            adaptive_bitrate_backoff_percent: 25,
+            bitrate_hint_min_kbps: 2_000,
+            bitrate_hint_max_kbps: 200_000,
         }
     }
 }
@@ -149,7 +164,44 @@ impl NetworkConfig {
             return Err(ConfigError::ZeroKeyframeRequestInterval);
         }
 
+        self.validate_bitrate_adaptation()
+    }
+
+    fn validate_bitrate_adaptation(&self) -> Result<(), ConfigError> {
+        if self.adaptive_bitrate_floor_kbps == 0 {
+            return Err(ConfigError::ZeroAdaptiveBitrateFloor);
+        }
+
+        if self.adaptive_bitrate_step_kbps == 0 {
+            return Err(ConfigError::ZeroAdaptiveBitrateStep);
+        }
+
+        if self.adaptive_bitrate_window_ms == 0 {
+            return Err(ConfigError::ZeroAdaptiveBitrateWindow);
+        }
+
+        if !BACKOFF_PERCENT_RANGE.contains(&self.adaptive_bitrate_backoff_percent) {
+            return Err(ConfigError::AdaptiveBitrateBackoffOutOfRange(
+                self.adaptive_bitrate_backoff_percent,
+            ));
+        }
+
+        if self.bitrate_hint_min_kbps == 0 {
+            return Err(ConfigError::ZeroBitrateHintMin);
+        }
+
+        if self.bitrate_hint_min_kbps > self.bitrate_hint_max_kbps {
+            return Err(ConfigError::BitrateHintRangeInverted {
+                min_kbps: self.bitrate_hint_min_kbps,
+                max_kbps: self.bitrate_hint_max_kbps,
+            });
+        }
+
         Ok(())
+    }
+
+    pub fn bitrate_hint_range(&self) -> RangeInclusive<u32> {
+        self.bitrate_hint_min_kbps..=self.bitrate_hint_max_kbps
     }
 }
 
@@ -354,6 +406,78 @@ mod tests {
             config.validate(),
             Err(ConfigError::ZeroReconnectTimeout)
         ));
+    }
+
+    #[test]
+    fn adaptive_bitrate_settings_are_validated() {
+        let floor = NetworkConfig {
+            adaptive_bitrate_floor_kbps: 0,
+            ..NetworkConfig::default()
+        };
+        let step = NetworkConfig {
+            adaptive_bitrate_step_kbps: 0,
+            ..NetworkConfig::default()
+        };
+        let window = NetworkConfig {
+            adaptive_bitrate_window_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            floor.validate(),
+            Err(ConfigError::ZeroAdaptiveBitrateFloor)
+        ));
+        assert!(matches!(
+            step.validate(),
+            Err(ConfigError::ZeroAdaptiveBitrateStep)
+        ));
+        assert!(matches!(
+            window.validate(),
+            Err(ConfigError::ZeroAdaptiveBitrateWindow)
+        ));
+        for percent in [0, 91] {
+            let backoff = NetworkConfig {
+                adaptive_bitrate_backoff_percent: percent,
+                ..NetworkConfig::default()
+            };
+
+            assert!(matches!(
+                backoff.validate(),
+                Err(ConfigError::AdaptiveBitrateBackoffOutOfRange(found)) if found == percent
+            ));
+        }
+    }
+
+    #[test]
+    fn the_bitrate_hint_range_must_be_ordered_and_above_zero() {
+        let zero = NetworkConfig {
+            bitrate_hint_min_kbps: 0,
+            ..NetworkConfig::default()
+        };
+        let inverted = NetworkConfig {
+            bitrate_hint_min_kbps: 50_000,
+            bitrate_hint_max_kbps: 40_000,
+            ..NetworkConfig::default()
+        };
+        let single = NetworkConfig {
+            bitrate_hint_min_kbps: 40_000,
+            bitrate_hint_max_kbps: 40_000,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            zero.validate(),
+            Err(ConfigError::ZeroBitrateHintMin)
+        ));
+        assert!(matches!(
+            inverted.validate(),
+            Err(ConfigError::BitrateHintRangeInverted {
+                min_kbps: 50_000,
+                max_kbps: 40_000
+            })
+        ));
+        assert!(single.validate().is_ok());
+        assert_eq!(single.bitrate_hint_range(), 40_000..=40_000);
     }
 
     #[test]

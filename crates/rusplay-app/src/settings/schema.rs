@@ -81,6 +81,8 @@ const POSITIVE_U32: Kind = Kind::Integer {
     max: u32::MAX as i64,
 };
 
+const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
+
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
 const CHROMA: &[&str] = &["4:2:0", "4:2:2", "4:4:4"];
 const BIT_DEPTHS: &[&str] = &["eight", "ten", "twelve"];
@@ -864,6 +866,61 @@ pub static FIELDS: &[Field] = &[
         U32,
     )
     .unit("ms"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.adaptive_bitrate",
+        "Adaptive bitrate",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.adaptive_bitrate_floor_kbps",
+        "Floor",
+        POSITIVE_U32,
+    )
+    .unit("kbps"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.adaptive_bitrate_step_kbps",
+        "Increase step",
+        POSITIVE_U32,
+    )
+    .unit("kbps"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.adaptive_bitrate_window_ms",
+        "Clean window",
+        POSITIVE_U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.adaptive_bitrate_backoff_percent",
+        "Backoff",
+        BACKOFF_PERCENT,
+    )
+    .unit("%"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.bitrate_hint_min_kbps",
+        "Host hint minimum",
+        POSITIVE_U32,
+    )
+    .unit("kbps"),
+    field(
+        Section::Network,
+        "Bitrate adaptation",
+        "network.bitrate_hint_max_kbps",
+        "Host hint maximum",
+        POSITIVE_U32,
+    )
+    .unit("kbps"),
     field(
         Section::Network,
         "Peers",

@@ -1,10 +1,11 @@
 use std::{
     net::SocketAddr,
+    ops::RangeInclusive,
     sync::{Arc, mpsc::Sender},
     time::{Duration, Instant},
 };
 
-use rusplay_config::NetworkConfig;
+use rusplay_config::{Config, NetworkConfig};
 use rusplay_net::{ControlEvent, NetError, RecvBatch, Transport, busy_reply};
 use rusplay_protocol::{ControlMessage, PacketHeader, ProtocolVersion, StreamKind};
 
@@ -42,6 +43,29 @@ impl From<&NetworkConfig> for ControlTiming {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HintPolicy {
+    Clamp(RangeInclusive<u32>),
+    Ignore,
+}
+
+impl HintPolicy {
+    pub(crate) fn from_config(config: &Config) -> Self {
+        if config.video.encoder.is_constant_quality() {
+            Self::Ignore
+        } else {
+            Self::Clamp(config.network.bitrate_hint_range())
+        }
+    }
+
+    fn apply(&self, kbps: u32) -> Option<u32> {
+        match self {
+            Self::Clamp(range) => Some(kbps.clamp(*range.start(), *range.end())),
+            Self::Ignore => None,
+        }
+    }
+}
+
 pub(crate) struct ControlLinks {
     pub shared: Arc<Shared>,
     pub transport: Arc<Transport>,
@@ -53,6 +77,7 @@ pub(crate) struct ControlLinks {
 
 pub(crate) struct ControlStage {
     timing: ControlTiming,
+    hints: HintPolicy,
     links: ControlLinks,
     streaming: bool,
     started: Instant,
@@ -61,12 +86,13 @@ pub(crate) struct ControlStage {
 }
 
 impl ControlStage {
-    pub(crate) fn new(network: &NetworkConfig, links: ControlLinks) -> Self {
+    pub(crate) fn new(network: &NetworkConfig, hints: HintPolicy, links: ControlLinks) -> Self {
         let now = Instant::now();
         let timing = ControlTiming::from(network);
 
         Self {
             timing,
+            hints,
             links,
             streaming: false,
             started: now,
@@ -226,7 +252,7 @@ impl ControlStage {
                     shared.counters.packets_reported_lost.add(u64::from(count));
                 }
                 ControlEvent::Received(ControlMessage::BitrateHint { kbps }) => {
-                    shared.mailbox.set_bitrate(kbps);
+                    self.take_hint(kbps);
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
                 ControlEvent::Undeliverable {
@@ -253,6 +279,20 @@ impl ControlStage {
         }
 
         Ok(flow)
+    }
+
+    fn take_hint(&self, kbps: u32) {
+        let counters = &self.links.shared.counters;
+        let Some(applied) = self.hints.apply(kbps) else {
+            counters.bitrate_hints_ignored.increment();
+            return;
+        };
+
+        if applied != kbps {
+            counters.bitrate_hints_clamped.increment();
+        }
+        counters.set_bitrate_target(applied);
+        self.links.shared.mailbox.set_bitrate(applied);
     }
 
     fn keep_alive(&mut self, now: Instant) -> Result<(), HostError> {

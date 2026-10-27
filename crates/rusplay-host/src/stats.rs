@@ -17,6 +17,9 @@ pub struct HostStats {
     pub datagrams_sent: u64,
     pub packets_reported_lost: u64,
     pub bitrate_changes: u64,
+    pub bitrate_hints_clamped: u64,
+    pub bitrate_hints_ignored: u64,
+    pub bitrate_target_kbps: Option<u32>,
     pub keepalives_sent: u64,
     pub control_undeliverable: u64,
     pub malformed_datagrams: u64,
@@ -71,6 +74,9 @@ pub(crate) struct Counters {
     pub datagrams_sent: Counter,
     pub packets_reported_lost: Counter,
     pub bitrate_changes: Counter,
+    pub bitrate_hints_clamped: Counter,
+    pub bitrate_hints_ignored: Counter,
+    bitrate_target_kbps: Counter,
     pub keepalives_sent: Counter,
     pub control_undeliverable: Counter,
     pub malformed_datagrams: Counter,
@@ -105,6 +111,12 @@ impl Counters {
             datagrams_sent: self.datagrams_sent.get(),
             packets_reported_lost: self.packets_reported_lost.get(),
             bitrate_changes: self.bitrate_changes.get(),
+            bitrate_hints_clamped: self.bitrate_hints_clamped.get(),
+            bitrate_hints_ignored: self.bitrate_hints_ignored.get(),
+            bitrate_target_kbps: match self.bitrate_target_kbps.get() {
+                0 => None,
+                kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),
+            },
             keepalives_sent: self.keepalives_sent.get(),
             control_undeliverable: self.control_undeliverable.get(),
             malformed_datagrams: self.malformed_datagrams.get(),
@@ -126,6 +138,10 @@ impl Counters {
                 nanos => Some(Duration::from_nanos(nanos)),
             },
         }
+    }
+
+    pub(crate) fn set_bitrate_target(&self, kbps: u32) {
+        self.bitrate_target_kbps.set(u64::from(kbps));
     }
 
     pub(crate) fn set_rtt(&self, rtt: Option<Duration>) {

@@ -46,6 +46,21 @@ paths:
   `network.keyframe_request_interval_ms` until a keyframe arrives, and every non-keyframe until
   then is skipped (counted in `frames_skipped`). A decode error on a keyframe is fatal. Nothing
   arriving for `network.peer_timeout_ms` ends the stream with `HostSilent`.
+- Adaptive bitrate (`bitrate.rs`, on unless `network.adaptive_bitrate` is off): the receive stage
+  owns a `BitrateController`, a pure state machine driven by explicit instants and the control
+  channel's smoothed RTT, unit tested without I/O. Its target starts at the client's
+  `video.bitrate_kbps` (the ceiling). Every congestion signal (`PacketsMissing`, `FrameLost`, a gap
+  in completed frame numbers, a decode-queue overflow, a decode failure; not the skip before the
+  first `StreamFormat`) cuts it by `network.adaptive_bitrate_backoff_percent`, down to
+  `network.adaptive_bitrate_floor_kbps` (lowered to the ceiling if above it), then holds for
+  `max(window / 4, 2 × RTT)` so one burst of loss cuts once; each signal also restarts the clean
+  window. After a clean window of `max(network.adaptive_bitrate_window_ms, 8 × RTT)` the target
+  rises by `network.adaptive_bitrate_step_kbps`, never past the ceiling. Each change becomes a
+  `ControlMessage::BitrateHint` through `HintOutbox`: at most one hint in flight, the newest
+  pending target sent once the previous is acknowledged (control delivery is unordered, so this is
+  what keeps an old hint from overtaking a new one), a full control window leaves it pending, and
+  an undeliverable hint is replaced by the current target. Nothing on the frame path waits for it.
+  `ClientStats` has `bitrate_hints_sent` and `bitrate_target_kbps` (`None` when disabled).
 - Receive → decode is a bounded `sync_channel` of `video.decode_queue_frames` encoded frames,
   filled with `try_send`: encoded frames cannot be dropped silently because later frames reference
   them, so overflow drops the frame and resyncs. Decode → present is a latest-wins `Slot`: a

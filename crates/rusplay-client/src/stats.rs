@@ -40,6 +40,8 @@ pub struct ClientStats {
     pub rumble_commands: u64,
     pub rumble_failures: u64,
     pub gamepad_failures: u64,
+    pub bitrate_hints_sent: u64,
+    pub bitrate_target_kbps: Option<u32>,
     pub rtt: Option<Duration>,
 }
 
@@ -101,6 +103,8 @@ pub(crate) struct Counters {
     pub rumble_commands: Counter,
     pub rumble_failures: Counter,
     pub gamepad_failures: Counter,
+    pub bitrate_hints_sent: Counter,
+    bitrate_target_kbps: Counter,
     rtt_nanos: Counter,
 }
 
@@ -142,11 +146,20 @@ impl Counters {
             rumble_commands: self.rumble_commands.get(),
             rumble_failures: self.rumble_failures.get(),
             gamepad_failures: self.gamepad_failures.get(),
+            bitrate_hints_sent: self.bitrate_hints_sent.get(),
+            bitrate_target_kbps: match self.bitrate_target_kbps.get() {
+                0 => None,
+                kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),
+            },
             rtt: match self.rtt_nanos.get() {
                 0 => None,
                 nanos => Some(Duration::from_nanos(nanos)),
             },
         }
+    }
+
+    pub(crate) fn set_bitrate_target(&self, kbps: u32) {
+        self.bitrate_target_kbps.set(u64::from(kbps));
     }
 
     pub(crate) fn set_rtt(&self, rtt: Option<Duration>) {
