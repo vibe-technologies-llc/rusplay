@@ -45,8 +45,30 @@ struct InFlight {
     id: u32,
     message: ControlMessage,
     datagram: Vec<u8>,
+    sent_at: Instant,
     deadline: Instant,
     retransmits: u8,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RttEstimator {
+    smoothed: Option<Duration>,
+    variation: Duration,
+}
+
+impl RttEstimator {
+    fn observe(&mut self, sample: Duration) {
+        match self.smoothed {
+            None => {
+                self.smoothed = Some(sample);
+                self.variation = sample / 2;
+            }
+            Some(smoothed) => {
+                self.variation = self.variation * 3 / 4 + smoothed.abs_diff(sample) / 4;
+                self.smoothed = Some(smoothed * 7 / 8 + sample / 8);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -90,6 +112,7 @@ pub struct ControlChannel {
     in_flight: VecDeque<InFlight>,
     outbox: VecDeque<Vec<u8>>,
     received: ReceiveWindow,
+    rtt: RttEstimator,
 }
 
 impl ControlChannel {
@@ -100,6 +123,7 @@ impl ControlChannel {
             in_flight: VecDeque::new(),
             outbox: VecDeque::new(),
             received: ReceiveWindow::default(),
+            rtt: RttEstimator::default(),
         }
     }
 
@@ -108,6 +132,15 @@ impl ControlChannel {
         self.in_flight.clear();
         self.outbox.clear();
         self.received = ReceiveWindow::default();
+        self.rtt = RttEstimator::default();
+    }
+
+    pub fn rtt(&self) -> Option<Duration> {
+        self.rtt.smoothed
+    }
+
+    pub fn rtt_variation(&self) -> Option<Duration> {
+        self.rtt.smoothed.map(|_| self.rtt.variation)
     }
 
     pub fn in_flight(&self) -> usize {
@@ -142,6 +175,7 @@ impl ControlChannel {
             id,
             message,
             datagram,
+            sent_at: now,
             deadline: now + self.config.retransmit_timeout,
             retransmits: 0,
         });
@@ -152,12 +186,18 @@ impl ControlChannel {
     pub fn handle_datagram(
         &mut self,
         datagram: &[u8],
+        now: Instant,
         events: &mut Vec<ControlEvent>,
     ) -> Result<(), NetError> {
         match ControlPacket::read(datagram)? {
             ControlPacket::Ack { id } => {
-                if let Some(position) = self.in_flight.iter().position(|entry| entry.id == id) {
-                    self.in_flight.remove(position);
+                if let Some(position) = self.in_flight.iter().position(|entry| entry.id == id)
+                    && let Some(acked) = self.in_flight.remove(position)
+                {
+                    if acked.retransmits == 0 {
+                        self.rtt
+                            .observe(now.saturating_duration_since(acked.sent_at));
+                    }
                     events.push(ControlEvent::Acked { id });
                 }
             }
@@ -249,7 +289,8 @@ mod tests {
 
     fn deliver(to: &mut ControlChannel, datagrams: &[Vec<u8>], events: &mut Vec<ControlEvent>) {
         for datagram in datagrams {
-            to.handle_datagram(datagram, events).unwrap();
+            to.handle_datagram(datagram, Instant::now(), events)
+                .unwrap();
         }
     }
 
@@ -481,7 +522,8 @@ mod tests {
         let mut events = Vec::new();
         let ack = ControlPacket::Ack { id: 12 }.to_datagram().unwrap();
 
-        a.handle_datagram(&ack, &mut events).unwrap();
+        a.handle_datagram(&ack, Instant::now(), &mut events)
+            .unwrap();
 
         assert_eq!(events.len(), 0);
     }
@@ -491,7 +533,7 @@ mod tests {
         let mut a = channel(3);
 
         assert!(matches!(
-            a.handle_datagram(&[1, 2, 3], &mut Vec::new()),
+            a.handle_datagram(&[1, 2, 3], Instant::now(), &mut Vec::new()),
             Err(NetError::Protocol(_))
         ));
     }
@@ -512,6 +554,105 @@ mod tests {
         assert_eq!(a.in_flight(), 0);
         assert!(!a.has_pending_transmit());
         assert_eq!(a.send(ControlMessage::Goodbye, Instant::now()).unwrap(), 0);
+    }
+
+    fn round_trip(a: &mut ControlChannel, b: &mut ControlChannel, sent: Instant, rtt: Duration) {
+        let mut events = Vec::new();
+        a.send(ControlMessage::Keepalive, sent).unwrap();
+        for datagram in drain(a) {
+            b.handle_datagram(&datagram, sent, &mut events).unwrap();
+        }
+        for datagram in drain(b) {
+            a.handle_datagram(&datagram, sent + rtt, &mut events)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn rtt_is_unknown_before_any_ack() {
+        let mut a = channel(3);
+        a.send(ControlMessage::Keepalive, Instant::now()).unwrap();
+
+        assert_eq!(a.rtt(), None);
+        assert_eq!(a.rtt_variation(), None);
+    }
+
+    #[test]
+    fn first_ack_seeds_the_estimate() {
+        let mut a = channel(3);
+        let mut b = channel(3);
+
+        round_trip(&mut a, &mut b, Instant::now(), Duration::from_millis(8));
+
+        assert_eq!(a.rtt(), Some(Duration::from_millis(8)));
+        assert_eq!(a.rtt_variation(), Some(Duration::from_millis(4)));
+    }
+
+    #[test]
+    fn later_acks_are_smoothed_per_rfc_6298() {
+        let mut a = channel(3);
+        let mut b = channel(3);
+        let start = Instant::now();
+
+        round_trip(&mut a, &mut b, start, Duration::from_millis(8));
+        round_trip(&mut a, &mut b, start, Duration::from_millis(16));
+
+        assert_eq!(a.rtt(), Some(Duration::from_millis(9)));
+        assert_eq!(a.rtt_variation(), Some(Duration::from_millis(5)));
+    }
+
+    #[test]
+    fn retransmitted_messages_do_not_sample_the_rtt() {
+        let mut a = channel(3);
+        let mut b = channel(3);
+        let start = Instant::now();
+        let mut events = Vec::new();
+
+        a.send(ControlMessage::Keepalive, start).unwrap();
+        drain(&mut a);
+        a.poll(start + RTO, &mut events);
+        for datagram in drain(&mut a) {
+            b.handle_datagram(&datagram, start + RTO, &mut events)
+                .unwrap();
+        }
+        for datagram in drain(&mut b) {
+            a.handle_datagram(&datagram, start + RTO * 2, &mut events)
+                .unwrap();
+        }
+
+        assert_eq!(a.in_flight(), 0);
+        assert_eq!(a.rtt(), None);
+    }
+
+    #[test]
+    fn duplicate_acks_sample_once() {
+        let mut a = channel(3);
+        let mut b = channel(3);
+        let start = Instant::now();
+        let mut events = Vec::new();
+
+        a.send(ControlMessage::Keepalive, start).unwrap();
+        for datagram in drain(&mut a) {
+            b.handle_datagram(&datagram, start, &mut events).unwrap();
+        }
+        let acks = drain(&mut b);
+        a.handle_datagram(&acks[0], start + Duration::from_millis(5), &mut events)
+            .unwrap();
+        a.handle_datagram(&acks[0], start + Duration::from_millis(50), &mut events)
+            .unwrap();
+
+        assert_eq!(a.rtt(), Some(Duration::from_millis(5)));
+    }
+
+    #[test]
+    fn reset_forgets_the_rtt() {
+        let mut a = channel(3);
+        let mut b = channel(3);
+
+        round_trip(&mut a, &mut b, Instant::now(), Duration::from_millis(8));
+        a.reset();
+
+        assert_eq!(a.rtt(), None);
     }
 
     #[test]

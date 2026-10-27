@@ -170,7 +170,8 @@ paths:
   surface only once the GPU has read it. CPU frames (software and NVDEC) keep their upload buffer, created on the first
   one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
   source size and upscaled, and requires identical output.
-- `ClientStats` is a snapshot of relaxed atomic counters shared by the stages.
+- `ClientStats` is a snapshot of relaxed atomic counters shared by the stages. `rtt` is the control
+  channel's smoothed round trip, republished by the receive stage on every wake.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation, queue overflow and video
   waiting for (and then carrying the newest) stream description;

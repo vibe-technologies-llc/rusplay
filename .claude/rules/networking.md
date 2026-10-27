@@ -94,6 +94,12 @@ paths:
 - `ControlMessage::Rumble { slot, strong, weak, delay_ms, duration_ms }` (tag 6, host to client, 10
   bytes) carries gamepad force feedback; reliable delivery keeps a stop from being lost, and the
   client caps every effect length so reordering cannot leave a motor running.
+- `ControlChannel` keeps a smoothed RTT (`rtt`, `rtt_variation`; RFC 6298: the first sample seeds
+  it, later ones use gains 1/8 and 1/4) from the time a message was sent to its acknowledgement.
+  A message that was retransmitted never samples (Karn), so an ambiguous ack cannot skew it.
+  `handle_datagram` takes the arrival `now` for that. The host and client control stages publish
+  it as `HostStats::rtt` / `ClientStats::rtt` (`None` until the first unretransmitted ack, and
+  after a `reset`).
 - Both ends start at id 0. A peer that restarts its session must `reset` its channel and the other
   end must `reset` too, otherwise the new ids look like old duplicates.
 

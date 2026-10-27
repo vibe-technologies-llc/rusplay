@@ -421,7 +421,9 @@ fn serve(
         {
             match PacketHeader::read(&buf[..len]).map(|header| header.stream) {
                 Ok(StreamKind::Control) => {
-                    control.handle_datagram(&buf[..len], &mut events).ok();
+                    control
+                        .handle_datagram(&buf[..len], Instant::now(), &mut events)
+                        .ok();
                 }
                 Ok(StreamKind::Input) => record_input(&buf[..len], &mut input_sequence, input),
                 _ => {}

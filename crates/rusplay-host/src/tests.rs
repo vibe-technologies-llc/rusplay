@@ -393,7 +393,9 @@ impl TestClient {
 
         match header.stream {
             StreamKind::Control => {
-                self.control.handle_datagram(datagram, control_events).ok();
+                self.control
+                    .handle_datagram(datagram, Instant::now(), control_events)
+                    .ok();
             }
             StreamKind::Video => {
                 self.video.push(datagram, Instant::now(), events).ok();
