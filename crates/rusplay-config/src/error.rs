@@ -13,6 +13,8 @@ pub enum ConfigError {
         path: PathBuf,
         source: Box<toml::de::Error>,
     },
+    #[error("failed to parse a host profile")]
+    ProfileParse { source: Box<toml::de::Error> },
     #[error("frame rate {numerator}/{denominator} is not a valid rate")]
     InvalidFrameRate { numerator: u32, denominator: u32 },
     #[error("video bitrate must be greater than zero")]
@@ -212,7 +214,8 @@ impl ConfigError {
             | Self::NoConfigHome
             | Self::Serialize { .. }
             | Self::CreateDirectory { .. }
-            | Self::Write { .. } => None,
+            | Self::Write { .. }
+            | Self::ProfileParse { .. } => None,
         }
     }
 }

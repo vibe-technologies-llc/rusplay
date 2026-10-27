@@ -7,6 +7,7 @@ mod input;
 mod network;
 mod paths;
 mod peers;
+mod profile;
 mod scaling;
 mod video;
 
@@ -30,6 +31,7 @@ pub use crate::{
     network::NetworkConfig,
     paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,
+    profile::HostProfile,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
         EncoderParams, NvencConfig, NvencPreset, NvencTuning, PresentMode, RateControl,

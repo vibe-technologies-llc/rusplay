@@ -265,13 +265,24 @@ paths:
 
 ## Host book
 
-- `HostBook` is the client's saved hosts: `SavedHost { name, address, peer }`. It owns the
-  `PeerStore` from `PeerStore::open_client` (secrets, keyed by `PeerId`) and a sibling text file,
-  the store's path with `.book` added (`paired-hosts.book` by default, so `peers.client_file`
-  moves both). The book holds no secret: line one is `rusplay-host-book 1`, then one line per
-  host, `<peer id hex or -> <address> <name>`. Loading refuses a bad header, address, id or name
-  and duplicate addresses or ids with `HostBookCorrupt` and the line number; an id missing from
-  the store loads as unpaired.
+- `HostBook` is the client's saved hosts: `SavedHost { name, address, peer, profile }`. It owns
+  the `PeerStore` from `PeerStore::open_client` (secrets, keyed by `PeerId`) and a sibling text
+  file, the store's path with `.book` added (`paired-hosts.book` by default, so
+  `peers.client_file` moves both). The book holds no secret: line one is `rusplay-host-book 2`,
+  then one line per host, `<peer id hex or -> <address> <name>`, optionally followed by the
+  host's profile as TOML, one tab-prefixed line per TOML line. Version 1 (no profile lines) still
+  loads, with empty profiles, and the next `save` writes version 2; a newer version is refused.
+  Loading refuses a bad header, address, id or name, duplicate addresses or ids, a profile line
+  before any host or in a version 1 book, and a profile that is not valid `HostProfile` TOML
+  (unknown keys included) with `HostBookCorrupt` and the line number; an id missing from the
+  store loads as unpaired.
+- The profile is `rusplay_config::HostProfile`: optional overrides of a fixed subset of client
+  options (`decoder`, `present_mode`, `present_frame_latency`, `keyboard`, `pointer`,
+  `gamepads`, `pointer_mode`), all absent by default and omitted from the TOML when unset. The
+  book stores only the sparse overrides, so unset fields keep following `client.toml`. The app
+  merges it at connect with `HostProfile::apply(&Config)` (overlay, then `Config::validate`).
+  Adding an overridable option means a field, an `overlay` line and a row in the app's profile
+  rows (`ui.md`).
 - `save` replaces the whole list: it remembers new or changed pairings in the store, writes the
   book through `rusplay_net::write_owner_only` (the peer store's `0700` directory, `0600` synced
   staging file and rename), then forgets store records no host references. A failed write leaves

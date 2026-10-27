@@ -2,15 +2,18 @@ use std::net::SocketAddr;
 
 use gpui::{Context, Entity, EventEmitter, Subscription, Task, Window, div, prelude::*, px};
 use rusplay_client::{Credentials, DiscoveredHost, HostBook, PeerRecord, Pin};
-use rusplay_config::ConfigEnvironment;
+use rusplay_config::{Config, ConfigEnvironment, HostProfile};
 
 use crate::{
-    hosts::model::{HostEntry, HostList, HostOrigin},
+    hosts::{
+        model::{HostEntry, HostList, HostOrigin},
+        profile::{self, ProfileRow, Source},
+    },
     notice::{Notice, NoticeRaised, error_chain},
     session::{self, SessionError},
     theme,
     widgets::{
-        controls::{ButtonStyle, button},
+        controls::{ButtonStyle, button, option_button, section_title},
         text_field::{TextField, TextFieldEvent},
     },
 };
@@ -25,6 +28,7 @@ pub struct HostsView {
     hosts: HostList,
     book: Option<HostBook>,
     environment: ConfigEnvironment,
+    global: Config,
     scan: Option<Task<()>>,
     name_input: Entity<TextField>,
     address_input: Entity<TextField>,
@@ -39,6 +43,7 @@ impl HostsView {
     pub fn new(
         default_port: u16,
         environment: ConfigEnvironment,
+        global: Config,
         book: Option<HostBook>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -65,6 +70,7 @@ impl HostsView {
             ),
             book,
             environment,
+            global,
             scan: None,
             name_input,
             address_input,
@@ -83,6 +89,8 @@ impl HostsView {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.reload_global(cx);
+
         if self.scan.is_some() {
             return;
         }
@@ -93,6 +101,40 @@ impl HostsView {
             let result = scanning.await;
             this.update(cx, |this, cx| this.scanned(result, cx)).ok();
         }));
+        cx.notify();
+    }
+
+    fn reload_global(&mut self, cx: &mut Context<Self>) {
+        match session::load_client_config(&self.environment) {
+            Ok(global) => self.global = global,
+            Err(error) => notify(
+                Notice::Failure(format!(
+                    "Could not load the client config for the host profiles: {}",
+                    error_chain(&error)
+                )),
+                cx,
+            ),
+        }
+    }
+
+    fn set_selected_profile(&mut self, profile: HostProfile, cx: &mut Context<Self>) {
+        let Some(index) = self.hosts.selected_index() else {
+            return;
+        };
+
+        if let Err(error) = profile.apply(&self.global) {
+            notify(
+                Notice::Failure(format!(
+                    "That override does not work with the client config: {}",
+                    error_chain(&error)
+                )),
+                cx,
+            );
+            return;
+        }
+
+        self.hosts.set_profile(index, profile);
+        self.persist(cx);
         cx.notify();
     }
 
@@ -304,6 +346,86 @@ impl HostsView {
             )
     }
 
+    fn render_profile(&self, host: &HostEntry, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let rows: Vec<_> = profile::rows(&host.profile, &self.global)
+            .into_iter()
+            .enumerate()
+            .map(|(position, row)| Self::render_profile_row(position, row, cx))
+            .collect();
+        let overridden = !host.profile.is_empty();
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(section_title(format!("Client settings for {}", host.name)))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme::text_muted())
+                    .child("Global follows client.toml; a choice overrides it for this host only."),
+            )
+            .children(rows)
+            .child(
+                div().child(
+                    button(
+                        "clear-profile",
+                        "Reset all to global",
+                        ButtonStyle::Quiet,
+                        overridden,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_selected_profile(HostProfile::default(), cx);
+                    })),
+                ),
+            )
+    }
+
+    fn render_profile_row(
+        position: usize,
+        row: ProfileRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let source_color = match row.source {
+            Source::Override => theme::accent(),
+            Source::Global => theme::text_muted(),
+        };
+        let choices: Vec<_> = row
+            .choices
+            .into_iter()
+            .enumerate()
+            .map(|(choice_position, choice)| {
+                let result = choice.result;
+                option_button(
+                    ("profile-choice", position * 16 + choice_position),
+                    choice.label,
+                    choice.selected,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_selected_profile(result.clone(), cx);
+                }))
+            })
+            .collect();
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .w(px(130.0))
+                    .text_sm()
+                    .text_color(theme::text())
+                    .child(row.label),
+            )
+            .child(div().flex().gap_1().children(choices))
+            .child(div().text_xs().text_color(source_color).child(format!(
+                "{} ({})",
+                row.effective,
+                row.source.label()
+            )))
+    }
+
     fn render_selected_actions(
         can_connect: bool,
         paired: bool,
@@ -348,6 +470,7 @@ impl Render for HostsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries: Vec<_> = self.hosts.entries().to_vec();
         let selected = self.hosts.selected();
+        let profile_panel = selected.cloned().map(|host| self.render_profile(&host, cx));
         let can_connect = selected.is_some();
         let paired = selected.is_some_and(|host| host.peer.is_some());
         let scanning = self.scan.is_some();
@@ -373,11 +496,13 @@ impl Render for HostsView {
         };
 
         div()
+            .id("hosts-page")
             .flex()
             .flex_col()
             .gap_4()
             .p_6()
             .size_full()
+            .overflow_y_scroll()
             .child(
                 div()
                     .flex()
@@ -431,6 +556,7 @@ impl Render for HostsView {
                             .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
                     ),
             )
+            .children(profile_panel)
     }
 }
 

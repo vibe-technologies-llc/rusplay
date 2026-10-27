@@ -6,13 +6,15 @@ use rusplay_client::{
     ClientError, ClientSession, ClientStream, Credentials, DiscoveredHost, DiscoveryBrowser,
     DiscoveryOptions, FrameSink, Gpu, StreamWindow, WaylandTarget,
 };
-use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
+use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole, HostProfile};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum SessionError {
     #[error(transparent)]
     Config(#[from] ConfigError),
+    #[error("the host's overrides do not fit the client config")]
+    HostProfile(#[source] ConfigError),
     #[error(transparent)]
     Client(#[from] ClientError),
     #[error("the window is not a wayland surface")]
@@ -23,6 +25,10 @@ pub fn load_client_config(environment: &ConfigEnvironment) -> Result<Config, Con
     let path = environment.config_path(ConfigRole::Client)?;
 
     Config::load_or_default(&path)
+}
+
+pub fn merge_profile(profile: &HostProfile, config: &Config) -> Result<Config, SessionError> {
+    profile.apply(config).map_err(SessionError::HostProfile)
 }
 
 pub fn discover(environment: &ConfigEnvironment) -> Result<Vec<DiscoveredHost>, SessionError> {
