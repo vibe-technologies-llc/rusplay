@@ -15,13 +15,13 @@ use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer,
 use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
 use rusplay_net::{
-    ControlChannel, ControlConfig, ControlEvent, PairingTiming, PeerRecord, PeerStore, Pin,
-    ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming, Transport,
-    TransportOptions, pair_as_client, reconnect_as_client,
+    ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
+    Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming,
+    Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
-    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
-    StreamKind,
+    ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
+    ProtocolVersion, ReconnectRejection, StreamDescription, StreamKind,
 };
 use tempfile::TempDir;
 
@@ -32,6 +32,7 @@ use crate::{
 };
 
 const PIN: &str = "583014";
+const CLIENT_NAME: &str = "test client";
 const FRAME_SIZE: Resolution = Resolution::new(64, 32);
 const RESIZED: Resolution = Resolution::new(96, 48);
 const FRAME_BYTES: usize = 5_000;
@@ -293,6 +294,7 @@ impl TestClient {
             &client.transport,
             host,
             &pin(),
+            ClientName::new(CLIENT_NAME).unwrap(),
             PairingTiming::from(&network()),
         )
         .unwrap();
@@ -445,7 +447,7 @@ fn complete(reassembler: &mut Reassembler, datagram: &[u8]) -> Vec<ReassembledFr
 }
 
 struct Fixture {
-    _dir: TempDir,
+    dir: TempDir,
     host: Arc<HostSession>,
     address: SocketAddr,
 }
@@ -461,11 +463,7 @@ impl Fixture {
         let host = Arc::new(configure(HostSession::bind(config, store).unwrap()));
         let address = host.local_addr().unwrap();
 
-        Self {
-            _dir: dir,
-            host,
-            address,
-        }
+        Self { dir, host, address }
     }
 
     fn serve(
@@ -512,6 +510,10 @@ fn a_paired_client_receives_numbered_frames_that_start_with_a_keyframe() {
     assert!(complete);
     assert_eq!(admission, Admission::Paired);
     assert_eq!(fixture.host.peers().read().len(), 1);
+    assert_eq!(
+        fixture.host.peers().read().iter().next().unwrap().name(),
+        CLIENT_NAME
+    );
     assert!(client.frames[0].keyframe);
     assert!(later_keyframes <= stats.frames_dropped);
     assert!(
@@ -767,6 +769,87 @@ fn an_unknown_client_cannot_reconnect() {
     );
 
     assert!(result.is_err());
+    assert!(matches!(
+        accepting.join().unwrap(),
+        Err(HostError::AcceptTimeout(_))
+    ));
+}
+
+#[test]
+fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(400), fake_factory(&bitrate));
+
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let started = client.pump_until(TestClient::has_hello);
+
+    let second = TestClient::bind(fixture.address);
+    let pairing = pair_as_client(
+        &second.transport,
+        fixture.address,
+        &pin(),
+        ClientName::EMPTY,
+        PairingTiming::from(&network()),
+    );
+    let reconnecting = reconnect_as_client(
+        &second.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(started);
+    assert!(matches!(
+        pairing,
+        Err(NetError::PairingRejected {
+            reason: PairingRejection::Busy
+        })
+    ));
+    assert!(matches!(
+        reconnecting,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::Busy
+        })
+    ));
+    assert!(client.pump_until(|client| client.frames.len() >= 2));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_peer_forgotten_in_the_store_file_cannot_reconnect_to_a_running_host() {
+    let mut config = host_config();
+    config.network.pairing_timeout_ms = 1_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
+    let (mut client, record) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    stream.stop().unwrap();
+
+    let mut external = PeerStore::open(fixture.dir.path().join("paired-clients")).unwrap();
+    external.forget(&record.id()).unwrap();
+    let host = Arc::clone(&fixture.host);
+    let accepting = thread::spawn(move || host.accept(None).map(|client| client.admission()));
+
+    let returning = TestClient::bind(fixture.address);
+    let result = reconnect_as_client(
+        &returning.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(matches!(
+        result,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::UnknownPeer
+        })
+    ));
+    assert!(fixture.host.peers().read().is_empty());
     assert!(matches!(
         accepting.join().unwrap(),
         Err(HostError::AcceptTimeout(_))

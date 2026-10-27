@@ -3,8 +3,9 @@ use std::{
     ffi::OsString,
     fmt, fs,
     io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use rusplay_config::PeersConfig;
@@ -129,21 +130,61 @@ impl PeerRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileStamp {
+    Missing,
+    Present {
+        modified: SystemTime,
+        len: u64,
+        inode: u64,
+    },
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> io::Result<Self> {
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(Self::Present {
+                modified: metadata.modified()?,
+                len: metadata.len(),
+                inode: metadata.ino(),
+            }),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(Self::Missing),
+            Err(source) => Err(source),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PeerStore {
     path: PathBuf,
     records: Vec<PeerRecord>,
+    stamp: Option<FileStamp>,
 }
 
 impl PeerStore {
     pub fn open(path: PathBuf) -> Result<Self, NetError> {
-        let records = match fs::read_to_string(&path) {
-            Ok(text) => parse(&text, &path)?,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(source) => return Err(NetError::PeerStoreRead { path, source }),
-        };
+        let (records, stamp) = load(&path)?;
 
-        Ok(Self { path, records })
+        Ok(Self {
+            path,
+            records,
+            stamp,
+        })
+    }
+
+    pub fn is_stale(&self) -> bool {
+        FileStamp::of(&self.path).ok() != self.stamp || self.stamp.is_none()
+    }
+
+    pub fn refresh(&mut self) -> Result<bool, NetError> {
+        if !self.is_stale() {
+            return Ok(false);
+        }
+
+        let (records, stamp) = load(&self.path)?;
+        self.records = records;
+        self.stamp = stamp;
+        Ok(true)
     }
 
     pub fn open_host(config: &PeersConfig) -> Result<Self, NetError> {
@@ -193,6 +234,7 @@ impl PeerStore {
 
         self.persist(&records)?;
         self.records = records;
+        self.stamp = FileStamp::of(&self.path).ok();
         Ok(())
     }
 
@@ -210,6 +252,7 @@ impl PeerStore {
 
         self.persist(&records)?;
         self.records = records;
+        self.stamp = FileStamp::of(&self.path).ok();
         Ok(true)
     }
 
@@ -254,6 +297,22 @@ impl PeerStore {
 
         fs::rename(&staging, &self.path).map_err(write_error)
     }
+}
+
+fn load(path: &Path) -> Result<(Vec<PeerRecord>, Option<FileStamp>), NetError> {
+    let stamp = FileStamp::of(path).ok();
+    let records = match fs::read_to_string(path) {
+        Ok(text) => parse(&text, path)?,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(source) => {
+            return Err(NetError::PeerStoreRead {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    };
+
+    Ok((records, stamp))
 }
 
 fn default_path(
@@ -400,6 +459,59 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_store_is_not_stale_and_an_external_change_is_picked_up() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        let mut running = PeerStore::open(path.clone()).unwrap();
+        running.remember(record("laptop", 1)).unwrap();
+        running.remember(record("desk", 2)).unwrap();
+
+        let unchanged = running.refresh().unwrap();
+        let mut other = PeerStore::open(path).unwrap();
+        other.forget(&secret(1).id()).unwrap();
+        let stale = running.is_stale();
+        let changed = running.refresh().unwrap();
+
+        assert!(!unchanged);
+        assert!(stale);
+        assert!(changed);
+        assert!(running.get(&secret(1).id()).is_none());
+        assert!(running.get(&secret(2).id()).is_some());
+        assert!(!running.is_stale());
+    }
+
+    #[test]
+    fn a_file_created_or_removed_behind_the_store_is_noticed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        let mut running = PeerStore::open(path.clone()).unwrap();
+        let mut writer = PeerStore::open(path.clone()).unwrap();
+        writer.remember(record("laptop", 1)).unwrap();
+
+        let created = running.refresh().unwrap();
+        fs::remove_file(&path).unwrap();
+        let removed = running.refresh().unwrap();
+
+        assert!(created);
+        assert!(removed);
+        assert!(running.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_file_fails_the_refresh_and_keeps_the_old_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        let mut running = PeerStore::open(path.clone()).unwrap();
+        running.remember(record("laptop", 1)).unwrap();
+
+        fs::write(&path, "garbage line\n").unwrap();
+        let result = running.refresh();
+
+        assert!(matches!(result, Err(NetError::PeerStoreCorrupt { .. })));
+        assert_eq!(running.len(), 1);
+    }
+
+    #[test]
     fn remembered_peers_survive_a_reload() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state").join("peers");
@@ -409,7 +521,14 @@ mod tests {
         store.remember(record("desk pc with spaces", 2)).unwrap();
         let reloaded = PeerStore::open(path).unwrap();
 
-        assert_eq!(reloaded, store);
+        let ids = |store: &PeerStore| -> Vec<(PeerId, String)> {
+            store
+                .iter()
+                .map(|record| (record.id(), record.name().to_owned()))
+                .collect()
+        };
+
+        assert_eq!(ids(&reloaded), ids(&store));
         assert_eq!(reloaded.len(), 2);
         assert_eq!(
             reloaded.get(&secret(2).id()).unwrap().name(),

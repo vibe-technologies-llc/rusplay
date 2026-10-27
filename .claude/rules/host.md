@@ -12,12 +12,14 @@ paths:
 - `accept(Option<Pin>)` drives `PairingResponder` (only when a PIN is given) and
   `ReconnectResponder` side by side on the same socket, by `StreamKind`, until one completes or
   `network.pairing_timeout_ms` passes (`AcceptTimeout`). A spent PIN budget is
-  `Net(PairingLocked)`. A PIN pairing is remembered in the store as `client at <ip>` before the
-  `Done` goes out. The session keys are installed before the final reply is sent, so the client's
+  `Net(PairingLocked)`. A PIN pairing is remembered in the store under the name the client announced in
+  `Start` (`client at <ip>` when it announced none) before the `Done` goes out. The session keys are installed before the final reply is sent, so the client's
   sealed `Hello` can never arrive first. Instead of `pair_as_host`'s linger, the session keeps
   the client's final handshake datagram (`Confirm` or `Proof`) and its reply (`Replay`), and the
   control stage answers a byte-identical retransmit from it. Any other pairing or reconnect
-  datagram during a session is ignored; a restarted client is noticed by the peer timeout.
+  datagram from the client during a session is ignored, and a `Start` or `Hello` from any other
+  address is answered `Rejected(Busy)` (`networking.md`); a restarted client is noticed by the
+  peer timeout.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across

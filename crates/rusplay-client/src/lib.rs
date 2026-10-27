@@ -5,6 +5,7 @@ mod decode;
 mod display;
 mod error;
 mod input;
+mod name;
 mod present;
 mod receive;
 mod session;

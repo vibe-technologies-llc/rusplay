@@ -110,6 +110,12 @@ pub enum ConfigError {
     EmptyHostName,
     #[error("peers.host_name is {bytes} bytes, above 64")]
     HostNameTooLong { bytes: usize },
+    #[error("peers.client_name is set to an empty name")]
+    EmptyClientName,
+    #[error("peers.client_name is {bytes} bytes, above 64")]
+    ClientNameTooLong { bytes: usize },
+    #[error("peers.client_name contains a control character")]
+    ClientNameControlCharacter,
     #[error("audio fec overhead {0}% is above 100%")]
     AudioFecOverheadOutOfRange(u8),
     #[error("software decoder thread count {0} is above 256")]
@@ -180,6 +186,9 @@ impl ConfigError {
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
             Self::EmptyHostName | Self::HostNameTooLong { .. } => Some("peers.host_name"),
+            Self::EmptyClientName
+            | Self::ClientNameTooLong { .. }
+            | Self::ClientNameControlCharacter => Some("peers.client_name"),
             Self::AudioFecOverheadOutOfRange(_) => Some("audio.fec_overhead_percent"),
             Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),
             Self::Read { .. }

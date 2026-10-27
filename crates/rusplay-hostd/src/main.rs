@@ -1,8 +1,15 @@
 mod cli;
 mod discovery;
+mod peers;
 mod responder;
 
-use std::{env, error::Error, path::Path, process::ExitCode, sync::Arc};
+use std::{
+    env,
+    error::Error,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use rusplay_config::{Config, ConfigError};
 use rusplay_host::{
@@ -11,8 +18,9 @@ use rusplay_host::{
 use thiserror::Error;
 
 use crate::{
-    cli::{CliError, Command, HELP, VERSION},
+    cli::{CliError, Command, HELP, PeersAction, VERSION},
     discovery::{ConfigSource, Environment},
+    peers::{PeersError, render_list, resolve},
     responder::{Responder, ResponderError},
 };
 
@@ -29,6 +37,8 @@ enum HostdError {
     Host(#[from] HostError),
     #[error(transparent)]
     Discovery(#[from] ResponderError),
+    #[error(transparent)]
+    Peers(#[from] PeersError),
 }
 
 fn main() -> ExitCode {
@@ -56,13 +66,31 @@ fn run() -> Result<(), HostdError> {
             println!("{VERSION}");
             Ok(())
         }
-        Command::Run { config } => {
-            let source = discovery::resolve(config, &Environment::from_process(), Path::is_file);
-            let config = load(&source)?;
+        Command::Run { config } => serve(load_config(config)?),
+        Command::Peers { config, action } => manage_peers(&load_config(config)?, &action),
+    }
+}
 
-            serve(config)
+fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {
+    let source = discovery::resolve(explicit, &Environment::from_process(), Path::is_file);
+
+    load(&source)
+}
+
+fn manage_peers(config: &Config, action: &PeersAction) -> Result<(), HostdError> {
+    let mut store = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
+
+    match action {
+        PeersAction::List => print!("{}", render_list(&store)),
+        PeersAction::Forget { target } => {
+            let id = resolve(&store, target)?;
+            let name = store.get(&id).map(|record| record.name().to_owned());
+            store.forget(&id).map_err(HostError::from)?;
+            println!("forgot {id} {}", name.unwrap_or_default());
         }
     }
+
+    Ok(())
 }
 
 fn serve(config: Config) -> Result<(), HostdError> {

@@ -119,6 +119,14 @@ paths:
   PIN is never exposed to offline guessing. `PairingMessage` on `StreamKind::Pairing` carries
   `Start` (client key share), `Reply` (host share plus key confirmation), `Confirm` (client key
   confirmation), `Done` and `Rejected`, all tagged with a random per-attempt id.
+- `Start` also carries the client's display name, `ClientName` (`rusplay-protocol`): a `u8`
+  length then at most 64 bytes of UTF-8 without control characters, empty allowed. Decoding
+  validates it, each failure its own `ProtocolError`. It is not part of the SPAKE2 transcript or
+  the confirmations, so it is an unauthenticated display hint: the host stores it as the
+  `PeerRecord` name and never uses it for identity (`PeerId` is the identity). The responder
+  hands it to the caller as `PairingOutcome::client_name`. The client sends `peers.client_name`,
+  else the kernel hostname (`rusplay-client/src/name.rs`), cut to 64 bytes on a character
+  boundary with control characters dropped.
 - The SPAKE2 secret feeds HKDF-SHA256 (salted with the attempt id) into two confirmation keys and
   two ChaCha20-Poly1305 session keys, one per direction. Each side proves it derived the same
   secret (HKDF-based tags over the label, attempt and both key shares, compared in constant time);
@@ -144,6 +152,12 @@ paths:
 - Without a session the transport stays plaintext, which is what tests and unpaired development
   use; refusing to stream before pairing is the session layer's policy. Key material is zeroized on
   drop and never printed by `Debug`.
+- Busy host: `busy_reply` turns a pairing `Start` or a reconnect `Hello` into `Rejected(Busy)`
+  under the same attempt id. The host's control stage sends it to any address but the current
+  client's while a session runs, so a second client fails at once with `PairingRejected` or
+  `ReconnectRejected` instead of timing out. The reply is shorter than the request, is sent
+  best effort (a send failure never ends the session) and is never sent to a datagram that is
+  not a first handshake message.
 - Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
   `Start`s, which only denies pairing and never grants access.
 - A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF
@@ -163,10 +177,14 @@ paths:
   the store, so a crash leaves the old file and a stale permissive staging file is never reused.
   `remember` and `forget` persist before they change the in-memory list, so a failed write changes
   nothing. `forget` is the revocation API; the host shares the store as
-  `RwLock<PeerStore>` so a forget applies to the next datagram.
+  `RwLock<PeerStore>` so a forget applies to the next datagram. Another process can edit the
+  file (`rusplay-hostd peers forget`): `PeerStore::is_stale` compares the file's modified time,
+  length and inode with those recorded at the last load or write, and `refresh` re-reads when
+  they differ, keeping the old records if the new file is corrupt.
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
   `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
-  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`, `Authentication`).
+  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`,
+  `Authentication`, `Busy`).
   Both proofs and both direction keys are HKDF-SHA256 outputs keyed by the secret and salted with
   peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
   secret and freshness from both sides, a reflected message never verifies, and session keys are

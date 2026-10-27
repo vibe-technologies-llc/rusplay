@@ -36,6 +36,12 @@ pub enum ProtocolError {
     DiscoveryNameTooLong { len: usize, max: usize },
     #[error("host name is not valid utf-8")]
     InvalidDiscoveryName,
+    #[error("client name of {len} bytes exceeds the limit of {max}")]
+    ClientNameTooLong { len: usize, max: usize },
+    #[error("client name is not valid utf-8")]
+    InvalidClientName,
+    #[error("client name contains a control character")]
+    ClientNameControlCharacter,
     #[error("unknown pairing message tag {0}")]
     UnknownPairingTag(u8),
     #[error("unknown pairing rejection reason {0}")]

@@ -11,7 +11,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_audio::CODEC_THREAD_STACK_BYTES;
-use rusplay_config::{AudioConfig, Config, InputConfig, NetworkConfig};
+use rusplay_config::{AudioConfig, Config, InputConfig};
 use rusplay_core::Resolution;
 use rusplay_input::{InputEvent, RumbleCommand, gamepad::PhysicalOptions};
 use rusplay_net::{
@@ -26,6 +26,7 @@ use crate::{
     decode::{self, DecodeLinks},
     display::resolve_target,
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
+    name::announced_name,
     present::{self, MappingOptions, PresentLinks, PresentOptions, SharedTarget},
     receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
@@ -107,7 +108,7 @@ impl ClientSession {
             SocketAddr::new(bind_address(network.bind_address, host), 0),
             TransportOptions::from(network),
         )?;
-        let paired = authenticate(&transport, host, credentials, network)?;
+        let paired = authenticate(&transport, host, credentials, &self.config)?;
         let transport = Arc::new(transport);
         let (input_sender, input_events) = mpsc::channel();
 
@@ -181,11 +182,19 @@ fn authenticate(
     transport: &Transport,
     host: SocketAddr,
     credentials: &Credentials,
-    network: &NetworkConfig,
+    config: &Config,
 ) -> Result<Option<PeerSecret>, ClientError> {
+    let network = &config.network;
+
     match credentials {
         Credentials::Pin(pin) => {
-            let outcome = pair_as_client(transport, host, pin, PairingTiming::from(network))?;
+            let outcome = pair_as_client(
+                transport,
+                host,
+                pin,
+                announced_name(&config.peers),
+                PairingTiming::from(network),
+            )?;
             transport.install_session(&outcome.keys);
             Ok(Some(outcome.secret))
         }

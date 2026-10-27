@@ -867,6 +867,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Peers",
+        "peers.client_name",
+        "Client name",
+        Kind::Text,
+    )
+    .optional(),
+    field(
+        Section::Network,
+        "Peers",
         "peers.host_file",
         "Paired clients file",
         Kind::Text,

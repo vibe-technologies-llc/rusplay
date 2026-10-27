@@ -4,7 +4,7 @@ use crate::ProtocolError;
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
-    pub const CURRENT: Self = Self(11);
+    pub const CURRENT: Self = Self(13);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
