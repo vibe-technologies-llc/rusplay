@@ -59,6 +59,12 @@ pub const fn device_input(backend: Backend, format: PixelFormat) -> Option<Devic
         (Backend::Nvenc, ChromaSubsampling::Yuv420, BitDepth::Ten) => {
             Some(DeviceInput::new(OpaqueFd, SemiPlanar, *b"P010"))
         }
+        (Backend::Nvenc, ChromaSubsampling::Yuv422, BitDepth::Eight) => {
+            Some(DeviceInput::new(OpaqueFd, SemiPlanar, *b"NV16"))
+        }
+        (Backend::Nvenc, ChromaSubsampling::Yuv422, BitDepth::Ten) => {
+            Some(DeviceInput::new(OpaqueFd, SemiPlanar, *b"P210"))
+        }
         (Backend::Nvenc, ChromaSubsampling::Yuv444, BitDepth::Eight) => {
             Some(DeviceInput::new(OpaqueFd, Planar, *b"YU24"))
         }

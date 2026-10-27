@@ -56,17 +56,30 @@ impl St2086 {
     }
 
     #[cfg(any(feature = "vaapi", feature = "nvenc"))]
-    pub(crate) fn av1_payload(&self) -> [u8; MASTERING_PAYLOAD_LEN] {
-        let mut payload = [0; MASTERING_PAYLOAD_LEN];
-        let points = [self.red, self.green, self.blue, self.white];
-        for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
-            slot[..2].copy_from_slice(&av1_chromaticity(x).to_be_bytes());
-            slot[2..].copy_from_slice(&av1_chromaticity(y).to_be_bytes());
+    pub(crate) fn av1_fixed_point(&self) -> Self {
+        let point = |[x, y]: [u16; 2]| [av1_chromaticity(x), av1_chromaticity(y)];
+
+        Self {
+            green: point(self.green),
+            blue: point(self.blue),
+            red: point(self.red),
+            white: point(self.white),
+            max_luminance: av1_luminance(self.max_luminance, AV1_MAX_LUMINANCE_UNITS),
+            min_luminance: av1_luminance(self.min_luminance, AV1_MIN_LUMINANCE_UNITS),
         }
-        let max = av1_luminance(self.max_luminance, AV1_MAX_LUMINANCE_UNITS);
-        let min = av1_luminance(self.min_luminance, AV1_MIN_LUMINANCE_UNITS);
-        payload[16..20].copy_from_slice(&max.to_be_bytes());
-        payload[20..].copy_from_slice(&min.to_be_bytes());
+    }
+
+    #[cfg(feature = "vaapi")]
+    pub(crate) fn av1_payload(&self) -> [u8; MASTERING_PAYLOAD_LEN] {
+        let fixed = self.av1_fixed_point();
+        let mut payload = [0; MASTERING_PAYLOAD_LEN];
+        let points = [fixed.red, fixed.green, fixed.blue, fixed.white];
+        for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
+            slot[..2].copy_from_slice(&x.to_be_bytes());
+            slot[2..].copy_from_slice(&y.to_be_bytes());
+        }
+        payload[16..20].copy_from_slice(&fixed.max_luminance.to_be_bytes());
+        payload[20..].copy_from_slice(&fixed.min_luminance.to_be_bytes());
 
         payload
     }
@@ -215,6 +228,20 @@ mod tests {
     }
 
     #[cfg(any(feature = "vaapi", feature = "nvenc"))]
+    #[test]
+    fn av1_fixed_point_rescales_chromaticities_and_luminance() {
+        let fixed = St2086::of(&bt2020_display()).av1_fixed_point();
+
+        assert_eq!(
+            fixed.red,
+            [av1_chromaticity(35_400), av1_chromaticity(14_600)]
+        );
+        assert_eq!(fixed.green[0], av1_chromaticity(8_500));
+        assert_eq!(fixed.max_luminance, 1000 << 8);
+        assert_eq!(fixed.min_luminance, 82);
+    }
+
+    #[cfg(feature = "vaapi")]
     #[test]
     fn av1_payload_uses_av1_fixed_point_in_red_green_blue_order() {
         let payload = St2086::of(&bt2020_display()).av1_payload();

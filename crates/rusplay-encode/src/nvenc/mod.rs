@@ -14,6 +14,7 @@ use std::{
         fd::{AsFd, BorrowedFd, OwnedFd},
         unix::fs::MetadataExt,
     },
+    ptr,
     rc::Rc,
 };
 
@@ -26,8 +27,8 @@ use crate::{
     input::YuvFrame,
     nvenc::{
         config::{
-            Features, Payload, Settings, codec_guid, configure, hdr_payloads, initialize_params,
-            preset_guid, profile, rate_control_supported, tuning_info,
+            Features, NativeHdr, Payload, Settings, codec_guid, configure, initialize_params,
+            native_hdr, preset_guid, profile, rate_control_supported, sei_payloads, tuning_info,
         },
         driver::{
             Bitstream, CudaContext, DevicePlane, Driver, Encoder, ExternalBuffer, ExternalMemory,
@@ -89,8 +90,13 @@ impl<'a> Probe<'a> {
         if !self.encoder.input_formats(guid)?.contains(&buffer) {
             return Ok(false);
         }
-        if format.chroma == ChromaSubsampling::Yuv444
-            && self.encoder.caps(guid, ffi::CAPS_SUPPORT_YUV444_ENCODE)? == 0
+        let chroma_caps = match format.chroma {
+            ChromaSubsampling::Yuv420 => None,
+            ChromaSubsampling::Yuv422 => Some(ffi::CAPS_SUPPORT_YUV422_ENCODE),
+            ChromaSubsampling::Yuv444 => Some(ffi::CAPS_SUPPORT_YUV444_ENCODE),
+        };
+        if let Some(query) = chroma_caps
+            && self.encoder.caps(guid, query)? == 0
         {
             return Ok(false);
         }
@@ -494,12 +500,17 @@ fn sei_array(payloads: &mut [Payload]) -> Vec<ffi::SeiPayload> {
         .collect()
 }
 
+struct Metadata<'a> {
+    sei: &'a mut [ffi::SeiPayload],
+    native: &'a mut NativeHdr,
+}
+
 fn picture_params(
     codec: Codec,
     picture: Picture,
     input: Input,
     output: *mut c_void,
-    sei: &mut [ffi::SeiPayload],
+    metadata: Metadata<'_>,
 ) -> ffi::PicParams {
     let mut params = ffi::PicParams::zeroed();
     params.version = ffi::PIC_PARAMS_VER;
@@ -516,28 +527,33 @@ fn picture_params(
         params.encode_pic_flags = ffi::PIC_FLAG_FORCE_IDR | ffi::PIC_FLAG_OUTPUT_SPSPPS;
     }
 
-    if !sei.is_empty() {
-        let count = u32::try_from(sei.len()).unwrap_or(u32::MAX);
-        let array = sei.as_mut_ptr();
-        match codec {
-            Codec::H264 => {
-                let mut h264 = ffi::PicParamsH264::zeroed();
-                h264.sei_payload_array_cnt = count;
-                h264.sei_payload_array = array;
-                params.codec.h264 = h264;
-            }
-            Codec::Hevc => {
-                let mut hevc = ffi::PicParamsHevc::zeroed();
-                hevc.sei_payload_array_cnt = count;
-                hevc.sei_payload_array = array;
-                params.codec.hevc = hevc;
-            }
-            Codec::Av1 => {
-                let mut av1 = ffi::PicParamsAv1::zeroed();
-                av1.obu_payload_array_cnt = count;
-                av1.obu_payload_array = array;
-                params.codec.av1 = av1;
-            }
+    let Metadata { sei, native } = metadata;
+    let count = u32::try_from(sei.len()).unwrap_or(u32::MAX);
+    let array = if sei.is_empty() {
+        ptr::null_mut()
+    } else {
+        sei.as_mut_ptr()
+    };
+    match codec {
+        Codec::H264 => {
+            let mut h264 = ffi::PicParamsH264::zeroed();
+            h264.sei_payload_array_cnt = count;
+            h264.sei_payload_array = array;
+            params.codec.h264 = h264;
+        }
+        Codec::Hevc => {
+            let mut hevc = ffi::PicParamsHevc::zeroed();
+            hevc.sei_payload_array_cnt = count;
+            hevc.sei_payload_array = array;
+            hevc.mastering_display = native.mastering_ptr();
+            hevc.max_cll = native.content_light_ptr();
+            params.codec.hevc = hevc;
+        }
+        Codec::Av1 => {
+            let mut av1 = ffi::PicParamsAv1::zeroed();
+            av1.mastering_display = native.mastering_ptr();
+            av1.max_cll = native.content_light_ptr();
+            params.codec.av1 = av1;
         }
     }
 
@@ -548,6 +564,7 @@ pub struct NvencEncoder {
     session: Option<Session>,
     device: Device,
     settings: Settings,
+    native_hdr: NativeHdr,
     keyframe_requested: bool,
     rate_changed: bool,
 }
@@ -597,6 +614,7 @@ impl NvencEncoder {
         Ok(Self {
             session,
             device,
+            native_hdr: native_hdr(settings.codec, &settings.color.hdr),
             settings,
             keyframe_requested: false,
             rate_changed: false,
@@ -639,6 +657,7 @@ impl VideoEncoder for NvencEncoder {
             session: slot,
             device,
             settings,
+            native_hdr: native,
             keyframe_requested,
             rate_changed,
         } = self;
@@ -662,7 +681,7 @@ impl VideoEncoder for NvencEncoder {
         let requested = std::mem::take(keyframe_requested);
         let keyframe = session.needs_keyframe || requested;
         let mut payloads = if keyframe {
-            hdr_payloads(settings.codec, &settings.color.hdr)
+            sei_payloads(settings.codec, &settings.color.hdr)
         } else {
             Vec::new()
         };
@@ -683,7 +702,10 @@ impl VideoEncoder for NvencEncoder {
                     picture,
                     input,
                     session.bitstream.pointer(),
-                    &mut sei,
+                    Metadata {
+                        sei: &mut sei,
+                        native,
+                    },
                 );
                 device.encoder.encode(&mut params)?;
                 session.bitstream.read()?
@@ -702,7 +724,10 @@ impl VideoEncoder for NvencEncoder {
                     picture,
                     input,
                     session.bitstream.pointer(),
-                    &mut sei,
+                    Metadata {
+                        sei: &mut sei,
+                        native,
+                    },
                 );
                 device.encoder.encode(&mut params)?;
                 let coded = session.bitstream.read()?;

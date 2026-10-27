@@ -34,6 +34,7 @@ pub(super) enum SplitEncode {
     AutoForced,
     Two,
     Three,
+    Four,
     Disabled,
 }
 
@@ -44,6 +45,7 @@ impl SplitEncode {
             Self::AutoForced => ffi::SPLIT_AUTO_FORCED_MODE,
             Self::Two => ffi::SPLIT_TWO_FORCED_MODE,
             Self::Three => ffi::SPLIT_THREE_FORCED_MODE,
+            Self::Four => ffi::SPLIT_FOUR_FORCED_MODE,
             Self::Disabled => ffi::SPLIT_DISABLE_MODE,
         }
     }
@@ -106,6 +108,7 @@ impl NvencParams {
                         "auto-forced" => SplitEncode::AutoForced,
                         "two" => SplitEncode::Two,
                         "three" => SplitEncode::Three,
+                        "four" => SplitEncode::Four,
                         "disabled" => SplitEncode::Disabled,
                         _ => return Err(invalid(key, value)),
                     });
@@ -176,7 +179,7 @@ mod tests {
             ("aq-strength", "0"),
             ("spatial-aq", "maybe"),
             ("multipass", "half"),
-            ("split-encode", "four"),
+            ("split-encode", "five"),
             ("intra-refresh-frames", "-1"),
         ] {
             let error = NvencParams::parse(&params(&[(key, value)])).unwrap_err();
@@ -197,5 +200,6 @@ mod tests {
         assert_eq!(Multipass::FullResolution.nvenc(), 2);
         assert_eq!(SplitEncode::Disabled.nvenc(), 15);
         assert_eq!(SplitEncode::Three.nvenc(), 3);
+        assert_eq!(SplitEncode::Four.nvenc(), 4);
     }
 }

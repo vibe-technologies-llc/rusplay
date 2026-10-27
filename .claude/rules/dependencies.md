@@ -24,7 +24,7 @@ paths:
   | PipeWire audio capture and playback | `pipewire` | `rusplay-audio/pipewire` |
   | VAAPI encode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-encode/vaapi` |
   | VAAPI decode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-decode/vaapi` |
-  | NVENC | system `libcuda.so.1` + `libnvidia-encode.so.1`, loaded at run time through `libloading`, with own hand-written FFI for Video Codec SDK 12.2 | `rusplay-encode/nvenc` |
+  | NVENC | system `libcuda.so.1` + `libnvidia-encode.so.1`, loaded at run time through `libloading`, with own hand-written FFI for Video Codec SDK 13.0 (driver R570 or newer) | `rusplay-encode/nvenc` |
   | NVDEC | the driver's `libcuda.so.1` and `libnvcuvid.so.1`, loaded at run time with `libloading` through own `#[repr(C)]` declarations in `src/nvdec/ffi.rs`; nothing is linked or needed at build time | `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
@@ -60,8 +60,9 @@ paths:
   The published `nvidia-video-codec-sdk` crate links `libcuda` and `libnvidia-encode` and needs the
   SDK at build time, so it is not used. `src/nvenc/ffi.rs` declares only the CUDA driver API and
   NVENC subset the backend calls, as `#[repr(C)]` structs whose sizes, field offsets and
-  `NVENCAPI_STRUCT_VERSION` values are unit tested against the 12.2 header (FFmpeg's
-  `nv-codec-headers` `n12.2.72.0`). `libloading` (pure Rust over `dlopen`) is the loader; a missing
+  `NVENCAPI_STRUCT_VERSION` values, `NV_ENC_CAPS` positions, buffer formats and bit-field
+  positions are unit tested against the 13.0 header (FFmpeg's `nv-codec-headers` `n13.0.19.1`,
+  `include/ffnvcodec/nvEncodeAPI.h`). `libloading` (pure Rust over `dlopen`) is the loader; a missing
   library is `LibraryNotFound`, a missing symbol `SymbolMissing`. Moving to a newer SDK means
   updating those structs and their tests together.
 

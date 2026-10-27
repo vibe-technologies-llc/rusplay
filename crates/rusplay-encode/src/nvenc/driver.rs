@@ -749,10 +749,11 @@ mod tests {
         assert_eq!(
             api_version_of(ffi::MAX_SUPPORTED_VERSION),
             ApiVersion {
-                major: 12,
-                minor: 2
+                major: 13,
+                minor: 0
             }
         );
+        assert!(api_version_of(0xc2) < REQUIRED_API);
         assert_eq!(
             api_version_of(0xb1),
             ApiVersion {

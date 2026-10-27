@@ -156,8 +156,8 @@ paths:
     on the GPU, or a buffer read back to shared memory.
   - GPU hand-off (`src/handoff.rs`): with `video.encoder_gpu_handoff` on (default),
     `Handoff::plan` takes `rusplay_encode::device::device_input` for the backend and format (VAAPI
-    4:2:0 as a DMA-BUF in `NV12`/`P010`/`P012`; NVENC 4:2:0 `NV12`/`P010` and 4:4:4 `YU24`/`Q410` as
-    an opaque fd), and `GpuPipeline::new` keeps it only when `rusplay_scale::can_export` says the
+    4:2:0 as a DMA-BUF in `NV12`/`P010`/`P012`; NVENC 4:2:0 `NV12`/`P010`, 4:2:2 `NV16`/`P210` and 4:4:4 `YU24`/`Q410`
+    as an opaque fd), and `GpuPipeline::new` keeps it only when `rusplay_scale::can_export` says the
     device exports that handle type. The converter then writes semi-planar, or `PlanarHigh` (MSB
     samples) for 4:4:4, with 256-byte rows (`HANDOFF_ROW_ALIGNMENT`) straight into memory from
     `ColorConverter::create_exported_frame`, once `check_device_layout` has accepted the planes
