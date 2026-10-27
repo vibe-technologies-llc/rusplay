@@ -744,14 +744,6 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
-        "network.jitter_buffer_ms",
-        "Jitter buffer",
-        U16,
-    )
-    .unit("ms"),
-    field(
-        Section::Network,
-        "Transport",
         "network.reassembly_timeout_ms",
         "Reassembly timeout",
         U16,
