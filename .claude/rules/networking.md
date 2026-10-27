@@ -112,8 +112,9 @@ paths:
   `network.discovery_group`, and answers each query by unicast to its sender. `handle_next`
   serves one datagram with a timeout and is meant to run in a loop on its own thread.
   `DiscoveryBrowser` (client) sends the query to the limited broadcast address and the group,
-  repeats it three times over the scan window, and returns the hosts whose announce echoed its
-  nonce, deduplicated by address. Tests aim it at loopback addresses instead of broadcast.
+  repeats it three times over the scan window (`network.discovery_scan_ms`, default 1000), and
+  returns the hosts whose announce echoed its nonce, deduplicated by address. Tests aim it at
+  loopback addresses instead of broadcast.
 - Discovery is IPv4 only. Limited broadcast leaves through the default-route interface only and
   the multicast group has TTL 1, so a host on another VLAN or a second interface is not found;
   entering an address by hand always works.
@@ -187,6 +188,7 @@ paths:
   file (`rusplay-hostd peers forget`): `PeerStore::is_stale` compares the file's modified time,
   length and inode with those recorded at the last load or write, and `refresh` re-reads when
   they differ, keeping the old records if the new file is corrupt.
+  The write path is `write_owner_only`, shared with the client's host book (`client.md`).
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
   `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
   host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`,

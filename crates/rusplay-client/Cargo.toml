@@ -42,6 +42,7 @@ wgpu.workspace = true
 [dev-dependencies]
 half.workspace = true
 pollster.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

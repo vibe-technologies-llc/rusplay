@@ -1,4 +1,4 @@
-use std::{fmt, io, time::Duration};
+use std::{fmt, io, path::PathBuf, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_config::{OutputColorSpace, OutputFormat, PresentMode};
@@ -82,6 +82,20 @@ pub enum ClientError {
     HostSilent(Duration),
     #[error("audio codec {codec} is not compiled into this client")]
     AudioCodecNotCompiled { codec: AudioCodec },
+    #[error("failed to read the host book {path}")]
+    HostBookRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to write the host book {path}")]
+    HostBookWrite {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("host book {path} is corrupt at line {line}")]
+    HostBookCorrupt { path: PathBuf, line: usize },
     #[error("failed to connect to the wayland compositor")]
     WaylandConnect(#[source] ConnectError),
     #[error("failed to list the wayland globals")]

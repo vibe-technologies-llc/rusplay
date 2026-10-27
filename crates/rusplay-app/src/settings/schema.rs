@@ -780,6 +780,14 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Network,
+        "Discovery",
+        "network.discovery_scan_ms",
+        "Scan time",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
         "Pairing",
         "network.pairing_pin_digits",
         "PIN digits",

@@ -40,7 +40,7 @@ paths:
 | Module | Role |
 |---|---|
 | `app` | Root view: page content, status bar, global focus and quit actions |
-| `hosts` | `HostList` model (address parsing, selection, remembered pairings, no UI types) and `HostsView`, which emits `ConnectRequested` |
+| `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
 | `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
@@ -52,10 +52,31 @@ paths:
   resolved by `ConfigEnvironment` in `rusplay-config`. It is read again on every connect so a save
   from the settings page takes effect without a restart. A missing file means defaults; a malformed
   one is reported in the status bar and defaults are used.
-- Host entries live only in memory until discovery lands. A host without a remembered pairing
-  needs the PIN the host shows; a successful PIN connect hands back `ClientStream::paired_secret`,
-  which `StreamView` turns into a `PeerRecord` (named after the host entry) and the root stores on
-  the entry, so later connects in the same run use `Credentials::Peer`.
+- Discovery: `HostsView::refresh` runs `session::discover` on gpui's background executor (the
+  scan blocks for `network.discovery_scan_ms`) when the app starts, on each switch to the Hosts
+  page and from the Refresh button, one scan at a time. The options come from the client config
+  re-read for that scan (`network.discovery_port`, `discovery_group`). `HostList::merge_discovered`
+  matches announces to entries by address first, then by a unique display name for a saved entry
+  that was not seen at its address (the host moved), keeps a saved entry's own name, and adds the
+  rest as `HostOrigin::Discovered` entries that disappear again when a later scan misses them.
+  Pairing turns a discovered entry into an added one. Announces carry no host id, so the name
+  match is a hint; pairing authenticates the host.
+- Saved hosts live in the client host book (`rusplay_client::HostBook`, `client.md`), opened once
+  at startup from the config's `peers` section; a change to `peers.client_file` applies at the
+  next start. `HostList` maps between entries and `SavedHost`s: `from_saved` at startup and
+  `saved_hosts` (the `HostOrigin::Added` entries) after every change, and `HostsView::persist`
+  saves the book after each add, remove, rename, address change, forget and pairing, and after a
+  scan that moved a saved host. A failed save is a status-bar notice and the in-memory list stays
+  usable. If the book cannot be opened (unreadable or corrupt) the app starts with an empty list
+  and no book, says so in the status bar, and never overwrites the file.
+- A host without a remembered pairing needs the PIN the host shows; a successful PIN connect
+  hands back `ClientStream::paired_secret`, which `StreamView` turns into a `PeerRecord` (named
+  after the host entry) and the root stores on the entry, so later connects use
+  `Credentials::Peer`, also after a restart. `Rename`, `Change address` (both read the Name and
+  Address fields; the pairing is kept, it is keyed by the secret and not the address) and
+  `Forget pairing` act on the selected entry; renaming or re-addressing a discovered entry saves
+  it. Names follow `MAX_PEER_NAME_BYTES` and carry no control characters, since they are written
+  to the book and become the `PeerRecord` name.
 
 ## Stream page
 
