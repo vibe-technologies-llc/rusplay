@@ -7,7 +7,8 @@ use std::{
 };
 
 use crate::{
-    capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox, stats::Counters,
+    capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox,
+    negotiate::Negotiation, stats::Counters,
 };
 
 #[derive(Debug)]
@@ -18,6 +19,7 @@ pub(crate) struct Shared {
     pub clock: StreamClock,
     pub counters: Counters,
     pub mailbox: Mailbox<Captured>,
+    pub negotiation: Negotiation,
 }
 
 impl Shared {
@@ -29,6 +31,7 @@ impl Shared {
             clock: StreamClock::start(),
             counters: Counters::default(),
             mailbox: Mailbox::new(),
+            negotiation: Negotiation::default(),
         }
     }
 

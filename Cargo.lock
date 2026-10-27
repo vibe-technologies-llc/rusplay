@@ -4862,6 +4862,7 @@ dependencies = [
  "parking_lot 0.13.0",
  "reed-solomon-simd",
  "rusplay-config",
+ "rusplay-core",
  "rusplay-protocol",
  "rustix",
  "sha2 0.11.1",

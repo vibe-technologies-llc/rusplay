@@ -1,5 +1,5 @@
 use rusplay_config::VideoEncoderConfig;
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, PixelFormat};
+use rusplay_core::{BitDepth, ChromaSubsampling, Codec, CodecFormat, FormatSet, PixelFormat};
 
 use crate::{Backend, EncodeError};
 
@@ -50,6 +50,13 @@ impl Capabilities {
             .iter()
             .filter(move |(candidate, _)| *candidate == codec)
             .map(|&(_, format)| format)
+    }
+
+    pub fn format_set(&self) -> FormatSet {
+        self.formats
+            .iter()
+            .map(|&(codec, format)| CodecFormat::new(codec, format))
+            .collect()
     }
 
     pub fn codecs(&self) -> Vec<Codec> {
@@ -107,6 +114,11 @@ mod tests {
         };
 
         assert_eq!(only_hevc_10.backend(), Backend::X265);
+        assert_eq!(only_hevc_10.format_set().iter().count(), CHROMAS.len());
+        assert!(only_hevc_10.format_set().contains(CodecFormat::new(
+            Codec::Hevc,
+            ten(ChromaSubsampling::Yuv444)
+        )));
         assert_eq!(only_hevc_10.codecs(), vec![Codec::Hevc]);
         assert!(only_hevc_10.supports(Codec::Hevc, ten(ChromaSubsampling::Yuv422)));
         assert!(!only_hevc_10.supports(Codec::Av1, ten(ChromaSubsampling::Yuv420)));

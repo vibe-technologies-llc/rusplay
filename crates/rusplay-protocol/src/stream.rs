@@ -1,7 +1,7 @@
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Chromaticities, Chromaticity, Codec, ColorPrimaries, ColorRange,
-    ColorSpace, ContentLightLevel, HdrLevels, Luminance, MasteringDisplay, MatrixCoefficients,
-    PixelFormat, Resolution, TransferFunction,
+    BitDepth, ChromaSubsampling, Chromaticities, Chromaticity, Codec, CodecFormat, ColorPrimaries,
+    ColorRange, ColorSpace, ContentLightLevel, HdrLevels, Luminance, MasteringDisplay,
+    MatrixCoefficients, PixelFormat, Resolution, TransferFunction,
 };
 
 use crate::ProtocolError;
@@ -12,7 +12,8 @@ const HAS_MASTERING: u8 = 1;
 const HAS_CONTENT_LIGHT: u8 = 1 << 1;
 const KNOWN_HDR_FLAGS: u8 = HAS_MASTERING | HAS_CONTENT_LIGHT;
 const CHROMATICITIES_LEN: usize = 16;
-const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1;
+const CONFIGURED_LEN: usize = 3;
+const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + CONFIGURED_LEN;
 const MASTERING_FIXED_LEN: usize = 1 + 8;
 const CONTENT_LIGHT_LEN: usize = 4;
 
@@ -23,6 +24,7 @@ pub struct StreamDescription {
     pub resolution: Resolution,
     pub format: PixelFormat,
     pub color: ColorSpace,
+    pub configured: CodecFormat,
 }
 
 impl StreamDescription {
@@ -31,6 +33,14 @@ impl StreamDescription {
         + MASTERING_FIXED_LEN
         + CHROMATICITIES_LEN
         + CONTENT_LIGHT_LEN;
+
+    pub const fn coded(&self) -> CodecFormat {
+        CodecFormat::new(self.codec, self.format)
+    }
+
+    pub fn is_fallback(&self) -> bool {
+        self.coded() != self.configured
+    }
 
     pub const fn is_newer_than(&self, other: &Self) -> bool {
         self.generation.wrapping_sub(other.generation).cast_signed() > 0
@@ -93,6 +103,10 @@ impl StreamDescription {
             out.extend_from_slice(&light.max_cll_nits.to_be_bytes());
             out.extend_from_slice(&light.max_fall_nits.to_be_bytes());
         }
+
+        out.push(codec_tag(self.configured.codec));
+        out.push(chroma_tag(self.configured.format.chroma));
+        out.push(self.configured.format.depth.bits());
     }
 
     pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, ProtocolError> {
@@ -138,11 +152,20 @@ impl StreamDescription {
             })
         };
 
+        let configured = CodecFormat::new(
+            read_codec(reader.u8()?)?,
+            PixelFormat {
+                chroma: read_chroma(reader.u8()?)?,
+                depth: read_depth(reader.u8()?)?,
+            },
+        );
+
         Ok(Self {
             generation,
             codec,
             resolution,
             format,
+            configured,
             color: ColorSpace {
                 primaries,
                 transfer,
@@ -346,6 +369,13 @@ pub(crate) mod tests {
                     }),
                 },
             },
+            configured: CodecFormat::new(
+                Codec::Hevc,
+                PixelFormat {
+                    chroma: ChromaSubsampling::Yuv444,
+                    depth: BitDepth::Twelve,
+                },
+            ),
         }
     }
 
@@ -356,6 +386,7 @@ pub(crate) mod tests {
             resolution: Resolution::new(1920, 1080),
             format: PixelFormat::default(),
             color: ColorSpace::default(),
+            configured: CodecFormat::new(Codec::Hevc, PixelFormat::default()),
         }
     }
 
@@ -433,6 +464,29 @@ pub(crate) mod tests {
         );
         assert_eq!(corrupt(18, 2), Err(ProtocolError::UnknownColorRange(2)));
         assert_eq!(corrupt(27, 4), Err(ProtocolError::UnknownHdrFlags(4)));
+    }
+
+    #[test]
+    fn the_configured_format_travels_last_and_is_validated() {
+        let mut out = Vec::new();
+        sdr_description().write(&mut out);
+        let configured_at = out.len() - CONFIGURED_LEN;
+        let corrupt = |offset: usize, value: u8| {
+            let mut bytes = out.clone();
+            bytes[configured_at + offset] = value;
+            StreamDescription::read(&mut Reader::new(&bytes, 0))
+        };
+
+        assert_eq!(out[configured_at..], [1, 1, 8]);
+        assert_eq!(corrupt(0, 5), Err(ProtocolError::UnknownCodec(5)));
+        assert_eq!(corrupt(1, 5), Err(ProtocolError::UnknownChroma(5)));
+        assert_eq!(corrupt(2, 9), Err(ProtocolError::UnknownBitDepth(9)));
+    }
+
+    #[test]
+    fn a_description_is_a_fallback_when_it_differs_from_the_configured_format() {
+        assert!(!sdr_description().is_fallback());
+        assert!(hdr_description().is_fallback());
     }
 
     #[test]

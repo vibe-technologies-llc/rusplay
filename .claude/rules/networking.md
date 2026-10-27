@@ -84,10 +84,27 @@ paths:
   primaries), range byte, reference white and peak as u32 nits, then a flags byte (bit 0
   mastering display, bit 1 content light; other bits are `UnknownHdrFlags`) and, when flagged,
   the mastering primaries in the same form plus max and min luminance as u32 0.0001 cd/m²
-  units, and MaxCLL/MaxFALL as u16. Variable length, at most 74 bytes with its tag
-  (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
+  units, and MaxCLL/MaxFALL as u16, and last the `configured` `CodecFormat` (codec tag, chroma
+  tag, depth bits): the host's configured format, so `is_fallback` tells the client when the
+  stream is a negotiated fallback (format negotiation, below). Variable length, at most 77 bytes
+  with its tag (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
   through `Chromaticities::new`, luminance through `Luminance::from_units`), each failure its own
   `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
+- `ControlMessage::Hello { version, formats }` (tag 0, 7 bytes): the u16 protocol version, then
+  a big-endian u32 `FormatSet` (`rusplay-core`), one bit per `CodecFormat` at
+  `codec * 9 + chroma * 3 + depth` (codec H.264, HEVC, AV1; chroma 4:2:0, 4:2:2, 4:4:4; depth 8,
+  10, 12). Bits 27 and up are `UnknownFormatBits`. The client sends what its decoder decodes,
+  the host answers with what its encoder produces.
+- Format negotiation: the host picks
+  `FormatSet::closest_to(configured)` from encodable ∩ decodable, where `configured` is the
+  host's `video.codec` and `video.pixel_format`. The fallback order is lexicographic: chroma
+  first, then depth, then codec. On the chroma and depth axes the configured value comes first,
+  then higher values nearest first (nothing asked for is lost), then lower values nearest first;
+  codecs are the configured one, then AV1, HEVC, H.264. So pixel format, which the user sees,
+  outranks the codec, and HEVC 4:2:2 8-bit on a radeonsi host (HEVC 4:2:0 only) becomes HEVC 4:2:0
+  8-bit. An empty intersection is `NoCommonFormat { encodable, decodable }` on both ends: the host
+  still answers the `Hello` with its set before its `Goodbye`, and the client computes the same
+  empty intersection from it. The order is unit tested in `rusplay-core/src/format.rs`.
 - The control channel (hello, keyframe requests, loss reports, bitrate hints, keepalives,
   stream format, clock ping and pong, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.

@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_host::{HostError, HostStats, HostStream};
+use rusplay_host::{HostError, HostStats, HostStream, NegotiatedFormat};
 
 const POLL: Duration = Duration::from_millis(100);
 
@@ -77,11 +77,27 @@ pub fn summary(stats: &HostStats) -> String {
     line
 }
 
+fn format_line(format: NegotiatedFormat) -> String {
+    if format.is_fallback() {
+        format!(
+            "streaming {} instead of the configured {}, which the encoder or client lacks",
+            format.chosen, format.configured
+        )
+    } else {
+        format!("streaming {}", format.chosen)
+    }
+}
+
 pub fn wait_logging(stream: HostStream, interval_ms: u32) -> Result<(), HostError> {
     let mut schedule = Schedule::new(interval_ms, Instant::now());
+    let mut format_reported = false;
 
     while !stream.is_finished() {
         thread::sleep(POLL);
+        if !format_reported && let Some(format) = stream.format() {
+            format_reported = true;
+            eprintln!("rusplay-hostd: {}", format_line(format));
+        }
         if schedule.take_due(Instant::now()) {
             eprintln!("rusplay-hostd: stats {}", summary(&stream.stats()));
         }
@@ -96,7 +112,28 @@ pub fn wait_logging(stream: HostStream, interval_ms: u32) -> Result<(), HostErro
 
 #[cfg(test)]
 mod tests {
+    use rusplay_host::CodecFormat;
+
     use super::*;
+
+    #[test]
+    fn a_fallback_names_both_formats() {
+        let mut formats = CodecFormat::all();
+        let configured = formats.next().unwrap();
+        let chosen = formats.next().unwrap();
+
+        let kept = format_line(NegotiatedFormat {
+            configured,
+            chosen: configured,
+        });
+        let fell_back = format_line(NegotiatedFormat { configured, chosen });
+
+        assert_eq!(kept, "streaming h264 4:2:0 8-bit");
+        assert_eq!(
+            fell_back,
+            "streaming h264 4:2:0 10-bit instead of the configured h264 4:2:0 8-bit, which the encoder or client lacks"
+        );
+    }
 
     #[test]
     fn zero_interval_never_comes_due() {

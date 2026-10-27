@@ -584,6 +584,21 @@ fn is_range_extension(profile: Profile) -> bool {
     )
 }
 
+pub(super) fn profile_for(format: PixelFormat) -> Profile {
+    match (format.chroma, format.depth) {
+        (ChromaSubsampling::Yuv420, BitDepth::Eight) => ffi::VAProfile_VAProfileHEVCMain,
+        (ChromaSubsampling::Yuv420, BitDepth::Ten) => ffi::VAProfile_VAProfileHEVCMain10,
+        (ChromaSubsampling::Yuv420, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain12,
+        (ChromaSubsampling::Yuv422, BitDepth::Eight | BitDepth::Ten) => {
+            ffi::VAProfile_VAProfileHEVCMain422_10
+        }
+        (ChromaSubsampling::Yuv422, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain422_12,
+        (ChromaSubsampling::Yuv444, BitDepth::Eight) => ffi::VAProfile_VAProfileHEVCMain444,
+        (ChromaSubsampling::Yuv444, BitDepth::Ten) => ffi::VAProfile_VAProfileHEVCMain444_10,
+        (ChromaSubsampling::Yuv444, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain444_12,
+    }
+}
+
 fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
     let chroma = match sps.chroma_format_idc {
         1 => ChromaSubsampling::Yuv420,
@@ -610,18 +625,7 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         }
     };
 
-    let profile = match (chroma, depth) {
-        (ChromaSubsampling::Yuv420, BitDepth::Eight) => ffi::VAProfile_VAProfileHEVCMain,
-        (ChromaSubsampling::Yuv420, BitDepth::Ten) => ffi::VAProfile_VAProfileHEVCMain10,
-        (ChromaSubsampling::Yuv420, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain12,
-        (ChromaSubsampling::Yuv422, BitDepth::Eight | BitDepth::Ten) => {
-            ffi::VAProfile_VAProfileHEVCMain422_10
-        }
-        (ChromaSubsampling::Yuv422, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain422_12,
-        (ChromaSubsampling::Yuv444, BitDepth::Eight) => ffi::VAProfile_VAProfileHEVCMain444,
-        (ChromaSubsampling::Yuv444, BitDepth::Ten) => ffi::VAProfile_VAProfileHEVCMain444_10,
-        (ChromaSubsampling::Yuv444, BitDepth::Twelve) => ffi::VAProfile_VAProfileHEVCMain444_12,
-    };
+    let profile = profile_for(PixelFormat { chroma, depth });
 
     let visible = sps.visible_rectangle();
     let highest_layer = usize::from(sps.max_sub_layers_minus1);

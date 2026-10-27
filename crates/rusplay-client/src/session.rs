@@ -127,6 +127,7 @@ impl ClientSession {
         open_microphone: impl FnOnce(&AudioConfig) -> Result<Option<Box<dyn AudioInput>>, ClientError>,
     ) -> Result<ClientStream, ClientError> {
         let network = &self.config.network;
+        let decodable = rusplay_decode::capabilities(&self.config.video.decoder)?.formats();
         let transport = Transport::bind(
             SocketAddr::new(bind_address(network.bind_address, host), 0),
             TransportOptions::from(network),
@@ -171,7 +172,14 @@ impl ClientSession {
             counters: Arc::clone(&stream.counters),
         };
         let bitrate = BitrateSettings::from_config(network, self.config.video.bitrate_kbps);
-        let receive = ReceiveStage::new(Arc::clone(&transport), host, network, bitrate, links);
+        let receive = ReceiveStage::new(
+            Arc::clone(&transport),
+            host,
+            decodable,
+            network,
+            bitrate,
+            links,
+        );
         stream.spawn(Stage::Receive, None, move || receive.run())?;
 
         let timeout = Duration::from_millis(u64::from(network.handshake_timeout_ms));

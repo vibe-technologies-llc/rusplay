@@ -2,7 +2,7 @@ use std::{fmt, io, path::PathBuf, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_config::{ConfigError, OutputColorSpace, OutputFormat, PresentMode};
-use rusplay_core::AudioCodec;
+use rusplay_core::{AudioCodec, FormatSet};
 use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
 use rusplay_net::NetError;
@@ -76,6 +76,13 @@ pub enum ClientError {
     VersionMismatch { ours: u16, theirs: u16 },
     #[error("host did not answer the hello within {0:?}")]
     HandshakeTimeout(Duration),
+    #[error(
+        "the host encodes {encodable} and this client decodes {decodable}, with no format in common"
+    )]
+    NoCommonFormat {
+        decodable: FormatSet,
+        encodable: FormatSet,
+    },
     #[error("host ended the session before answering the hello")]
     HandshakeAborted,
     #[error("host never acknowledged the hello")]

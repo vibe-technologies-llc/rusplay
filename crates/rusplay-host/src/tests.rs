@@ -14,7 +14,9 @@ use std::{
 
 use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
 use rusplay_config::{Config, NetworkConfig, RateControl, VaapiConfig, VideoEncoderConfig};
-use rusplay_core::{Codec, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp};
+use rusplay_core::{
+    Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution, Timestamp,
+};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
     Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming,
@@ -64,10 +66,13 @@ fn network() -> NetworkConfig {
 }
 
 fn host_config() -> Config {
-    Config {
+    let mut config = Config {
         network: network(),
         ..Config::default()
-    }
+    };
+    config.video.codec = Codec::Av1;
+
+    config
 }
 
 fn pin() -> Pin {
@@ -160,8 +165,8 @@ fn feed_with_cursor(frames: u32, cursor: Subscriber<CursorUpdate>) -> Arc<Captur
     })
 }
 
-#[derive(Default)]
 struct FakePipeline {
+    format: CodecFormat,
     last: Option<u8>,
     encoded: u32,
     resolution: Option<Resolution>,
@@ -175,7 +180,7 @@ impl FakePipeline {
         self.encoded += 1;
 
         EncodedFrame {
-            codec: Codec::Av1,
+            codec: self.format.codec,
             timestamp,
             keyframe,
             data: vec![fill; FRAME_BYTES],
@@ -214,32 +219,54 @@ impl VideoPipeline for FakePipeline {
 
     fn stream_format(&self) -> Option<StreamFormat> {
         self.resolution.map(|resolution| StreamFormat {
-            codec: Codec::Av1,
+            codec: self.format.codec,
             resolution: self.stream.unwrap_or(resolution),
-            format: PixelFormat::default(),
+            format: self.format.format,
             color: ColorSpace::default(),
         })
     }
 }
 
-fn fake_factory(bitrate: &Arc<AtomicU32>) -> PipelineFactory {
-    let bitrate = Arc::clone(bitrate);
-    Box::new(move || {
+struct FakeFactory {
+    bitrate: Arc<AtomicU32>,
+    stream: Option<Resolution>,
+    encodable: FormatSet,
+}
+
+impl PipelineFactory for FakeFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        Ok(self.encodable)
+    }
+
+    fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
         Ok(Box::new(FakePipeline {
-            bitrate,
-            ..FakePipeline::default()
-        }) as Box<dyn VideoPipeline>)
+            format,
+            last: None,
+            encoded: 0,
+            resolution: None,
+            stream: self.stream,
+            bitrate: self.bitrate,
+        }))
+    }
+}
+
+fn encoding_factory(bitrate: &Arc<AtomicU32>, encodable: FormatSet) -> Box<dyn PipelineFactory> {
+    Box::new(FakeFactory {
+        bitrate: Arc::clone(bitrate),
+        stream: None,
+        encodable,
     })
 }
 
-fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> PipelineFactory {
-    let bitrate = Arc::clone(bitrate);
-    Box::new(move || {
-        Ok(Box::new(FakePipeline {
-            bitrate,
-            stream: Some(stream),
-            ..FakePipeline::default()
-        }) as Box<dyn VideoPipeline>)
+fn fake_factory(bitrate: &Arc<AtomicU32>) -> Box<dyn PipelineFactory> {
+    encoding_factory(bitrate, FormatSet::ALL)
+}
+
+fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> Box<dyn PipelineFactory> {
+    Box::new(FakeFactory {
+        bitrate: Arc::clone(bitrate),
+        stream: Some(stream),
+        encodable: FormatSet::ALL,
     })
 }
 
@@ -334,8 +361,13 @@ impl TestClient {
     }
 
     fn hello(&mut self) {
+        self.hello_decoding(FormatSet::ALL);
+    }
+
+    fn hello_decoding(&mut self, formats: FormatSet) {
         self.send(ControlMessage::Hello {
             version: ProtocolVersion::CURRENT,
+            formats,
         });
     }
 
@@ -478,7 +510,7 @@ impl Fixture {
         &self,
         pin: Option<Pin>,
         feed: Arc<CaptureFeed>,
-        factory: PipelineFactory,
+        factory: Box<dyn PipelineFactory>,
     ) -> thread::JoinHandle<Result<(Admission, HostStream), HostError>> {
         let host = Arc::clone(&self.host);
         thread::spawn(move || {
@@ -602,6 +634,95 @@ fn the_stream_format_is_announced_before_the_first_frame_and_again_on_a_resize()
     assert!(second.is_newer_than(&first));
     assert!(client.frames[3].keyframe);
     stream.stop().unwrap();
+}
+
+fn formats_of(codec: Codec) -> FormatSet {
+    CodecFormat::all()
+        .filter(|format| format.codec == codec)
+        .collect()
+}
+
+#[test]
+fn the_host_falls_back_to_what_the_client_decodes_and_says_so() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let encodable: FormatSet = formats_of(Codec::Av1)
+        .iter()
+        .chain(formats_of(Codec::Hevc).iter())
+        .collect();
+    let serving = fixture.serve(Some(pin()), feed(3), encoding_factory(&bitrate, encodable));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello_decoding(formats_of(Codec::Hevc));
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let complete =
+        client.pump_until(|client| !client.frames.is_empty() && !client.formats.is_empty());
+    let negotiated = stream.format();
+    stream.stop().unwrap();
+
+    let configured = CodecFormat::new(Codec::Av1, PixelFormat::default());
+    let chosen = CodecFormat::new(Codec::Hevc, PixelFormat::default());
+    let (_, announced) = client.formats[0];
+    assert!(complete);
+    assert!(client.has(ControlMessage::Hello {
+        version: ProtocolVersion::CURRENT,
+        formats: encodable,
+    }));
+    assert_eq!(announced.coded(), chosen);
+    assert_eq!(announced.configured, configured);
+    assert!(announced.is_fallback());
+    assert_eq!(
+        negotiated.map(|format| (format.configured, format.chosen)),
+        Some((configured, chosen))
+    );
+    assert!(negotiated.is_some_and(|format| format.is_fallback()));
+}
+
+#[test]
+fn the_configured_format_is_kept_when_the_client_decodes_it() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let complete = client.pump_until(|client| !client.formats.is_empty());
+    stream.stop().unwrap();
+
+    let (_, announced) = client.formats[0];
+    assert!(complete);
+    assert!(!announced.is_fallback());
+    assert_eq!(
+        announced.coded(),
+        CodecFormat::new(Codec::Av1, PixelFormat::default())
+    );
+}
+
+#[test]
+fn no_common_format_ends_the_session_after_telling_the_client_what_the_host_encodes() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let encodable = formats_of(Codec::Hevc);
+    let serving = fixture.serve(Some(pin()), feed(3), encoding_factory(&bitrate, encodable));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello_decoding(formats_of(Codec::Av1));
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let told = client.pump_until(|client| client.has(ControlMessage::Goodbye));
+
+    assert!(told);
+    assert!(client.has(ControlMessage::Hello {
+        version: ProtocolVersion::CURRENT,
+        formats: encodable,
+    }));
+    assert_eq!(client.frames, []);
+    assert!(stream.format().is_none());
+    assert!(matches!(
+        wait_for_end(stream),
+        Err(HostError::NoCommonFormat { encodable: e, decodable: d })
+            if e == encodable && d == formats_of(Codec::Av1)
+    ));
 }
 
 #[test]

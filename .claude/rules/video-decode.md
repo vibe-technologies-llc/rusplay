@@ -13,6 +13,16 @@ paths:
   `CodecUnsupported` when the backend cannot decode the codec. The backend types
   (`VaapiDecoder`, `NvdecDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
   decoder lives on the thread that created it.
+- `rusplay_decode::capabilities(&VideoDecoderConfig)` returns `Capabilities` (backend and a
+  `FormatSet`), the formats the client announces in its `Hello`. Software: every AV1 chroma and
+  depth, nothing else. VAAPI (`src/vaapi/capabilities.rs`) opens the device and keeps a format
+  when its profile has a VLD entrypoint and the RT format attribute holds that chroma and depth:
+  H.264 High, High10 and High422 (no 4:4:4, no 12-bit), HEVC through the same
+  `hevc::profile_for` the decoder uses, AV1 Profile 0 for 8/10-bit 4:2:0, Profile 1 for 8/10-bit
+  4:4:4 and Profile 2 for 4:2:2 or 12-bit. NVDEC loads the driver, opens `gpu_index` and keeps a
+  format when `cuvidGetDecoderCaps` reports it supported with its output surface in the mask
+  (`format::decodes`, unit tested); a missing library or device is the same specific error as
+  `NvdecDecoder::new`. A backend whose feature is off is `BackendNotCompiled`.
 - The decoder backend and its options are `video.decoder` in `rusplay-config`
   (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
 - `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the

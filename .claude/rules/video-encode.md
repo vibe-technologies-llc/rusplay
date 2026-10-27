@@ -28,6 +28,8 @@ paths:
   on `encoder.gpu_index` and runs the same `Probe` as `open` (`src/nvenc/mod.rs`); x265 asks `x265_api_query` for each depth; x264 and SVT-AV1
   answer from the same `supports` predicates their `open` checks. A backend whose feature is off
   is `BackendNotCompiled`. Tests hold `capabilities` and `open` to the same answer for every pair.
+  `Capabilities::format_set` is the same answer as a `FormatSet`, which the host session
+  intersects with the client's decodable set (`host.md`).
 - Defaults are low latency: no B-frames, no lookahead, one frame in flight, infinite GOP with
   intra refresh, and IDR only on explicit request (`request_keyframe`, driven by loss reports).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.

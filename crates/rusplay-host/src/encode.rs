@@ -6,12 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_core::{EncodedFrame, Timestamp};
+use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Timestamp};
 
 use crate::{
     CaptureFeed, HostError,
     capture::Captured,
     mailbox::{Delivery, Waited},
+    negotiate::NegotiatedFormat,
     outbox::ControlOutbox,
     pipeline::{StreamFormat, VideoPipeline},
     shared::Shared,
@@ -19,8 +20,11 @@ use crate::{
 
 const IDLE_WAKE: Duration = Duration::from_millis(20);
 
-pub(crate) type PipelineFactory =
-    Box<dyn FnOnce() -> Result<Box<dyn VideoPipeline>, HostError> + Send>;
+pub(crate) trait PipelineFactory: Send {
+    fn encodable(&mut self) -> Result<FormatSet, HostError>;
+
+    fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError>;
+}
 
 #[derive(Debug)]
 pub(crate) struct Outgoing {
@@ -36,12 +40,41 @@ pub(crate) struct EncodeLinks {
     pub outbox: Arc<ControlOutbox>,
 }
 
-pub(crate) fn run(factory: PipelineFactory, links: &EncodeLinks) -> Result<(), HostError> {
-    let result =
-        factory().and_then(|mut pipeline| EncodeStage::default().serve(&mut *pipeline, links));
+pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Result<(), HostError> {
+    let result = open_negotiated(factory, links).and_then(|opened| match opened {
+        Some(mut opened) => {
+            EncodeStage::default().serve(&mut *opened.pipeline, opened.negotiated, links)
+        }
+        None => Ok(()),
+    });
     links.shared.stop();
 
     result
+}
+
+struct NegotiatedPipeline {
+    pipeline: Box<dyn VideoPipeline>,
+    negotiated: NegotiatedFormat,
+}
+
+fn open_negotiated(
+    mut factory: Box<dyn PipelineFactory>,
+    links: &EncodeLinks,
+) -> Result<Option<NegotiatedPipeline>, HostError> {
+    let negotiation = &links.shared.negotiation;
+    negotiation.offer(factory.encodable()?);
+
+    loop {
+        if links.shared.stopped() {
+            return Ok(None);
+        }
+        if let Some(negotiated) = negotiation.wait_agreed(IDLE_WAKE) {
+            return Ok(Some(NegotiatedPipeline {
+                pipeline: factory.build(negotiated.chosen)?,
+                negotiated,
+            }));
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -58,6 +91,7 @@ impl EncodeStage {
     fn serve(
         &mut self,
         pipeline: &mut dyn VideoPipeline,
+        negotiated: NegotiatedFormat,
         links: &EncodeLinks,
     ) -> Result<(), HostError> {
         let counters = &links.shared.counters;
@@ -114,7 +148,7 @@ impl EncodeStage {
             let Some(encoded) = encoded else {
                 continue;
             };
-            self.announce(pipeline.stream_format(), links)?;
+            self.announce(pipeline.stream_format(), negotiated.configured, links)?;
             if !self.forward(encoded, captured_micros, links) {
                 return Ok(());
             }
@@ -124,6 +158,7 @@ impl EncodeStage {
     fn announce(
         &mut self,
         format: Option<StreamFormat>,
+        configured: CodecFormat,
         links: &EncodeLinks,
     ) -> Result<(), HostError> {
         let Some(format) = format.filter(|format| self.announced != Some(*format)) else {
@@ -132,7 +167,9 @@ impl EncodeStage {
 
         self.generation = self.generation.wrapping_add(1);
         self.announced = Some(format);
-        links.outbox.announce(format.describe(self.generation))
+        links
+            .outbox
+            .announce(format.describe(self.generation, configured))
     }
 
     fn keyframe_follows(&self, frame: u32) -> bool {

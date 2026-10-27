@@ -13,6 +13,7 @@ mod input;
 mod link;
 mod mailbox;
 mod microphone;
+mod negotiate;
 mod outbox;
 mod pipeline;
 mod portal;
@@ -27,6 +28,7 @@ mod tests;
 mod upload;
 
 pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
+pub use rusplay_core::{CodecFormat, FormatSet};
 pub use rusplay_net::{DiscoveryResponder, NetError, PeerRecord, PeerStore, Pin};
 pub use rusplay_protocol::PeerId;
 
@@ -37,6 +39,7 @@ pub use crate::{
     gpu::Gpu,
     input::{InputFeed, InputTarget},
     microphone::MicrophoneOutputFactory,
+    negotiate::NegotiatedFormat,
     portal::{PortalHost, open_portal},
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},

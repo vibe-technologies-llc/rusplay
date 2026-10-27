@@ -10,6 +10,7 @@ use std::{
 
 use parking_lot::RwLock;
 use rusplay_config::{Config, NetworkConfig};
+use rusplay_core::{CodecFormat, FormatSet};
 use rusplay_net::{
     ControlEvent, NetError, PeerStore, RecvBatch, SessionTakeover, Transport, busy_reply,
 };
@@ -20,6 +21,7 @@ use rusplay_protocol::{
 use crate::{
     HostError,
     accept::{Replay, refresh_peers},
+    negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
 };
@@ -95,6 +97,7 @@ pub(crate) struct ControlLinks {
     pub outbox: Arc<ControlOutbox>,
     pub input: Option<Sender<Vec<u8>>>,
     pub microphone: Option<SyncSender<Vec<u8>>>,
+    pub configured: CodecFormat,
 }
 
 pub(crate) struct ControlStage {
@@ -103,6 +106,7 @@ pub(crate) struct ControlStage {
     links: ControlLinks,
     takeover: SessionTakeover,
     streaming: bool,
+    unanswered_hello: Option<FormatSet>,
     started: Instant,
     last_heard: Instant,
     next_keepalive: Instant,
@@ -119,6 +123,7 @@ impl ControlStage {
             takeover: SessionTakeover::new(links.peer),
             links,
             streaming: false,
+            unanswered_hello: None,
             started: now,
             last_heard: now,
             next_keepalive: now + timing.keepalive_interval,
@@ -169,6 +174,7 @@ impl ControlStage {
             if self.handle(&mut events, now)? == Flow::Ended {
                 return Ok(());
             }
+            self.answer_hello(now)?;
             self.keep_alive(now)?;
 
             self.links.outbox.send_announcement(now)?;
@@ -248,6 +254,28 @@ impl ControlStage {
         Ok(())
     }
 
+    fn resume_after_takeover(
+        &mut self,
+        chosen: CodecFormat,
+        encodable: FormatSet,
+        decodable: FormatSet,
+        now: Instant,
+    ) -> Result<(), HostError> {
+        if !decodable.contains(chosen) {
+            self.say_goodbye();
+            return Err(HostError::NoCommonFormat {
+                encodable,
+                decodable,
+            });
+        }
+
+        self.streaming = true;
+        self.next_keepalive = now + self.timing.keepalive_interval;
+        self.links.outbox.resend_announcement(now)?;
+        self.links.shared.start();
+        Ok(())
+    }
+
     fn switch_client(
         &mut self,
         address: SocketAddr,
@@ -264,6 +292,7 @@ impl ControlStage {
         events.clear();
         self.links.replay = replay;
         self.streaming = false;
+        self.unanswered_hello = None;
         self.started = now;
         self.last_heard = now;
     }
@@ -361,7 +390,7 @@ impl ControlStage {
 
         for event in events.drain(..) {
             match event {
-                ControlEvent::Received(ControlMessage::Hello { version }) => {
+                ControlEvent::Received(ControlMessage::Hello { version, formats }) => {
                     if version != ProtocolVersion::CURRENT {
                         self.say_goodbye();
                         return Err(HostError::VersionMismatch {
@@ -369,18 +398,7 @@ impl ControlStage {
                             theirs: version.0,
                         });
                     }
-                    self.send(
-                        ControlMessage::Hello {
-                            version: ProtocolVersion::CURRENT,
-                        },
-                        now,
-                    )?;
-                    if !self.streaming {
-                        self.streaming = true;
-                        self.next_keepalive = now + self.timing.keepalive_interval;
-                        self.links.outbox.resend_announcement(now)?;
-                        shared.start();
-                    }
+                    self.unanswered_hello = Some(formats);
                 }
                 ControlEvent::Received(ControlMessage::RequestKeyframe { frame }) => {
                     shared.mailbox.request_keyframe(frame);
@@ -424,6 +442,45 @@ impl ControlStage {
         }
 
         Ok(flow)
+    }
+
+    fn answer_hello(&mut self, now: Instant) -> Result<(), HostError> {
+        let shared = Arc::clone(&self.links.shared);
+        let (Some(decodable), Some(encodable)) =
+            (self.unanswered_hello, shared.negotiation.encodable())
+        else {
+            return Ok(());
+        };
+        self.unanswered_hello = None;
+
+        self.send(
+            ControlMessage::Hello {
+                version: ProtocolVersion::CURRENT,
+                formats: encodable,
+            },
+            now,
+        )?;
+        if self.streaming {
+            return Ok(());
+        }
+
+        if let Some(agreed) = shared.negotiation.agreed() {
+            return self.resume_after_takeover(agreed.chosen, encodable, decodable, now);
+        }
+
+        match negotiate(self.links.configured, encodable, decodable) {
+            Ok(negotiated) => {
+                shared.negotiation.agree(negotiated);
+                self.streaming = true;
+                self.next_keepalive = now + self.timing.keepalive_interval;
+                shared.start();
+                Ok(())
+            }
+            Err(error) => {
+                self.say_goodbye();
+                Err(error)
+            }
+        }
     }
 
     fn take_hint(&self, kbps: u32) {

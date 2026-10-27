@@ -1,5 +1,6 @@
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod annexb;
+mod capabilities;
 mod error;
 #[cfg(all(test, any(feature = "vaapi", feature = "nvdec")))]
 #[path = "../tests/common/mod.rs"]
@@ -30,6 +31,7 @@ pub use crate::software::Rav1dDecoder;
 #[cfg(feature = "vaapi")]
 pub use crate::vaapi::VaapiDecoder;
 pub use crate::{
+    capabilities::{Capabilities, capabilities},
     error::{BitstreamUnit, CudaCall, CudaStatus, DecodeError, VaCall, VaStatus},
     frame::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,

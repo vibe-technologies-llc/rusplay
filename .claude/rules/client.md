@@ -12,12 +12,17 @@ paths:
   `Credentials::Peer` runs `reconnect_as_client`), installs the session keys and only then starts
   the stages, so nothing streams unsealed. It returns once the host has answered the client's
   `Hello`, or fails with `HandshakeTimeout` after `network.handshake_timeout_ms`,
-  `HelloUndeliverable` or `HandshakeAborted`. `probe` only opens the configured decoders.
+  `HelloUndeliverable`, `HandshakeAborted` or `NoCommonFormat`. `probe` only opens the configured
+  decoders. Before binding, `connect` asks `rusplay_decode::capabilities` for `video.decoder`'s
+  formats; the `Hello` carries them, and a host `Hello` whose encodable set shares none of them
+  ends the stream with `NoCommonFormat { decodable, encodable }`.
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. Before the first video frame, and again whenever any of it changes, the host
   sends `ControlMessage::StreamFormat` with a newer generation; the client decodes and labels
-  video only from it, never from its own `video.codec` or `video.color`. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
+  video only from it, never from its own `video.codec` or `video.color`. Its `configured` is the
+  host's configured format, so `ClientStream::stream_format()` and `is_fallback` show a
+  negotiated downgrade instead of hiding it. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
   The host's periodic `Keepalive` only needs the channel's acknowledgement, which every received
   message gets; `rusplay-host` (`.claude/rules/host.md`) is the host side of this contract.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
@@ -222,7 +227,8 @@ paths:
   `StateRecord`s that `held_state_snapshots_reach_the_host` looks for); the test client config
   turns `input.gamepads` off so the tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
-  (`tests/common`): PIN pairing, the `Hello` exchange followed by a `StreamFormat`
+  (`tests/common`): PIN pairing, the `Hello` exchange (`HostOptions::encodable` is the set the
+  test host answers with; an HEVC-only one checks `NoCommonFormat`) followed by a `StreamFormat`
   (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names
   H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
