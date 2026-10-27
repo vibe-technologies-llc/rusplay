@@ -1,4 +1,5 @@
 mod form;
+mod role;
 mod schema;
 mod view;
 

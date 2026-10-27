@@ -126,8 +126,15 @@ paths:
   every visible row, collects all type errors, and only when there are none runs
   `Config::validate`, whose `ConfigError::field()` names the row to mark. A rejected save jumps to
   the section of the first marked row.
-- `Save` writes `client.toml`; `Save as host config` writes `host.toml` from the same form, which
-  is the file `rusplay-hostd` discovers. Both go through `Config::save` (validate, then write a
-  sibling temporary file and rename it over the target).
+- The page edits one config role at a time, chosen by the `Editing` tabs above the fields
+  (`settings/role.rs`): `client.toml`, which the app itself loads, or `host.toml`, which
+  `rusplay-hostd` discovers. Each role has its own baseline: the first visit to the host tab reads
+  `host.toml` (defaults when it is missing, an error notice and no switch when it is malformed),
+  never the client values. The inactive role's form, saved config and unsaved flag are parked in
+  `SettingsView::parked`, so switching keeps unsaved edits and the tab names which role has them.
+  `Save` and `Revert` act on the active role only. Both go through `Config::save` (validate, then
+  write a sibling temporary file and rename it over the target). The client config is read again
+  at connect, so a client save takes effect without a restart; a host save does only once the
+  daemon restarts.
 - gpui's own transitive dependencies are C-backed on Linux (`xkbcommon`, `freetype` and
   `fontconfig` through `zed-font-kit`); that is accepted for gpui, see `dependencies.md`.
