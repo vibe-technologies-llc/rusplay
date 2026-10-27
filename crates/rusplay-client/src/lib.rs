@@ -16,7 +16,9 @@ mod testing;
 #[cfg(feature = "window")]
 mod window;
 
-pub use rusplay_net::{PeerRecord, PeerSecret, Pin};
+pub use rusplay_net::{
+    DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, PeerRecord, PeerSecret, Pin,
+};
 pub use rusplay_protocol::{CursorImage, StreamDescription};
 pub use rusplay_scale::{ColorVolume, OutputLight};
 

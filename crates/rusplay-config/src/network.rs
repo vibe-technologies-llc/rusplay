@@ -28,6 +28,7 @@ pub struct NetworkConfig {
     pub control_max_retransmits: u8,
     pub discovery_port: u16,
     pub discovery_group: Ipv4Addr,
+    pub discovery_scan_ms: u32,
     pub pairing_pin_digits: u8,
     pub pairing_max_attempts: u8,
     pub pairing_timeout_ms: u32,
@@ -55,6 +56,7 @@ impl Default for NetworkConfig {
             control_max_retransmits: 8,
             discovery_port: 47_801,
             discovery_group: Ipv4Addr::new(239, 255, 47, 80),
+            discovery_scan_ms: 1_000,
             pairing_pin_digits: 6,
             pairing_max_attempts: 3,
             pairing_timeout_ms: 120_000,
@@ -96,6 +98,10 @@ impl NetworkConfig {
 
         if self.discovery_port == 0 {
             return Err(ConfigError::ZeroDiscoveryPort);
+        }
+
+        if self.discovery_scan_ms == 0 {
+            return Err(ConfigError::ZeroDiscoveryScan);
         }
 
         if !self.discovery_group.is_multicast() {
@@ -240,6 +246,19 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::ZeroControlRetransmit)
+        ));
+    }
+
+    #[test]
+    fn zero_discovery_scan_is_rejected() {
+        let config = NetworkConfig {
+            discovery_scan_ms: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroDiscoveryScan)
         ));
     }
 

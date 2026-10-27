@@ -61,6 +61,8 @@ pub enum ConfigError {
     ZeroControlRetransmit,
     #[error("discovery port must be greater than zero")]
     ZeroDiscoveryPort,
+    #[error("discovery scan time must be greater than zero")]
+    ZeroDiscoveryScan,
     #[error("discovery group {0} is not a multicast address")]
     DiscoveryGroupNotMulticast(Ipv4Addr),
     #[error("pairing pin length {0} is outside 4..=12 digits")]
@@ -158,6 +160,7 @@ impl ConfigError {
             Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
             Self::ZeroControlRetransmit => Some("network.control_retransmit_ms"),
             Self::ZeroDiscoveryPort => Some("network.discovery_port"),
+            Self::ZeroDiscoveryScan => Some("network.discovery_scan_ms"),
             Self::DiscoveryGroupNotMulticast(_) => Some("network.discovery_group"),
             Self::PinDigitsOutOfRange(_) => Some("network.pairing_pin_digits"),
             Self::ZeroPairingAttempts => Some("network.pairing_max_attempts"),

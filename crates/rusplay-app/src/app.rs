@@ -75,7 +75,8 @@ impl RusplayApp {
 
         let mut subscriptions = Vec::new();
 
-        let hosts = cx.new(|cx| HostsView::new(config.network.port, cx));
+        let hosts = cx.new(|cx| HostsView::new(config.network.port, environment.clone(), cx));
+        hosts.update(cx, HostsView::refresh);
         subscriptions.push(cx.subscribe(&hosts, |this, _, event: &NoticeRaised, cx| {
             this.notice = Some(event.0.clone());
             cx.notify();
@@ -217,6 +218,9 @@ impl RusplayApp {
                 option_button(("page", position), page.title(), self.page == page).on_click(
                     cx.listener(move |this, _, _, cx| {
                         this.page = page;
+                        if page == Page::Hosts {
+                            this.hosts.update(cx, HostsView::refresh);
+                        }
                         cx.notify();
                     }),
                 ),

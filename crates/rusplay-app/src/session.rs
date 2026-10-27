@@ -1,10 +1,10 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use gpui::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use rusplay_client::{
-    ClientError, ClientSession, ClientStream, Credentials, Gpu, StreamWindow, WaylandTarget,
-    WindowSink,
+    ClientError, ClientSession, ClientStream, Credentials, DiscoveredHost, DiscoveryBrowser,
+    DiscoveryOptions, Gpu, StreamWindow, WaylandTarget, WindowSink,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
 use thiserror::Error;
@@ -23,6 +23,16 @@ pub fn load_client_config(environment: &ConfigEnvironment) -> Result<Config, Con
     let path = environment.config_path(ConfigRole::Client)?;
 
     Config::load_or_default(&path)
+}
+
+pub fn discover(environment: &ConfigEnvironment) -> Result<Vec<DiscoveredHost>, SessionError> {
+    let config = load_client_config(environment)?;
+    let scan_time = Duration::from_millis(u64::from(config.network.discovery_scan_ms));
+
+    let browser = DiscoveryBrowser::with_options(DiscoveryOptions::from(&config.network))
+        .map_err(ClientError::from)?;
+
+    Ok(browser.scan(scan_time).map_err(ClientError::from)?)
 }
 
 pub fn attach_window(window: &Window, config: &Config) -> Result<StreamWindow, SessionError> {

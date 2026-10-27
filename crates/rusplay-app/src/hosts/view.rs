@@ -1,11 +1,13 @@
 use std::net::SocketAddr;
 
-use gpui::{Context, Entity, EventEmitter, Subscription, Window, div, prelude::*, px};
-use rusplay_client::{Credentials, PeerRecord, Pin};
+use gpui::{Context, Entity, EventEmitter, Subscription, Task, Window, div, prelude::*, px};
+use rusplay_client::{Credentials, DiscoveredHost, PeerRecord, Pin};
+use rusplay_config::ConfigEnvironment;
 
 use crate::{
-    hosts::model::{HostEntry, HostList},
-    notice::{Notice, NoticeRaised},
+    hosts::model::{HostEntry, HostList, HostOrigin},
+    notice::{Notice, NoticeRaised, error_chain},
+    session::{self, SessionError},
     theme,
     widgets::{
         controls::{ButtonStyle, button},
@@ -21,6 +23,8 @@ pub struct ConnectRequested {
 
 pub struct HostsView {
     hosts: HostList,
+    environment: ConfigEnvironment,
+    scan: Option<Task<()>>,
     name_input: Entity<TextField>,
     address_input: Entity<TextField>,
     pin_input: Entity<TextField>,
@@ -31,7 +35,7 @@ impl EventEmitter<NoticeRaised> for HostsView {}
 impl EventEmitter<ConnectRequested> for HostsView {}
 
 impl HostsView {
-    pub fn new(default_port: u16, cx: &mut Context<Self>) -> Self {
+    pub fn new(default_port: u16, environment: ConfigEnvironment, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| TextField::new("", "Name (optional)", cx));
         let address_input = cx.new(|cx| TextField::new("", "Address, e.g. 192.168.1.20", cx));
         let pin_input = cx.new(|cx| TextField::new("", "PIN shown by the host", cx));
@@ -50,6 +54,8 @@ impl HostsView {
 
         Self {
             hosts: HostList::new(default_port),
+            environment,
+            scan: None,
             name_input,
             address_input,
             pin_input,
@@ -63,6 +69,38 @@ impl HostsView {
                 .update(cx, |input, cx| input.set_text("", cx));
             cx.notify();
         }
+    }
+
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.scan.is_some() {
+            return;
+        }
+
+        let environment = self.environment.clone();
+        let scanning = cx.background_spawn(async move { session::discover(&environment) });
+        self.scan = Some(cx.spawn(async move |this, cx| {
+            let result = scanning.await;
+            this.update(cx, |this, cx| this.scanned(result, cx)).ok();
+        }));
+        cx.notify();
+    }
+
+    fn scanned(
+        &mut self,
+        result: Result<Vec<DiscoveredHost>, SessionError>,
+        cx: &mut Context<Self>,
+    ) {
+        self.scan = None;
+
+        match result {
+            Ok(found) => self.hosts.merge_discovered(&found),
+            Err(error) => notify(
+                Notice::Failure(format!("Could not scan for hosts: {}", error_chain(&error))),
+                cx,
+            ),
+        }
+
+        cx.notify();
     }
 
     fn add_host(&mut self, cx: &mut Context<Self>) {
@@ -158,7 +196,7 @@ impl HostsView {
                         div()
                             .text_xs()
                             .text_color(theme::text_muted())
-                            .child(host.address.to_string()),
+                            .child(format!("{} - {}", host.address, availability(host))),
                     ),
             )
             .child(
@@ -179,12 +217,13 @@ impl Render for HostsView {
         let selected = self.hosts.selected();
         let can_connect = selected.is_some();
         let paired = selected.is_some_and(|host| host.peer.is_some());
+        let scanning = self.scan.is_some();
 
         let list = if entries.is_empty() {
             div()
                 .py_6()
                 .text_color(theme::text_muted())
-                .child("No hosts yet. Add one by address below; discovery will list hosts here.")
+                .child("No hosts found. Refresh to scan the network again, or add one by address below.")
                 .into_any_element()
         } else {
             let mut rows = Vec::with_capacity(entries.len());
@@ -206,7 +245,22 @@ impl Render for HostsView {
             .gap_4()
             .p_6()
             .size_full()
-            .child(div().text_xl().text_color(theme::text()).child("Hosts"))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_xl().text_color(theme::text()).child("Hosts"))
+                    .child(
+                        button(
+                            "refresh-hosts",
+                            if scanning { "Scanning..." } else { "Refresh" },
+                            ButtonStyle::Secondary,
+                            !scanning,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    ),
+            )
             .child(list)
             .child(
                 div()
@@ -243,6 +297,14 @@ impl Render for HostsView {
                             .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
                     ),
             )
+    }
+}
+
+const fn availability(host: &HostEntry) -> &'static str {
+    match (host.online, host.origin) {
+        (true, HostOrigin::Discovered) => "found on the network",
+        (true, HostOrigin::Added) => "online",
+        (false, _) => "not seen",
     }
 }
 

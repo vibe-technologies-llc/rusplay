@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use rusplay_client::PeerRecord;
+use rusplay_client::{DiscoveredHost, PeerRecord};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -11,11 +11,19 @@ pub enum HostError {
     Duplicate { address: SocketAddr },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOrigin {
+    Added,
+    Discovered,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostEntry {
     pub name: String,
     pub address: SocketAddr,
     pub peer: Option<PeerRecord>,
+    pub origin: HostOrigin,
+    pub online: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +86,8 @@ impl HostList {
             name,
             address,
             peer: None,
+            origin: HostOrigin::Added,
+            online: false,
         });
         let index = self.entries.len() - 1;
         self.selected = Some(index);
@@ -99,9 +109,80 @@ impl HostList {
         {
             Some(entry) => {
                 entry.peer = Some(peer);
+                entry.origin = HostOrigin::Added;
                 true
             }
             None => false,
+        }
+    }
+
+    pub fn merge_discovered(&mut self, found: &[DiscoveredHost]) {
+        for entry in &mut self.entries {
+            entry.online = false;
+        }
+
+        let mut unmatched = Vec::new();
+        for host in found {
+            match self
+                .entries
+                .iter_mut()
+                .find(|entry| entry.address == host.address)
+            {
+                Some(entry) => {
+                    entry.online = true;
+                    if entry.origin == HostOrigin::Discovered {
+                        entry.name.clone_from(&host.name);
+                    }
+                }
+                None => unmatched.push(host),
+            }
+        }
+
+        let mut new_hosts = Vec::new();
+        for host in &unmatched {
+            if self.move_saved_host(host, &unmatched) {
+                continue;
+            }
+            new_hosts.push(HostEntry {
+                name: host.name.clone(),
+                address: host.address,
+                peer: None,
+                origin: HostOrigin::Discovered,
+                online: true,
+            });
+        }
+
+        let selected_address = self.selected().map(|entry| entry.address);
+        self.entries
+            .retain(|entry| entry.online || entry.origin == HostOrigin::Added);
+        self.entries.extend(new_hosts);
+        self.selected = selected_address.and_then(|address| {
+            self.entries
+                .iter()
+                .position(|entry| entry.address == address)
+        });
+    }
+
+    fn move_saved_host(&mut self, host: &DiscoveredHost, unmatched: &[&DiscoveredHost]) -> bool {
+        let announced_once = unmatched
+            .iter()
+            .filter(|other| other.name == host.name)
+            .count()
+            == 1;
+        if !announced_once {
+            return false;
+        }
+
+        let mut candidates = self.entries.iter_mut().filter(|entry| {
+            entry.origin == HostOrigin::Added && !entry.online && entry.name == host.name
+        });
+        match (candidates.next(), candidates.next()) {
+            (Some(entry), None) => {
+                entry.address = host.address;
+                entry.online = true;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -217,6 +298,102 @@ mod tests {
 
         assert_eq!(hosts.entries()[0].peer, None);
         assert_eq!(hosts.entries()[1].peer, Some(record));
+    }
+
+    fn found(name: &str, address: &str) -> DiscoveredHost {
+        DiscoveredHost {
+            address: address.parse().unwrap(),
+            name: name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn discovered_hosts_are_listed_once_and_marked_online() {
+        let mut hosts = list();
+
+        hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
+        hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(hosts.entries()[0].origin, HostOrigin::Discovered);
+        assert!(hosts.entries()[0].online);
+    }
+
+    #[test]
+    fn a_discovered_host_matching_a_saved_address_keeps_the_saved_name() {
+        let mut hosts = list();
+        hosts.add("Living room", "10.0.0.2").unwrap();
+
+        hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(hosts.entries()[0].name, "Living room");
+        assert_eq!(hosts.entries()[0].origin, HostOrigin::Added);
+        assert!(hosts.entries()[0].online);
+    }
+
+    #[test]
+    fn a_saved_host_that_changed_address_is_matched_by_its_name() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+
+        hosts.merge_discovered(&[found("desk", "10.0.0.9:47800")]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.9:47800".parse().unwrap()
+        );
+        assert_eq!(
+            hosts.selected().unwrap().address,
+            hosts.entries()[0].address
+        );
+    }
+
+    #[test]
+    fn ambiguous_names_are_not_matched_by_name() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+
+        hosts.merge_discovered(&[
+            found("desk", "10.0.0.8:47800"),
+            found("desk", "10.0.0.9:47800"),
+        ]);
+
+        assert_eq!(hosts.entries().len(), 3);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.2:47800".parse().unwrap()
+        );
+        assert!(!hosts.entries()[0].online);
+    }
+
+    #[test]
+    fn hosts_that_vanish_are_dropped_unless_saved() {
+        let mut hosts = list();
+        hosts.add("saved", "10.0.0.1").unwrap();
+        hosts.merge_discovered(&[found("gone", "10.0.0.2:47800")]);
+        hosts.select(1);
+
+        hosts.merge_discovered(&[]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(hosts.entries()[0].name, "saved");
+        assert!(!hosts.entries()[0].online);
+        assert_eq!(hosts.selected(), None);
+    }
+
+    #[test]
+    fn pairing_a_discovered_host_saves_it() {
+        let mut hosts = list();
+        hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
+        let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
+
+        hosts.remember_peer("10.0.0.2:47800".parse().unwrap(), record);
+        hosts.merge_discovered(&[]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(hosts.entries()[0].origin, HostOrigin::Added);
     }
 
     #[test]

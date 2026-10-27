@@ -106,8 +106,9 @@ paths:
   `network.discovery_group`, and answers each query by unicast to its sender. `handle_next`
   serves one datagram with a timeout and is meant to run in a loop on its own thread.
   `DiscoveryBrowser` (client) sends the query to the limited broadcast address and the group,
-  repeats it three times over the scan window, and returns the hosts whose announce echoed its
-  nonce, deduplicated by address. Tests aim it at loopback addresses instead of broadcast.
+  repeats it three times over the scan window (`network.discovery_scan_ms`, default 1000), and
+  returns the hosts whose announce echoed its nonce, deduplicated by address. Tests aim it at
+  loopback addresses instead of broadcast.
 - Discovery is IPv4 only. Limited broadcast leaves through the default-route interface only and
   the multicast group has TTL 1, so a host on another VLAN or a second interface is not found;
   entering an address by hand always works.
