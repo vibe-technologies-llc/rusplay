@@ -201,6 +201,14 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   second constraint on one pointer is a fatal protocol error for the whole connection), and
   releasing destroys it. `engage` and `release` can also be called from the app; they run on the
   capture thread within one poll interval.
+- Engaging also creates a `zwp_keyboard_shortcuts_inhibitor_v1` on the surface and seat when
+  `input.inhibit_shortcuts` (default on) and `input.keyboard` are set and the compositor offers
+  `zwp_keyboard_shortcuts_inhibit_manager_v1`, so Super, Alt+Tab and similar reach the host.
+  Releasing destroys it (one inhibitor per surface and seat: a second is a protocol error). The
+  compositor's `inactive` event means the user took its shortcuts back through the compositor's
+  own escape combo, and the capture treats it as a release; clicking or the release chord engages
+  again with a fresh inhibitor. The compositor may keep that escape combo, so the release chord
+  stays the documented way out.
 - The local cursor is hidden while engaged, by the capture itself, since gpui offers no hidden
   cursor style: on engage and on every pointer enter while engaged it calls
   `wl_pointer.set_cursor(enter serial, null)` on its own pointer object (the cursor belongs to the

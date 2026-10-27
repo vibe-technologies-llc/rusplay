@@ -38,6 +38,7 @@ pub struct InputConfig {
     pub pointer_sensitivity: f32,
     pub gamepad_deadzone: f32,
     pub release_chord: ReleaseChord,
+    pub inhibit_shortcuts: bool,
     pub rumble_max_ms: u16,
     pub resend_delay_ms: u16,
     pub snapshot_interval_ms: u16,
@@ -55,6 +56,7 @@ impl Default for InputConfig {
             pointer_sensitivity: 1.0,
             gamepad_deadzone: 0.05,
             release_chord: ReleaseChord::default(),
+            inhibit_shortcuts: true,
             rumble_max_ms: 5000,
             resend_delay_ms: 8,
             snapshot_interval_ms: 1000,
@@ -146,6 +148,15 @@ mod tests {
 
         assert_eq!(config.snapshot_interval_ms, 1000);
         assert!(config.accept_remote);
+    }
+
+    #[test]
+    fn shortcut_inhibition_ships_on_and_can_be_turned_off() {
+        let default: InputConfig = toml::from_str("").unwrap();
+        let off: InputConfig = toml::from_str("inhibit_shortcuts = false").unwrap();
+
+        assert!(default.inhibit_shortcuts);
+        assert!(!off.inhibit_shortcuts);
     }
 
     #[test]

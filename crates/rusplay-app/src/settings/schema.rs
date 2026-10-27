@@ -924,6 +924,13 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Input,
+        "Forwarding",
+        "input.inhibit_shortcuts",
+        "Keep the desktop's shortcuts from the stream while engaged",
+        Kind::Flag,
+    ),
+    field(
+        Section::Input,
         "Tuning",
         "input.pointer_sensitivity",
         "Pointer sensitivity",

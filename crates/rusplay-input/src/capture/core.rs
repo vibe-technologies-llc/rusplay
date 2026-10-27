@@ -43,6 +43,7 @@ pub struct CaptureOptions {
     pub pointer_mode: PointerMode,
     pub sensitivity: f64,
     pub chord: ReleaseChord,
+    pub inhibit_shortcuts: bool,
 }
 
 impl From<&InputConfig> for CaptureOptions {
@@ -53,6 +54,7 @@ impl From<&InputConfig> for CaptureOptions {
             pointer_mode: config.pointer_mode,
             sensitivity: f64::from(config.pointer_sensitivity),
             chord: config.release_chord,
+            inhibit_shortcuts: config.inhibit_shortcuts,
         }
     }
 }
@@ -279,6 +281,7 @@ mod tests {
             pointer_mode: PointerMode::Relative,
             sensitivity: 2.0,
             chord: ReleaseChord::CtrlAlt,
+            inhibit_shortcuts: true,
         }
     }
 
@@ -528,6 +531,7 @@ mod tests {
                 pointer_mode: PointerMode::Absolute,
                 sensitivity: 1.5,
                 chord: ReleaseChord::CtrlAltShift,
+                inhibit_shortcuts: true,
             }
         );
     }

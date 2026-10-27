@@ -18,6 +18,10 @@ use wayland_protocols::wp::{
         wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
         wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
     },
+    keyboard_shortcuts_inhibit::zv1::client::{
+        zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+        zwp_keyboard_shortcuts_inhibitor_v1::{self, ZwpKeyboardShortcutsInhibitorV1},
+    },
     pointer_constraints::zv1::client::{
         zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
         zwp_pointer_constraints_v1::{Lifetime, ZwpPointerConstraintsV1},
@@ -56,6 +60,7 @@ pub(super) struct State {
     sink: Box<dyn FnMut(InputEvent) + Send>,
     surface: WlSurface,
     handle: QueueHandle<State>,
+    seat: WlSeat,
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
     constraints: Option<ZwpPointerConstraintsV1>,
@@ -64,6 +69,8 @@ pub(super) struct State {
     locked: Option<ZwpLockedPointerV1>,
     shape_manager: Option<WpCursorShapeManagerV1>,
     shape_device: Option<WpCursorShapeDeviceV1>,
+    inhibit_manager: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
+    inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
     enter_serial: Option<u32>,
     pointer_focused: bool,
     keyboard_focused: bool,
@@ -86,7 +93,7 @@ impl State {
         };
         let relative_mode = core.lock().options().pointer_mode == PointerMode::Relative;
 
-        globals
+        let seat = globals
             .bind::<WlSeat, _, _>(handle, SEAT_VERSIONS, ())
             .map_err(missing("wl_seat"))?;
         let constraints =
@@ -95,6 +102,9 @@ impl State {
             globals.bind::<ZwpRelativePointerManagerV1, _, _>(handle, CONSTRAINT_VERSIONS, ());
         let shape_manager = globals
             .bind::<WpCursorShapeManagerV1, _, _>(handle, CURSOR_SHAPE_VERSIONS, ())
+            .ok();
+        let inhibit_manager = globals
+            .bind::<ZwpKeyboardShortcutsInhibitManagerV1, _, _>(handle, CONSTRAINT_VERSIONS, ())
             .ok();
 
         let (constraints, relative_manager) = if relative_mode {
@@ -111,6 +121,7 @@ impl State {
             sink,
             surface,
             handle: handle.clone(),
+            seat,
             pointer: None,
             keyboard: None,
             constraints,
@@ -119,6 +130,8 @@ impl State {
             locked: None,
             shape_manager,
             shape_device: None,
+            inhibit_manager,
+            inhibitor: None,
             enter_serial: None,
             pointer_focused: false,
             keyboard_focused: false,
@@ -149,6 +162,9 @@ impl State {
 
         if let Some(relative) = self.relative.take() {
             relative.destroy();
+        }
+        if let Some(manager) = self.inhibit_manager.take() {
+            manager.destroy();
         }
         if let Some(device) = self.shape_device.take() {
             device.destroy();
@@ -186,10 +202,12 @@ impl State {
         match transition {
             Transition::Engaged => {
                 self.lock_pointer();
+                self.inhibit_shortcuts();
                 self.hide_cursor();
             }
             Transition::Released => {
                 self.unlock_pointer();
+                self.restore_shortcuts();
                 self.restore_cursor();
             }
             Transition::Unchanged => {}
@@ -217,6 +235,26 @@ impl State {
     fn unlock_pointer(&mut self) {
         if let Some(locked) = self.locked.take() {
             locked.destroy();
+        }
+    }
+
+    fn inhibit_shortcuts(&mut self) {
+        let options = self.core.lock().options();
+        let (Some(manager), true, None) = (
+            &self.inhibit_manager,
+            options.inhibit_shortcuts && options.keyboard,
+            &self.inhibitor,
+        ) else {
+            return;
+        };
+
+        self.inhibitor =
+            Some(manager.inhibit_shortcuts(&self.surface, &self.seat, &self.handle, ()));
+    }
+
+    fn restore_shortcuts(&mut self) {
+        if let Some(inhibitor) = self.inhibitor.take() {
+            inhibitor.destroy();
         }
     }
 
@@ -425,6 +463,34 @@ impl Dispatch<ZwpRelativePointerV1, ()> for State {
         {
             state.with_core(|core, out| core.pointer_motion(dx_unaccel, dy_unaccel, out));
         }
+    }
+}
+
+impl Dispatch<ZwpKeyboardShortcutsInhibitorV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpKeyboardShortcutsInhibitorV1,
+        event: zwp_keyboard_shortcuts_inhibitor_v1::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if matches!(event, zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive) {
+            let transition = state.with_core(CaptureCore::release);
+            state.apply(transition);
+        }
+    }
+}
+
+impl Dispatch<ZwpKeyboardShortcutsInhibitManagerV1, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &ZwpKeyboardShortcutsInhibitManagerV1,
+        _: <ZwpKeyboardShortcutsInhibitManagerV1 as Proxy>::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 
