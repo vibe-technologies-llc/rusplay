@@ -603,6 +603,28 @@ fn field_marking_unmarks_a_single_long_term_field() {
 }
 
 #[test]
+#[ignore = "decode-vaapi-driver-field-long-term: the vcn firmware mis-marks the long-term field"]
+fn field_marking_unmarks_a_long_term_field_after_a_non_reference_frame() {
+    let mut expected = setup_frames(true);
+    expected.push((
+        Field::probe(&[7, 8, 5, 6, 1, 2, 4]),
+        Field::probe(&[8, 7, 6, 5, 2, 1, 4]),
+    ));
+    let unmark_long_term_field = vec![Mmco::UnmarkLongTerm {
+        long_term_pic_num: 1,
+    }];
+
+    let mut pictures = long_term_setup(true);
+    pictures.extend([
+        FieldPicture::intra(4, 3, false, 7).with_marking(unmark_long_term_field),
+        FieldPicture::intra(4, 3, true, 8),
+    ]);
+    pictures.extend(probe_frame(5, 4, (7, Vec::new()), (7, Vec::new())));
+
+    assert_field_stream(4, &pictures, &expected);
+}
+
+#[test]
 fn an_unpaired_field_is_output_as_its_own_frame() {
     let config = VaapiDecoderConfig::default();
     if !Path::new(&config.device).exists() {
