@@ -1,6 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use rusplay_client::{DiscoveredHost, MAX_PEER_NAME_BYTES, PeerRecord, SavedHost};
+use rusplay_config::HostProfile;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -26,6 +27,7 @@ pub struct HostEntry {
     pub name: String,
     pub address: SocketAddr,
     pub peer: Option<PeerRecord>,
+    pub profile: HostProfile,
     pub origin: HostOrigin,
     pub online: bool,
 }
@@ -53,6 +55,7 @@ impl HostList {
                 name: host.name.clone(),
                 address: host.address,
                 peer: host.peer.clone(),
+                profile: host.profile.clone(),
                 origin: HostOrigin::Added,
                 online: false,
             })
@@ -73,6 +76,7 @@ impl HostList {
                 name: entry.name.clone(),
                 address: entry.address,
                 peer: entry.peer.clone(),
+                profile: entry.profile.clone(),
             })
             .collect()
     }
@@ -118,6 +122,7 @@ impl HostList {
             name,
             address,
             peer: None,
+            profile: HostProfile::default(),
             origin: HostOrigin::Added,
             online: false,
         });
@@ -159,6 +164,13 @@ impl HostList {
         entry.origin = HostOrigin::Added;
         entry.online = false;
         Ok(())
+    }
+
+    pub fn set_profile(&mut self, index: usize, profile: HostProfile) {
+        if let Some(entry) = self.entries.get_mut(index) {
+            entry.profile = profile;
+            entry.origin = HostOrigin::Added;
+        }
     }
 
     pub fn forget_pairing(&mut self, index: usize) -> bool {
@@ -219,6 +231,7 @@ impl HostList {
                 name: announced_name(host),
                 address: host.address,
                 peer: None,
+                profile: HostProfile::default(),
                 origin: HostOrigin::Discovered,
                 online: true,
             });
@@ -309,6 +322,7 @@ fn announced_name(host: &DiscoveredHost) -> String {
 #[cfg(test)]
 mod tests {
     use rusplay_client::PeerSecret;
+    use rusplay_config::PresentMode;
 
     use super::*;
 
@@ -594,5 +608,41 @@ mod tests {
         hosts.select(5);
 
         assert_eq!(hosts.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn a_profile_is_saved_with_its_host_and_survives_the_list_round_trip() {
+        let mut hosts = list();
+        hosts.add("a", "10.0.0.1").unwrap();
+        hosts.add("b", "10.0.0.2").unwrap();
+        let profile = HostProfile {
+            present_mode: Some(PresentMode::Fifo),
+            ..HostProfile::default()
+        };
+
+        hosts.set_profile(1, profile.clone());
+        let saved = hosts.saved_hosts();
+        let restored = HostList::from_saved(47_800, &saved);
+
+        assert!(saved[0].profile.is_empty());
+        assert_eq!(saved[1].profile, profile);
+        assert_eq!(restored.entries()[1].profile, profile);
+    }
+
+    #[test]
+    fn a_profile_on_a_discovered_host_saves_it() {
+        let mut hosts = list();
+        hosts.merge_discovered(&[found("den", "10.0.0.5:47800")]);
+        assert_eq!(hosts.saved_hosts().len(), 0);
+
+        hosts.set_profile(
+            0,
+            HostProfile {
+                keyboard: Some(false),
+                ..HostProfile::default()
+            },
+        );
+
+        assert_eq!(hosts.saved_hosts().len(), 1);
     }
 }

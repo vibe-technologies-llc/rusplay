@@ -85,7 +85,15 @@ impl RusplayApp {
                 )));
             })
             .ok();
-        let hosts = cx.new(|cx| HostsView::new(config.network.port, environment.clone(), book, cx));
+        let hosts = cx.new(|cx| {
+            HostsView::new(
+                config.network.port,
+                environment.clone(),
+                config.clone(),
+                book,
+                cx,
+            )
+        });
         hosts.update(cx, HostsView::refresh);
         subscriptions.push(cx.subscribe(&hosts, |this, _, event: &NoticeRaised, cx| {
             this.notice = Some(event.0.clone());
@@ -150,6 +158,7 @@ impl RusplayApp {
 
         let attached = session::load_client_config(&self.environment)
             .map_err(session::SessionError::from)
+            .and_then(|config| session::merge_profile(&request.host.profile, &config))
             .and_then(|config| {
                 session::attach_window(window, &config).map(|attached| (config, attached))
             });

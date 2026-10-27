@@ -16,7 +16,6 @@
 
 # Client app
 - [S, blocked by: stream-capture-timestamps] `app-stream-stats-end-to-end`: add the capture-to-present figure to the stream header's statistics (`stats.rs` in `rusplay-app` shows client-side latency only, from `PresentedFrame`'s `received_at`, `decoded_at` and `submitted_at`), and a picture overlay, which has to be drawn in `compose.wgsl` or an extra subsurface since the stream subsurface sits above gpui's surface
-- [L] `app-host-profiles`: per-host client overrides (decoder, present mode, input) merged over `client.toml` at connect, showing which value is in effect
 - [XL] `app-host-mode`: host from the desktop app. `ui.md` calls the app a thin shell over `rusplay-client` and `rusplay-host`, but `rusplay-app` does not depend on `rusplay-host` at all; either build a hosting page (portal session, PIN display, paired clients, stats) or correct the rule. Split before starting
 
 # Session

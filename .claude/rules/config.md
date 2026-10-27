@@ -19,3 +19,7 @@ paths:
 - `validate` checks ranges that serde cannot express, each failure its own `ConfigError`
   variant. `Config::load` reads, parses and validates.
 - New options go through the `add-config-option` skill.
+- `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the
+  client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the
+  matching `Config` values and `apply` validates the merged result with `Config::validate`, so a
+  profile is never checked on its own.

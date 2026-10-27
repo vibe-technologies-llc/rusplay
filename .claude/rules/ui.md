@@ -70,6 +70,17 @@ paths:
   scan that moved a saved host. A failed save is a status-bar notice and the in-memory list stays
   usable. If the book cannot be opened (unreadable or corrupt) the app starts with an empty list
   and no book, says so in the status bar, and never overwrites the file.
+- Per-host client overrides (`HostProfile`, `client.md`) belong to the saved host: the Hosts page
+  shows, for the selected host, one row per overridable option (`hosts/profile.rs`, no gpui
+  types) with a `Global` button plus one per value, the effective value and whether it comes from
+  the override or the global `client.toml`. Choosing a value or `Global` changes that one field;
+  `Reset all to global` clears the profile. `HostsView` keeps the client config it last read
+  (at start and on every refresh) as the global side, rejects a choice whose merged config fails
+  `Config::validate` with a notice, and saves the book on every change. Setting a profile on a
+  discovered host saves the host. At connect the root merges the selected host's profile over the
+  freshly read `client.toml` before the window is attached, so `video.present_mode` takes
+  effect, and a merge that fails validation aborts the connect with a notice
+  (`SessionError::HostProfile`).
 - A host without a remembered pairing needs the PIN the host shows; a successful PIN connect
   hands back `ClientStream::paired_secret`, which `StreamView` turns into a `PeerRecord` (named
   after the host entry) and the root stores on the entry, so later connects use
