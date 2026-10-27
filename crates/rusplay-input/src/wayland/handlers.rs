@@ -11,6 +11,7 @@ use wayland_client::{
         wl_registry::WlRegistry,
         wl_seat::{self, Capability, WlSeat},
         wl_surface::WlSurface,
+        wl_touch::{self, WlTouch},
     },
 };
 use wayland_protocols::wp::{
@@ -67,6 +68,7 @@ pub(super) struct State {
     seat: WlSeat,
     pointer: Option<WlPointer>,
     keyboard: Option<WlKeyboard>,
+    touch: Option<WlTouch>,
     constraints: Option<ZwpPointerConstraintsV1>,
     relative_manager: Option<ZwpRelativePointerManagerV1>,
     relative: Option<ZwpRelativePointerV1>,
@@ -132,6 +134,7 @@ impl State {
             seat,
             pointer: None,
             keyboard: None,
+            touch: None,
             constraints,
             relative_manager,
             relative: None,
@@ -202,6 +205,9 @@ impl State {
         }
         if let Some(pointer) = self.pointer.take().filter(|pointer| pointer.version() >= 3) {
             pointer.release();
+        }
+        if let Some(touch) = self.touch.take().filter(|touch| touch.version() >= 3) {
+            touch.release();
         }
         if let Some(keyboard) = self
             .keyboard
@@ -378,6 +384,11 @@ impl Dispatch<WlSeat, ()> for State {
         if capabilities.contains(Capability::Keyboard) && state.keyboard.is_none() {
             state.keyboard = Some(seat.get_keyboard(handle, ()));
         }
+
+        let wants_touch = state.core.lock().options().touch;
+        if capabilities.contains(Capability::Touch) && wants_touch && state.touch.is_none() {
+            state.touch = Some(seat.get_touch(handle, ()));
+        }
     }
 }
 
@@ -490,6 +501,33 @@ impl Dispatch<WlKeyboard, ()> for State {
                 state.apply(transition);
                 state.sync_pointer_lock();
             }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlTouch, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &WlTouch,
+        event: wl_touch::Event,
+        (): &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_touch::Event::Down {
+                surface, id, x, y, ..
+            } if surface == state.surface => {
+                state.with_core(|core, out| core.touch_down(id, x, y, out));
+            }
+            wl_touch::Event::Motion { id, x, y, .. } => {
+                state.with_core(|core, out| core.touch_motion(id, x, y, out));
+            }
+            wl_touch::Event::Up { id, .. } => {
+                state.with_core(|core, out| core.touch_up(id, out));
+            }
+            wl_touch::Event::Cancel => state.with_core(CaptureCore::touch_cancel),
             _ => {}
         }
     }

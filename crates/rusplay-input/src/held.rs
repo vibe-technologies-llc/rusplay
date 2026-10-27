@@ -1,7 +1,10 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, LockState, StateRecord};
+use crate::{
+    GamepadAxis, GamepadButton, GamepadEvent, InputEvent, LockState, StateRecord, TouchEvent,
+};
 
 pub const MAX_PADS: usize = 16;
 pub const PAD_AXES: usize = 6;
+pub const MAX_TOUCHES: usize = 16;
 
 const KEY_SET_WORDS: usize = 12;
 const KEY_SET_WORDS_U32: u32 = 12;
@@ -71,6 +74,45 @@ fn locate(code: u32) -> Option<(usize, u64)> {
     (word < KEY_SET_WORDS).then(|| (word, 1u64 << (code % BITS_PER_WORD)))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TouchSet(u16);
+
+impl TouchSet {
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn contains(self, slot: u8) -> bool {
+        u32::from(slot) < u16::BITS && self.0 & (1 << slot) != 0
+    }
+
+    pub fn insert(&mut self, slot: u8) {
+        if u32::from(slot) < u16::BITS {
+            self.0 |= 1 << slot;
+        }
+    }
+
+    pub fn remove(&mut self, slot: u8) {
+        if u32::from(slot) < u16::BITS {
+            self.0 &= !(1 << slot);
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = u8> {
+        (0u8..)
+            .take(MAX_TOUCHES)
+            .filter(move |slot| self.contains(*slot))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PadState {
     pub buttons: u16,
@@ -110,6 +152,7 @@ pub struct HeldInput {
     buttons: KeySet,
     pads: [Option<PadState>; MAX_PADS],
     locks: Option<LockState>,
+    touches: TouchSet,
 }
 
 impl HeldInput {
@@ -118,7 +161,10 @@ impl HeldInput {
     }
 
     pub fn is_idle(&self) -> bool {
-        self.keys.is_empty() && self.buttons.is_empty() && self.pads.iter().all(Option::is_none)
+        self.keys.is_empty()
+            && self.buttons.is_empty()
+            && self.touches.is_empty()
+            && self.pads.iter().all(Option::is_none)
     }
 
     pub const fn keys(&self) -> &KeySet {
@@ -133,6 +179,10 @@ impl HeldInput {
         self.locks
     }
 
+    pub const fn touches(&self) -> TouchSet {
+        self.touches
+    }
+
     pub fn pad(&self, slot: u8) -> Option<&PadState> {
         self.pads.get(usize::from(slot))?.as_ref()
     }
@@ -143,6 +193,11 @@ impl HeldInput {
             InputEvent::PointerButton { button, pressed } => self.buttons.set(button, pressed),
             InputEvent::Gamepad { slot, event } => self.observe_pad(slot, event),
             InputEvent::Locks(locks) => self.locks = Some(locks),
+            InputEvent::Touch { slot, event } => match event {
+                TouchEvent::Down { .. } => self.touches.insert(slot),
+                TouchEvent::Up | TouchEvent::Cancel => self.touches.remove(slot),
+                TouchEvent::Motion { .. } => {}
+            },
             InputEvent::PointerMotion { .. }
             | InputEvent::PointerAbsolute { .. }
             | InputEvent::Scroll { .. } => {}
@@ -174,6 +229,7 @@ impl HeldInput {
         out.push(StateRecord::Keys(self.keys));
         out.push(StateRecord::Buttons(self.buttons));
         out.push(StateRecord::Pads(self.connected_mask()));
+        out.push(StateRecord::Touches(self.touches));
         out.extend(self.locks.map(StateRecord::Locks));
 
         for (slot, pad) in (0u8..).zip(&self.pads) {
@@ -198,6 +254,17 @@ impl HeldInput {
             }
             StateRecord::Pads(mask) => self.reconcile_connections(*mask, out),
             StateRecord::Pad { slot, state } => self.reconcile_pad(*slot, state, out),
+            StateRecord::Touches(target) => {
+                out.extend(
+                    self.touches
+                        .iter()
+                        .filter(|slot| !target.contains(*slot))
+                        .map(|slot| InputEvent::Touch {
+                            slot,
+                            event: TouchEvent::Up,
+                        }),
+                );
+            }
             StateRecord::Locks(target) => {
                 if self.locks != Some(*target) {
                     out.push(InputEvent::Locks(*target));
@@ -213,6 +280,11 @@ impl HeldInput {
         diff_keys(&self.buttons, &KeySet::default(), out, |button, pressed| {
             InputEvent::PointerButton { button, pressed }
         });
+
+        out.extend(self.touches.iter().map(|slot| InputEvent::Touch {
+            slot,
+            event: TouchEvent::Up,
+        }));
 
         for (slot, pad) in (0u8..).zip(&self.pads) {
             if pad.is_some() {
@@ -575,6 +647,56 @@ mod tests {
         assert!(state.is_idle());
     }
 
+    fn touch(slot: u8, event: TouchEvent) -> InputEvent {
+        InputEvent::Touch { slot, event }
+    }
+
+    fn lift(slot: u8) -> InputEvent {
+        touch(slot, TouchEvent::Up)
+    }
+
+    fn land(slot: u8) -> InputEvent {
+        touch(slot, TouchEvent::Down { x: 0.5, y: 0.5 })
+    }
+
+    #[test]
+    fn touches_are_held_from_down_until_up_or_cancel() {
+        let mut state = held(&[land(0), land(3), land(5)]);
+        state.observe(&touch(3, TouchEvent::Motion { x: 0.1, y: 0.2 }));
+        state.observe(&lift(0));
+        state.observe(&touch(5, TouchEvent::Cancel));
+
+        assert_eq!(state.touches().iter().collect::<Vec<_>>(), vec![3]);
+        assert!(!state.is_idle());
+    }
+
+    #[test]
+    fn a_snapshot_lifts_touches_the_client_no_longer_holds() {
+        let mut host = held(&[land(1), land(2)]);
+        let client = held(&[land(2)]);
+
+        assert_eq!(converge(&mut host, &client), vec![lift(1)]);
+        assert_eq!(host, client);
+    }
+
+    #[test]
+    fn a_snapshot_never_invents_a_touch() {
+        let mut host = HeldInput::new();
+        let client = held(&[land(2)]);
+
+        assert_eq!(converge(&mut host, &client), Vec::new());
+    }
+
+    #[test]
+    fn releasing_everything_lifts_touches() {
+        let state = held(&[land(4), land(7), key(30, true)]);
+        let mut events = Vec::new();
+
+        state.release_all(&mut events);
+
+        assert_eq!(events, vec![key(30, false), lift(4), lift(7)]);
+    }
+
     #[test]
     fn an_idle_snapshot_still_names_every_scope() {
         let mut records = Vec::new();
@@ -587,6 +709,7 @@ mod tests {
                 StateRecord::Keys(KeySet::default()),
                 StateRecord::Buttons(KeySet::default()),
                 StateRecord::Pads(0),
+                StateRecord::Touches(TouchSet::default()),
             ]
         );
     }

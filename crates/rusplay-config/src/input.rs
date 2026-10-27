@@ -102,6 +102,7 @@ pub enum HotkeyKey {
 pub struct InputConfig {
     pub keyboard: bool,
     pub pointer: bool,
+    pub touch: bool,
     pub gamepads: bool,
     pub max_gamepads: u8,
     pub pointer_mode: PointerMode,
@@ -128,6 +129,7 @@ impl Default for InputConfig {
         Self {
             keyboard: true,
             pointer: true,
+            touch: true,
             gamepads: true,
             max_gamepads: 4,
             pointer_mode: PointerMode::default(),
@@ -274,6 +276,15 @@ mod tests {
         assert_eq!(config.pointer_mode, PointerMode::Auto);
         assert_eq!(config.pointer_auto_delay_ms, 250);
         assert_eq!(InputConfig::default().pointer_mode, PointerMode::Absolute);
+    }
+
+    #[test]
+    fn touch_ships_on_and_can_be_turned_off() {
+        let default: InputConfig = toml::from_str("").unwrap();
+        let off: InputConfig = toml::from_str("touch = false").unwrap();
+
+        assert!(default.touch);
+        assert!(!off.touch);
     }
 
     #[test]

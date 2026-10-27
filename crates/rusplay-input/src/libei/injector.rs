@@ -19,7 +19,7 @@ use rustix::{
 };
 
 use crate::{
-    InputError, InputEvent, InputSink, LockMasks, LockSync,
+    InputError, InputEvent, InputSink, LockMasks, LockSync, TouchSet,
     libei::{
         AbsoluteMapper, AbsoluteTarget, Capability, EiRequest, MappedRegion, PortalInputOptions,
         Region, RemoteDesktopSession, StartedPortal, translate,
@@ -57,9 +57,20 @@ impl DeviceSlot {
     fn can_emit(&self, capability: Capability) -> bool {
         self.resumed
             && match capability {
-                Capability::PointerAbsolute => self.absolute.is_some(),
+                Capability::PointerAbsolute | Capability::Touch => {
+                    self.absolute.is_some()
+                        && self.device.has_capability(device_capability(capability))
+                }
                 other => self.device.has_capability(device_capability(other)),
             }
+    }
+
+    fn touchscreen(&self) -> Option<ei::Touchscreen> {
+        self.device.interface::<ei::Touchscreen>()
+    }
+
+    fn map_touch(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        self.absolute.as_ref().map(|mapper| mapper.map(x, y))
     }
 
     fn emit(&self, request: EiRequest) -> Result<(), InputError> {
@@ -98,6 +109,26 @@ impl DeviceSlot {
                     .ok_or_else(unavailable)?;
                 button.button(code, button_state(pressed));
             }
+            EiRequest::TouchDown { slot, x, y } => {
+                let (x, y) = self.map_touch(x, y).ok_or_else(unavailable)?;
+                self.touchscreen()
+                    .ok_or_else(unavailable)?
+                    .down(slot.into(), x, y);
+            }
+            EiRequest::TouchMotion { slot, x, y } => {
+                let (x, y) = self.map_touch(x, y).ok_or_else(unavailable)?;
+                self.touchscreen()
+                    .ok_or_else(unavailable)?
+                    .motion(slot.into(), x, y);
+            }
+            EiRequest::TouchUp { slot } => {
+                self.touchscreen().ok_or_else(unavailable)?.up(slot.into());
+            }
+            EiRequest::TouchCancel { slot } => {
+                self.touchscreen()
+                    .ok_or_else(unavailable)?
+                    .cancel(slot.into());
+            }
             EiRequest::Scroll120 { dx, dy } => {
                 let scroll = self
                     .device
@@ -121,6 +152,7 @@ pub struct LibeiInjector {
     closed: bool,
     sync_locks: bool,
     lock_sync: LockSync,
+    touches: TouchSet,
     session: Option<RemoteDesktopSession>,
 }
 
@@ -145,6 +177,7 @@ impl LibeiInjector {
             closed: false,
             sync_locks: config.sync_locks && config.keyboard,
             lock_sync: LockSync::new(),
+            touches: TouchSet::default(),
             session: None,
         })
     }
@@ -266,6 +299,9 @@ impl LibeiInjector {
             }
             EiEvent::DeviceRemoved(removed) => {
                 self.devices.retain(|slot| slot.device != removed.device);
+                if removed.device.has_capability(DeviceCapability::Touch) {
+                    self.touches = TouchSet::default();
+                }
             }
             EiEvent::Disconnected(_) => self.closed = true,
             _ => {}
@@ -276,11 +312,16 @@ impl LibeiInjector {
         if let Some(slot) = self.devices.iter_mut().find(|slot| &slot.device == device) {
             slot.resumed = resumed;
             slot.emulating = false;
+            if slot.device.has_capability(DeviceCapability::Touch) {
+                self.touches = TouchSet::default();
+            }
         }
     }
 
     fn absolute_mapper(&self, device: &event::Device) -> Option<AbsoluteMapper> {
-        if !device.has_capability(DeviceCapability::PointerAbsolute) {
+        if !device.has_capability(DeviceCapability::PointerAbsolute)
+            && !device.has_capability(DeviceCapability::Touch)
+        {
             return None;
         }
 
@@ -322,6 +363,26 @@ impl LibeiInjector {
         slot.device.device().frame(serial, timestamp);
 
         self.flush()
+    }
+
+    fn touch_admitted(&self, request: EiRequest) -> bool {
+        match request {
+            EiRequest::TouchDown { slot, .. } => !self.touches.contains(slot),
+            EiRequest::TouchMotion { slot, .. }
+            | EiRequest::TouchUp { slot }
+            | EiRequest::TouchCancel { slot } => self.touches.contains(slot),
+            _ => true,
+        }
+    }
+
+    fn touch_sent(&mut self, request: EiRequest) {
+        match request {
+            EiRequest::TouchDown { slot, .. } => self.touches.insert(slot),
+            EiRequest::TouchUp { slot } | EiRequest::TouchCancel { slot } => {
+                self.touches.remove(slot);
+            }
+            _ => {}
+        }
     }
 
     fn sync_locks(&mut self) -> Result<(), InputError> {
@@ -379,7 +440,12 @@ impl InputSink for LibeiInjector {
             return Err(InputError::SinkClosed);
         }
 
+        if !self.touch_admitted(request) {
+            return Ok(());
+        }
+
         self.send(request)?;
+        self.touch_sent(request);
         if let EiRequest::Key { code, .. } = request {
             self.lock_sync.key_injected(code, Instant::now());
         }
@@ -402,6 +468,9 @@ fn bound_capabilities(config: InputConfig) -> BitFlags<DeviceCapability> {
     let mut bound = BitFlags::empty();
     if config.keyboard {
         bound |= DeviceCapability::Keyboard;
+    }
+    if config.touch {
+        bound |= DeviceCapability::Touch;
     }
     if config.pointer {
         bound |= DeviceCapability::Pointer
@@ -427,6 +496,7 @@ fn device_capability(capability: Capability) -> DeviceCapability {
         Capability::PointerAbsolute => DeviceCapability::PointerAbsolute,
         Capability::Button => DeviceCapability::Button,
         Capability::Scroll => DeviceCapability::Scroll,
+        Capability::Touch => DeviceCapability::Touch,
     }
 }
 
@@ -467,6 +537,7 @@ mod tests {
     fn bound_capabilities_follow_the_config() {
         let keyboard_only = InputConfig {
             pointer: false,
+            touch: false,
             ..InputConfig::default()
         };
         let pointer_only = InputConfig {
@@ -480,6 +551,14 @@ mod tests {
         );
         assert!(!bound_capabilities(pointer_only).contains(DeviceCapability::Keyboard));
         assert!(bound_capabilities(pointer_only).contains(DeviceCapability::PointerAbsolute));
+        assert!(bound_capabilities(pointer_only).contains(DeviceCapability::Touch));
+        assert!(
+            !bound_capabilities(InputConfig {
+                touch: false,
+                ..pointer_only
+            })
+            .contains(DeviceCapability::Touch)
+        );
     }
 
     #[test]

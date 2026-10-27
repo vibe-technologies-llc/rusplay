@@ -9,7 +9,7 @@ use std::{
 };
 
 use rusplay_input::{
-    GamepadEvent, HeldInput, InputEvent, InputRecord, RumbleCommand, StateRecord,
+    GamepadEvent, HeldInput, InputEvent, InputRecord, RumbleCommand, StateRecord, TouchEvent,
     capture::EventCoalescer,
     gamepad::{PhysicalGamepads, PhysicalOptions},
 };
@@ -152,6 +152,7 @@ impl InputPacketer {
 fn changes_state(event: &InputEvent) -> bool {
     match event {
         InputEvent::Key { .. } | InputEvent::PointerButton { .. } | InputEvent::Locks(_) => true,
+        InputEvent::Touch { event, .. } => !matches!(event, TouchEvent::Motion { .. }),
         InputEvent::Gamepad { event, .. } => !matches!(event, GamepadEvent::Axis { .. }),
         InputEvent::PointerMotion { .. }
         | InputEvent::PointerAbsolute { .. }
@@ -488,6 +489,14 @@ mod tests {
         assert!(changes_state(&connected));
         assert!(changes_state(&key(1, false)));
         assert!(changes_state(&InputEvent::Locks(LockState::default())));
+        assert!(changes_state(&InputEvent::Touch {
+            slot: 0,
+            event: TouchEvent::Up
+        }));
+        assert!(!changes_state(&InputEvent::Touch {
+            slot: 0,
+            event: TouchEvent::Motion { x: 0.5, y: 0.5 }
+        }));
         assert!(!changes_state(&InputEvent::Scroll { dx: 0.0, dy: 1.0 }));
     }
 

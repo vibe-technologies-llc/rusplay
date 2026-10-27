@@ -1,4 +1,7 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent, LockState};
+use crate::{
+    GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent, LockState, MAX_TOUCHES,
+    TouchEvent,
+};
 
 const TAG_KEY: u8 = 0;
 const TAG_POINTER_MOTION: u8 = 1;
@@ -7,6 +10,10 @@ const TAG_POINTER_BUTTON: u8 = 3;
 const TAG_SCROLL: u8 = 4;
 const TAG_GAMEPAD: u8 = 5;
 const TAG_LOCKS: u8 = 6;
+const TAG_TOUCH_DOWN: u8 = 7;
+const TAG_TOUCH_MOTION: u8 = 8;
+const TAG_TOUCH_UP: u8 = 9;
+const TAG_TOUCH_CANCEL: u8 = 10;
 
 const PAD_CONNECTED: u8 = 0;
 const PAD_DISCONNECTED: u8 = 1;
@@ -21,6 +28,7 @@ const GAMEPAD_HEADER_LEN: usize = 2;
 const PAD_BUTTON_LEN: usize = 2 + BOOL_LEN;
 const PAD_AXIS_LEN: usize = 1 + 4;
 const LOCKS_LEN: usize = 1;
+const TOUCH_SLOT_LEN: usize = 1;
 
 impl InputEvent {
     pub fn encoded_len(&self) -> usize {
@@ -32,6 +40,7 @@ impl InputEvent {
                 }
                 Self::Gamepad { event, .. } => GAMEPAD_HEADER_LEN + gamepad_payload_len(*event),
                 Self::Locks(_) => LOCKS_LEN,
+                Self::Touch { event, .. } => TOUCH_SLOT_LEN + touch_payload_len(*event),
             }
     }
 
@@ -72,6 +81,7 @@ impl InputEvent {
                 out.push(TAG_LOCKS);
                 out.push(locks.to_bits());
             }
+            Self::Touch { slot, event } => encode_touch(slot, event, out),
         }
     }
 
@@ -104,6 +114,9 @@ impl InputEvent {
                 event: decode_gamepad(&mut reader)?,
             },
             TAG_LOCKS => Self::Locks(LockState::from_bits(reader.u8()?)?),
+            tag @ (TAG_TOUCH_DOWN | TAG_TOUCH_MOTION | TAG_TOUCH_UP | TAG_TOUCH_CANCEL) => {
+                decode_touch(tag, &mut reader)?
+            }
             tag => return Err(InputError::WireUnknownTag(tag)),
         };
 
@@ -111,6 +124,51 @@ impl InputEvent {
 
         Ok(event)
     }
+}
+
+fn touch_payload_len(event: TouchEvent) -> usize {
+    match event {
+        TouchEvent::Down { .. } | TouchEvent::Motion { .. } => 2 * F64_LEN,
+        TouchEvent::Up | TouchEvent::Cancel => 0,
+    }
+}
+
+fn encode_touch(slot: u8, event: TouchEvent, out: &mut Vec<u8>) {
+    let (tag, position) = match event {
+        TouchEvent::Down { x, y } => (TAG_TOUCH_DOWN, Some((x, y))),
+        TouchEvent::Motion { x, y } => (TAG_TOUCH_MOTION, Some((x, y))),
+        TouchEvent::Up => (TAG_TOUCH_UP, None),
+        TouchEvent::Cancel => (TAG_TOUCH_CANCEL, None),
+    };
+
+    out.push(tag);
+    out.push(slot);
+    if let Some((x, y)) = position {
+        out.extend_from_slice(&x.to_le_bytes());
+        out.extend_from_slice(&y.to_le_bytes());
+    }
+}
+
+fn decode_touch(tag: u8, reader: &mut Reader) -> Result<InputEvent, InputError> {
+    let slot = reader.u8()?;
+    if usize::from(slot) >= MAX_TOUCHES {
+        return Err(InputError::TouchSlotOutOfRange(slot));
+    }
+
+    let event = match tag {
+        TAG_TOUCH_DOWN => TouchEvent::Down {
+            x: reader.f64()?,
+            y: reader.f64()?,
+        },
+        TAG_TOUCH_MOTION => TouchEvent::Motion {
+            x: reader.f64()?,
+            y: reader.f64()?,
+        },
+        TAG_TOUCH_UP => TouchEvent::Up,
+        _ => TouchEvent::Cancel,
+    };
+
+    Ok(InputEvent::Touch { slot, event })
 }
 
 fn gamepad_payload_len(event: GamepadEvent) -> usize {
@@ -273,6 +331,22 @@ mod tests {
                 caps: true,
                 num: false,
             }),
+            InputEvent::Touch {
+                slot: 0,
+                event: TouchEvent::Down { x: 0.25, y: 0.75 },
+            },
+            InputEvent::Touch {
+                slot: 15,
+                event: TouchEvent::Motion { x: 1.0, y: 0.0 },
+            },
+            InputEvent::Touch {
+                slot: 3,
+                event: TouchEvent::Up,
+            },
+            InputEvent::Touch {
+                slot: 4,
+                event: TouchEvent::Cancel,
+            },
         ]
     }
 
@@ -374,6 +448,18 @@ mod tests {
 
         assert_eq!(bytes, [TAG_LOCKS, 3]);
         assert!(matches!(unknown, Err(InputError::WireInvalidLockBits(4))));
+    }
+
+    #[test]
+    fn touch_events_carry_their_slot_and_reject_slots_past_the_limit() {
+        let up = round_trip(InputEvent::Touch {
+            slot: 2,
+            event: TouchEvent::Up,
+        });
+        let too_high = InputEvent::decode(&[TAG_TOUCH_UP, 16]);
+
+        assert_eq!(up, [TAG_TOUCH_UP, 2]);
+        assert!(matches!(too_high, Err(InputError::TouchSlotOutOfRange(16))));
     }
 
     #[test]

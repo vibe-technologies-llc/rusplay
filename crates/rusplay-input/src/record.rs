@@ -1,6 +1,6 @@
 use crate::{
     InputError, InputEvent, LockState,
-    held::{KeySet, MAX_PADS, PAD_AXES, PadState},
+    held::{KeySet, MAX_PADS, PAD_AXES, PadState, TouchSet},
     wire::Reader,
 };
 
@@ -9,12 +9,14 @@ const TAG_BUTTONS: u8 = 17;
 const TAG_PADS: u8 = 18;
 const TAG_PAD: u8 = 19;
 const TAG_LOCKS: u8 = 20;
-const LAST_STATE_TAG: u8 = TAG_LOCKS;
+const TAG_TOUCHES: u8 = 21;
+const LAST_STATE_TAG: u8 = TAG_TOUCHES;
 
 const TAG_LEN: usize = 1;
 const KEY_SET_LEN: usize = KeySet::WORDS * size_of::<u64>();
 const PADS_LEN: usize = size_of::<u16>();
 const LOCKS_LEN: usize = 1;
+const TOUCHES_LEN: usize = size_of::<u16>();
 const PAD_LEN: usize = 1 + size_of::<u16>() + PAD_AXES * size_of::<f32>();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,6 +26,7 @@ pub enum StateRecord {
     Pads(u16),
     Pad { slot: u8, state: PadState },
     Locks(LockState),
+    Touches(TouchSet),
 }
 
 impl StateRecord {
@@ -36,6 +39,7 @@ impl StateRecord {
                 Self::Pads(_) => PADS_LEN,
                 Self::Pad { .. } => PAD_LEN,
                 Self::Locks(_) => LOCKS_LEN,
+                Self::Touches(_) => TOUCHES_LEN,
             }
     }
 
@@ -66,6 +70,10 @@ impl StateRecord {
                 out.push(TAG_LOCKS);
                 out.push(locks.to_bits());
             }
+            Self::Touches(touches) => {
+                out.push(TAG_TOUCHES);
+                out.extend_from_slice(&touches.bits().to_le_bytes());
+            }
         }
     }
 
@@ -93,6 +101,7 @@ impl StateRecord {
 
                 Ok(Self::Pad { slot, state })
             }
+            TAG_TOUCHES => Ok(Self::Touches(TouchSet::from_bits(reader.u16()?))),
             TAG_LOCKS => Ok(Self::Locks(LockState::from_bits(reader.u8()?)?)),
             tag => Err(InputError::WireUnknownTag(tag)),
         }
@@ -196,6 +205,9 @@ mod tests {
         round_trip(StateRecord::Buttons(keys(&[0x110, 0x111])));
         round_trip(StateRecord::Keys(KeySet::default()));
         round_trip(StateRecord::Pads(0b1010_0000_0000_0101));
+        round_trip(StateRecord::Touches(TouchSet::from_bits(
+            0b1000_0000_0000_0110,
+        )));
         round_trip(StateRecord::Locks(LockState {
             caps: false,
             num: true,

@@ -1,4 +1,4 @@
-use crate::{InputError, InputEvent};
+use crate::{InputError, InputEvent, TouchEvent};
 
 const VALUE120_PER_NOTCH: f64 = 120.0;
 
@@ -9,6 +9,7 @@ pub enum Capability {
     PointerAbsolute,
     Button,
     Scroll,
+    Touch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,6 +19,10 @@ pub enum EiRequest {
     MotionNormalised { x: f32, y: f32 },
     Button { code: u32, pressed: bool },
     Scroll120 { dx: i32, dy: i32 },
+    TouchDown { slot: u8, x: f32, y: f32 },
+    TouchMotion { slot: u8, x: f32, y: f32 },
+    TouchUp { slot: u8 },
+    TouchCancel { slot: u8 },
 }
 
 impl EiRequest {
@@ -28,6 +33,10 @@ impl EiRequest {
             Self::MotionNormalised { .. } => Capability::PointerAbsolute,
             Self::Button { .. } => Capability::Button,
             Self::Scroll120 { .. } => Capability::Scroll,
+            Self::TouchDown { .. }
+            | Self::TouchMotion { .. }
+            | Self::TouchUp { .. }
+            | Self::TouchCancel { .. } => Capability::Touch,
         }
     }
 }
@@ -56,6 +65,24 @@ pub fn translate(event: InputEvent) -> Result<EiRequest, InputError> {
         }),
         InputEvent::Gamepad { .. } => Err(InputError::GamepadUnsupported),
         InputEvent::Locks(_) => Err(InputError::LocksNotARequest),
+        InputEvent::Touch { slot, event } => translate_touch(slot, event),
+    }
+}
+
+fn translate_touch(slot: u8, event: TouchEvent) -> Result<EiRequest, InputError> {
+    match event {
+        TouchEvent::Down { x, y } => Ok(EiRequest::TouchDown {
+            slot,
+            x: narrow(x)?.clamp(0.0, 1.0),
+            y: narrow(y)?.clamp(0.0, 1.0),
+        }),
+        TouchEvent::Motion { x, y } => Ok(EiRequest::TouchMotion {
+            slot,
+            x: narrow(x)?.clamp(0.0, 1.0),
+            y: narrow(y)?.clamp(0.0, 1.0),
+        }),
+        TouchEvent::Up => Ok(EiRequest::TouchUp { slot }),
+        TouchEvent::Cancel => Ok(EiRequest::TouchCancel { slot }),
     }
 }
 
@@ -280,6 +307,39 @@ mod tests {
         assert!(matches!(motion, Err(InputError::NonFiniteValue)));
         assert!(matches!(absolute, Err(InputError::NonFiniteValue)));
         assert!(matches!(scroll, Err(InputError::NonFiniteValue)));
+    }
+
+    #[test]
+    fn touch_events_translate_with_clamped_coordinates() {
+        let down = translate(InputEvent::Touch {
+            slot: 2,
+            event: TouchEvent::Down { x: -1.0, y: 0.5 },
+        })
+        .unwrap();
+        let up = translate(InputEvent::Touch {
+            slot: 2,
+            event: TouchEvent::Up,
+        })
+        .unwrap();
+        let bad = translate(InputEvent::Touch {
+            slot: 2,
+            event: TouchEvent::Motion {
+                x: f64::NAN,
+                y: 0.0,
+            },
+        });
+
+        assert_eq!(
+            down,
+            EiRequest::TouchDown {
+                slot: 2,
+                x: 0.0,
+                y: 0.5
+            }
+        );
+        assert_eq!(up, EiRequest::TouchUp { slot: 2 });
+        assert_eq!(down.capability(), Capability::Touch);
+        assert!(matches!(bad, Err(InputError::NonFiniteValue)));
     }
 
     #[test]

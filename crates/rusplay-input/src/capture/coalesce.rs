@@ -1,4 +1,4 @@
-use crate::{GamepadEvent, InputEvent};
+use crate::{GamepadEvent, InputEvent, TouchEvent};
 
 #[derive(Debug, Default, Clone)]
 pub struct EventCoalescer {
@@ -41,6 +41,20 @@ impl EventCoalescer {
                 Some(last @ InputEvent::PointerAbsolute { .. }),
                 InputEvent::PointerAbsolute { .. },
             ) => {
+                *last = event;
+            }
+            (
+                Some(last),
+                InputEvent::Touch {
+                    slot,
+                    event: TouchEvent::Motion { .. },
+                },
+            ) if matches!(
+                *last,
+                InputEvent::Touch { slot: pending, event: TouchEvent::Motion { .. } }
+                    if pending == slot
+            ) =>
+            {
                 *last = event;
             }
             (
@@ -194,6 +208,37 @@ mod tests {
                 press,
                 axis(0, GamepadAxis::LEFT_Y, 0.3),
                 axis(1, GamepadAxis::LEFT_X, 0.2),
+            ]
+        );
+    }
+
+    #[test]
+    fn touch_motion_keeps_the_latest_per_slot_and_never_crosses_other_events() {
+        let motion = |slot, x| InputEvent::Touch {
+            slot,
+            event: TouchEvent::Motion { x, y: 0.0 },
+        };
+        let up = InputEvent::Touch {
+            slot: 0,
+            event: TouchEvent::Up,
+        };
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(motion(0, 0.1));
+        coalescer.push(motion(0, 0.2));
+        coalescer.push(motion(1, 0.3));
+        coalescer.push(motion(0, 0.4));
+        coalescer.push(up);
+        coalescer.push(motion(0, 0.5));
+
+        assert_eq!(
+            drained(&mut coalescer),
+            vec![
+                motion(0, 0.2),
+                motion(1, 0.3),
+                motion(0, 0.4),
+                up,
+                motion(0, 0.5),
             ]
         );
     }

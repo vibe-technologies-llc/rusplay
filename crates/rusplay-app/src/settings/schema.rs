@@ -975,6 +975,13 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Input,
         "Forwarding",
+        "input.touch",
+        "Touch",
+        Kind::Flag,
+    ),
+    field(
+        Section::Input,
+        "Forwarding",
         "input.gamepads",
         "Gamepads",
         Kind::Flag,

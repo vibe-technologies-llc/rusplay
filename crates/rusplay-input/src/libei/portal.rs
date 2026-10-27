@@ -23,9 +23,11 @@ pub enum PortalStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct PortalInputOptions {
     pub keyboard: bool,
     pub pointer: bool,
+    pub touch: bool,
     pub persist: bool,
     pub restore_token: Option<String>,
 }
@@ -35,6 +37,7 @@ impl PortalInputOptions {
         Self {
             keyboard: config.keyboard,
             pointer: config.pointer,
+            touch: config.touch,
             persist: false,
             restore_token: None,
         }
@@ -47,6 +50,9 @@ impl PortalInputOptions {
         }
         if self.pointer {
             types |= DeviceType::Pointer;
+        }
+        if self.touch {
+            types |= DeviceType::Touchscreen;
         }
         types
     }
@@ -71,6 +77,7 @@ pub struct PortalStream {
 pub struct StartedPortal {
     pub keyboard: bool,
     pub pointer: bool,
+    pub touch: bool,
     pub streams: Vec<PortalStream>,
     pub restore_token: Option<String>,
 }
@@ -141,6 +148,7 @@ impl RemoteDesktopSession {
         Ok(StartedPortal {
             keyboard: devices.contains(DeviceType::Keyboard),
             pointer: devices.contains(DeviceType::Pointer),
+            touch: devices.contains(DeviceType::Touchscreen),
             streams,
             restore_token: selected.restore_token().map(str::to_owned),
         })
