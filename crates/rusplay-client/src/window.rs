@@ -19,7 +19,7 @@ use rusplay_config::{
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
 use rusplay_input::{
-    capture::{ActivePointer, CaptureOptions},
+    capture::{ActivePointer, CaptureOptions, ClientAction},
     wayland::{HostCursorObserver, WaylandCapture},
 };
 use rusplay_scale::ColorVolume;
@@ -294,6 +294,12 @@ impl StreamWindow {
         if let Some(capture) = &self.capture {
             capture.set_pointer_mode(mode);
         }
+    }
+
+    pub fn take_actions(&self) -> Vec<ClientAction> {
+        self.capture
+            .as_ref()
+            .map_or_else(Vec::new, WaylandCapture::take_actions)
     }
 
     pub fn release(&self) {

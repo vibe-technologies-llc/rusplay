@@ -4,7 +4,7 @@ use gpui::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use rusplay_client::{
     ClientError, ClientSession, ClientStream, Credentials, DiscoveredHost, DiscoveryBrowser,
-    DiscoveryOptions, Gpu, StreamWindow, WaylandTarget, WindowSink,
+    DiscoveryOptions, FrameSink, Gpu, StreamWindow, WaylandTarget,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
 use thiserror::Error;
@@ -46,7 +46,7 @@ pub fn connect(
     host: SocketAddr,
     credentials: &Credentials,
     gpu: Gpu,
-    sink: WindowSink,
+    sink: impl FrameSink,
 ) -> Result<ClientStream, SessionError> {
     Ok(ClientSession::new(config).connect(host, credentials, gpu, sink)?)
 }

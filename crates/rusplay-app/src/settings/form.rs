@@ -752,6 +752,7 @@ mod tests {
             for option in options {
                 let mut model = form(&Config::default());
                 satisfy(&mut model, index);
+                model.set_flag(first_with_path("input.hotkeys"), false);
                 model.set_text(index, *option);
 
                 assert!(model.build().is_ok(), "{} = {option}", field.path);
@@ -966,6 +967,19 @@ mod tests {
         let fields: Vec<_> = issues.iter().filter_map(FormError::field).collect();
 
         assert_eq!(fields, vec![bitrate, address]);
+    }
+
+    #[test]
+    fn a_reused_hotkey_marks_the_row_that_reuses_it() {
+        let stats = first_with_path("input.hotkey_stats");
+        let disconnect = first_with_path("input.hotkey_disconnect");
+        let mut model = form(&Config::default());
+        model.set_text(disconnect, "s");
+
+        let issues = model.build().unwrap_err();
+
+        assert_ne!(stats, disconnect);
+        assert_eq!(issues[0].field(), Some(disconnect));
     }
 
     #[test]

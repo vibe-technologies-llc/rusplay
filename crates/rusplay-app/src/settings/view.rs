@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    mem,
+};
 
 use gpui::{
     Anchor, AnyElement, Context, Entity, EventEmitter, Subscription, Window, anchored, deferred,
@@ -10,6 +13,7 @@ use crate::{
     notice::{Notice, NoticeRaised, error_chain},
     settings::{
         form::{FormModel, Pair, Value},
+        role::{ROLES, load_baseline, role_label},
         schema::{FIELDS, Field, Kind, Section},
     },
     theme,
@@ -33,8 +37,16 @@ struct PairInputs {
     value: Entity<TextField>,
 }
 
+struct RoleState {
+    saved: Config,
+    form: FormModel,
+    dirty: bool,
+}
+
 pub struct SettingsView {
     environment: ConfigEnvironment,
+    role: ConfigRole,
+    parked: Option<RoleState>,
     saved: Config,
     form: FormModel,
     section: Section,
@@ -81,6 +93,8 @@ impl SettingsView {
 
         let mut view = Self {
             environment,
+            role: ConfigRole::Client,
+            parked: None,
             saved: config,
             form,
             section: Section::Video,
@@ -100,7 +114,7 @@ impl SettingsView {
                 let subscription =
                     cx.subscribe(&input, move |this, input, event, cx| match event {
                         TextFieldEvent::Changed => this.text_edited(index, &input, cx),
-                        TextFieldEvent::Submitted => this.save(ConfigRole::Client, cx),
+                        TextFieldEvent::Submitted => this.save(cx),
                     });
                 subscriptions.push(subscription);
                 view.inputs.push(Some(input));
@@ -225,6 +239,15 @@ impl SettingsView {
             }
         }
 
+        self.sync_inputs(cx);
+        self.dirty = false;
+        cx.emit(NoticeRaised(Notice::Info(
+            "Reverted to the saved settings".to_owned(),
+        )));
+        cx.notify();
+    }
+
+    fn sync_inputs(&mut self, cx: &mut Context<Self>) {
         for (index, input) in self.inputs.iter().enumerate() {
             if let Some(input) = input {
                 let text = self.form.text(index).to_owned();
@@ -239,14 +262,54 @@ impl SettingsView {
 
         self.errors.clear();
         self.open_choice = None;
-        self.dirty = false;
-        cx.emit(NoticeRaised(Notice::Info(
-            "Reverted to the saved settings".to_owned(),
-        )));
+    }
+
+    fn switch_role(&mut self, role: ConfigRole, cx: &mut Context<Self>) {
+        if role == self.role {
+            return;
+        }
+
+        let incoming = match self.parked.take() {
+            Some(state) => state,
+            None => match self.load_role(role) {
+                Ok(state) => state,
+                Err(message) => {
+                    cx.emit(NoticeRaised(Notice::Failure(message)));
+                    return;
+                }
+            },
+        };
+
+        self.parked = Some(RoleState {
+            saved: mem::replace(&mut self.saved, incoming.saved),
+            form: mem::replace(&mut self.form, incoming.form),
+            dirty: mem::replace(&mut self.dirty, incoming.dirty),
+        });
+        self.role = role;
+        self.sync_inputs(cx);
         cx.notify();
     }
 
-    fn save(&mut self, role: ConfigRole, cx: &mut Context<Self>) {
+    fn load_role(&self, role: ConfigRole) -> Result<RoleState, String> {
+        let failure = |error: &dyn std::error::Error| {
+            format!(
+                "Could not load the {} config: {}",
+                role_label(role).to_lowercase(),
+                error_chain(error)
+            )
+        };
+
+        let saved = load_baseline(&self.environment, role).map_err(|error| failure(&error))?;
+        let form = FormModel::from_config(&saved).map_err(|error| failure(&error))?;
+
+        Ok(RoleState {
+            saved,
+            form,
+            dirty: false,
+        })
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>) {
         self.errors.clear();
 
         let config = match self.form.build() {
@@ -280,15 +343,13 @@ impl SettingsView {
 
         let written = self
             .environment
-            .config_path(role)
+            .config_path(self.role)
             .and_then(|path| config.save(&path).map(|()| path));
 
         match written {
             Ok(path) => {
-                if role == ConfigRole::Client {
-                    self.saved = config;
-                    self.dirty = false;
-                }
+                self.saved = config;
+                self.dirty = false;
                 cx.emit(NoticeRaised(Notice::Info(format!(
                     "Saved {}",
                     path.display()
@@ -634,10 +695,48 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn render_roles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let mut tabs = Vec::with_capacity(ROLES.len());
+
+        for (position, role) in ROLES.into_iter().enumerate() {
+            let unsaved = if role == self.role {
+                self.dirty
+            } else {
+                self.parked.as_ref().is_some_and(|state| state.dirty)
+            };
+            let label = if unsaved {
+                format!("{} config (unsaved)", role_label(role))
+            } else {
+                format!("{} config", role_label(role))
+            };
+
+            tabs.push(
+                option_button(("role", position), label, role == self.role)
+                    .on_click(cx.listener(move |this, _, _, cx| this.switch_role(role, cx))),
+            );
+        }
+
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_6()
+            .py_3()
+            .border_b_1()
+            .border_color(theme::border())
+            .child(
+                div()
+                    .pr_2()
+                    .text_color(theme::text_muted())
+                    .child("Editing"),
+            )
+            .children(tabs)
+    }
+
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let location = self
             .environment
-            .config_path(ConfigRole::Client)
+            .config_path(self.role)
             .map_or_else(|error| error.to_string(), |path| path.display().to_string());
 
         div()
@@ -681,20 +780,8 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| this.reset(cx))),
                     )
                     .child(
-                        button(
-                            "settings-save-host",
-                            "Save as host config",
-                            ButtonStyle::Secondary,
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.save(ConfigRole::Host, cx))),
-                    )
-                    .child(
-                        button("settings-save", "Save", ButtonStyle::Primary, true).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.save(ConfigRole::Client, cx);
-                            }),
-                        ),
+                        button("settings-save", "Save", ButtonStyle::Primary, true)
+                            .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     ),
             )
     }
@@ -717,6 +804,7 @@ impl Render for SettingsView {
 
         let sidebar = self.render_sidebar(cx);
         let footer = self.render_footer(cx);
+        let roles = self.render_roles(cx);
 
         div().flex().size_full().child(sidebar).child(
             div()
@@ -725,6 +813,7 @@ impl Render for SettingsView {
                 .flex_1()
                 .min_w_0()
                 .h_full()
+                .child(roles)
                 .child(
                     div()
                         .id("settings-fields")

@@ -43,6 +43,7 @@ paths:
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
 | `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
+| `stats` | `TimingSink` (wraps the window's sink and records `PresentedFrame` timings), `StatsSampler` and `StreamRates`; no gpui types |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
 | `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls |
 | `theme` | The colour palette, one function per colour |
@@ -92,12 +93,32 @@ paths:
   header shows which, naming the chord (`chord_label`), and a pointer button next to
   `Disconnect` names the active pointer (`Pointer: auto (relative)`) and cycles
   `input.pointer_mode` for the session on click. Losing window activation
-  (`observe_window_activation`) releases. `Quit` is ignored while input is engaged, because the
-  keyboard also reaches gpui and `ctrl-q` belongs to the game then.
-- A 50 ms poll on the foreground executor ends the session when any client stage, the window's
+  (`observe_window_activation`) releases. `Quit` and `F11` are ignored while input is engaged,
+  because the keyboard also reaches gpui and `ctrl-q` and `F11` belong to the game then; the
+  client hotkeys (`input.md`) are the way to act on the client from there.
+- Fullscreen: the header's `Fullscreen` button, `F11` while not engaged (root action
+  `ToggleFullscreen`) and the fullscreen hotkey all call gpui's `Window::toggle_fullscreen`. The
+  stream view omits its header and the root omits the status bar while the window is fullscreen
+  and a stream exists, so notices are invisible then; the stats toggle and the disconnect hotkey
+  are the controls that remain. A fullscreen switch changes no focus: engagement lives in the
+  capture's `CaptureCore`, the pointer lock and shortcuts inhibitor are bound to the surface, and
+  the layout follows through the canvas prepaint's `set_region`. Engagement is dropped only if the
+  compositor itself moves keyboard focus off the surface (`wl_keyboard.leave`, an inhibitor
+  `inactive` event, or gpui's activation observer), which an `xdg_toplevel.set_fullscreen` does
+  not do on the compositors this was written against; it has not been exercised on a live
+  compositor from this repository.
+- A 50 ms poll on the foreground executor (`spawn_in`, so it can reach the `Window`) runs the
+  client actions queued by the hotkeys, ends the session when any client stage, the window's
   presenter or a layout update failed, and re-renders when a newer stream description arrives so
   the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the stream first, then the window, and
   emits `StreamEvent::Ended` with the notice for the status bar.
+- Statistics: the same poll feeds `StatsSampler` with `ClientStream::stats()` and the
+  `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
+  counter deltas into per-second rates and the timing deltas into average and peak client latency
+  (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
+  line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
+  underruns) appear only while non-zero. The figures are client side only: the end-to-end time
+  waits on `stream-capture-timestamps`.
 
 ## Settings
 
@@ -126,8 +147,15 @@ paths:
   every visible row, collects all type errors, and only when there are none runs
   `Config::validate`, whose `ConfigError::field()` names the row to mark. A rejected save jumps to
   the section of the first marked row.
-- `Save` writes `client.toml`; `Save as host config` writes `host.toml` from the same form, which
-  is the file `rusplay-hostd` discovers. Both go through `Config::save` (validate, then write a
-  sibling temporary file and rename it over the target).
+- The page edits one config role at a time, chosen by the `Editing` tabs above the fields
+  (`settings/role.rs`): `client.toml`, which the app itself loads, or `host.toml`, which
+  `rusplay-hostd` discovers. Each role has its own baseline: the first visit to the host tab reads
+  `host.toml` (defaults when it is missing, an error notice and no switch when it is malformed),
+  never the client values. The inactive role's form, saved config and unsaved flag are parked in
+  `SettingsView::parked`, so switching keeps unsaved edits and the tab names which role has them.
+  `Save` and `Revert` act on the active role only. Both go through `Config::save` (validate, then
+  write a sibling temporary file and rename it over the target). The client config is read again
+  at connect, so a client save takes effect without a restart; a host save does only once the
+  daemon restarts.
 - gpui's own transitive dependencies are C-backed on Linux (`xkbcommon`, `freetype` and
   `fontconfig` through `zed-font-kit`); that is accepted for gpui, see `dependencies.md`.

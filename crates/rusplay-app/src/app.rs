@@ -15,13 +15,14 @@ use crate::{
     widgets::controls::option_button,
 };
 
-actions!(rusplay, [FocusNext, FocusPrevious, Quit]);
+actions!(rusplay, [FocusNext, FocusPrevious, Quit, ToggleFullscreen]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, None),
         KeyBinding::new("shift-tab", FocusPrevious, None),
         KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("f11", ToggleFullscreen, None),
     ]);
 }
 
@@ -289,7 +290,7 @@ impl Focusable for RusplayApp {
 }
 
 impl Render for RusplayApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.stream {
             Some(stream) => stream.view.clone().into_any_element(),
             None => div()
@@ -306,6 +307,11 @@ impl Render for RusplayApp {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, cx| window.focus_prev(cx)))
+            .on_action(cx.listener(|this, _: &ToggleFullscreen, window, cx| {
+                if !this.input_engaged(cx) {
+                    window.toggle_fullscreen();
+                }
+            }))
             .on_action(cx.listener(|this, _: &Quit, _, cx| {
                 if this.input_engaged(cx) {
                     return;
@@ -319,6 +325,8 @@ impl Render for RusplayApp {
             .bg(theme::background())
             .text_color(theme::text())
             .child(div().flex_1().min_h_0().child(content))
-            .child(self.render_status())
+            .children(
+                (!(window.is_fullscreen() && self.stream.is_some())).then(|| self.render_status()),
+            )
     }
 }

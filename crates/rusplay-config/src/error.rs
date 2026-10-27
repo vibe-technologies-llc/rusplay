@@ -2,6 +2,8 @@ use std::{io, net::Ipv4Addr, path::PathBuf};
 
 use thiserror::Error;
 
+use crate::input::{HotkeyKey, ReleaseChord};
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read config file {path}")]
@@ -81,6 +83,15 @@ pub enum ConfigError {
     PointerSensitivityOutOfRange(f32),
     #[error("gamepad deadzone {0} is outside 0.0..=0.9")]
     GamepadDeadzoneOutOfRange(f32),
+    #[error(
+        "hotkey chord {hotkey:?} holds every modifier of the release chord {release:?}, which would release input first"
+    )]
+    HotkeyChordShadowsRelease {
+        hotkey: ReleaseChord,
+        release: ReleaseChord,
+    },
+    #[error("hotkey key {key:?} is bound to more than one action")]
+    HotkeyKeyReused { key: HotkeyKey, field: &'static str },
     #[error("reconnect timeout must be greater than zero")]
     ZeroReconnectTimeout,
     #[error("handshake timeout must be greater than zero")]
@@ -186,6 +197,8 @@ impl ConfigError {
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),
             Self::PointerSensitivityOutOfRange(_) => Some("input.pointer_sensitivity"),
             Self::GamepadDeadzoneOutOfRange(_) => Some("input.gamepad_deadzone"),
+            Self::HotkeyChordShadowsRelease { .. } => Some("input.hotkey_chord"),
+            Self::HotkeyKeyReused { field, .. } => Some(*field),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
             Self::EmptyHostName | Self::HostNameTooLong { .. } => Some("peers.host_name"),

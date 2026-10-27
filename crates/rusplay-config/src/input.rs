@@ -27,6 +27,75 @@ pub enum ReleaseChord {
     CtrlAltShift,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChordModifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+impl ChordModifiers {
+    pub const fn includes(self, other: Self) -> bool {
+        (self.ctrl || !other.ctrl) && (self.shift || !other.shift) && (self.alt || !other.alt)
+    }
+}
+
+impl ReleaseChord {
+    pub const fn modifiers(self) -> ChordModifiers {
+        let (ctrl, shift, alt) = match self {
+            Self::CtrlAlt => (true, false, true),
+            Self::CtrlShift => (true, true, false),
+            Self::AltShift => (false, true, true),
+            Self::CtrlAltShift => (true, true, true),
+        };
+
+        ChordModifiers { ctrl, shift, alt }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyKey {
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
@@ -40,6 +109,12 @@ pub struct InputConfig {
     pub pointer_sensitivity: f32,
     pub gamepad_deadzone: f32,
     pub release_chord: ReleaseChord,
+    pub hotkeys: bool,
+    pub hotkey_chord: ReleaseChord,
+    pub hotkey_fullscreen: HotkeyKey,
+    pub hotkey_stats: HotkeyKey,
+    pub hotkey_disconnect: HotkeyKey,
+    pub hotkey_pointer_mode: HotkeyKey,
     pub inhibit_shortcuts: bool,
     pub rumble_max_ms: u16,
     pub resend_delay_ms: u16,
@@ -59,6 +134,12 @@ impl Default for InputConfig {
             pointer_sensitivity: 1.0,
             gamepad_deadzone: 0.05,
             release_chord: ReleaseChord::default(),
+            hotkeys: true,
+            hotkey_chord: ReleaseChord::CtrlAlt,
+            hotkey_fullscreen: HotkeyKey::F,
+            hotkey_stats: HotkeyKey::S,
+            hotkey_disconnect: HotkeyKey::D,
+            hotkey_pointer_mode: HotkeyKey::P,
             inhibit_shortcuts: true,
             rumble_max_ms: 5000,
             resend_delay_ms: 8,
@@ -84,6 +165,37 @@ impl InputConfig {
             return Err(ConfigError::GamepadDeadzoneOutOfRange(
                 self.gamepad_deadzone,
             ));
+        }
+
+        if self.hotkeys {
+            self.validate_hotkeys()?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_hotkeys(self) -> Result<(), ConfigError> {
+        if self
+            .hotkey_chord
+            .modifiers()
+            .includes(self.release_chord.modifiers())
+        {
+            return Err(ConfigError::HotkeyChordShadowsRelease {
+                hotkey: self.hotkey_chord,
+                release: self.release_chord,
+            });
+        }
+
+        let bound = [
+            ("input.hotkey_fullscreen", self.hotkey_fullscreen),
+            ("input.hotkey_stats", self.hotkey_stats),
+            ("input.hotkey_disconnect", self.hotkey_disconnect),
+            ("input.hotkey_pointer_mode", self.hotkey_pointer_mode),
+        ];
+        for (position, (field, key)) in bound.iter().enumerate() {
+            if bound[..position].iter().any(|(_, earlier)| earlier == key) {
+                return Err(ConfigError::HotkeyKeyReused { key: *key, field });
+            }
         }
 
         Ok(())
@@ -190,5 +302,83 @@ mod tests {
             InputConfig::default().release_chord,
             ReleaseChord::CtrlAltShift
         );
+    }
+
+    #[test]
+    fn hotkeys_ship_on_with_distinct_keys_under_a_chord_that_leaves_the_release_chord_alone() {
+        let config = InputConfig::default();
+
+        assert!(config.hotkeys);
+        assert!(config.validate().is_ok());
+        assert!(
+            !config
+                .hotkey_chord
+                .modifiers()
+                .includes(config.release_chord.modifiers())
+        );
+    }
+
+    #[test]
+    fn hotkey_keys_use_lowercase_names() {
+        let config: InputConfig =
+            toml::from_str("hotkey_fullscreen = \"f11\"\nhotkey_stats = \"x\"").unwrap();
+
+        assert_eq!(config.hotkey_fullscreen, HotkeyKey::F11);
+        assert_eq!(config.hotkey_stats, HotkeyKey::X);
+    }
+
+    #[test]
+    fn a_hotkey_chord_containing_the_release_chord_is_rejected() {
+        let same = InputConfig {
+            release_chord: ReleaseChord::CtrlAlt,
+            ..InputConfig::default()
+        };
+        let wider = InputConfig {
+            hotkey_chord: ReleaseChord::CtrlAltShift,
+            release_chord: ReleaseChord::CtrlShift,
+            ..InputConfig::default()
+        };
+        let off = InputConfig {
+            hotkeys: false,
+            ..same
+        };
+
+        assert!(matches!(
+            same.validate(),
+            Err(ConfigError::HotkeyChordShadowsRelease { .. })
+        ));
+        assert!(matches!(
+            wider.validate(),
+            Err(ConfigError::HotkeyChordShadowsRelease { .. })
+        ));
+        assert!(off.validate().is_ok());
+    }
+
+    #[test]
+    fn one_key_cannot_serve_two_actions() {
+        let config = InputConfig {
+            hotkey_disconnect: HotkeyKey::S,
+            ..InputConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::HotkeyKeyReused {
+                key: HotkeyKey::S,
+                field: "input.hotkey_disconnect"
+            })
+        ));
+    }
+
+    #[test]
+    fn chord_modifiers_include_each_other_by_subset() {
+        let ctrl_alt = ReleaseChord::CtrlAlt.modifiers();
+        let all = ReleaseChord::CtrlAltShift.modifiers();
+        let alt_shift = ReleaseChord::AltShift.modifiers();
+
+        assert!(all.includes(ctrl_alt));
+        assert!(ctrl_alt.includes(ctrl_alt));
+        assert!(!ctrl_alt.includes(all));
+        assert!(!ctrl_alt.includes(alt_shift));
     }
 }

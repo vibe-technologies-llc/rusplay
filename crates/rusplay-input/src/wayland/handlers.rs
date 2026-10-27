@@ -472,6 +472,7 @@ impl Dispatch<WlKeyboard, ()> for State {
                 let pressed = key_state == KeyState::Pressed;
                 let transition = state.with_core(|core, out| core.key(key, pressed, out));
                 state.apply(transition);
+                state.sync_pointer_lock();
             }
             _ => {}
         }

@@ -148,6 +148,21 @@ Live tests need a Wayland session with the portal and a person to confirm its di
 - The release chord is `input.release_chord`, any left or right modifier of each member
   (`ctrl-alt-shift` by default), detected on the press that completes it, which is not forwarded.
   Pressing it again re-engages.
+- Client hotkeys are a chord-plus-key layer in `CaptureCore::key`, active only while engaged and
+  gated by `input.hotkeys` (default on). With every modifier of `input.hotkey_chord` down
+  (`ctrl-alt` by default), the press of `input.hotkey_fullscreen`, `hotkey_stats`,
+  `hotkey_disconnect` or `hotkey_pointer_mode` (`f`, `s`, `d`, `p`) is consumed: it is not
+  forwarded, and its release is not either because it never entered `held_keys`. The chord's
+  own modifiers were forwarded as they were pressed and are released with the user's fingers, so
+  the host briefly sees Ctrl+Alt held with no key. The pointer key cycles the mode inside the core
+  (the wayland handler re-syncs the pointer lock after every key); the other three queue a
+  `ClientAction` (`ToggleFullscreen`, `ToggleStats`, `Disconnect`, at most eight pending) that the
+  owner drains with `WaylandCapture::take_actions` / `StreamWindow::take_actions`; the app does it
+  in its 50 ms poll. `HotkeyKey` is a closed set of letters and F1 to F12, mapped to evdev codes in
+  `core.rs`. The release chord is checked first, so `validate` rejects a hotkey chord holding every
+  modifier of the release chord (`HotkeyChordShadowsRelease`), and rejects one key bound to two
+  actions (`HotkeyKeyReused`). Function keys are not defaults because Ctrl+Alt+Fn is the compositor's
+  VT switch, which no client can inhibit.
 - Relative mode forwards `relative_pointer` deltas times `input.pointer_sensitivity` as
   `PointerMotion`. Absolute mode maps surface coordinates through the `StreamRegion` (the
   letterboxed picture rectangle in surface coordinates, set by the app) to `0.0..=1.0`, clamped,

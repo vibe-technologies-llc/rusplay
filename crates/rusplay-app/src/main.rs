@@ -3,6 +3,7 @@ mod hosts;
 mod notice;
 mod session;
 mod settings;
+mod stats;
 mod stream;
 mod theme;
 mod widgets;
