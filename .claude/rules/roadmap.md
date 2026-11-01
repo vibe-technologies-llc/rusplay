@@ -1,8 +1,8 @@
 # Roadmap
 
 - `docs/ROADMAP.md` is only an index of the list files and the item format. The lists are
-  `docs/FEATURES.md`, `docs/BUGS.md` and `docs/PERFORMANCE.md`. A new kind of work gets a new
-  list file and an index row.
+  `docs/FEATURES.md`, `docs/BUGS.md`, `docs/PERFORMANCE.md` and `docs/QUALITY.md`. A new kind of
+  work gets a new list file and an index row.
 - Each list is a set of `# Category` headings, and under each one bullet per item:
 
   ```markdown

@@ -71,8 +71,8 @@ with no trailers or attribution lines. The full pre-commit procedure is the `che
 ## Roadmap
 
 `docs/ROADMAP.md` indexes the work lists (`docs/FEATURES.md`, `docs/BUGS.md`,
-`docs/PERFORMANCE.md`). An item is deleted from its list in the same commit that implements it.
-The format is in `.claude/rules/roadmap.md`.
+`docs/PERFORMANCE.md`, `docs/QUALITY.md`). An item is deleted from its list in the same commit
+that implements it. The format is in `.claude/rules/roadmap.md`.
 
 ## Rules
 

@@ -7,6 +7,7 @@ Outstanding work, split by kind. Finished items are deleted, not ticked off.
 | [FEATURES.md](FEATURES.md) | Functionality still to build |
 | [BUGS.md](BUGS.md) | Known defects |
 | [PERFORMANCE.md](PERFORMANCE.md) | Latency, throughput and quality work on paths that already function |
+| [QUALITY.md](QUALITY.md) | Tests, structure, tooling and documentation that change no behaviour |
 
 ## Item format
 
