@@ -4,6 +4,8 @@ mod ffi;
 pub(crate) mod format;
 mod h264;
 mod hdr;
+#[cfg(test)]
+mod header_tests;
 mod hevc;
 mod level;
 mod params;

@@ -154,6 +154,13 @@ paths:
   LSB; radeonsi decodes identically across the 65536th frame either way); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
   (`primary_ref_frame` 0) and one tile unless the size forces more. A temporal delimiter is
   prepended when the driver output lacks one, so every AV1 packet is a temporal unit.
+- The header writers are tested without a device in `src/vaapi/header_tests/`: every packed header
+  (H.264 SPS/PPS/slice, HEVC VPS/SPS/PPS/slice, AV1 sequence and frame header) is parsed back with
+  `cros-codecs` across profiles, chroma, depth, resolutions, colour descriptions, frame rates and
+  QPs, the VA sequence, picture and slice parameter structs are compared against the parsed
+  headers, and the SEI and metadata OBU bytes are checked against hand-derived vectors. A stream
+  is driven through `begin`, the header and parameter builders, then `commit`, which `buffers`
+  also uses, so the tests walk the same state machine without a VA context.
 - Rate control: `Cbr` maps to `VA_RC_CBR`, `Vbr` to `VA_RC_VBR` with the maximum as
   `bits_per_second` and the bitrate as `target_percentage`, `ConstantQuality` to `VA_RC_CQP` (AV1
   `base_qindex` is `qp * 5`). The HRD buffer is `video.vbv_frames` frames at the peak rate

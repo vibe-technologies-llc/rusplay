@@ -409,7 +409,10 @@ impl Av1Stream {
         (bytes, offsets)
     }
 
-    fn sequence_parameters(&self, bits_per_second: u32) -> ffi::VAEncSequenceParameterBufferAV1 {
+    pub(super) fn sequence_parameters(
+        &self,
+        bits_per_second: u32,
+    ) -> ffi::VAEncSequenceParameterBufferAV1 {
         let mut parameters = ffi::VAEncSequenceParameterBufferAV1 {
             seq_profile: self.profile.seq_profile(),
             seq_level_idx: self.level.id,
@@ -432,7 +435,7 @@ impl Av1Stream {
         parameters
     }
 
-    fn picture_parameters(
+    pub(super) fn picture_parameters(
         &self,
         picture: &Picture,
         order_hint: u8,
@@ -505,11 +508,9 @@ impl Av1Stream {
         context: &Context,
         picture: &Picture,
     ) -> Result<CodecBuffers, EncodeError> {
-        if picture.keyframe {
-            self.reference = None;
-        }
+        self.begin(picture);
 
-        let order_hint = u8::try_from(picture.index % (1 << ORDER_HINT_BITS)).unwrap_or(0);
+        let order_hint = Self::order_hint(picture);
         let (frame_header, offsets) = self.frame_header(picture.keyframe, order_hint);
         let tile_group = ffi::VAEncTileGroupBufferAV1 {
             tg_start: 0,
@@ -546,10 +547,24 @@ impl Av1Stream {
             &tile_group,
         )?;
 
+        self.commit(picture);
+
+        Ok(buffers)
+    }
+
+    pub(super) fn begin(&mut self, picture: &Picture) {
+        if picture.keyframe {
+            self.reference = None;
+        }
+    }
+
+    pub(super) fn order_hint(picture: &Picture) -> u8 {
+        u8::try_from(picture.index % (1 << ORDER_HINT_BITS)).unwrap_or(0)
+    }
+
+    pub(super) fn commit(&mut self, picture: &Picture) {
         self.reference = Some(ReferencePicture {
             surface: picture.recon,
         });
-
-        Ok(buffers)
     }
 }

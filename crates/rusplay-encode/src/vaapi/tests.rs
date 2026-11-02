@@ -8,18 +8,16 @@ use std::{
 };
 
 use cros_codecs::codec::{
-    av1::parser::{FrameType, ObuAction, ParsedObu, Parser as Av1Parser},
-    h264::parser::{Nalu as H264Nalu, NaluType as H264NaluType, Parser as H264Parser},
-    h265::parser::{Nalu as H265Nalu, NaluType as H265NaluType, Parser as H265Parser},
+    h264::parser::{Nalu as H264Nalu, NaluType as H264NaluType},
+    h265::parser::{Nalu as H265Nalu, NaluType as H265NaluType},
 };
 use rusplay_config::{
     RateControl, SoftwareDecoderConfig, VaapiConfig, VaapiDecoderConfig, VideoConfig,
     VideoEncoderConfig,
 };
 use rusplay_core::{
-    BitDepth, BufferLease, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace,
-    DrmFourcc, EncodedFrame, Frame, FrameBuffer, FrameRate, PixelFormat, Plane, Resolution,
-    Timestamp, TransferFunction,
+    BitDepth, BufferLease, ChromaSubsampling, Codec, ColorSpace, DrmFourcc, EncodedFrame, Frame,
+    FrameBuffer, PixelFormat, Plane, Resolution, Timestamp,
 };
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
@@ -29,11 +27,7 @@ use crate::{
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
     vaapi::{
-        StreamInfo,
-        av1::{Av1Profile, Av1Stream, TileLayout},
         format::{pack, surface_format},
-        h264::{H264Profile, H264Stream},
-        hevc::{HevcProfile, HevcStream},
         va::{Display, DmaBufImport, Image, Surface},
     },
 };
@@ -375,35 +369,6 @@ fn hevc_nal_types(data: &[u8]) -> Vec<H265NaluType> {
         types.push(nalu.header.type_);
     }
     types
-}
-
-fn av1_frame_types(data: &[u8]) -> (bool, Vec<FrameType>) {
-    let mut parser = Av1Parser::default();
-    let mut has_sequence_header = false;
-    let mut types = Vec::new();
-    let mut rest = data;
-
-    while !rest.is_empty() {
-        let obu = match parser.read_obu(rest).unwrap() {
-            ObuAction::Process(obu) => obu,
-            ObuAction::Drop(length) => {
-                rest = &rest[length as usize..];
-                continue;
-            }
-        };
-        rest = &rest[obu.bytes_used..];
-        match parser
-            .parse_obu(obu)
-            .unwrap_or_else(|error| panic!("parsing an obu: {error}"))
-        {
-            ParsedObu::SequenceHeader(_) => has_sequence_header = true,
-            ParsedObu::FrameHeader(header) => types.push(header.frame_type),
-            ParsedObu::Frame(frame) => types.push(frame.header.frame_type),
-            _ => {}
-        }
-    }
-
-    (has_sequence_header, types)
 }
 
 fn is_h264_idr(data: &[u8]) -> bool {
@@ -1011,193 +976,4 @@ fn unspecified_resolution_follows_the_first_frame() {
         other,
         Err(EncodeError::FrameResolutionMismatch { expected, .. }) if expected == RESOLUTION
     ));
-}
-
-fn info(format: PixelFormat, resolution: Resolution) -> StreamInfo {
-    StreamInfo {
-        resolution,
-        format,
-        color: ColorSpace {
-            primaries: ColorPrimaries::Bt2020,
-            transfer: TransferFunction::Pq,
-            range: ColorRange::Limited,
-            ..ColorSpace::default()
-        },
-        frame_rate: FrameRate::new(60_000, 1_001),
-        peak_kbps: 80_000,
-        qp: None,
-    }
-}
-
-#[test]
-fn h264_parameter_sets_parse_back() {
-    let stream = H264Stream::new(
-        H264Profile::High,
-        info(yuv420(BitDepth::Eight), ODD_RESOLUTION),
-    );
-    let mut data = stream.sps().bytes;
-    data.extend(stream.pps().bytes);
-    data.extend(stream.slice_header(true).bytes);
-    let mut parser = H264Parser::default();
-    let mut cursor = Cursor::new(data.as_slice());
-
-    let sps_nalu = H264Nalu::next(&mut cursor).unwrap();
-    let sps = parser.parse_sps(&sps_nalu).unwrap().clone();
-    let pps_nalu = H264Nalu::next(&mut cursor).unwrap();
-    parser.parse_pps(&pps_nalu).unwrap();
-    let rect = sps.visible_rectangle();
-    let vui = &sps.vui_parameters;
-
-    assert_eq!(sps.profile_idc, 100);
-    assert_eq!(rect.max.x - rect.min.x, ODD_RESOLUTION.width);
-    assert_eq!(rect.max.y - rect.min.y, ODD_RESOLUTION.height);
-    assert_eq!(sps.max_num_ref_frames, 1);
-    assert_eq!(vui.colour_primaries, 9);
-    assert_eq!(vui.transfer_characteristics, 16);
-    assert_eq!(vui.matrix_coefficients, 9);
-    assert!(!vui.video_full_range_flag);
-    assert_eq!(vui.max_num_reorder_frames, 0);
-    assert_eq!(vui.time_scale, 120_000);
-}
-
-#[test]
-fn hevc_parameter_sets_parse_back() {
-    for (format, profile_idc) in [
-        (yuv420(BitDepth::Ten), 2),
-        (pixel(ChromaSubsampling::Yuv422, BitDepth::Ten), 4),
-        (pixel(ChromaSubsampling::Yuv444, BitDepth::Eight), 4),
-    ] {
-        let stream = HevcStream::new(
-            HevcProfile::for_format(format),
-            info(format, ODD_RESOLUTION),
-        );
-        let mut data = stream.vps();
-        data.extend(stream.sps());
-        data.extend(stream.pps());
-        let mut parser = H265Parser::default();
-        let mut cursor = Cursor::new(data.as_slice());
-
-        let vps = H265Nalu::next(&mut cursor).unwrap();
-        parser.parse_vps(&vps).unwrap();
-        let sps_nalu = H265Nalu::next(&mut cursor).unwrap();
-        let sps = parser.parse_sps(&sps_nalu).unwrap().clone();
-        let pps = H265Nalu::next(&mut cursor).unwrap();
-        parser.parse_pps(&pps).unwrap();
-        let rect = sps.visible_rectangle();
-
-        assert_eq!(sps.profile_tier_level.general_profile_idc, profile_idc);
-        assert_eq!(rect.max.x - rect.min.x, ODD_RESOLUTION.width);
-        assert_eq!(rect.max.y - rect.min.y, ODD_RESOLUTION.height);
-        assert_eq!(
-            u32::from(sps.bit_depth_luma_minus8) + 8,
-            u32::from(format.depth.bits())
-        );
-        assert_eq!(sps.max_num_reorder_pics[0], 0);
-        assert_eq!(sps.vui_parameters.colour_primaries, 9);
-    }
-}
-
-#[test]
-fn hevc_slice_header_carries_only_the_poc_lsb() {
-    let format = yuv420(BitDepth::Eight);
-    let stream = HevcStream::new(HevcProfile::for_format(format), info(format, RESOLUTION));
-
-    for (order, lsb) in [
-        (1, 1),
-        (65_535, 65_535),
-        (65_536, 0),
-        (65_537, 1),
-        (131_075, 3),
-        (i32::MAX, 65_535),
-    ] {
-        let mut data = stream.vps();
-        data.extend(stream.sps());
-        data.extend(stream.pps());
-        data.extend(HevcStream::slice_header(false, order).bytes);
-        let mut parser = H265Parser::default();
-        let mut cursor = Cursor::new(data.as_slice());
-
-        let vps = H265Nalu::next(&mut cursor).unwrap();
-        parser.parse_vps(&vps).unwrap();
-        let sps = H265Nalu::next(&mut cursor).unwrap();
-        parser.parse_sps(&sps).unwrap();
-        let pps = H265Nalu::next(&mut cursor).unwrap();
-        parser.parse_pps(&pps).unwrap();
-        let slice = H265Nalu::next(&mut cursor).unwrap();
-        let slice = parser.parse_slice_header(slice).unwrap();
-
-        assert_eq!(slice.header.pic_order_cnt_lsb, lsb, "order {order}");
-    }
-}
-
-#[test]
-fn av1_headers_parse_back() {
-    for (format, profile) in [
-        (yuv420(BitDepth::Ten), Av1Profile::Main),
-        (
-            pixel(ChromaSubsampling::Yuv444, BitDepth::Eight),
-            Av1Profile::High,
-        ),
-    ] {
-        let stream = Av1Stream::new(profile, info(format, ODD_RESOLUTION));
-        let (frame_header, offsets) = stream.frame_header(true, 0);
-        let mut data = stream.sequence_header();
-        data.extend(&frame_header);
-
-        let (has_sequence_header, types) = av1_frame_types(&data);
-        let qindex_byte = offsets.qindex as usize / 8;
-        let qindex_shift = offsets.qindex % 8;
-        let window = u16::from_be_bytes([frame_header[qindex_byte], frame_header[qindex_byte + 1]]);
-
-        assert!(has_sequence_header);
-        assert_eq!(types, vec![FrameType::KeyFrame]);
-        assert_eq!((window >> (8 - qindex_shift)) & 0xff, 128);
-        assert_eq!(offsets.total_bits as usize, frame_header.len() * 8);
-        assert_eq!(offsets.cdef_bits, 16);
-    }
-}
-
-#[test]
-fn av1_inter_header_parses_after_a_key_frame() {
-    let stream = Av1Stream::new(Av1Profile::Main, info(yuv420(BitDepth::Eight), RESOLUTION));
-    let mut data = stream.sequence_header();
-    data.extend(stream.frame_header(true, 0).0);
-
-    let mut parser = Av1Parser::default();
-    let mut rest = data.as_slice();
-    while !rest.is_empty() {
-        let ObuAction::Process(obu) = parser.read_obu(rest).unwrap() else {
-            panic!("dropped an obu");
-        };
-        rest = &rest[obu.bytes_used..];
-        if let ParsedObu::FrameHeader(header) = parser.parse_obu(obu).unwrap() {
-            parser.ref_frame_update(&header).unwrap();
-        }
-    }
-    let mut inter = crate::obu::temporal_delimiter();
-    inter.extend(stream.frame_header(false, 1).0);
-    let ObuAction::Process(delimiter) = parser.read_obu(&inter).unwrap() else {
-        panic!("dropped the temporal delimiter");
-    };
-    let inter = &inter[delimiter.bytes_used..];
-    parser.parse_obu(delimiter).unwrap();
-    let ObuAction::Process(obu) = parser.read_obu(inter).unwrap() else {
-        panic!("dropped the inter frame header");
-    };
-    let ParsedObu::FrameHeader(header) = parser.parse_obu(obu).unwrap() else {
-        panic!("not a frame header");
-    };
-
-    assert_eq!(header.frame_type, FrameType::InterFrame);
-    assert_eq!(header.refresh_frame_flags, 1);
-    assert_eq!(header.order_hint, 1);
-}
-
-#[test]
-fn av1_tiles_split_wide_frames() {
-    let narrow = TileLayout::new(Resolution::new(1920, 1080));
-    let wide = TileLayout::new(Resolution::new(7680, 4320));
-
-    assert_eq!(narrow.tile_count(), 1);
-    assert_eq!(wide.tile_count(), 4);
 }

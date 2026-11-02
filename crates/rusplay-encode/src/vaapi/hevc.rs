@@ -452,7 +452,10 @@ impl HevcStream {
         packed(bytes)
     }
 
-    fn sequence_parameters(&self, bits_per_second: u32) -> ffi::VAEncSequenceParameterBufferHEVC {
+    pub(super) fn sequence_parameters(
+        &self,
+        bits_per_second: u32,
+    ) -> ffi::VAEncSequenceParameterBufferHEVC {
         let mut parameters = ffi::VAEncSequenceParameterBufferHEVC {
             general_profile_idc: self.profile.idc(),
             general_level_idc: self.level.id,
@@ -505,7 +508,7 @@ impl HevcStream {
         })
     }
 
-    fn picture_parameters(
+    pub(super) fn picture_parameters(
         &self,
         picture: &Picture,
         order: i32,
@@ -545,7 +548,7 @@ impl HevcStream {
         parameters
     }
 
-    fn slice_parameters(&self, picture: &Picture) -> ffi::VAEncSliceParameterBufferHEVC {
+    pub(super) fn slice_parameters(&self, picture: &Picture) -> ffi::VAEncSliceParameterBufferHEVC {
         let mut slice = ffi::VAEncSliceParameterBufferHEVC {
             num_ctu_in_slice: self.ctb_count(),
             slice_type: if picture.keyframe {
@@ -576,11 +579,9 @@ impl HevcStream {
         context: &Context,
         picture: &Picture,
     ) -> Result<CodecBuffers, EncodeError> {
-        if picture.keyframe {
-            self.reference = None;
-        }
+        self.begin(picture);
 
-        let order = i32::try_from(picture.index).unwrap_or(i32::MAX);
+        let order = Self::order(picture);
         let sequence = sequence_buffer(context, picture, || {
             self.sequence_parameters(picture.bits_per_second)
         })?;
@@ -617,11 +618,25 @@ impl HevcStream {
             &self.slice_parameters(picture),
         )?;
 
+        self.commit(picture, order);
+
+        Ok(buffers)
+    }
+
+    pub(super) fn begin(&mut self, picture: &Picture) {
+        if picture.keyframe {
+            self.reference = None;
+        }
+    }
+
+    pub(super) fn order(picture: &Picture) -> i32 {
+        i32::try_from(picture.index).unwrap_or(i32::MAX)
+    }
+
+    pub(super) fn commit(&mut self, picture: &Picture, order: i32) {
         self.reference = Some(ReferencePicture {
             surface: picture.recon,
             order,
         });
-
-        Ok(buffers)
     }
 }
