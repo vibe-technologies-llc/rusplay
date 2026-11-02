@@ -2,8 +2,8 @@ use std::ptr;
 
 use rusplay_config::{NvencPreset, NvencTuning, RateControl};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, FrameRate, HdrLevels, PixelFormat,
-    Resolution,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorRange, ColorSpace, FrameRate, HdrLevels,
+    PixelFormat, Resolution,
 };
 
 use crate::{
@@ -26,6 +26,7 @@ pub(super) struct Settings {
     pub codec: Codec,
     pub format: PixelFormat,
     pub color: ColorSpace,
+    pub siting: ChromaSiting,
     pub frame_rate: FrameRate,
     pub vbv_frames: u8,
     pub resolution: Option<Resolution>,
@@ -206,7 +207,7 @@ pub(super) fn apply_rate(rc: &mut ffi::RcParams, values: RateValues) {
     }
 }
 
-pub(super) fn vui(color: &ColorSpace) -> ffi::VuiParameters {
+pub(super) fn vui(color: &ColorSpace, siting: ChromaSiting) -> ffi::VuiParameters {
     ffi::VuiParameters {
         video_signal_type_present_flag: 1,
         video_format: ffi::VUI_VIDEO_FORMAT_UNSPECIFIED,
@@ -215,6 +216,9 @@ pub(super) fn vui(color: &ColorSpace) -> ffi::VuiParameters {
         colour_primaries: u32::from(color.primaries.h273_code().unwrap_or(2)),
         transfer_characteristics: u32::from(color.transfer.h273_code()),
         colour_matrix: u32::from(color.matrix_coefficients().h273_code()),
+        chroma_sample_location_flag: 1,
+        chroma_sample_location_top: siting.vui_chroma_location(),
+        chroma_sample_location_bot: siting.vui_chroma_location(),
         ..ffi::VuiParameters::default()
     }
 }
@@ -271,7 +275,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             h264.separate_colour_plane_flag = 0;
             h264.output_bit_depth = depth;
             h264.input_bit_depth = depth;
-            h264.vui = vui(color);
+            h264.vui = vui(color, settings.siting);
         }
         Codec::Hevc => {
             let hevc = unsafe { &mut config.codec.hevc };
@@ -287,7 +291,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             hevc.max_num_ref_frames_in_dpb = 1;
             hevc.output_bit_depth = depth;
             hevc.input_bit_depth = depth;
-            hevc.vui = vui(color);
+            hevc.vui = vui(color, settings.siting);
         }
         Codec::Av1 => {
             let av1 = unsafe { &mut config.codec.av1 };
@@ -302,7 +306,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             av1.max_num_ref_frames_in_dpb = 1;
             av1.output_bit_depth = depth;
             av1.input_bit_depth = depth;
-            let signalled = vui(color);
+            let signalled = vui(color, settings.siting);
             av1.color_primaries = signalled.colour_primaries;
             av1.transfer_characteristics = signalled.transfer_characteristics;
             av1.matrix_coefficients = signalled.colour_matrix;
@@ -311,7 +315,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             } else {
                 ffi::AV1_COLOR_RANGE_STUDIO
             };
-            av1.chroma_sample_position = 0;
+            av1.chroma_sample_position = settings.siting.av1_chroma_position();
         }
     }
 }
@@ -441,6 +445,7 @@ mod tests {
             codec,
             format,
             color: ColorSpace::default(),
+            siting: ChromaSiting::default(),
             frame_rate: FrameRate::new(60, 1),
             vbv_frames: 2,
             resolution: None,
@@ -740,12 +745,35 @@ mod tests {
             range: ColorRange::Full,
             ..ColorSpace::default()
         };
-        let signalled = vui(&srgb);
+        let signalled = vui(&srgb, ChromaSiting::default());
 
         assert_eq!(signalled.colour_primaries, 1);
         assert_eq!(signalled.transfer_characteristics, 13);
         assert_eq!(signalled.colour_matrix, 1);
         assert_eq!(signalled.video_full_range_flag, 1);
+    }
+
+    #[test]
+    fn the_siting_lands_in_every_codec_config() {
+        for (siting, location, position) in
+            [(ChromaSiting::Left, 0, 1), (ChromaSiting::Center, 1, 0)]
+        {
+            let sited = |codec| Settings {
+                siting,
+                ..settings(codec, PixelFormat::default())
+            };
+            let h264 = configured(&sited(Codec::H264), ALL_FEATURES);
+            let hevc = configured(&sited(Codec::Hevc), ALL_FEATURES);
+            let av1 = configured(&sited(Codec::Av1), ALL_FEATURES);
+            let vuis = unsafe { [h264.codec.h264.vui, hevc.codec.hevc.vui] };
+
+            for vui in vuis {
+                assert_eq!(vui.chroma_sample_location_flag, 1);
+                assert_eq!(vui.chroma_sample_location_top, location);
+                assert_eq!(vui.chroma_sample_location_bot, location);
+            }
+            assert_eq!(unsafe { av1.codec.av1.chroma_sample_position }, position);
+        }
     }
 
     #[test]

@@ -18,7 +18,6 @@
 - [XL] `video-ltr-recovery`: recover from loss against a client-acknowledged long-term reference instead of an IDR. Every recovery path forces an IDR today (`rusplay-host/src/encode.rs`, `pipeline.rs`), a large burst at 4:2:2/4:4:4 10-bit. The NVENC SDK 13 structs already carry the LTR fields and the VAAPI encoder writes its own headers, so the reference structure is Rusplay's. Split into: client acks of the last good frame and a recover-from-frame request (protocol bump), an encoder-trait method to invalidate or mark references with IDR fallback, then per backend (NVENC LTR, VAAPI AV1 slot refresh first, H.264/HEVC long-term refs after; VCN's own reference marking, see `decode-vaapi-driver-field-long-term`, makes those risky)
 
 # Scaling
-- [M] `host-chroma-siting-signalled`: the client now prefers the chroma siting the decoder reads from the bitstream (H.264/HEVC VUI `chroma_sample_loc_type`, AV1 `chroma_sample_position`) over `scaling.chroma_siting`, but nothing writes it: the host's own encoders leave the VUI chroma location and the AV1 position unset, so a host with `scaling.chroma_siting = center` still needs the same value in the client config. Write the siting the host converted with into each encoder's headers (`rusplay-encode`: VAAPI header writers, NVENC `chroma_sample_location_*`, x264/x265, SVT-AV1) or signal it in `StreamDescription` (protocol bump); AV1 cannot express centred horizontal siting, so that path needs the protocol field
 
 # Headless host
 

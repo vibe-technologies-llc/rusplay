@@ -7,8 +7,8 @@ use std::{
 
 use rusplay_config::{VideoConfig, X264Config, X264Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame, FrameRate,
-    HdrLevels, PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame,
+    FrameRate, HdrLevels, PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
@@ -72,6 +72,10 @@ const fn full_range_flag(range: ColorRange) -> c_int {
     }
 }
 
+fn chroma_location(siting: ChromaSiting) -> c_int {
+    c_int::try_from(siting.vui_chroma_location()).unwrap_or_default()
+}
+
 const fn colour_space_id(chroma: ChromaSubsampling) -> c_int {
     match chroma {
         ChromaSubsampling::Yuv420 => sys::X264_CSP_I420,
@@ -117,13 +121,18 @@ struct Settings {
     config: X264Config,
     pixel_format: PixelFormat,
     color: ColorSpace,
+    siting: ChromaSiting,
     frame_rate: FrameRate,
     vbv_frames: u8,
     bitrate_kbps: u32,
 }
 
 impl Settings {
-    fn new(video: &VideoConfig, config: &X264Config) -> Result<Self, EncodeError> {
+    fn new(
+        video: &VideoConfig,
+        config: &X264Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
         if !supports(video.pixel_format) {
             return Err(EncodeError::BitDepthUnsupported {
                 backend: BACKEND,
@@ -135,6 +144,7 @@ impl Settings {
             config: config.clone(),
             pixel_format: video.pixel_format,
             color: video.color,
+            siting,
             frame_rate: video.frame_rate,
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
@@ -234,6 +244,7 @@ impl Settings {
         )?;
         parse(param, "transfer", transfer_name(self.color.transfer))?;
         param.vui.b_fullrange = full_range_flag(self.color.range);
+        param.vui.i_chroma_loc = chroma_location(self.siting);
         apply_hdr(param, &self.color.hdr);
 
         Ok(())
@@ -441,8 +452,12 @@ pub struct X264Encoder {
 }
 
 impl X264Encoder {
-    pub fn new(video: &VideoConfig, config: &X264Config) -> Result<Self, EncodeError> {
-        let settings = Settings::new(video, config)?;
+    pub fn new(
+        video: &VideoConfig,
+        config: &X264Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
+        let settings = Settings::new(video, config, siting)?;
 
         let session = video
             .resolution
@@ -585,7 +600,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x264).unwrap();
+        let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
         let display = &param.mastering_display;
@@ -607,12 +622,28 @@ mod tests {
     }
 
     #[test]
+    fn the_siting_reaches_the_vui_chroma_location() {
+        let config = config(PixelFormat::default(), X264Config::default());
+        let VideoEncoderConfig::X264(x264) = &config.encoder else {
+            return;
+        };
+
+        for (siting, location) in [(ChromaSiting::Left, 0), (ChromaSiting::Center, 1)] {
+            let settings = Settings::new(&config, x264, siting).unwrap();
+
+            let param = settings.param(testing::TEST_RESOLUTION).unwrap();
+
+            assert_eq!(param.vui.i_chroma_loc, location);
+        }
+    }
+
+    #[test]
     fn sdr_streams_write_no_hdr_sei() {
         let config = config(PixelFormat::default(), X264Config::default());
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x264).unwrap();
+        let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
 
@@ -643,7 +674,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x264).unwrap();
+        let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
 
@@ -657,7 +688,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x264).unwrap();
+        let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
 

@@ -7,8 +7,8 @@ use std::{
 
 use rusplay_config::{VideoConfig, X265Config, X265Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame, FrameRate,
-    PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame,
+    FrameRate, PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{
@@ -263,17 +263,23 @@ struct Settings {
     config: X265Config,
     pixel_format: PixelFormat,
     color: ColorSpace,
+    siting: ChromaSiting,
     frame_rate: FrameRate,
     vbv_frames: u8,
     bitrate_kbps: u32,
 }
 
 impl Settings {
-    fn new(video: &VideoConfig, config: &X265Config) -> Result<Self, EncodeError> {
+    fn new(
+        video: &VideoConfig,
+        config: &X265Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
         let settings = Self {
             config: config.clone(),
             pixel_format: video.pixel_format,
             color: video.color,
+            siting,
             frame_rate: video.frame_rate,
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
@@ -350,6 +356,7 @@ impl Settings {
         )?;
         param.parse("transfer", transfer_name(self.color.transfer))?;
         param.parse("range", range_name(self.color.range))?;
+        param.parse("chromaloc", &self.siting.vui_chroma_location().to_string())?;
 
         let hdr = &self.color.hdr;
         if let Some(display) = &hdr.mastering {
@@ -528,8 +535,12 @@ pub struct X265Encoder {
 }
 
 impl X265Encoder {
-    pub fn new(video: &VideoConfig, config: &X265Config) -> Result<Self, EncodeError> {
-        let settings = Settings::new(video, config)?;
+    pub fn new(
+        video: &VideoConfig,
+        config: &X265Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
+        let settings = Settings::new(video, config, siting)?;
 
         let session = video
             .resolution
@@ -675,7 +686,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x265).unwrap();
+        let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.pixel_format.depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
@@ -714,7 +725,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x265).unwrap();
+        let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.pixel_format.depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
@@ -730,7 +741,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, x265).unwrap();
+        let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.pixel_format.depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();

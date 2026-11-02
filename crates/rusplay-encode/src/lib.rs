@@ -41,7 +41,7 @@ mod x265;
 mod x26x;
 
 use rusplay_config::VideoConfig;
-use rusplay_core::{EncodedFrame, Frame};
+use rusplay_core::{ChromaSiting, EncodedFrame, Frame};
 
 pub use crate::{
     backend::Backend,
@@ -60,6 +60,13 @@ pub trait VideoEncoder: Send {
 }
 
 pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> {
+    open_sited(config, ChromaSiting::default())
+}
+
+pub fn open_sited(
+    config: &VideoConfig,
+    siting: ChromaSiting,
+) -> Result<Box<dyn VideoEncoder>, EncodeError> {
     let backend = Backend::from(&config.encoder);
 
     backend.check_codec(config.codec)?;
@@ -67,23 +74,23 @@ pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> 
     match &config.encoder {
         #[cfg(feature = "x264")]
         rusplay_config::VideoEncoderConfig::X264(x264) => {
-            Ok(Box::new(x264::X264Encoder::new(config, x264)?))
+            Ok(Box::new(x264::X264Encoder::new(config, x264, siting)?))
         }
         #[cfg(feature = "x265")]
         rusplay_config::VideoEncoderConfig::X265(x265) => {
-            Ok(Box::new(x265::X265Encoder::new(config, x265)?))
+            Ok(Box::new(x265::X265Encoder::new(config, x265, siting)?))
         }
         #[cfg(feature = "svt-av1")]
         rusplay_config::VideoEncoderConfig::SvtAv1(svt) => {
-            Ok(Box::new(svt_av1::SvtAv1Encoder::new(config, svt)?))
+            Ok(Box::new(svt_av1::SvtAv1Encoder::new(config, svt, siting)?))
         }
         #[cfg(feature = "vaapi")]
         rusplay_config::VideoEncoderConfig::Vaapi(vaapi) => {
-            Ok(Box::new(vaapi::VaapiEncoder::new(config, vaapi)?))
+            Ok(Box::new(vaapi::VaapiEncoder::new(config, vaapi, siting)?))
         }
         #[cfg(feature = "nvenc")]
         rusplay_config::VideoEncoderConfig::Nvenc(nvenc) => {
-            Ok(Box::new(nvenc::NvencEncoder::new(config, nvenc)?))
+            Ok(Box::new(nvenc::NvencEncoder::new(config, nvenc, siting)?))
         }
         #[cfg(not(all(
             feature = "vaapi",

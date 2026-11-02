@@ -38,7 +38,10 @@ clips per channel.
   bitstream (H.264/HEVC VUI `colour_primaries`, `transfer_characteristics`,
   `matrix_coefficients`, `video_full_range_flag`; AV1 `color_config`; mastering display colour
   volume and content light level SEI/metadata OBUs, written by every encoder backend,
-  `.claude/rules/video-encode.md`). The decoder reports what the bitstream says
+  `.claude/rules/video-encode.md`). The chroma siting the host converted with travels the same two
+  ways: `StreamDescription::siting` and the VUI `chroma_sample_loc_type` / AV1
+  `chroma_sample_position`; the client prefers the bitstream, then the description, then its own
+  `scaling.chroma_siting`. The decoder reports what the bitstream says
   (`DecodedFrame::color`, `.claude/rules/video-decode.md`), and the client lays it over the
   stream description, so the bitstream wins wherever it says something.
 - **The client owns the mapping to its display.** The target is the output's image description

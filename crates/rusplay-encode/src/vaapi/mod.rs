@@ -22,8 +22,8 @@ use std::{
 
 use rusplay_config::{RateControl, VaapiConfig, VideoConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer, FrameRate,
-    PixelFormat, Plane, Resolution,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer,
+    FrameRate, PixelFormat, Plane, Resolution,
 };
 
 use crate::{
@@ -65,6 +65,7 @@ struct StreamInfo {
     resolution: Resolution,
     format: PixelFormat,
     color: ColorSpace,
+    siting: ChromaSiting,
     frame_rate: FrameRate,
     peak_kbps: u32,
     qp: Option<u8>,
@@ -436,6 +437,7 @@ struct Settings {
     codec: Codec,
     format: PixelFormat,
     color: ColorSpace,
+    siting: ChromaSiting,
     frame_rate: FrameRate,
     vbv_frames: u8,
     resolution: Option<Resolution>,
@@ -468,6 +470,7 @@ impl Settings {
             resolution,
             format: self.format,
             color: self.color,
+            siting: self.siting,
             frame_rate: self.frame_rate,
             peak_kbps: self.peak_kbps(),
             qp: self.qp(),
@@ -713,7 +716,11 @@ pub struct VaapiEncoder {
 unsafe impl Send for VaapiEncoder {}
 
 impl VaapiEncoder {
-    pub fn new(video: &VideoConfig, vaapi: &VaapiConfig) -> Result<Self, EncodeError> {
+    pub fn new(
+        video: &VideoConfig,
+        vaapi: &VaapiConfig,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
         let params = VaapiParams::parse(&vaapi.params)?;
         if video.color.primaries.h273_code().is_none() {
             return Err(EncodeError::ColorPrimariesUnsignalable {
@@ -727,6 +734,7 @@ impl VaapiEncoder {
             codec: video.codec,
             format: video.pixel_format,
             color: video.color,
+            siting,
             frame_rate: video.frame_rate,
             vbv_frames: video.vbv_frames,
             resolution: video.resolution,

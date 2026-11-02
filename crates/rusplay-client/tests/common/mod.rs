@@ -23,8 +23,8 @@ use rusplay_client::{
 };
 use rusplay_config::{Config, NetworkConfig, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange, ColorSpace,
-    FormatSet, PixelFormat, Resolution, TransferFunction,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange,
+    ColorSpace, FormatSet, PixelFormat, Resolution, TransferFunction,
 };
 use rusplay_input::{InputEvent, InputRecord, StateRecord};
 use rusplay_net::{
@@ -103,6 +103,7 @@ pub fn stream_description() -> StreamDescription {
                 depth: BitDepth::Eight,
             },
         ),
+        siting: ChromaSiting::Left,
     }
 }
 

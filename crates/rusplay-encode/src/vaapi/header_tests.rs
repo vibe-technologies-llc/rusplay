@@ -4,8 +4,8 @@ mod hevc;
 mod sei;
 
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, ColorSpace, FrameRate, HdrLevels,
-    MatrixCoefficients, PixelFormat, Resolution, TransferFunction,
+    BitDepth, ChromaSiting, ChromaSubsampling, ColorPrimaries, ColorRange, ColorSpace, FrameRate,
+    HdrLevels, MatrixCoefficients, PixelFormat, Resolution, TransferFunction,
 };
 
 use crate::{
@@ -175,6 +175,7 @@ pub(super) fn stream_info(format: PixelFormat, resolution: Resolution) -> Stream
         frame_rate: FrameRate::new(60, 1),
         peak_kbps: PEAK_KBPS,
         qp: None,
+        siting: ChromaSiting::default(),
     }
 }
 

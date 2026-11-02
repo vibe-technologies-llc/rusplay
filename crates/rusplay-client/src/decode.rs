@@ -119,7 +119,10 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
             Ok(Some(picture)) => {
                 links.counters.frames_decoded.increment();
                 let color = picture.color.over(video.stream.color);
-                let siting = picture.color.chroma_siting;
+                let siting = Some(resolve_siting(
+                    picture.color.chroma_siting,
+                    video.stream.siting,
+                ));
                 let decoded_at = Instant::now();
                 if let Some(latency) = links
                     .counters
@@ -165,6 +168,13 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
     Ok(())
 }
 
+const fn resolve_siting(bitstream: Option<ChromaSiting>, described: ChromaSiting) -> ChromaSiting {
+    match bitstream {
+        Some(siting) => siting,
+        None => described,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc;
@@ -172,6 +182,22 @@ mod tests {
     use rusplay_config::SoftwareDecoderConfig;
 
     use super::*;
+
+    #[test]
+    fn the_bitstream_siting_wins_over_the_described_one() {
+        for bitstream in [ChromaSiting::Left, ChromaSiting::Center] {
+            for described in [ChromaSiting::Left, ChromaSiting::Center] {
+                assert_eq!(resolve_siting(Some(bitstream), described), bitstream);
+            }
+        }
+    }
+
+    #[test]
+    fn the_described_siting_covers_a_bitstream_that_signals_none() {
+        for described in [ChromaSiting::Left, ChromaSiting::Center] {
+            assert_eq!(resolve_siting(None, described), described);
+        }
+    }
 
     #[test]
     fn a_decoder_open_request_opens_the_decoder_before_any_frame() {

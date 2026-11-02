@@ -6,9 +6,30 @@ use crate::{
     scale::ChromaSiting,
 };
 
+const AV1_CHROMA_POSITION_UNKNOWN: u32 = 0;
 const AV1_CHROMA_POSITION_VERTICAL: u32 = 1;
 const AV1_CHROMA_POSITION_COLOCATED: u32 = 2;
 const VUI_CHROMA_LOCATION_TYPES: u32 = 6;
+const VUI_CHROMA_LOCATION_LEFT: u32 = 0;
+const VUI_CHROMA_LOCATION_CENTER: u32 = 1;
+
+impl ChromaSiting {
+    #[must_use]
+    pub const fn vui_chroma_location(self) -> u32 {
+        match self {
+            Self::Left => VUI_CHROMA_LOCATION_LEFT,
+            Self::Center => VUI_CHROMA_LOCATION_CENTER,
+        }
+    }
+
+    #[must_use]
+    pub const fn av1_chroma_position(self) -> u32 {
+        match self {
+            Self::Left => AV1_CHROMA_POSITION_VERTICAL,
+            Self::Center => AV1_CHROMA_POSITION_UNKNOWN,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct SignalledColor {
@@ -176,6 +197,28 @@ mod tests {
         assert_eq!(siting(1), Some(ChromaSiting::Left));
         assert_eq!(siting(2), Some(ChromaSiting::Left));
         assert_eq!(siting(3), None);
+    }
+
+    #[test]
+    fn written_chroma_locations_read_back_as_the_same_siting() {
+        for siting in [ChromaSiting::Left, ChromaSiting::Center] {
+            let location =
+                SignalledColor::default().with_vui_chroma_location(siting.vui_chroma_location());
+
+            assert_eq!(location.chroma_siting, Some(siting));
+        }
+    }
+
+    #[test]
+    fn av1_writes_only_the_left_siting() {
+        let position = |siting: ChromaSiting| {
+            SignalledColor::default()
+                .with_av1_chroma_position(siting.av1_chroma_position())
+                .chroma_siting
+        };
+
+        assert_eq!(position(ChromaSiting::Left), Some(ChromaSiting::Left));
+        assert_eq!(position(ChromaSiting::Center), None);
     }
 
     #[test]

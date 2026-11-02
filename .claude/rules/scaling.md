@@ -105,7 +105,7 @@ paths:
   computes Y'CbCr there and packs luma straight into the output buffer. Chroma is then
   downscaled in gamma space (as every encoder expects) with `scaling.downscale.chroma_filter`
   through `TapTable`s at an exact 2:1 ratio, so odd sizes round the chroma plane up and the
-  edge clamps. Horizontal siting is `ChromaSiting::Left` by default and set by `scaling.chroma_siting` for the host and for the client (which prefers the siting its decoder reads from the stream) (the enum lives in `rusplay-core`; MPEG-2/H.264/HEVC type 0,
+  edge clamps. Horizontal siting is `ChromaSiting::Left` by default and set by `scaling.chroma_siting` for the host, which writes it into the bitstream and `StreamDescription::siting`, and for the client (which prefers the siting its decoder reads from the stream, then the description, then its own config) (the enum lives in `rusplay-core`; MPEG-2/H.264/HEVC type 0,
   co-sited with even luma columns, a phase of -0.5 source pixels) or `Center`; vertical 4:2:0
   siting is always centred. The chroma plane is built by one of three paths.
   4:4:4 is one dispatch (`convert_direct`): each invocation owns one output word of luma and
