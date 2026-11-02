@@ -83,6 +83,10 @@ paths:
   full queue drops the `Open` and the first frame opens the decoder as before. The decoder is also
   reopened when a frame's description names another codec; an open failure ends the stream with
   `Decode`, and `connect` does not wait for it.
+  The decode loop waits on the queue with a 50 ms `recv_timeout` and checks the stop flag on each
+  wake, so a stage that fails while `connect` still holds the queue's sender (the audio decoder
+  failing to open) stops the decode thread, which closes the slot and ends present, instead of
+  leaving `connect` joined on stages that never end.
 - Encoded frames carry the host's capture time (`VideoFrameHeader`, stripped by the receive
   stage) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
   `PresentedFrame::captured`. `PresentedFrame` also has `received_at`, `decoded_at` and
@@ -105,8 +109,16 @@ paths:
   only, sigmoid when enlarging either axis; the downscale filter otherwise). The passes ping-pong
   between at most two scratch textures at the source resolution and the last one writes the
   output texture, so a frame that needs no colour pass and no scaling is unpacked straight into
-  it. Chroma siting is `Left`, matching the host's `ColorConverter` default.
-- Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC`, pooled up
+  it. Chroma siting is `scaling.chroma_siting` (default `Left`), which must match the host's: the stream does not signal it and the decoder does not report it yet.
+- The present stage keeps the last frame's pre-scale image (`Retained`: the scratch texture the
+  scaler read, or the output texture itself when the frame was not scaled, no copy) with the
+  frame's metadata. `ClientStream::set_target` with a changed target nudges the decoded `Slot`
+  (`Slot::take_or_nudge`, a value still comes first), and the stage then re-scales the retained
+  image into a pooled output at the new size, or copies it when the target equals the source, and
+  hands it to the sink as the same frame (`frame`, `captured` and the instants unchanged,
+  `submitted_at` new). It is not counted in `frames_presented`, so a static remote screen
+  follows a resize, fullscreen or the header hiding without new video.
+- Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC | COPY_DST`, pooled up
   to four per target size as `Arc<wgpu::Texture>`; a texture is reused once only the pool holds it,
   so the app may keep a `PresentedFrame` for as long as it displays it. If all four are held the
   frame is skipped (`frames_unpresented`). The app's later submissions on the same queue are
@@ -277,7 +289,8 @@ paths:
   cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message) or stop,
   and keeps the last frame so a cursor move redraws without a new picture. It draws only a frame
   whose texture size equals `layout.pixels`; anything else is a frame scaled for an older layout
-  and is skipped. It (re)configures the swapchain to that size, sets the viewport destination to
+  and is skipped; a `None` layout unmaps the subsurface (a null buffer attach and commit) and the
+  next drawn frame maps it again. It (re)configures the swapchain to that size, sets the viewport destination to
   the logical size just before presenting (so buffer and destination change in the same commit
   and the compositor maps the buffer 1:1), composes and presents with `Queue::present`.
 - Swapchain: format and surface colour space from `SurfaceOutput::choose` (`window/output.rs`,
@@ -296,7 +309,9 @@ paths:
   resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
   picture, via `present::scale_settings`) into a texture of `round(size * target / space)`,
   rebuilt only when the shape or the scale changes. Its origin is
-  `round((position - hotspot) * target / space)`, clipped by the picture.
+  `round((position - hotspot) * target / space)` (the subtraction saturates), clipped by the
+  picture. A shape whose image or scaled size exceeds the device's `max_texture_dimension_2d` is
+  not drawn and counts once per shape and size in `StreamWindow::cursors_skipped`.
 - Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
   `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
   `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`

@@ -20,6 +20,14 @@ pub enum ScaleFilter {
     EwaRobidouxSharp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChromaSiting {
+    #[default]
+    Left,
+    Center,
+}
+
 impl ScaleFilter {
     pub const fn is_polar(self) -> bool {
         matches!(

@@ -1,12 +1,10 @@
-use std::net::SocketAddr;
-
 use gpui::{Context, Entity, EventEmitter, Subscription, Task, Window, div, prelude::*, px};
 use rusplay_client::{Credentials, DiscoveredHost, HostBook, PeerRecord, Pin};
 use rusplay_config::{Config, ConfigEnvironment, HostProfile};
 
 use crate::{
     hosts::{
-        model::{HostEntry, HostList, HostOrigin},
+        model::{HostEntry, HostId, HostList, HostOrigin},
         profile::{self, ProfileRow, Source},
     },
     notice::{Notice, NoticeRaised, error_chain},
@@ -79,12 +77,26 @@ impl HostsView {
         }
     }
 
-    pub fn remember_peer(&mut self, address: SocketAddr, peer: PeerRecord, cx: &mut Context<Self>) {
-        if self.hosts.remember_peer(address, peer) {
+    pub fn remember_peer(&mut self, id: HostId, peer: PeerRecord, cx: &mut Context<Self>) -> bool {
+        let remembered = self.hosts.remember_peer(id, peer);
+        if remembered {
             self.persist(cx);
             self.pin_input
                 .update(cx, |input, cx| input.set_text("", cx));
             cx.notify();
+        }
+
+        remembered
+    }
+
+    pub fn request_connection(&mut self, target: &str, cx: &mut Context<Self>) {
+        match self.hosts.find(target) {
+            Ok(index) => {
+                self.hosts.select(index);
+                self.connect(cx);
+                cx.notify();
+            }
+            Err(error) => notify(Notice::Failure(error.to_string()), cx),
         }
     }
 

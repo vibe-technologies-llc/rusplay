@@ -23,6 +23,7 @@ pub struct VideoConfig {
     pub encoder: VideoEncoderConfig,
     pub encoder_gpu_handoff: bool,
     pub decoder: VideoDecoderConfig,
+    pub vbv_frames: u8,
     pub decode_queue_frames: u8,
     pub present_mode: PresentMode,
     pub present_frame_latency: u8,
@@ -40,6 +41,7 @@ impl Default for VideoConfig {
             encoder: VideoEncoderConfig::default(),
             encoder_gpu_handoff: true,
             decoder: VideoDecoderConfig::default(),
+            vbv_frames: 2,
             decode_queue_frames: 3,
             present_mode: PresentMode::default(),
             present_frame_latency: 1,
@@ -53,6 +55,16 @@ impl VideoConfig {
             return Err(ConfigError::InvalidFrameRate {
                 numerator: self.frame_rate.numerator,
                 denominator: self.frame_rate.denominator,
+            });
+        }
+
+        if let Some(resolution) = self
+            .resolution
+            .filter(|resolution| resolution.pixel_count() == 0)
+        {
+            return Err(ConfigError::EmptyStreamResolution {
+                width: resolution.width,
+                height: resolution.height,
             });
         }
 
@@ -74,6 +86,10 @@ impl VideoConfig {
                 min_nits: mastering.min_nits.nits(),
                 max_nits: mastering.max_nits.nits(),
             });
+        }
+
+        if self.vbv_frames == 0 {
+            return Err(ConfigError::ZeroVbvFrames);
         }
 
         if self.decode_queue_frames == 0 {
@@ -356,5 +372,31 @@ mod tests {
 
         config.present_frame_latency = 3;
         assert!(config.validate().is_ok());
+    }
+
+    fn with_resolution(width: u32, height: u32) -> VideoConfig {
+        VideoConfig {
+            resolution: Some(Resolution::new(width, height)),
+            ..VideoConfig::default()
+        }
+    }
+
+    #[test]
+    fn stream_resolution_with_a_zero_side_is_rejected() {
+        assert!(with_resolution(1920, 1080).validate().is_ok());
+        assert!(matches!(
+            with_resolution(0, 1080).validate(),
+            Err(ConfigError::EmptyStreamResolution {
+                width: 0,
+                height: 1080
+            })
+        ));
+        assert!(matches!(
+            with_resolution(1920, 0).validate(),
+            Err(ConfigError::EmptyStreamResolution {
+                width: 1920,
+                height: 0
+            })
+        ));
     }
 }

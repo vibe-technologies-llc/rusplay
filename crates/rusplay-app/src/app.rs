@@ -6,6 +6,7 @@ use rusplay_client::HostBook;
 use rusplay_config::{Config, ConfigEnvironment};
 
 use crate::{
+    cli::Launch,
     hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
     session,
@@ -52,6 +53,8 @@ pub struct RusplayApp {
     page: Page,
     environment: ConfigEnvironment,
     stream: Option<ActiveStream>,
+    abandoned: Vec<ActiveStream>,
+    exit_on_disconnect: bool,
     hosts: Entity<HostsView>,
     settings: Option<Entity<SettingsView>>,
     notice: Option<Notice>,
@@ -62,6 +65,7 @@ pub struct RusplayApp {
 impl RusplayApp {
     pub fn new(
         environment: ConfigEnvironment,
+        launch: Launch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -134,16 +138,27 @@ impl RusplayApp {
             }
         };
 
-        Self {
+        let app = Self {
             page: Page::Hosts,
             environment,
             stream: None,
+            abandoned: Vec::new(),
+            exit_on_disconnect: launch.exit_on_disconnect,
             hosts,
             settings,
             notice,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
+        };
+
+        if let Some(target) = launch.connect {
+            cx.defer_in(window, move |this, _, cx| {
+                this.hosts
+                    .update(cx, |hosts, cx| hosts.request_connection(&target, cx));
+            });
         }
+
+        app
     }
 
     fn start_stream(
@@ -165,10 +180,12 @@ impl RusplayApp {
         let (config, attached) = match attached {
             Ok(attached) => attached,
             Err(error) => {
-                self.notice = Some(Notice::Failure(format!(
-                    "Could not open the stream view: {}",
-                    error_chain(&error)
-                )));
+                let message = format!("Could not open the stream view: {}", error_chain(&error));
+                if self.exit_on_disconnect {
+                    eprintln!("rusplay: {message}");
+                    cx.quit();
+                }
+                self.notice = Some(Notice::Failure(message));
                 cx.notify();
                 return;
             }
@@ -188,7 +205,9 @@ impl RusplayApp {
         let events = cx.subscribe_in(
             &stream,
             window,
-            |this, _, event: &StreamEvent, window, cx| this.stream_event(event, window, cx),
+            |this, source, event: &StreamEvent, window, cx| {
+                this.stream_event(source, event, window, cx);
+            },
         );
         window.focus(&stream.focus_handle(cx), cx);
 
@@ -200,19 +219,52 @@ impl RusplayApp {
         cx.notify();
     }
 
-    fn stream_event(&mut self, event: &StreamEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn stream_event(
+        &mut self,
+        source: &Entity<StreamView>,
+        event: &StreamEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self
+            .stream
+            .as_ref()
+            .is_some_and(|active| active.view == *source);
+
         match event {
-            StreamEvent::Paired { address, peer } => {
-                let (address, peer) = (*address, peer.clone());
-                self.hosts
-                    .update(cx, |hosts, cx| hosts.remember_peer(address, peer, cx));
+            StreamEvent::Paired { host, name, peer } => {
+                let (host, peer) = (*host, peer.clone());
+                let remembered = self
+                    .hosts
+                    .update(cx, |hosts, cx| hosts.remember_peer(host, peer, cx));
+                if !remembered {
+                    self.notice = Some(Notice::Failure(format!(
+                        "Paired with {name}, but it is no longer in the host list, so the pairing was not saved"
+                    )));
+                }
             }
             StreamEvent::Notice(notice) => self.notice = Some(notice.clone()),
-            StreamEvent::Ended(notice) => {
+            StreamEvent::Abandoned if current => {
+                self.abandoned.extend(self.stream.take());
+                window.focus(&self.focus_handle, cx);
+            }
+            StreamEvent::Ended(notice) if current => {
                 self.notice = Some(notice.clone());
                 self.stream = None;
                 window.focus(&self.focus_handle, cx);
             }
+            StreamEvent::Abandoned | StreamEvent::Ended(_) => {
+                self.abandoned.retain(|active| active.view != *source);
+            }
+        }
+
+        if let StreamEvent::Ended(notice) = event
+            && self.exit_on_disconnect
+        {
+            if let Notice::Failure(message) = notice {
+                eprintln!("rusplay: {message}");
+            }
+            cx.quit();
         }
         cx.notify();
     }
@@ -224,7 +276,7 @@ impl RusplayApp {
     }
 
     fn end_stream(&mut self, cx: &mut Context<Self>) {
-        if let Some(stream) = self.stream.take() {
+        if let Some(stream) = &self.stream {
             stream.view.update(cx, StreamView::disconnect);
         }
     }

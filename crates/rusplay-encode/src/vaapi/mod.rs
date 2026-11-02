@@ -436,6 +436,7 @@ struct Settings {
     format: PixelFormat,
     color: ColorSpace,
     frame_rate: FrameRate,
+    vbv_frames: u8,
     resolution: Option<Resolution>,
     bitrate_kbps: u32,
     rate_control: RateControl,
@@ -720,6 +721,7 @@ impl VaapiEncoder {
             format: video.pixel_format,
             color: video.color,
             frame_rate: video.frame_rate,
+            vbv_frames: video.vbv_frames,
             resolution: video.resolution,
             bitrate_kbps: video.bitrate_kbps,
             rate_control: vaapi.rate_control,
@@ -751,7 +753,8 @@ fn rate_buffers(settings: &Settings, context: &Context) -> Result<Vec<Buffer>, E
         }
     };
 
-    let buffer_bits = vbv_buffer_kbit(peak, settings.frame_rate).saturating_mul(1000);
+    let buffer_bits =
+        vbv_buffer_kbit(peak, settings.frame_rate, settings.vbv_frames).saturating_mul(1000);
     let window_ms = u64::from(buffer_bits) * 1000 / u64::from(settings.bits_per_second().max(1));
 
     let mut rate_control = ffi::VAEncMiscParameterRateControl {

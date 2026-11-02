@@ -29,6 +29,7 @@ use crate::{
     ClientError, ClientStream, DisplayImage, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
     cursor::CursorWatcher,
     display::{query_display, resolve_target},
+    stats::Counter,
     window::{
         choice::{Admission, OutputChoice},
         compose::Composer,
@@ -54,6 +55,7 @@ struct Shared {
     pending: Mutex<Pending>,
     wake: Condvar,
     color_target: Mutex<ColorVolume>,
+    cursors_skipped: Arc<Counter>,
 }
 
 impl Shared {
@@ -62,6 +64,7 @@ impl Shared {
             pending: Mutex::new(Pending::default()),
             wake: Condvar::new(),
             color_target: Mutex::new(color_target),
+            cursors_skipped: Arc::new(Counter::default()),
         }
     }
 
@@ -167,7 +170,11 @@ impl StreamWindow {
         let shared = Arc::new(Shared::new(options.output.encoding.target));
         let presenter = Presenter {
             composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
-            cursor_layer: CursorLayer::new(&gpu.device, config.scaling),
+            cursor_layer: CursorLayer::new(
+                &gpu.device,
+                config.scaling,
+                Arc::clone(&shared.cursors_skipped),
+            ),
             gpu: gpu.clone(),
             surface,
             adapter,
@@ -178,6 +185,7 @@ impl StreamWindow {
             options,
             configured: None,
             destination: None,
+            mapped: false,
             frame: None,
             cursor: None,
         };
@@ -329,6 +337,10 @@ impl StreamWindow {
         Ok(true)
     }
 
+    pub fn cursors_skipped(&self) -> u64 {
+        self.shared.cursors_skipped.get()
+    }
+
     pub fn is_finished(&self) -> bool {
         self.presenter.as_ref().is_none_or(JoinHandle::is_finished)
             || self
@@ -472,6 +484,7 @@ struct Presenter {
     cursor_layer: CursorLayer,
     configured: Option<Resolution>,
     destination: Option<(u32, u32)>,
+    mapped: bool,
     frame: Option<PresentedFrame>,
     cursor: Option<LatestCursor>,
 }
@@ -525,7 +538,14 @@ impl Presenter {
     }
 
     fn draw(&mut self, layout: Option<WindowLayout>) -> Result<(), ClientError> {
-        let (Some(layout), Some(frame)) = (layout, self.frame.as_ref()) else {
+        let Some(layout) = layout else {
+            if self.mapped {
+                self.child.unmap();
+                self.mapped = false;
+            }
+            return Ok(());
+        };
+        let Some(frame) = self.frame.as_ref() else {
             return Ok(());
         };
         if frame.resolution() != layout.pixels {
@@ -609,6 +629,7 @@ impl Presenter {
 
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(texture);
+        self.mapped = true;
 
         Ok(())
     }

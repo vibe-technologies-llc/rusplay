@@ -17,7 +17,6 @@ use crate::{
     Backend, EncodeError, VideoEncoder,
     hdr::St2086,
     input::{YuvFrame, bytes_per_sample},
-    rate::VBV_BUFFER_FRAMES,
     software::CParam,
 };
 
@@ -98,9 +97,9 @@ fn bits_per_second(kbps: u32) -> Result<u32, EncodeError> {
         })
 }
 
-fn buffer_levels_ms(frame_rate: FrameRate) -> (i64, i64) {
+fn buffer_levels_ms(frame_rate: FrameRate, vbv_frames: u8) -> (i64, i64) {
     let numerator = u64::from(frame_rate.numerator).max(1);
-    let frames_ms = 1000 * u64::from(frame_rate.denominator) * VBV_BUFFER_FRAMES / numerator;
+    let frames_ms = 1000 * u64::from(frame_rate.denominator) * u64::from(vbv_frames) / numerator;
 
     let maximum = frames_ms.max(MIN_BUFFER_MS);
     let level = (maximum / 2).max(MIN_BUFFER_LEVEL_MS);
@@ -238,6 +237,7 @@ struct Settings {
     pixel_format: PixelFormat,
     color: ColorSpace,
     frame_rate: FrameRate,
+    vbv_frames: u8,
     bitrate_kbps: u32,
 }
 
@@ -267,6 +267,7 @@ impl Settings {
             pixel_format: format,
             color: video.color,
             frame_rate: video.frame_rate,
+            vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };
 
@@ -293,7 +294,7 @@ impl Settings {
         if self.config.low_latency {
             config.pred_structure = sys::PredStructure_LOW_DELAY;
             config.rtc = true;
-            let (maximum, level) = buffer_levels_ms(self.frame_rate);
+            let (maximum, level) = buffer_levels_ms(self.frame_rate, self.vbv_frames);
             config.maximum_buffer_size_ms = maximum;
             config.optimal_buffer_level_ms = level;
             config.starting_buffer_level_ms = level;
@@ -559,6 +560,13 @@ mod tests {
     const SEQUENCE_HEADER_OBU: u8 = 1;
     const OBU_HAS_SIZE_FLAG: u8 = 0b10;
     const OBU_EXTENSION_FLAG: u8 = 0b100;
+
+    #[test]
+    fn buffer_levels_follow_the_vbv_frames_with_a_floor() {
+        assert_eq!(buffer_levels_ms(FrameRate::new(30, 1), 3), (100, 50));
+        assert_eq!(buffer_levels_ms(FrameRate::new(30, 1), 6), (200, 100));
+        assert_eq!(buffer_levels_ms(FrameRate::new(240, 1), 1), (40, 20));
+    }
 
     fn obu_types(data: &[u8]) -> Vec<u8> {
         let mut types = Vec::new();

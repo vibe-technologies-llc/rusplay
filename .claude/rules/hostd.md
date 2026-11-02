@@ -28,11 +28,13 @@ paths:
   (every section is `deny_unknown_fields`, then `validate`) and prints `<path> is valid`, or the
   cause chain with status 1, so a typo is found without starting a capture session. With no
   file found it says the defaults apply.
-- Config path discovery is `discovery.rs`, pure over an `Environment` (`XDG_CONFIG_HOME`, `HOME`)
-  and an `exists` predicate so tests need no filesystem. Order: `--config` (used as given, a
-  missing file is a read error and not a fallthrough), `$XDG_CONFIG_HOME/rusplay/host.toml`,
-  `~/.config/rusplay/host.toml`, then `Config::default()`. A relative or empty
-  `XDG_CONFIG_HOME` is ignored as the XDG specification says.
+- Config path discovery is `discovery.rs`, pure over a `ConfigEnvironment` (`XDG_CONFIG_HOME`,
+  `HOME`) and an `exists` predicate so tests need no filesystem. The candidate list is
+  `ConfigEnvironment::candidates(ConfigRole::Host)` from `rusplay-config`, the one the app's Host
+  settings resolve through too (`config.md`). Order: `--config` (used as given, a missing file is
+  a read error and not a fallthrough), `$XDG_CONFIG_HOME/rusplay/host.toml`,
+  `~/.config/rusplay/host.toml`, then `Config::default()`. A relative or empty `XDG_CONFIG_HOME`
+  is ignored as the XDG specification says.
 - `responder.rs` runs the `DiscoveryResponder` (re-exported by `rusplay-host`) on the thread
   `rusplay-hostd-discovery`, bound on `network.discovery_port` and `network.discovery_group` and
   announcing the host's media port (the port `HostSession` actually bound) and its name, so a

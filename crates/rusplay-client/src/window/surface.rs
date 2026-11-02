@@ -102,6 +102,12 @@ impl ChildSurface {
         );
     }
 
+    pub(crate) fn unmap(&self) {
+        self.surface.attach(None, 0, 0);
+        self.surface.commit();
+        self.connection.flush().ok();
+    }
+
     pub(crate) fn connection(&self) -> &Connection {
         &self.connection
     }

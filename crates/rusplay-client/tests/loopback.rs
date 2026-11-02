@@ -218,6 +218,74 @@ fn frames_are_scaled_to_the_requested_target() {
 }
 
 #[test]
+fn a_target_change_rescales_the_last_frame_without_new_video() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let frames = 8;
+    let host = TestHost::start(HostOptions {
+        frames,
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let session = ClientSession::new(common::client_config());
+    let latest = LatestFrame::new();
+    let native = Resolution::new(FIXTURE_WIDTH, FIXTURE_HEIGHT);
+    let upscaled = Resolution::new(2 * FIXTURE_WIDTH, 2 * FIXTURE_HEIGHT);
+    let downscaled = Resolution::new(FIXTURE_WIDTH / 2, FIXTURE_HEIGHT / 2);
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu.clone(),
+        latest.clone(),
+    )
+    .unwrap();
+    let last = wait_for_frame(&latest, |frame| frame.frame == frames - 1);
+    let presented = latest.presented();
+
+    stream.set_target(Some(upscaled));
+    let up = wait_for_frame(&latest, |frame| frame.resolution() == upscaled);
+    let texels = common::download(&gpu, &up.texture);
+    let distinct: std::collections::BTreeSet<[u16; 4]> = texels.iter().copied().collect();
+
+    stream.set_target(Some(downscaled));
+    let down = wait_for_frame(&latest, |frame| frame.resolution() == downscaled);
+
+    stream.set_target(Some(native));
+    let back = wait_for_frame(&latest, |frame| frame.resolution() == native);
+    let restored = common::download(&gpu, &back.texture);
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert_eq!(last.resolution(), native);
+    assert_eq!(up.frame, frames - 1);
+    assert_eq!(down.frame, frames - 1);
+    assert_eq!(back.frame, frames - 1);
+    assert!(distinct.len() > 100);
+    assert_eq!(restored, common::download(&gpu, &last.texture));
+    assert_eq!(stats.frames_presented, presented);
+}
+
+fn wait_for_frame(
+    latest: &LatestFrame,
+    wanted: impl Fn(&PresentedFrame) -> bool,
+) -> PresentedFrame {
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let frame = latest
+            .wait(remaining)
+            .expect("the wanted frame was never presented");
+        if wanted(&frame) {
+            return frame;
+        }
+    }
+}
+
+#[test]
 fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
     let Some(gpu) = common::gpu() else {
         return;

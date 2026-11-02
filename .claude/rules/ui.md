@@ -39,6 +39,7 @@ paths:
 
 | Module | Role |
 |---|---|
+| `cli` | `lexopt` argument parsing for `rusplay` (`Launch`), pure and unit tested |
 | `app` | Root view: page content, status bar, global focus and quit actions |
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
@@ -48,9 +49,18 @@ paths:
 | `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls |
 | `theme` | The colour palette, one function per colour |
 
+- Arguments (`cli.rs`): `--connect <NAME|ADDRESS>` looks the host up in the host book
+  (`HostList::find`: a case-insensitive unique name first, then an address, with the configured
+  port when none is given) once the window exists (`Context::defer_in`) and goes through the same
+  `HostsView::connect` as the Connect button, so the host's profile applies and an unpaired host
+  gives the usual "Pair first" notice; an unknown or ambiguous target is a failure notice and the
+  app stays open on the Hosts page. `--exit-on-disconnect` quits on any `StreamEvent::Ended` (a
+  failed connect included, whose message goes to stderr) and when the stream view cannot be
+  opened. A usage error exits with status 2.
 - Views never write to the status bar directly: they emit `NoticeRaised` and the root subscribes.
-- The client config lives at `$XDG_CONFIG_HOME/rusplay/client.toml` (`$HOME/.config` when unset),
-  resolved by `ConfigEnvironment` in `rusplay-config`. It is read again on every connect so a save
+- The client config is `client.toml` under `$XDG_CONFIG_HOME/rusplay/`, or `$HOME/.config/rusplay/`
+  when the XDG file does not exist, resolved by `ConfigEnvironment` in `rusplay-config` (the same
+  resolver `rusplay-hostd` uses for `host.toml`). It is read again on every connect so a save
   from the settings page takes effect without a restart. A missing file means defaults; a malformed
   one is reported in the status bar and defaults are used.
 - Discovery: `HostsView::refresh` runs `session::discover` on gpui's background executor (the
@@ -83,8 +93,13 @@ paths:
   (`SessionError::HostProfile`).
 - A host without a remembered pairing needs the PIN the host shows; a successful PIN connect
   hands back `ClientStream::paired_secret`, which `StreamView` turns into a `PeerRecord` (named
-  after the host entry) and the root stores on the entry, so later connects use
-  `Credentials::Peer`, also after a restart. `Rename`, `Change address` (both read the Name and
+  after the host entry) and the root stores on the entry, found by its stable `HostId` (not the
+  address, which a discovery merge can change), so later connects use `Credentials::Peer`, also
+  after a restart. A host that left the list meanwhile gives a failure notice instead of losing
+  the pairing silently. Disconnecting while the connect still runs emits `StreamEvent::Abandoned`:
+  the window is stopped at once but the root keeps the view in `abandoned` until the connect
+  returns, so a pairing the host already stored is still reported (`Paired`) before the new
+  stream is stopped and the view ends. `Rename`, `Change address` (both read the Name and
   Address fields; the pairing is kept, it is keyed by the secret and not the address) and
   `Forget pairing` act on the selected entry; renaming or re-addressing a discovered entry saves
   it. Names follow `MAX_PEER_NAME_BYTES` and carry no control characters, since they are written
@@ -135,13 +150,20 @@ paths:
 
 - The settings page is data-driven. `settings/schema.rs` is one static `FIELDS` table with a row
   per option: dotted TOML path, label, unit, `Kind` (flag, bounded integer, decimal, choice,
-  multi-choice, text, IP address, resolution, frame rate, key/value pairs), whether it is
+  multi-choice, primaries, text, IP address, resolution, frame rate, key/value pairs), whether it is
   optional, and `when` conditions. `settings/form.rs` (`FormModel`, no gpui types) holds one
   `Value` per row, converts a `Config` into rows and rows back into a TOML table that is
   deserialized into `Config` and then `validate()`d. `settings/view.rs` renders rows by `Kind`:
   toggles for flags, segmented buttons for up to four choices, dropdowns beyond that (optional
   choices gain a `(none)` entry), chips for multi-choices, `TextField` for numbers and text, and
   an editable list for `params`.
+- `Kind::Primaries` (`settings/primaries.rs`) is one text value: a named set, or
+  `custom RX,RY GX,GY BX,BY WX,WY` for a `primaries.custom` table. The view shows a dropdown of
+  the names plus `custom` (choosing it seeds the BT.709 points, or keeps the edited ones) and,
+  while the value is custom, a text input for the points. Parsing builds the TOML table and
+  checks it by deserializing a `ColorPrimaries`, so a degenerate gamut is a field error
+  (`PrimariesRejected`) before the config is assembled. The coverage tests include a config with
+  `ColorPrimaries::Custom` in all three primaries rows.
 - A new `rusplay-config` option needs a row in `FIELDS`; tests fail until it has one:
   `every_serialized_option_has_a_form_field` walks populated configs for every encoder and decoder
   backend and `every_choice_option_is_accepted_by_the_config` feeds each listed choice through

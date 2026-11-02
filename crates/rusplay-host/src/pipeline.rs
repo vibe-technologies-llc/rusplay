@@ -15,10 +15,10 @@ use rusplay_core::{
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
-    ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
-    DmaBufImporter, DmaBufPlane, ExportedFrame, GpuFenceWait, GpuFenceWaiter, InputLight,
-    LineariseSettings, Lineariser, PlaneLayout, ScaleError, ScalePipelines, ScaleSettings, Scaler,
-    WriteFence, YuvFrame, can_export, wait_for_writes,
+    ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf, DmaBufImporter,
+    DmaBufPlane, ExportedFrame, GpuFenceWait, GpuFenceWaiter, InputLight, LineariseSettings,
+    Lineariser, PlaneLayout, ScaleError, ScalePipelines, ScaleSettings, Scaler, WriteFence,
+    YuvFrame, can_export, wait_for_writes,
 };
 
 use crate::{
@@ -977,7 +977,7 @@ fn convert_settings(
         hdr: video.color.hdr,
         input,
         chroma_filter: config.scaling.downscale.chroma_filter,
-        chroma_siting: ChromaSiting::Left,
+        chroma_siting: config.scaling.chroma_siting,
         row_alignment,
     }
 }

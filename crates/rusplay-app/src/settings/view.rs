@@ -13,6 +13,7 @@ use crate::{
     notice::{Notice, NoticeRaised, error_chain},
     settings::{
         form::{FormModel, Pair, Value},
+        primaries,
         role::{ROLES, load_baseline, role_label},
         schema::{FIELDS, Field, Kind, Section},
     },
@@ -26,6 +27,7 @@ use crate::{
 const SEGMENTED_LIMIT: usize = 4;
 const LABEL_WIDTH: f32 = 200.0;
 const INPUT_WIDTH: f32 = 300.0;
+const PRIMARIES_INPUT_WIDTH: f32 = 440.0;
 const SIDEBAR_WIDTH: f32 = 190.0;
 const DROPDOWN_WIDTH: f32 = 230.0;
 const DROPDOWN_MAX_HEIGHT: f32 = 340.0;
@@ -70,6 +72,7 @@ fn uses_text_input(kind: Kind) -> bool {
             | Kind::Address
             | Kind::Resolution
             | Kind::FrameRate
+            | Kind::Primaries
     )
 }
 
@@ -77,6 +80,7 @@ fn placeholder(field: &Field) -> &'static str {
     match field.kind {
         Kind::Resolution => "1920x1080, empty for the capture size",
         Kind::FrameRate => "60 or 60000/1001",
+        Kind::Primaries => "custom RX,RY GX,GY BX,BY WX,WY",
         _ if field.optional => "not set",
         _ => "",
     }
@@ -154,7 +158,16 @@ impl SettingsView {
     }
 
     fn choose(&mut self, index: usize, option: &str, cx: &mut Context<Self>) {
-        self.form.set_text(index, option);
+        let text = if FIELDS[index].kind == Kind::Primaries {
+            primaries::choice(self.form.text(index), option)
+        } else {
+            option.to_owned()
+        };
+        if let Some(Some(input)) = self.inputs.get(index) {
+            input.update(cx, |input, cx| input.set_text(&text, cx));
+        }
+
+        self.form.set_text(index, text);
         self.open_choice = None;
         self.mark_edited(index);
         cx.notify();
@@ -432,6 +445,7 @@ impl SettingsView {
                 self.render_segmented(index, options, cx)
             }
             Kind::Choice(options) => self.render_dropdown(index, options, field.optional, cx),
+            Kind::Primaries => self.render_primaries(index, cx),
             Kind::MultiChoice(options) => self.render_chips(index, options, cx),
             Kind::Pairs => self.render_pairs(index, cx),
             Kind::Integer { .. }
@@ -454,13 +468,38 @@ impl SettingsView {
         div().w(px(INPUT_WIDTH)).child(input).into_any_element()
     }
 
+    fn selected_choice(&self, index: usize) -> String {
+        let text = self.form.text(index);
+
+        if FIELDS[index].kind == Kind::Primaries {
+            primaries::selected(text).to_owned()
+        } else {
+            text.to_owned()
+        }
+    }
+
+    fn render_primaries(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let selector = self.render_dropdown(index, primaries::CHOICES, FIELDS[index].optional, cx);
+        let mut row = div().flex().items_center().gap_2().child(selector);
+
+        if primaries::is_custom(self.form.text(index))
+            && let Some(input) = self.inputs[index].clone()
+        {
+            let invalid = self.errors.contains_key(&index);
+            input.update(cx, |input, cx| input.set_invalid(invalid, cx));
+            row = row.child(div().w(px(PRIMARIES_INPUT_WIDTH)).child(input));
+        }
+
+        row.into_any_element()
+    }
+
     fn render_segmented(
         &mut self,
         index: usize,
         options: &'static [&'static str],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let current = self.form.text(index).to_owned();
+        let current = self.selected_choice(index);
         let mut buttons = Vec::with_capacity(options.len());
 
         for (position, option) in options.iter().copied().enumerate() {
@@ -521,7 +560,7 @@ impl SettingsView {
         optional: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let current = self.form.text(index).to_owned();
+        let current = self.selected_choice(index);
         let shown = if current.is_empty() {
             UNSET_LABEL.to_owned()
         } else {

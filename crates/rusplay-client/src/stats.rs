@@ -71,7 +71,7 @@ impl Counter {
         self.0.store(value, Ordering::Relaxed);
     }
 
-    fn get(&self) -> u64 {
+    pub(crate) fn get(&self) -> u64 {
         self.0.load(Ordering::Relaxed)
     }
 }

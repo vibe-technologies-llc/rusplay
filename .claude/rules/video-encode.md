@@ -68,8 +68,11 @@ paths:
   `content-light` through `svt_av1_enc_parse_parameter`, which stores the values big-endian in
   `mastering_display`/`content_light_level` (the test reads them with `from_be`).
 - Rate control is CBR-like: the typed bitrate is also the VBV max rate, with a buffer of
-  `VBV_BUFFER_FRAMES` frames. `set_bitrate` rescales the VBV values the encoder currently runs
-  with, so a user override of the buffer keeps its ratio.
+  `video.vbv_frames` frames (default 2, at least 1, every backend reads it from `VideoConfig`).
+  `set_bitrate` rescales the VBV values the encoder currently runs
+  with, so a user override of the buffer keeps its ratio. SVT-AV1's low-latency mode takes the
+  same frames as milliseconds at the frame rate, floored at 40 ms with the starting level half
+  of it (at least 20 ms), so a one-frame buffer at a high frame rate stays at the floor.
 - x264 runs CFR with a frame-counter pts. Variable-frame-rate input makes x264 hold one frame
   back to compute its duration, which breaks the one-in-one-out rule. A ledger maps the counter
   back to the capture `Timestamp`.
@@ -151,7 +154,7 @@ paths:
   prepended when the driver output lacks one, so every AV1 packet is a temporal unit.
 - Rate control: `Cbr` maps to `VA_RC_CBR`, `Vbr` to `VA_RC_VBR` with the maximum as
   `bits_per_second` and the bitrate as `target_percentage`, `ConstantQuality` to `VA_RC_CQP` (AV1
-  `base_qindex` is `qp * 5`). The HRD buffer is `VBV_BUFFER_FRAMES` frames at the peak rate
+  `base_qindex` is `qp * 5`). The HRD buffer is `video.vbv_frames` frames at the peak rate
   (`src/rate.rs`, shared with the software encoders) and bit stuffing is off. Rate-control and HRD
   misc buffers go out on every keyframe and on the frame after `set_bitrate`, which is how
   `set_bitrate` applies without re-creating the encoder.
@@ -228,7 +231,7 @@ paths:
   with `ColorPrimariesUnsignalable`.
 - Rate control: `Cbr` is `NV_ENC_PARAMS_RC_CBR`, `Vbr` is `_VBR` with the maximum as `maxBitRate`,
   `ConstantQuality` is `_CONSTQP` with the QP on every picture type (AV1 `qp * 5`, at most 255).
-  The VBV buffer and initial delay are `VBV_BUFFER_FRAMES` frames at the peak rate (`src/rate.rs`).
+  The VBV buffer and initial delay are `video.vbv_frames` frames at the peak rate (`src/rate.rs`).
   `set_bitrate` marks the rate dirty and the next `encode` applies it with `nvEncReconfigureEncoder`
   on the same session, without an IDR.
 - Intra refresh is on when the GPU reports `NV_ENC_CAPS_SUPPORT_INTRA_REFRESH`: one sweep over

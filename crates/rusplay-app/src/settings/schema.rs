@@ -39,6 +39,7 @@ pub enum Kind {
     Integer { min: i64, max: i64 },
     Decimal,
     Choice(&'static [&'static str]),
+    Primaries,
     MultiChoice(&'static [&'static str]),
     Text,
     Address,
@@ -86,7 +87,7 @@ const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
 const CHROMA: &[&str] = &["4:2:0", "4:2:2", "4:4:4"];
 const BIT_DEPTHS: &[&str] = &["eight", "ten", "twelve"];
-const PRIMARIES: &[&str] = &[
+pub const PRIMARIES: &[&str] = &[
     "bt709",
     "display-p3",
     "dci-p3",
@@ -159,6 +160,7 @@ const HOTKEY_KEYS: &[&str] = &[
     "t", "u", "v", "w", "x", "y", "z", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
     "f11", "f12",
 ];
+const CHROMA_SITINGS: &[&str] = &["left", "center"];
 const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
 const SCALE_FILTERS: &[&str] = &[
@@ -175,6 +177,16 @@ const SCALE_FILTERS: &[&str] = &[
     "ewa-hann",
     "ewa-robidoux",
     "ewa-robidoux-sharp",
+];
+
+const SEPARABLE_SCALE_FILTERS: &[&str] = &[
+    "bilinear",
+    "hermite",
+    "catmull-rom",
+    "mitchell",
+    "lanczos2",
+    "lanczos3",
+    "lanczos4",
 ];
 
 const BACKEND_PATH: &str = "video.encoder.backend";
@@ -317,6 +329,14 @@ pub static FIELDS: &[Field] = &[
     .unit("kbps"),
     field(
         Section::Video,
+        "Stream",
+        "video.vbv_frames",
+        "Rate buffer",
+        U8,
+    )
+    .unit("frames"),
+    field(
+        Section::Video,
         "Pixel format",
         "video.pixel_format.chroma",
         "Chroma subsampling",
@@ -334,7 +354,7 @@ pub static FIELDS: &[Field] = &[
         "Colour",
         "video.color.primaries",
         "Primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     ),
     field(
         Section::Video,
@@ -379,7 +399,7 @@ pub static FIELDS: &[Field] = &[
         "HDR metadata",
         "video.color.hdr.mastering.primaries",
         "Mastering display primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     )
     .optional(),
     field(
@@ -1243,6 +1263,13 @@ pub static FIELDS: &[Field] = &[
     .optional(),
     field(
         Section::Scaling,
+        "Chroma",
+        "scaling.chroma_siting",
+        "Chroma siting",
+        Kind::Choice(CHROMA_SITINGS),
+    ),
+    field(
+        Section::Scaling,
         "Downscale",
         "scaling.downscale.filter",
         "Filter",
@@ -1274,7 +1301,7 @@ pub static FIELDS: &[Field] = &[
         "Upscale",
         "scaling.upscale.chroma_filter",
         "Chroma filter",
-        Kind::Choice(SCALE_FILTERS),
+        Kind::Choice(SEPARABLE_SCALE_FILTERS),
     ),
     field(
         Section::Scaling,
@@ -1309,7 +1336,7 @@ pub static FIELDS: &[Field] = &[
         "Display target",
         "color.target.primaries",
         "Primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     )
     .optional(),
     field(
