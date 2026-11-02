@@ -48,7 +48,8 @@ paths:
   devices, binds the capabilities `input.keyboard` and `input.pointer` allow, and sends. It
   answers pings through the `reis` event converter, so it must be called regularly or the server
   may drop the client; `service` runs that pass without an event, and the host calls it from its
-  input loop.
+  input loop. Once the compositor has closed the connection `pump` returns `SinkClosed` without
+  reading the socket again.
 - Devices start paused. `wait_ready` blocks until the compositor resumes one (the portal dialog
   may still be open). An event with no resumed device offering its capability returns
   `DeviceUnavailable`, and a device paused mid-session simply stops matching until resumed. A
@@ -56,6 +57,10 @@ paths:
 - Each device is put in emulating state lazily (`start_emulating` with an increasing sequence)
   and every injected event is followed by its own `frame` with a `CLOCK_MONOTONIC` microsecond
   timestamp. Emulation is stopped when the injector drops.
+  `InputSink::inject_batch` (default: `inject` per event, one result each) is overridden by
+  `LibeiInjector`, which drains the socket once and flushes once for the whole batch, and by
+  `SplitSink`, which routes each half's events to its own sink and returns the results in the
+  original order. Each event still gets its own `frame`.
 - Keys are sent as evdev keycodes, which are layout independent, so the host's own layout decides
   the symbols. The keymap the EIS server offers is read only for the lock masks below.
 - Lock sync (`input.sync_locks`, default on, needs `input.keyboard`): `inject(InputEvent::Locks)`

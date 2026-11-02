@@ -3,7 +3,7 @@ use std::{
     ops::RangeInclusive,
     sync::{
         Arc,
-        mpsc::{Sender, SyncSender, TrySendError},
+        mpsc::{SyncSender, TrySendError},
     },
     time::{Duration, Instant},
 };
@@ -21,6 +21,7 @@ use rusplay_protocol::{
 use crate::{
     HostError,
     accept::{Replay, refresh_peers},
+    datagrams::ForwardedDatagram,
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
@@ -95,8 +96,8 @@ pub(crate) struct ControlLinks {
     pub peer: PeerId,
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
-    pub input: Option<Sender<Vec<u8>>>,
-    pub microphone: Option<SyncSender<Vec<u8>>>,
+    pub input: Option<SyncSender<ForwardedDatagram>>,
+    pub microphone: Option<SyncSender<ForwardedDatagram>>,
     pub configured: CodecFormat,
 }
 
@@ -227,7 +228,13 @@ impl ControlStage {
         now: Instant,
         events: &mut Vec<ControlEvent>,
     ) -> Result<(), HostError> {
-        refresh_peers(&self.links.peers).ok();
+        if refresh_peers(&self.links.peers).is_err() {
+            if let Some(refusal) = busy_reply(datagram) {
+                self.links.transport.send_to(&refusal, from).ok();
+            }
+            return Ok(());
+        }
+
         let handled = self
             .takeover
             .handle(datagram, from, &self.links.peers.read());
@@ -342,11 +349,7 @@ impl ControlStage {
                 true
             }
             Ok(StreamKind::Input) => {
-                if self.streaming
-                    && let Some(input) = &self.links.input
-                {
-                    input.send(datagram.to_vec()).ok();
-                }
+                self.forward_input(datagram);
                 true
             }
             Ok(StreamKind::Microphone) => {
@@ -367,6 +370,23 @@ impl ControlStage {
         Ok(())
     }
 
+    fn forward_input(&self, datagram: &[u8]) {
+        if !self.streaming {
+            return;
+        }
+        let Some(input) = &self.links.input else {
+            return;
+        };
+
+        let forwarded = ForwardedDatagram {
+            epoch: self.links.shared.client.epoch(),
+            bytes: datagram.to_vec(),
+        };
+        if let Err(TrySendError::Full(_)) = input.try_send(forwarded) {
+            self.links.shared.counters.input_packets_dropped.increment();
+        }
+    }
+
     fn forward_microphone(&self, datagram: &[u8]) {
         if !self.streaming {
             return;
@@ -375,7 +395,11 @@ impl ControlStage {
             return;
         };
 
-        if let Err(TrySendError::Full(_)) = microphone.try_send(datagram.to_vec()) {
+        let forwarded = ForwardedDatagram {
+            epoch: self.links.shared.client.epoch(),
+            bytes: datagram.to_vec(),
+        };
+        if let Err(TrySendError::Full(_)) = microphone.try_send(forwarded) {
             self.links
                 .shared
                 .counters

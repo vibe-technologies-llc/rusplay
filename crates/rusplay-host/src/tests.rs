@@ -30,7 +30,7 @@ use rusplay_protocol::{
 use tempfile::TempDir;
 
 use crate::{
-    Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream,
+    Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream, Stage,
     encode::PipelineFactory,
     pipeline::{StreamFormat, VideoPipeline},
 };
@@ -268,6 +268,66 @@ fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> Box<dyn Pipe
         stream: Some(stream),
         encodable: FormatSet::ALL,
     })
+}
+
+struct LosesFirstKeyframe {
+    inner: FakePipeline,
+    lost: bool,
+}
+
+impl VideoPipeline for LosesFirstKeyframe {
+    fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
+        if keyframe && !self.lost {
+            self.lost = true;
+            self.inner.resolution = Some(frame.resolution);
+            return Ok(None);
+        }
+
+        self.inner.encode(frame, keyframe)
+    }
+
+    fn repeat(
+        &mut self,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        if keyframe && !self.lost {
+            self.lost = true;
+            return Ok(None);
+        }
+
+        self.inner.repeat(timestamp, keyframe)
+    }
+
+    fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError> {
+        self.inner.set_bitrate(kbps)
+    }
+
+    fn stream_format(&self) -> Option<StreamFormat> {
+        self.inner.stream_format()
+    }
+}
+
+struct LosesFirstKeyframeFactory;
+
+impl PipelineFactory for LosesFirstKeyframeFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        Ok(FormatSet::ALL)
+    }
+
+    fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
+        Ok(Box::new(LosesFirstKeyframe {
+            inner: FakePipeline {
+                format,
+                last: None,
+                encoded: 1,
+                resolution: None,
+                stream: None,
+                bitrate: Arc::default(),
+            },
+            lost: false,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -776,6 +836,22 @@ fn a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe() 
 }
 
 #[test]
+fn a_keyframe_the_pipeline_failed_to_produce_is_forced_again_on_the_next_frame() {
+    let fixture = Fixture::new(host_config());
+    let serving = fixture.serve(Some(pin()), feed(80), Box::new(LosesFirstKeyframeFactory));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+    client.send(ControlMessage::RequestKeyframe { frame: 1_000 });
+    let recovered = client.pump_until(|client| client.frames.iter().any(|frame| frame.keyframe));
+
+    assert!(recovered);
+    stream.stop().unwrap();
+}
+
+#[test]
 fn a_request_older_than_the_last_keyframe_is_ignored() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
@@ -936,6 +1012,37 @@ fn a_silent_client_times_out() {
     assert!(matches!(
         wait_for_end(stream),
         Err(HostError::ClientSilent(_))
+    ));
+}
+
+struct PanickingFactory;
+
+impl PipelineFactory for PanickingFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        Ok(FormatSet::ALL)
+    }
+
+    fn build(self: Box<Self>, _format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
+        panic!("the encoder fell over");
+    }
+}
+
+#[test]
+fn a_stage_that_panics_ends_a_session_whose_client_still_answers() {
+    let fixture = Fixture::new(host_config());
+    let serving = fixture.serve(Some(pin()), feed(1), Box::new(PanickingFactory));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let ended = client.pump_until(|_| stream.is_finished());
+
+    assert!(ended);
+    assert!(matches!(
+        stream.wait(),
+        Err(HostError::StagePanicked {
+            stage: Stage::Encode
+        })
     ));
 }
 
@@ -1219,6 +1326,40 @@ fn a_peer_forgotten_in_the_store_file_cannot_reconnect_to_a_running_host() {
         accepting.join().unwrap(),
         Err(HostError::AcceptTimeout(_))
     ));
+}
+
+#[test]
+fn a_takeover_is_refused_while_the_peer_store_cannot_be_read() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+    let (mut first, record) = TestClient::pair(fixture.address);
+    first.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(first.pump_until(|client| client.has_hello() && client.frames.len() >= 2));
+
+    std::fs::write(
+        fixture.dir.path().join("paired-clients"),
+        b"\xff not a store",
+    )
+    .unwrap();
+    let returning = TestClient::bind(fixture.address);
+    let result = reconnect_as_client(
+        &returning.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(matches!(
+        result,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::Busy
+        })
+    ));
+    assert_eq!(stream.stats().sessions_taken_over, 0);
+    assert_eq!(stream.client(), first.transport.local_addr().unwrap());
+    stream.stop().unwrap();
 }
 
 #[test]

@@ -28,7 +28,6 @@
 
 # Headless host
 - [M] `hostd-unattended-pairing`: run `rusplay-hostd` as a service. Today a fresh PIN goes to stderr for each pairing window and there is no control socket (`hostd.md`), which is the last step that needs a terminal: the portal grant already survives restarts through `capture.restore_token_file`. Spike a PIN file under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) against a minimal Unix control socket, then ship a systemd user unit
-- [S] `hostd-config-command`: add `rusplay-hostd config default` (print `Config::default()` as TOML) and `config check [PATH]` (discover, load and validate, printing the error chain), next to the existing `peers` subcommands (`rusplay-hostd/src/cli.rs:58-114`). Every section is `deny_unknown_fields`, so today a typo is found only by starting a capture session
 - [M] `stats-machine-readable`: emit session statistics as JSON lines (`HostStats` in `rusplay-hostd/src/stats.rs:99-108` and `ClientStats` with `capture_to_present`) behind a config option, so encoder, FEC and pacing settings can be compared and regressions tracked without scraping stderr. Decide whether to add `serde_json` or write the lines by hand
 
 # Input

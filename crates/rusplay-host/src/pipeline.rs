@@ -17,8 +17,8 @@ use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ChromaSiting, ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf,
     DmaBufImporter, DmaBufPlane, ExportedFrame, GpuFenceWait, GpuFenceWaiter, InputLight,
-    LineariseSettings, Lineariser, PlaneLayout, ScalePipelines, ScaleSettings, Scaler, WriteFence,
-    YuvFrame, can_export, wait_for_writes,
+    LineariseSettings, Lineariser, PlaneLayout, ScaleError, ScalePipelines, ScaleSettings, Scaler,
+    WriteFence, YuvFrame, can_export, wait_for_writes,
 };
 
 use crate::{
@@ -31,6 +31,8 @@ use crate::{
 
 const CONVERT_ROW_ALIGNMENT: u32 = 4;
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const CONSECUTIVE_IMPORT_FAILURES: u32 = 60;
+const GPU_FENCE_POLL_ALLOWANCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamFormat {
@@ -57,6 +59,13 @@ impl StreamFormat {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PipelineNotices {
+    pub dmabuf_fallbacks: u64,
+    pub dmabuf_import_failures: u64,
+    pub handoff_disabled: u64,
+}
+
 pub(crate) trait VideoPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError>;
 
@@ -69,6 +78,10 @@ pub(crate) trait VideoPipeline {
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError>;
 
     fn stream_format(&self) -> Option<StreamFormat>;
+
+    fn take_notices(&mut self) -> PipelineNotices {
+        PipelineNotices::default()
+    }
 }
 
 struct Upload {
@@ -163,6 +176,9 @@ pub(crate) struct GpuPipeline {
     encoder: Option<OpenEncoder>,
     input: Option<Frame>,
     bitrate_kbps: Option<u32>,
+    import_failures: u32,
+    poll_timeout: Option<Duration>,
+    notices: PipelineNotices,
 }
 
 pub(crate) struct GpuPipelineFactory {
@@ -253,6 +269,9 @@ impl GpuPipeline {
             encoder: None,
             input: None,
             bitrate_kbps: None,
+            import_failures: 0,
+            poll_timeout: None,
+            notices: PipelineNotices::default(),
         }
     }
 
@@ -270,17 +289,35 @@ impl GpuPipeline {
                 planes,
                 ..
             } => match self.import(frame, fd.as_fd(), *modifier, planes) {
-                Ok(source) => Ok(Some(source)),
-                Err(error) => {
-                    let Some(fallback) = &self.fallback else {
-                        return Err(error);
-                    };
-                    fallback.request();
-                    Ok(None)
+                Ok(source) => {
+                    self.import_failures = 0;
+                    Ok(Some(source))
                 }
+                Err(error) => self.import_failed(error),
             },
             FrameBuffer::OpaqueFd { .. } => Err(HostError::CaptureOpaqueFd),
         }
+    }
+
+    fn import_failed(&mut self, error: HostError) -> Result<Option<Source>, HostError> {
+        if rejects_dmabuf(&error) {
+            let Some(fallback) = &self.fallback else {
+                return Err(error);
+            };
+            if !fallback.is_requested() {
+                self.notices.dmabuf_fallbacks += 1;
+            }
+            fallback.request();
+            return Ok(None);
+        }
+
+        self.import_failures += 1;
+        if self.import_failures >= CONSECUTIVE_IMPORT_FAILURES {
+            return Err(error);
+        }
+        self.notices.dmabuf_import_failures += 1;
+
+        Ok(None)
     }
 
     fn upload_shm(&mut self, frame: &Frame, data: &[u8], stride: u32) -> Result<Source, HostError> {
@@ -488,9 +525,24 @@ impl GpuPipeline {
             );
         }
         let submission = self.gpu.queue.submit([encoder.finish()]);
-        drop(source.fence.take());
+        self.poll_timeout = source.fence.take().map(|_| {
+            Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms))
+                + GPU_FENCE_POLL_ALLOWANCE
+        });
 
         Ok(submission)
+    }
+
+    fn poll_gpu(&self, submission: Option<wgpu::SubmissionIndex>) -> Result<(), HostError> {
+        let timeout = self.poll_timeout;
+        self.gpu
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: submission,
+                timeout,
+            })
+            .map(drop)
+            .map_err(|error| poll_failure(error, timeout))
     }
 
     fn hand_off(
@@ -509,13 +561,7 @@ impl GpuPipeline {
 
         let resolution = converter.settings().resolution;
         let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
-        self.gpu
-            .device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            })
-            .map_err(HostError::GpuPoll)?;
+        self.poll_gpu(Some(submission))?;
         self.input = Some(frame);
 
         Ok(())
@@ -538,9 +584,11 @@ impl GpuPipeline {
                 self.handoff = HandoffState::Proven(handoff);
                 Ok(encoded)
             }
-            (Err(_), HandoffState::Trying(_)) => {
+            (Err(error), HandoffState::Trying(_)) if !is_fence_timeout(&error) => {
                 self.handoff = HandoffState::Off;
+                self.notices.handoff_disabled += 1;
                 self.input = None;
+                self.encoder = None;
                 self.convert(source)?;
                 self.read_back(timestamp)?;
                 self.encode_input(keyframe)
@@ -563,10 +611,7 @@ impl GpuPipeline {
             .map_async(wgpu::MapMode::Read, .., move |result| {
                 done.send(result).ok();
             });
-        self.gpu
-            .device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(HostError::GpuPoll)?;
+        self.poll_gpu(None)?;
         if let Ok(result) = mapped.recv() {
             result.map_err(HostError::GpuReadback)?;
         }
@@ -677,6 +722,10 @@ impl VideoPipeline for GpuPipeline {
         Ok(())
     }
 
+    fn take_notices(&mut self) -> PipelineNotices {
+        std::mem::take(&mut self.notices)
+    }
+
     fn stream_format(&self) -> Option<StreamFormat> {
         let video = &self.config.video;
 
@@ -686,6 +735,37 @@ impl VideoPipeline for GpuPipeline {
             format: video.pixel_format,
             color: video.color,
         })
+    }
+}
+
+fn poll_failure(error: wgpu::PollError, timeout: Option<Duration>) -> HostError {
+    match (error, timeout) {
+        (wgpu::PollError::Timeout, Some(timeout)) => HostError::GpuFenceTimeout(timeout),
+        (error, _) => HostError::GpuPoll(error),
+    }
+}
+
+const fn is_fence_timeout(error: &HostError) -> bool {
+    matches!(error, HostError::GpuFenceTimeout(_))
+}
+
+fn rejects_dmabuf(error: &HostError) -> bool {
+    match error {
+        HostError::CaptureFormatUnsupported { .. } => true,
+        HostError::Scale(error) => matches!(
+            error,
+            ScaleError::DmaBufImportUnavailable
+                | ScaleError::DmaBufNeedsVulkan
+                | ScaleError::DmaBufFormatUnsupported(_)
+                | ScaleError::DmaBufModifierUnsupported { .. }
+                | ScaleError::DmaBufPlaneCount { .. }
+                | ScaleError::DmaBufPlanesSplit { .. }
+                | ScaleError::DmaBufPlaneOutOfBounds { .. }
+                | ScaleError::DmaBufExtentUnsupported { .. }
+                | ScaleError::DmaBufFormatMismatch { .. }
+                | ScaleError::DmaBufTooSmall { .. }
+        ),
+        _ => false,
     }
 }
 

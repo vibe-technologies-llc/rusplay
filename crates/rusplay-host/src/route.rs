@@ -40,7 +40,8 @@ impl Route {
         } = *key;
         let stream = &config.video.color;
         let resolution = config.video.resolution.unwrap_or(capture);
-        let scale = (resolution != capture).then(|| scale_settings(config, capture, resolution));
+        let scale = (resolution != capture)
+            .then(|| scale_settings(config, capture, resolution, !source.transfer.is_hdr()));
         let map = map_settings(config, &source);
         let needs_map = !ColorPlan::new(&map)?.is_identity();
         let linear_scale = scale.is_some_and(|settings| linear_light(config, &settings));
@@ -111,7 +112,12 @@ fn linear_light(config: &Config, settings: &ScaleSettings) -> bool {
     upscaling || config.scaling.downscale.linear_light
 }
 
-fn scale_settings(config: &Config, source: Resolution, target: Resolution) -> ScaleSettings {
+fn scale_settings(
+    config: &Config,
+    source: Resolution,
+    target: Resolution,
+    sigmoid_allowed: bool,
+) -> ScaleSettings {
     let scaling = &config.scaling;
     let upscaling = target.width > source.width || target.height > source.height;
 
@@ -122,7 +128,7 @@ fn scale_settings(config: &Config, source: Resolution, target: Resolution) -> Sc
             source,
             target,
             antiringing: upscale.antiringing,
-            sigmoid: upscale.sigmoid.then_some(Sigmoid {
+            sigmoid: (upscale.sigmoid && sigmoid_allowed).then_some(Sigmoid {
                 center: upscale.sigmoid_center,
                 slope: upscale.sigmoid_slope,
             }),
@@ -313,5 +319,22 @@ mod tests {
         assert_eq!(route.read, SourceRead::Srgb);
         assert!(route.scale.and_then(|scale| scale.sigmoid).is_some());
         assert_eq!(route.input, InputLight::Linear);
+    }
+
+    #[test]
+    fn an_hdr_capture_is_never_upscaled_through_the_sigmoid() {
+        let config = stream(pq_bt2020(), Some(Resolution::new(128, 64)));
+
+        let hdr = Route::plan(&config, &key(*b"XB30", pq_bt2020())).unwrap();
+        let sdr = Route::plan(
+            &stream(srgb(), Some(Resolution::new(128, 64))),
+            &key(*b"XR24", srgb()),
+        )
+        .unwrap();
+
+        assert!(config.scaling.upscale.sigmoid);
+        assert!(hdr.scale.is_some());
+        assert_eq!(hdr.scale.and_then(|scale| scale.sigmoid), None);
+        assert!(sdr.scale.and_then(|scale| scale.sigmoid).is_some());
     }
 }

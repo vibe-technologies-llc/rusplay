@@ -6,8 +6,9 @@ paths:
 # Headless host binary
 
 - Arguments are parsed with `lexopt` in `cli.rs`: `-c`/`--config <PATH>`, `-h`/`--help`,
-  `-V`/`--version`, and the one subcommand `peers list` / `peers forget <ID|NAME>` (below); any
-  other positional word is `UnknownCommand`. A usage error exits with status 2 after printing the
+  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>` and
+  `config default` / `config check [PATH]` (below); any other positional word is
+  `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
   chain.
 - `peers` (`peers.rs`) opens the paired-client store (`PeerStore::open_host`, so `peers.host_file`
@@ -21,6 +22,12 @@ paths:
   rewrites the file from a stale in-memory list. A client already streaming stays until it
   leaves, and there is no control socket. A store file that fails to parse during a refresh
   fails the accept window (printed, then a new PIN), never silently keeps the old list.
+- `config` (`config.rs`) never touches the GPU, portal, network or peer store. `config default`
+  prints `Config::default()` as TOML. `config check` resolves the path like a normal start (the
+  positional `PATH` or `--config`, either but not both, else discovery), runs `Config::load`
+  (every section is `deny_unknown_fields`, then `validate`) and prints `<path> is valid`, or the
+  cause chain with status 1, so a typo is found without starting a capture session. With no
+  file found it says the defaults apply.
 - Config path discovery is `discovery.rs`, pure over an `Environment` (`XDG_CONFIG_HOME`, `HOME`)
   and an `exists` predicate so tests need no filesystem. Order: `--config` (used as given, a
   missing file is a read error and not a fallthrough), `$XDG_CONFIG_HOME/rusplay/host.toml`,

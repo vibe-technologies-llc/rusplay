@@ -26,6 +26,11 @@ pub use crate::{
 
 pub trait InputSink {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError>;
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        results.extend(events.iter().map(|event| self.inject(*event)));
+    }
 }
 
 pub trait InputSource {

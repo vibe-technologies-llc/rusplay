@@ -204,6 +204,33 @@ fn microphone_packets_with_fec_still_play() {
 }
 
 #[test]
+fn a_takeover_restarts_the_microphone_numbering() {
+    let capture = Capture::default();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let config = microphone_config(true);
+    let packets = tone_packets(&config.audio, PACKETS);
+    let fixture = fixture(config, &capture, &opened);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+
+    let (mut first, record) = TestClient::pair(fixture.address);
+    first.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(first.pump_until(TestClient::has_hello));
+    send_packets(&first, &packets, FecScheme::None);
+    assert!(capture.wait_for_frames(PACKETS as usize));
+
+    let mut second = TestClient::reconnect(fixture.address, &record);
+    second.hello();
+    assert!(second.pump_until(TestClient::has_hello));
+    send_packets(&second, &packets, FecScheme::None);
+
+    assert!(capture.wait_for_frames(2 * PACKETS as usize));
+    assert_eq!(stream.stats().sessions_taken_over, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
 fn microphone_packets_before_the_hello_are_ignored() {
     let capture = Capture::default();
     let opened = Arc::new(AtomicUsize::new(0));

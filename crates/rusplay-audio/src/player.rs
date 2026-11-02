@@ -59,6 +59,10 @@ impl ConcealingPlayer {
         }
     }
 
+    pub fn restart(&mut self) {
+        self.expected = None;
+    }
+
     pub fn stats(&self) -> PlayerStats {
         self.stats
     }
@@ -276,6 +280,19 @@ mod tests {
             [Produced::Decoded(5), Produced::Decoded(6)]
         );
         assert_eq!(player.stats().late, 2);
+    }
+
+    #[test]
+    fn a_restart_accepts_numbers_from_the_start_again() {
+        let (mut player, _) = player(&mono());
+        feed(&mut player, 200);
+        feed(&mut player, 201);
+
+        player.restart();
+        feed(&mut player, 0);
+
+        assert_eq!(player.stats().late, 0);
+        assert_eq!(player.stats().lost, 0);
     }
 
     #[test]

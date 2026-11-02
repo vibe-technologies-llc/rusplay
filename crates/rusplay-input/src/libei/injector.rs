@@ -142,6 +142,13 @@ impl DeviceSlot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Batch {
+    Idle,
+    Unpumped,
+    Pumped,
+}
+
 pub struct LibeiInjector {
     context: ei::Context,
     converter: EiEventConverter,
@@ -150,6 +157,7 @@ pub struct LibeiInjector {
     devices: Vec<DeviceSlot>,
     sequence: u32,
     closed: bool,
+    batch: Batch,
     sync_locks: bool,
     lock_sync: LockSync,
     touches: TouchSet,
@@ -175,6 +183,7 @@ impl LibeiInjector {
             devices: Vec::new(),
             sequence: 0,
             closed: false,
+            batch: Batch::Idle,
             sync_locks: config.sync_locks && config.keyboard,
             lock_sync: LockSync::new(),
             touches: TouchSet::default(),
@@ -238,6 +247,10 @@ impl LibeiInjector {
     }
 
     fn pump(&mut self) -> Result<(), InputError> {
+        if self.closed {
+            return Err(InputError::SinkClosed);
+        }
+
         match self.context.read() {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
@@ -411,7 +424,28 @@ impl LibeiInjector {
         Ok(())
     }
 
+    fn pump_for_event(&mut self) -> Result<(), InputError> {
+        if self.batch == Batch::Pumped {
+            return Ok(());
+        }
+
+        self.pump()?;
+        if self.batch == Batch::Unpumped {
+            self.batch = Batch::Pumped;
+        }
+
+        Ok(())
+    }
+
     fn flush(&self) -> Result<(), InputError> {
+        if self.batch != Batch::Idle {
+            return Ok(());
+        }
+
+        self.flush_now()
+    }
+
+    fn flush_now(&self) -> Result<(), InputError> {
         self.context
             .flush()
             .map_err(|errno| InputError::EiIo(errno.into()))
@@ -421,7 +455,7 @@ impl LibeiInjector {
 impl InputSink for LibeiInjector {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
         if let InputEvent::Locks(locks) = event {
-            self.pump()?;
+            self.pump_for_event()?;
             if self.closed {
                 return Err(InputError::SinkClosed);
             }
@@ -435,7 +469,7 @@ impl InputSink for LibeiInjector {
 
         let request = translate(event)?;
 
-        self.pump()?;
+        self.pump_for_event()?;
         if self.closed {
             return Err(InputError::SinkClosed);
         }
@@ -451,6 +485,23 @@ impl InputSink for LibeiInjector {
         }
 
         Ok(())
+    }
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        if events.is_empty() {
+            return;
+        }
+
+        self.batch = Batch::Unpumped;
+        results.extend(events.iter().map(|event| self.inject(*event)));
+        self.batch = Batch::Idle;
+
+        if let Err(error) = self.flush_now()
+            && let Some(last) = results.iter_mut().rev().find(|result| result.is_ok())
+        {
+            *last = Err(error);
+        }
     }
 }
 

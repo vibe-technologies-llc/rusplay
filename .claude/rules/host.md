@@ -20,7 +20,8 @@ paths:
   datagram from the client during a session is ignored, and a `Start` or a `Hello` for another
   peer from any other address is answered `Rejected(Busy)` (`networking.md`).
   - Takeover: a reconnect `Hello` for the session's own peer, from any address, runs through
-    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`).
+    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`; a refresh that fails refuses the takeover with
+    `Rejected(Busy)` and leaves the session as it is, never falling back to the old list).
     Only on the authenticated `Accepted` the stage installs the new session keys, answers, and
     restarts the session for the new client: `Shared::suspend` (streaming flag off, mailbox held
     and a keyframe forced), `ClientLink::switch` (the shared client address every stage reads,
@@ -28,16 +29,19 @@ paths:
     the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
     and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage
     resends the latest `StreamFormat` before `Shared::start`, so the description precedes the forced
-    keyframe. The input stage resets its `InputSequence` and the cursor stage resends the image
-    when the epoch changes. `HostStats::sessions_taken_over` counts them. The old client is simply
-    dropped: its datagrams no longer unseal. The host has no `Reassembler` of its own to reset;
-    the new client's is fresh.
+    keyframe. When the epoch changes the input stage lifts everything the old client held
+    (`release_all`), starts a fresh `HeldInput` and `InputSequence`, and the cursor stage resends
+    the image. `HostStats::sessions_taken_over` counts them. The old client is simply
+    dropped: its datagrams no longer unseal. The microphone stage, which numbers nothing itself but
+    follows the client's numbering, starts a fresh `Reassembler` and calls
+    `ConcealingPlayer::restart` when the epoch changes, since a new client numbers packets from 0.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
   a socket wait. Four to six named threads, each returning `Result<(), HostError>`, share
   `Shared` (stop flag, the streaming flag, `Counters`, the capture mailbox). Any stage that ends
-  stops the others; `wait`/`stop` join all of them and return the first error, and dropping the
+  stops the others, and so does a panic (every thread body runs inside a `StopOnDrop` guard, so
+  an unwinding build never leaves control sending keepalives); `wait`/`stop` join all of them and return the first error, and dropping the
   stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
@@ -68,7 +72,9 @@ paths:
     scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
-    `network.pacing_window_percent` of the frame interval in bursts at least 250 µs apart, so a
+    `network.pacing_window_percent` of the frame interval, the shorter of the configured
+    `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
+    faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
     frame never waits behind the previous one's pacing for long.
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
@@ -91,7 +97,8 @@ paths:
     quality.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
     the audio and cursor stages wait for. `StreamKind::Microphone` datagrams, and `Fec` datagrams
-    that protect it, are forwarded after `Hello` with `try_send` to the microphone stage's bounded
+    that protect it, are forwarded after `Hello` with `try_send` (tagged with the `ClientLink` epoch,
+    and the stage drops one from an earlier epoch) to the microphone stage's bounded
     channel (`audio.decode_queue_packets` datagrams; a full channel counts
     `microphone_packets_dropped`), so the control stage stays the only socket reader.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the
@@ -135,14 +142,17 @@ paths:
     stage on the `CaptureFeed` so it survives sessions) and the client scales to the stream. The
     stage sends nothing until a frame has been captured, and a capture resize counts as a
     change, so it sends a message even while the cursor sits still.
-- Encode → send is a `sync_channel` of two encoded frames filled with `try_send`. A full queue
+- Encode → send is a `sync_channel` of one encoded frame filled with `try_send` (a deeper queue
+  only adds latency behind a frame still being paced). A full queue
   drops the frame without consuming a frame number and forces the next frame to be a keyframe,
   because later frames would reference the dropped one.
 - Keyframes: a `RequestKeyframe { frame }` forces the next encode to be a keyframe unless a
   keyframe numbered after `frame` was already sent (`keyframe_requests_ignored`), since the
   client repeats its request until one arrives. Requests coalesce to the earliest frame. With no
   new capture frame pending, the pipeline re-encodes its last encoder input as a keyframe
-  (`frames_repeated`), so a static screen still answers.
+  (`frames_repeated`), so a static screen still answers. The forced flag is cleared only once a frame reached the send queue, so a
+  pipeline that produced nothing (an import that fell back to shared memory, a repeat with no
+  input yet) or a full queue leaves the next frame a keyframe.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
   - DMA-BUF frames are the default path and are never copied: `GpuPipeline` imports them with its
     own `DmaBufImporter` (created on the first DMA-BUF frame, its cache keeping a capture
@@ -160,7 +170,14 @@ paths:
   - A DMA-BUF frame that fails to import (importer unavailable, unsupported format or modifier)
     makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
     `PipeWireCapture` forwards) and skip the frame, so PipeWire renegotiates to shared memory and
-    the session keeps going; a source without a fallback returns the import error.
+    the session keeps going; a source without a fallback returns the import error. Only a
+    rejection of the buffer itself (`rejects_dmabuf`: importer unavailable, unsupported format or
+    modifier, plane layout or extent) asks for it, once per stream (`dmabuf_fallbacks`), since
+    the capture keeps `prefer_dmabuf` off for good. Any other import error (importer creation,
+    memory import, fence syscalls) is taken as transient: the frame is dropped
+    (`dmabuf_import_failures`) and the next one retries DMA-BUF, until 60 failures in a row end the
+    session with the error. The encode stage reads these counts from `VideoPipeline::take_notices`
+    after every encode and `rusplay-hostd` prints them with the other stats.
   - Before the GPU reads a DMA-BUF the pipeline waits for its write fences (`gate_on_writes`).
     A buffer whose fences have already signalled (a zero-timeout `wait_for_writes`) is read
     straight away. Otherwise, with `capture.dmabuf_gpu_fence_wait` on (default) and a
@@ -170,8 +187,12 @@ paths:
     on the producer. Without a waiter, or when staging fails (a kernel without
     `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`), it falls back to `rusplay_scale::wait_for_writes` for up to
     `capture.dmabuf_fence_timeout_ms` (default 100, 0 only checks); a timeout reads the buffer
-    as it is rather than dropping the frame, so a producer whose fences never signal still
-    streams, as it did before the wait existed. The GPU wait has no timeout.
+    as it is rather than dropping the frame, so on this path a producer whose fences never signal
+    still streams. A staged GPU wait cannot be abandoned that way, so the device poll that follows
+    the submission (hand-off wait or readback) is bounded by `capture.dmabuf_fence_timeout_ms` plus
+    a fixed 500 ms allowance for the GPU work; a producer whose fence never signals ends the
+    session with `GpuFenceTimeout` (never retried as a hand-off failure). Polls with no staged fence
+    are not bounded.
   - The frame, and so its PipeWire buffer lease, is held until the readback or hand-off wait has
     seen the GPU finish, and then as the feed's retained frame; the encode stage drops the previous retained
     frame before encoding the next, so a session holds at most three capture buffers.
@@ -196,7 +217,8 @@ paths:
     sRGB source in a format with an sRGB view is read through that view; anything else is
     linearised by a `Lineariser` at the capture size (PQ and HLG as display light relative to the
     source's reference white); then scale, map and convert with `InputLight::Linear`. Upscaling is
-    always in linear light, since the sigmoid needs it.
+    always in linear light, since the sigmoid needs it. The sigmoid is left off when the source transfer is PQ or HLG, whose linear
+    light runs above reference white and would be clamped by the sigmoid's 0..1 input.
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
@@ -226,8 +248,9 @@ paths:
     write), with `video.encoder_gpu_handoff` off, and when the device cannot export. The hand-off
     starts as `HandoffState::Trying`: an export, layout or encode failure before the first
     handed-off frame has encoded turns it `Off` for the pipeline, and that same frame is converted
-    again into the readback target and encoded from shared memory, so a driver that refuses the
-    import costs one extra conversion. Once a frame has encoded (`Proven`), errors end the session
+    again into the readback target and encoded from shared memory by a freshly reopened encoder (the
+    failed one may hold state from the discarded frame), so a driver that refuses the import costs
+    one extra conversion and one encoder reopen; `HostStats::handoff_disabled` counts it. Once a frame has encoded (`Proven`), errors end the session
     like any other encoder error.
   - Readback: the converter writes planar with 4-byte rows, the frame is copied into a `MAP_READ`
     buffer in the same submission, mapped, and its planes are repacked row by row into the reused
@@ -265,18 +288,27 @@ paths:
   it. Tests that enable the microphone must replace it or they publish a real PipeWire node.
 - Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
   `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
-  `service(&mut Vec<RumbleCommand>)`) behind a mutex that the session's input stage holds for the
+  `inject_batch`, which defaults to `inject` per event, and `service(&mut Vec<RumbleCommand>)`)
+  behind a mutex that the session's input stage holds for the
   session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
   `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
   holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
-  a request channel, servicing it every 50 ms while no session uses it so the compositor's pings
+  a request channel (each call waits at most `INJECT_TIMEOUT`, 250 ms, then fails with
+  `SinkClosed`, and a late reply is told apart by its request id), servicing it every 50 ms while no session uses it so the compositor's pings
   are answered between clients. The injector thread ends when the feed drops.
   - `rusplay-host-input` (only with a feed) receives the datagrams the control stage forwards
-    once the `Hello` is answered (earlier ones are dropped), reads them with `InputPacket::read`
+    once the `Hello` is answered (earlier ones are dropped) over a bounded `sync_channel` of
+    `INPUT_QUEUE_DATAGRAMS` (256) filled with `try_send` (a full channel counts
+    `input_packets_dropped`, so a stalled compositor never queues input to replay late as a
+    burst). Each datagram carries the `ClientLink` epoch it was forwarded under and the stage drops
+    one from an earlier epoch (`input_packets_stale`) so a takeover never lets the old client's
+    datagrams raise the new sequence. It reads them with `InputPacket::read`
     and `InputSequence::admit` (a fresh sequence per session), decodes each record with
-    `InputRecord::decode` and injects it; an event goes straight to the target, a state record
-    is turned into the events that bring the host to the client's held state
-    (`HeldInput::reconcile`, `input_events_repaired`) and those are injected. A failed injection
+    `InputRecord::decode` and injects the events of a section as one `inject_batch` (a single round
+    trip to the injector thread, one result per event, each recorded in `HeldInput` only on
+    success); a state record first flushes the events before it, then is turned into the events
+    that bring the host to the client's held state (`HeldInput::reconcile`,
+    `input_events_repaired`), which are injected as a batch too. A failed injection
     is not recorded as held, so the next snapshot tries again. A malformed datagram or record
     counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
     in `input_failures` without ending the session, since a paused device or a closed compositor
@@ -284,6 +316,9 @@ paths:
     `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
     window drops the command (`rumble_dropped`), because the client caps every effect length. On
     the way out it releases whatever `HeldInput` says the client still held.
+    The portal's `InputTarget::service` always polls both halves, the libei connection and the
+    virtual pads' rumble, and returns the first error, so a compositor that dropped EIS never leaves
+    a pad's force-feedback upload undrained.
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input }`; the GPU is needed for the
     capture's importable modifiers, so the GPU is opened before the portal. With `input.accept_remote` it
     opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over

@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -51,6 +54,23 @@ impl SharedTarget {
             thread::sleep(Duration::from_millis(2));
         }
         true
+    }
+}
+
+struct GatedTarget {
+    open: Arc<AtomicBool>,
+}
+
+impl InputTarget for GatedTarget {
+    fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+        while !self.open.load(Ordering::Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
+    }
+
+    fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        Ok(())
     }
 }
 
@@ -295,6 +315,38 @@ fn a_host_without_an_input_feed_ignores_input_datagrams() {
     client.pump(Duration::from_millis(150), |_| false);
 
     assert_eq!(stream.stats().input_packets, 0);
+    assert!(!stream.is_finished());
+    stream.stop().unwrap();
+}
+
+#[test]
+fn input_that_the_target_cannot_keep_up_with_is_dropped_instead_of_queued() {
+    let open = Arc::new(AtomicBool::new(false));
+    let gated = GatedTarget {
+        open: Arc::clone(&open),
+    };
+    let fixture = Fixture::with_session(host_config(), move |session| {
+        session.without_audio().with_input(InputFeed::new(gated))
+    });
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(client.pump_until(TestClient::has_hello));
+    for sequence in 0..600 {
+        client.send_datagram(&input_datagram(
+            sequence,
+            &events(&[key(30, sequence % 2 == 0)]),
+            &[],
+        ));
+    }
+
+    let dropped = client.pump_until(|_| stream.stats().input_packets_dropped > 0);
+    open.store(true, Ordering::Release);
+
+    assert!(dropped);
     assert!(!stream.is_finished());
     stream.stop().unwrap();
 }

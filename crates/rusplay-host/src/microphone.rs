@@ -1,4 +1,5 @@
 use std::{
+    iter,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError},
@@ -11,7 +12,7 @@ use rusplay_config::{AudioConfig, NetworkConfig};
 use rusplay_net::{Reassembler, ReassemblyEvent, ReassemblyLimits};
 use rusplay_protocol::StreamKind;
 
-use crate::{HostError, shared::Shared, stats::Counters};
+use crate::{HostError, datagrams::ForwardedDatagram, shared::Shared, stats::Counters};
 
 const IDLE_WAKE: Duration = Duration::from_millis(20);
 
@@ -36,7 +37,7 @@ pub(crate) fn default_microphone_output() -> Option<MicrophoneOutputFactory> {
 
 pub(crate) struct MicrophoneLinks {
     pub shared: Arc<Shared>,
-    pub datagrams: Receiver<Vec<u8>>,
+    pub datagrams: Receiver<ForwardedDatagram>,
 }
 
 pub(crate) fn run(
@@ -63,17 +64,36 @@ fn serve(
     let mut reassembler = Reassembler::new(StreamKind::Microphone, ReassemblyLimits::from(network));
     let mut events = Vec::new();
     let counters = &links.shared.counters;
+    let mut epoch = links.shared.client.epoch();
+    let mut follow = |reassembler: &mut Reassembler,
+                      player: &mut ConcealingPlayer,
+                      events: &mut Vec<ReassemblyEvent>| {
+        let current = links.shared.client.epoch();
+        if current != epoch {
+            epoch = current;
+            *reassembler =
+                Reassembler::new(StreamKind::Microphone, ReassemblyLimits::from(network));
+            player.restart();
+            events.clear();
+        }
+
+        epoch
+    };
 
     while !links.shared.stopped() {
+        follow(&mut reassembler, &mut player, &mut events);
+
         let wait = reassembler.next_timeout().map_or(IDLE_WAKE, |due| {
             due.saturating_duration_since(Instant::now()).min(IDLE_WAKE)
         });
 
         match links.datagrams.recv_timeout(wait) {
-            Ok(datagram) => {
-                push(&mut reassembler, &datagram, &mut events, counters);
-                while let Ok(datagram) = links.datagrams.try_recv() {
-                    push(&mut reassembler, &datagram, &mut events, counters);
+            Ok(first) => {
+                for datagram in iter::once(first).chain(links.datagrams.try_iter()) {
+                    let current = follow(&mut reassembler, &mut player, &mut events);
+                    if datagram.epoch == current {
+                        push(&mut reassembler, &datagram.bytes, &mut events, counters);
+                    }
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}

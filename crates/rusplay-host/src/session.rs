@@ -26,13 +26,13 @@ use crate::{
     negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
-    send::{self, SendLinks, SendOptions},
-    shared::Shared,
+    send::{self, Pacing, SendLinks, SendOptions},
+    shared::{Shared, StopOnDrop},
 };
 
 const FEC_BLOCK_DATA_SHARDS: u8 = 32;
-const SEND_QUEUE_FRAMES: usize = 2;
-const PERCENT: u32 = 100;
+const SEND_QUEUE_FRAMES: usize = 1;
+const INPUT_QUEUE_DATAGRAMS: usize = 256;
 
 pub struct HostSession {
     config: Config,
@@ -161,7 +161,7 @@ impl HostSession {
             Arc::clone(&self.transport),
             Arc::clone(&shared.client),
         ));
-        let (input_sender, input_datagrams) = mpsc::channel();
+        let (input_sender, input_datagrams) = mpsc::sync_channel(INPUT_QUEUE_DATAGRAMS);
         let hints = HintPolicy::from_config(&self.config);
         if hints != HintPolicy::Ignore {
             shared
@@ -266,15 +266,18 @@ fn image_repeat(config: &Config) -> Option<Duration> {
 
 fn send_options(config: &Config) -> SendOptions {
     let network = &config.network;
-    let pacing_window = network
+    let pacing = network
         .pacing
         .then(|| config.video.frame_rate.frame_interval())
         .flatten()
-        .map(|interval| interval * u32::from(network.pacing_window_percent) / PERCENT);
+        .map(|frame_interval| Pacing {
+            frame_interval,
+            window_percent: network.pacing_window_percent,
+        });
 
     SendOptions {
         fec: FecScheme::for_overhead(FEC_BLOCK_DATA_SHARDS, network.fec_overhead_percent),
-        pacing_window,
+        pacing,
     }
 }
 
@@ -344,7 +347,11 @@ impl HostStream {
         if let Some(bytes) = stack_bytes {
             builder = builder.stack_size(bytes);
         }
-        let spawned = builder.spawn(body);
+        let guard = StopOnDrop(Arc::clone(&self.shared));
+        let spawned = builder.spawn(move || {
+            let _guard = guard;
+            body()
+        });
 
         match spawned {
             Ok(handle) => {

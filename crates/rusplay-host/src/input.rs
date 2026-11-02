@@ -9,18 +9,26 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand};
+use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
-use crate::{HostError, Stage, outbox::ControlOutbox, shared::Shared};
+use crate::{
+    HostError, Stage, datagrams::ForwardedDatagram, outbox::ControlOutbox, shared::Shared,
+};
 
 const SERVICE_INTERVAL: Duration = Duration::from_millis(4);
 const IDLE_SERVICE_INTERVAL: Duration = Duration::from_millis(50);
+const INJECT_TIMEOUT: Duration = Duration::from_millis(250);
 const INJECTOR_THREAD: &str = "rusplay-host-injector";
 
 pub trait InputTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError>;
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        results.extend(events.iter().map(|event| self.inject(*event)));
+    }
 
     fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError>;
 }
@@ -62,7 +70,11 @@ impl InputFeed {
             })?;
 
         match ready.recv() {
-            Ok(Ok(())) => Ok(Self::new(RemoteTarget { requests, replies })),
+            Ok(Ok(())) => Ok(Self::new(RemoteTarget {
+                requests,
+                replies,
+                next_id: 0,
+            })),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(HostError::StagePanicked {
                 stage: Stage::Input,
@@ -76,12 +88,12 @@ impl InputFeed {
 }
 
 enum Request {
-    Inject(InputEvent),
+    Inject(Vec<InputEvent>),
     Service,
 }
 
 enum Reply {
-    Injected(Result<(), InputError>),
+    Injected(Vec<Result<(), InputError>>),
     Serviced {
         rumble: Vec<RumbleCommand>,
         result: Result<(), InputError>,
@@ -89,25 +101,46 @@ enum Reply {
 }
 
 struct RemoteTarget {
-    requests: Sender<Request>,
-    replies: Receiver<Reply>,
+    requests: Sender<(u64, Request)>,
+    replies: Receiver<(u64, Reply)>,
+    next_id: u64,
 }
 
 impl RemoteTarget {
-    fn call(&self, request: Request) -> Result<Reply, InputError> {
+    fn call(&mut self, request: Request) -> Result<Reply, InputError> {
+        self.next_id += 1;
+        let id = self.next_id;
         self.requests
-            .send(request)
+            .send((id, request))
             .map_err(|_| InputError::SinkClosed)?;
 
-        self.replies.recv().map_err(|_| InputError::SinkClosed)
+        let deadline = Instant::now() + INJECT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.replies.recv_timeout(remaining) {
+                Ok((answered, reply)) if answered == id => return Ok(reply),
+                Ok(_) => {}
+                Err(_) => return Err(InputError::SinkClosed),
+            }
+        }
     }
 }
 
 impl InputTarget for RemoteTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
-        match self.call(Request::Inject(event))? {
-            Reply::Injected(result) => result,
-            Reply::Serviced { .. } => Err(InputError::SinkClosed),
+        let mut results = Vec::with_capacity(1);
+        self.inject_batch(&[event], &mut results);
+
+        results.pop().unwrap_or(Err(InputError::SinkClosed))
+    }
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        match self.call(Request::Inject(events.to_vec())) {
+            Ok(Reply::Injected(injected)) => results.extend(injected),
+            Ok(Reply::Serviced { .. }) | Err(_) => {
+                results.extend(events.iter().map(|_| Err(InputError::SinkClosed)));
+            }
         }
     }
 
@@ -127,20 +160,22 @@ impl InputTarget for RemoteTarget {
 
 fn serve_requests(
     mut target: impl InputTarget,
-    requests: &Receiver<Request>,
-    replies: &Sender<Reply>,
+    requests: &Receiver<(u64, Request)>,
+    replies: &Sender<(u64, Reply)>,
 ) {
     let mut idle = Vec::new();
 
     loop {
         match requests.recv_timeout(IDLE_SERVICE_INTERVAL) {
-            Ok(Request::Inject(event)) => {
-                replies.send(Reply::Injected(target.inject(event))).ok();
+            Ok((id, Request::Inject(events))) => {
+                let mut results = Vec::with_capacity(events.len());
+                target.inject_batch(&events, &mut results);
+                replies.send((id, Reply::Injected(results))).ok();
             }
-            Ok(Request::Service) => {
+            Ok((id, Request::Service)) => {
                 let mut rumble = Vec::new();
                 let result = target.service(&mut rumble);
-                replies.send(Reply::Serviced { rumble, result }).ok();
+                replies.send((id, Reply::Serviced { rumble, result })).ok();
             }
             Err(RecvTimeoutError::Timeout) => {
                 idle.clear();
@@ -160,7 +195,7 @@ impl fmt::Debug for InputFeed {
 pub(crate) struct InputLinks {
     pub shared: Arc<Shared>,
     pub feed: Arc<InputFeed>,
-    pub datagrams: Receiver<Vec<u8>>,
+    pub datagrams: Receiver<ForwardedDatagram>,
     pub outbox: Arc<ControlOutbox>,
 }
 
@@ -182,7 +217,9 @@ struct InputStage<'a> {
     sequence: InputSequence,
     epoch: u32,
     held: HeldInput,
+    pending: Vec<InputEvent>,
     repairs: Vec<InputEvent>,
+    outcomes: Vec<Result<(), InputError>>,
     commands: Vec<RumbleCommand>,
 }
 
@@ -194,7 +231,9 @@ impl<'a> InputStage<'a> {
             sequence: InputSequence::new(),
             epoch: shared.client.epoch(),
             held: HeldInput::new(),
+            pending: Vec::new(),
             repairs: Vec::new(),
+            outcomes: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -202,15 +241,16 @@ impl<'a> InputStage<'a> {
     fn serve(
         &mut self,
         target: &mut dyn InputTarget,
-        datagrams: &Receiver<Vec<u8>>,
+        datagrams: &Receiver<ForwardedDatagram>,
     ) -> Result<(), HostError> {
         while !self.shared.stopped() {
+            self.follow_client(target);
+
             match datagrams.recv_timeout(SERVICE_INTERVAL) {
                 Ok(datagram) => {
-                    self.follow_client();
-                    self.apply_datagram(target, &datagram);
+                    self.admit(target, &datagram);
                     while let Ok(next) = datagrams.try_recv() {
-                        self.apply_datagram(target, &next);
+                        self.admit(target, &next);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -223,11 +263,25 @@ impl<'a> InputStage<'a> {
         Ok(())
     }
 
-    fn follow_client(&mut self) {
+    fn follow_client(&mut self, target: &mut dyn InputTarget) {
         let epoch = self.shared.client.epoch();
-        if epoch != self.epoch {
-            self.epoch = epoch;
-            self.sequence.reset();
+        if epoch == self.epoch {
+            return;
+        }
+
+        self.release_all(target);
+        self.held = HeldInput::new();
+        self.sequence.reset();
+        self.epoch = epoch;
+    }
+
+    fn admit(&mut self, target: &mut dyn InputTarget, datagram: &ForwardedDatagram) {
+        self.follow_client(target);
+
+        if datagram.epoch == self.epoch {
+            self.apply_datagram(target, &datagram.bytes);
+        } else {
+            self.shared.counters.input_packets_stale.increment();
         }
     }
 
@@ -250,47 +304,60 @@ impl<'a> InputStage<'a> {
     }
 
     fn apply_section(&mut self, target: &mut dyn InputTarget, records: InputRecords<'_>) {
+        let mut events = std::mem::take(&mut self.pending);
+        events.clear();
+
         for bytes in records {
             let decoded = bytes.ok().and_then(|bytes| InputRecord::decode(bytes).ok());
 
             match decoded {
-                Some(record) => self.apply(target, record),
+                Some(InputRecord::Event(event)) => events.push(event),
+                Some(InputRecord::State(state)) => {
+                    self.inject_all(target, &events);
+                    events.clear();
+                    self.reconcile(target, &state);
+                }
                 None => self.shared.counters.malformed_datagrams.increment(),
             }
         }
+
+        self.inject_all(target, &events);
+        events.clear();
+        self.pending = events;
     }
 
-    fn apply(&mut self, target: &mut dyn InputTarget, record: InputRecord) {
-        match record {
-            InputRecord::Event(event) => {
-                self.inject(target, event);
-            }
-            InputRecord::State(state) => {
-                self.shared.counters.input_state_records.increment();
+    fn reconcile(&mut self, target: &mut dyn InputTarget, state: &StateRecord) {
+        self.shared.counters.input_state_records.increment();
 
-                let mut events = std::mem::take(&mut self.repairs);
-                events.clear();
-                self.held.reconcile(&state, &mut events);
-                for event in events.drain(..) {
-                    if self.inject(target, event) {
-                        self.shared.counters.input_events_repaired.increment();
-                    }
-                }
-                self.repairs = events;
-            }
+        let mut events = std::mem::take(&mut self.repairs);
+        events.clear();
+        self.held.reconcile(state, &mut events);
+        let repaired = self.inject_all(target, &events);
+        self.shared
+            .counters
+            .input_events_repaired
+            .add(repaired as u64);
+        self.repairs = events;
+    }
+
+    fn inject_all(&mut self, target: &mut dyn InputTarget, events: &[InputEvent]) -> usize {
+        if events.is_empty() {
+            return 0;
         }
-    }
 
-    fn inject(&mut self, target: &mut dyn InputTarget, event: InputEvent) -> bool {
         let counters = &self.shared.counters;
-        let injected = target.inject(event).is_ok();
+        let mut injected = 0;
+        target.inject_batch(events, &mut self.outcomes);
 
-        if injected {
-            self.held.observe(&event);
-            counters.input_events.increment();
-        } else {
-            counters.input_failures.increment();
+        for (event, outcome) in events.iter().zip(&self.outcomes) {
+            if outcome.is_ok() {
+                self.held.observe(event);
+                counters.input_events.increment();
+                injected += 1;
+            }
         }
+        let failed = events.len() - injected;
+        counters.input_failures.add(failed as u64);
 
         injected
     }
@@ -330,11 +397,7 @@ impl<'a> InputStage<'a> {
         let mut events = Vec::new();
         self.held.release_all(&mut events);
 
-        for event in events {
-            if target.inject(event).is_ok() {
-                self.held.observe(&event);
-            }
-        }
+        self.inject_all(target, &events);
     }
 }
 
@@ -496,6 +559,36 @@ mod tests {
         assert_eq!(commands, vec![rumble]);
     }
 
+    struct StallsOnce {
+        stalled: bool,
+    }
+
+    impl InputTarget for StallsOnce {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            if !self.stalled {
+                self.stalled = true;
+                thread::sleep(INJECT_TIMEOUT + Duration::from_millis(100));
+            }
+            Ok(())
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_stalled_injector_times_out_and_its_late_reply_is_not_mistaken_for_the_next() {
+        let feed = InputFeed::spawn(|| Ok(StallsOnce { stalled: false })).unwrap();
+        let mut target = feed.target();
+
+        let stalled = target.inject(key(30, true));
+        let recovered = target.inject(key(30, false));
+
+        assert!(matches!(stalled, Err(InputError::SinkClosed)));
+        assert!(recovered.is_ok());
+    }
+
     #[test]
     fn a_target_that_fails_to_build_reports_why() {
         let built = InputFeed::spawn(|| -> Result<Recorder, HostError> {
@@ -548,6 +641,124 @@ mod tests {
         assert_eq!(rig.stats().input_packets, 2);
     }
 
+    #[derive(Default)]
+    struct Batches {
+        sizes: Vec<usize>,
+        rejected: Vec<InputEvent>,
+    }
+
+    impl InputTarget for Batches {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            Ok(())
+        }
+
+        fn inject_batch(
+            &mut self,
+            events: &[InputEvent],
+            results: &mut Vec<Result<(), InputError>>,
+        ) {
+            self.sizes.push(events.len());
+            results.clear();
+            results.extend(events.iter().map(|event| {
+                if self.rejected.contains(event) {
+                    Err(InputError::SinkClosed)
+                } else {
+                    Ok(())
+                }
+            }));
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_events_of_a_datagram_reach_the_target_as_one_batch() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches::default();
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(
+                0,
+                &[
+                    event(key(1, true)),
+                    event(key(2, true)),
+                    event(key(3, true)),
+                ],
+                &[],
+            ),
+        );
+
+        assert_eq!(target.sizes, vec![3]);
+        assert_eq!(rig.stats().input_events, 3);
+    }
+
+    #[test]
+    fn a_state_record_sees_the_outcome_of_the_events_before_it() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches::default();
+        let mut records = vec![event(key(30, true))];
+        records.extend(snapshot_of(&[]));
+
+        stage.apply_datagram(&mut target, &datagram(0, &records, &[]));
+
+        assert_eq!(target.sizes, vec![1, 1]);
+        assert_eq!(rig.stats().input_events_repaired, 1);
+    }
+
+    #[test]
+    fn each_event_of_a_batch_keeps_its_own_outcome() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches {
+            rejected: vec![key(2, true)],
+            ..Batches::default()
+        };
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(0, &[event(key(1, true)), event(key(2, true))], &[]),
+        );
+        stage.release_all(&mut target);
+
+        assert_eq!(rig.stats().input_events, 2);
+        assert_eq!(rig.stats().input_failures, 1);
+        assert_eq!(target.sizes, vec![2, 1]);
+    }
+
+    struct RejectsOdd;
+
+    impl InputTarget for RejectsOdd {
+        fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
+            match event {
+                InputEvent::Key { keycode, .. } if keycode % 2 == 1 => Err(InputError::SinkClosed),
+                _ => Ok(()),
+            }
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_batch_through_the_injector_thread_returns_a_result_per_event() {
+        let feed = InputFeed::spawn(|| Ok(RejectsOdd)).unwrap();
+        let mut target = feed.target();
+        let mut results = Vec::new();
+
+        target.inject_batch(&[key(2, true), key(3, true), key(4, true)], &mut results);
+
+        assert_eq!(
+            results.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            vec![true, false, true]
+        );
+    }
+
     #[test]
     fn a_lost_datagram_is_recovered_from_the_next_ones_previous_section() {
         let rig = Rig::new();
@@ -590,11 +801,70 @@ mod tests {
         rig.shared
             .client
             .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
-        stage.follow_client();
+        stage.follow_client(&mut target);
+        target.events.clear();
         stage.apply_datagram(&mut target, &datagram(0, &[event(key(2, true))], &[]));
 
-        assert_eq!(target.events, vec![key(1, true), key(2, true)]);
+        assert_eq!(target.events, vec![key(2, true)]);
         assert_eq!(rig.stats().input_packets_stale, 0);
+    }
+
+    #[test]
+    fn a_takeover_lifts_what_the_old_client_held() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let pad = InputEvent::Gamepad {
+            slot: 1,
+            event: GamepadEvent::Connected,
+        };
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(0, &[event(key(30, true)), event(pad)], &[]),
+        );
+        target.events.clear();
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        stage.follow_client(&mut target);
+        let lifted = target.events.len();
+        stage.apply_datagram(&mut target, &datagram(0, &snapshot_of(&[]), &[]));
+
+        assert_eq!(lifted, 2);
+        assert!(target.events.contains(&key(30, false)));
+        assert_eq!(target.events.len(), 2);
+        assert!(stage.held.is_idle());
+    }
+
+    #[test]
+    fn datagrams_forwarded_for_the_old_client_are_dropped_after_a_takeover() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let old_epoch = rig.shared.client.epoch();
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let new_epoch = rig.shared.client.epoch();
+
+        stage.admit(
+            &mut target,
+            &ForwardedDatagram {
+                epoch: old_epoch,
+                bytes: datagram(900, &[event(key(1, true))], &[]),
+            },
+        );
+        stage.admit(
+            &mut target,
+            &ForwardedDatagram {
+                epoch: new_epoch,
+                bytes: datagram(0, &[event(key(2, true))], &[]),
+            },
+        );
+
+        assert_eq!(target.events, vec![key(2, true)]);
+        assert_eq!(rig.stats().input_packets_stale, 1);
     }
 
     #[test]

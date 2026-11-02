@@ -49,9 +49,19 @@ mod shared {
             InputSink::inject(self, event)
         }
 
+        fn inject_batch(
+            &mut self,
+            events: &[InputEvent],
+            results: &mut Vec<Result<(), InputError>>,
+        ) {
+            InputSink::inject_batch(self, events, results);
+        }
+
         fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
-            self.desktop.service()?;
-            self.gamepads.poll_rumble(rumble)
+            let desktop = self.desktop.service();
+            let gamepads = self.gamepads.poll_rumble(rumble);
+
+            desktop.and(gamepads)
         }
     }
 
