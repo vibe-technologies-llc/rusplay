@@ -8,7 +8,7 @@ use std::{
 };
 
 use rusplay_config::NetworkConfig;
-use rusplay_protocol::DiscoveryMessage;
+use rusplay_protocol::{DiscoveryMessage, HostId};
 
 use crate::{NetError, pairing::fill_random};
 
@@ -50,6 +50,7 @@ pub struct DiscoveredHost {
     pub address: SocketAddr,
     pub name: String,
     pub busy: bool,
+    pub id: HostId,
 }
 
 #[derive(Debug)]
@@ -58,6 +59,7 @@ pub struct DiscoveryResponder {
     port: u16,
     name: String,
     busy: Arc<AtomicBool>,
+    host_id: HostId,
 }
 
 impl DiscoveryResponder {
@@ -71,6 +73,7 @@ impl DiscoveryResponder {
             nonce: 0,
             port: host_port,
             busy: false,
+            host_id: HostId::NONE,
             name: name.to_owned(),
         };
         announce.to_datagram()?;
@@ -91,7 +94,14 @@ impl DiscoveryResponder {
             port: host_port,
             name: name.to_owned(),
             busy: Arc::new(AtomicBool::new(false)),
+            host_id: HostId::NONE,
         })
+    }
+
+    #[must_use]
+    pub const fn with_host_id(mut self, host_id: HostId) -> Self {
+        self.host_id = host_id;
+        self
     }
 
     #[must_use]
@@ -135,6 +145,7 @@ impl DiscoveryResponder {
             nonce,
             port: self.port,
             busy: self.busy.load(Ordering::Relaxed),
+            host_id: self.host_id,
             name: self.name.clone(),
         }
         .to_datagram()?;
@@ -206,6 +217,7 @@ impl DiscoveryBrowser {
                 nonce: echoed,
                 port,
                 busy,
+                host_id,
                 name,
             }) = DiscoveryMessage::from_datagram(&buf[..len])
             else {
@@ -222,6 +234,7 @@ impl DiscoveryBrowser {
                     address,
                     name,
                     busy,
+                    id: host_id,
                 });
             }
         }
@@ -300,6 +313,7 @@ mod tests {
                 address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 47_800),
                 name: "couch-pc".to_owned(),
                 busy: false,
+                id: HostId::NONE,
             }]
         );
     }
@@ -331,6 +345,24 @@ mod tests {
             .map(|host| (host.name.as_str(), host.busy))
             .collect();
         assert_eq!(states, [("idle", false), ("mid-session", true)]);
+    }
+
+    #[test]
+    fn the_announce_carries_the_responders_host_id() {
+        let id = HostId([7; HostId::LEN]);
+        let host = Arc::new(
+            DiscoveryResponder::bind(LOOPBACK, None, 47_800, "couch-pc")
+                .unwrap()
+                .with_host_id(id),
+        );
+        let server = serve(&host, 1);
+        let browser = DiscoveryBrowser::new(vec![host.local_addr().unwrap()]).unwrap();
+
+        let found = browser.scan(SCAN).unwrap();
+
+        server.join().unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, id);
     }
 
     #[test]
@@ -392,6 +424,7 @@ mod tests {
             nonce: 12345,
             port: 9,
             busy: false,
+            host_id: HostId::NONE,
             name: "evil".to_owned(),
         }
         .to_datagram()

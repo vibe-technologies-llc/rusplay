@@ -9,7 +9,7 @@ use std::{
 };
 
 use rusplay_config::NetworkConfig;
-use rusplay_host::{DiscoveryResponder, NetError};
+use rusplay_host::{DiscoveryResponder, HostId, NetError};
 use thiserror::Error;
 
 const HOSTNAME_FILE: &str = "/proc/sys/kernel/hostname";
@@ -36,11 +36,13 @@ impl Responder {
         network: &NetworkConfig,
         host_port: u16,
         configured_name: Option<&str>,
+        host_id: HostId,
         busy: Arc<AtomicBool>,
     ) -> Result<Self, ResponderError> {
         let name = announced_name(configured_name, system_hostname());
         let responder = DiscoveryResponder::bind_with_options(network.into(), host_port, &name)
             .map_err(ResponderError::Bind)?
+            .with_host_id(host_id)
             .with_busy_flag(busy);
 
         Self::spawn(responder)

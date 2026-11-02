@@ -17,7 +17,8 @@ use std::{
 
 use rusplay_config::{Config, ConfigError};
 use rusplay_host::{
-    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin, open_portal,
+    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin,
+    load_or_create_host_id, open_portal,
 };
 use thiserror::Error;
 
@@ -30,6 +31,7 @@ use crate::{
 };
 
 const USAGE_EXIT_CODE: u8 = 2;
+const HOST_ID_FILE: &str = "host-id";
 const MILLIS_PER_SECOND: u32 = 1_000;
 
 #[derive(Debug, Error)]
@@ -135,6 +137,8 @@ fn warn_if_exposed(store: &PeerStore) {
 fn serve(config: Config) -> Result<(), HostdError> {
     let peers = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
     warn_if_exposed(&peers);
+    let host_id = load_or_create_host_id(&peers.path().with_file_name(HOST_ID_FILE))
+        .map_err(HostError::from)?;
     let pin_file = PinFile::open(
         &config.peers,
         pin_file::runtime_dir_from_process().as_deref(),
@@ -158,6 +162,7 @@ fn serve(config: Config) -> Result<(), HostdError> {
         &host.config().network,
         address.port(),
         host.config().peers.host_name.as_deref(),
+        host_id,
         host.busy_flag(),
     )?;
 

@@ -148,13 +148,18 @@ paths:
 
 - `StreamKind::Discovery` carries `DiscoveryMessage`: a `Query` with a random nonce and an
   `Announce` echoing that nonce with the host's media port, a flags byte (bit 0 `busy`, any
-  other bit is `UnknownDiscoveryFlags`) and a name of at most 64 UTF-8 bytes.
+  other bit is `UnknownDiscoveryFlags`), the host's 16-byte `HostId` (all zero, `HostId::NONE`,
+  when the responder has none) and a name of at most 64 UTF-8 bytes.
   Announces are unauthenticated hints; pairing, not discovery, establishes trust.
 - `DiscoveryResponder` (host) listens on `network.discovery_port` on all IPv4 interfaces, joins
   `network.discovery_group`, and answers each query by unicast to its sender. `handle_next`
   serves one datagram with a timeout and is meant to run in a loop on its own thread.
   `with_busy_flag` hands it a shared `AtomicBool` it reads for every reply, which
   `DiscoveredHost::busy` reports on the client.
+  `with_host_id` sets the id, `DiscoveredHost::id` reports it. `load_or_create_host_id(path)`
+  reads a stable random id from a file or, when it does not exist, draws one from the OS random
+  source and writes it owner only (`write_owner_only`); a file that is not 32 hex digits, or is
+  all zero, is `HostIdCorrupt` and is never overwritten.
   `DiscoveryBrowser` (client) sends the query to the limited broadcast address and the group,
   repeats it three times over the scan window (`network.discovery_scan_ms`, default 1000), and
   returns the hosts whose announce echoed its nonce, deduplicated by address. Tests aim it at

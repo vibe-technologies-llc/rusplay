@@ -1,10 +1,53 @@
+use std::fmt;
+
 use crate::{PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamKind};
 
 const TAG_QUERY: u8 = 0;
 const TAG_ANNOUNCE: u8 = 1;
 const FLAG_BUSY: u8 = 1;
 const KNOWN_FLAGS: u8 = FLAG_BUSY;
-const ANNOUNCE_FIXED_LEN: usize = 8;
+const ANNOUNCE_FIXED_LEN: usize = 4 + 2 + 1 + HostId::LEN + 1;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct HostId(pub [u8; HostId::LEN]);
+
+impl HostId {
+    pub const LEN: usize = 16;
+    pub const NONE: Self = Self([0; Self::LEN]);
+
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.as_bytes();
+        if digits.len() != Self::LEN * 2 {
+            return None;
+        }
+
+        let mut bytes = [0; Self::LEN];
+        for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
+            let pair = std::str::from_utf8(pair).ok()?;
+            *byte = u8::from_str_radix(pair, 16).ok()?;
+        }
+
+        Some(Self(bytes))
+    }
+
+    pub fn is_none(&self) -> bool {
+        *self == Self::NONE
+    }
+}
+
+impl fmt::Debug for HostId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, formatter)
+    }
+}
+
+impl fmt::Display for HostId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0
+            .iter()
+            .try_for_each(|byte| write!(formatter, "{byte:02x}"))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryMessage {
@@ -15,6 +58,7 @@ pub enum DiscoveryMessage {
         nonce: u32,
         port: u16,
         busy: bool,
+        host_id: HostId,
         name: String,
     },
 }
@@ -42,6 +86,7 @@ impl DiscoveryMessage {
                 nonce,
                 port,
                 busy,
+                host_id,
                 name,
             } => {
                 let len = u8::try_from(name.len())
@@ -60,6 +105,7 @@ impl DiscoveryMessage {
                 payload.extend_from_slice(&nonce.to_be_bytes());
                 payload.extend_from_slice(&port.to_be_bytes());
                 payload.push(if *busy { FLAG_BUSY } else { 0 });
+                payload.extend_from_slice(&host_id.0);
                 payload.push(len);
                 payload.extend_from_slice(name.as_bytes());
             }
@@ -119,7 +165,9 @@ impl DiscoveryMessage {
             })?;
         let port = u16::from_be_bytes([fixed[0], fixed[1]]);
         let flags = fixed[2];
-        let name_len = usize::from(fixed[3]);
+        let mut id = [0; HostId::LEN];
+        id.copy_from_slice(&fixed[3..3 + HostId::LEN]);
+        let name_len = usize::from(fixed[3 + HostId::LEN]);
 
         if flags & !KNOWN_FLAGS != 0 {
             return Err(ProtocolError::UnknownDiscoveryFlags(flags));
@@ -144,6 +192,7 @@ impl DiscoveryMessage {
             nonce,
             port,
             busy: flags & FLAG_BUSY != 0,
+            host_id: HostId(id),
             name,
         })
     }
@@ -175,11 +224,14 @@ fn expect_exact(body: &[u8], expected: usize) -> Result<(), ProtocolError> {
 mod tests {
     use super::*;
 
+    const FLAGS_AT: usize = PacketHeader::SIZE + 7;
+
     fn announce(name: &str) -> DiscoveryMessage {
         DiscoveryMessage::Announce {
             nonce: 0xCAFE_F00D,
             port: 47_800,
             busy: false,
+            host_id: HostId([0xA5; HostId::LEN]),
             name: name.to_owned(),
         }
     }
@@ -210,7 +262,10 @@ mod tests {
 
         assert_eq!(
             &datagram[PacketHeader::SIZE..],
-            [1, 0xCA, 0xFE, 0xF0, 0x0D, 0xBA, 0xB8, 0, 2, b'a', b'b']
+            [
+                1, 0xCA, 0xFE, 0xF0, 0x0D, 0xBA, 0xB8, 0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5,
+                0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 2, b'a', b'b'
+            ]
         );
     }
 
@@ -220,19 +275,51 @@ mod tests {
             nonce: 1,
             port: 2,
             busy: true,
+            host_id: HostId::NONE,
             name: "ab".to_owned(),
         };
 
         let datagram = message.to_datagram().unwrap();
 
-        assert_eq!(datagram[PacketHeader::SIZE + 7], 1);
+        assert_eq!(datagram[FLAGS_AT], 1);
         assert_eq!(DiscoveryMessage::from_datagram(&datagram), Ok(message));
+    }
+
+    #[test]
+    fn the_host_id_round_trips_and_prints_as_hex() {
+        let id = HostId::from_hex("00112233445566778899aabbccddeeff").unwrap();
+        let message = DiscoveryMessage::Announce {
+            nonce: 1,
+            port: 2,
+            busy: false,
+            host_id: id,
+            name: String::new(),
+        };
+
+        let datagram = message.to_datagram().unwrap();
+
+        assert_eq!(id.to_string(), "00112233445566778899aabbccddeeff");
+        assert_eq!(DiscoveryMessage::from_datagram(&datagram), Ok(message));
+        assert!(!id.is_none());
+        assert!(HostId::NONE.is_none());
+    }
+
+    #[test]
+    fn malformed_hex_is_not_a_host_id() {
+        for text in [
+            "",
+            "00",
+            "zz112233445566778899aabbccddeeff",
+            "é0112233445566778899aabbccddeef",
+        ] {
+            assert_eq!(HostId::from_hex(text), None);
+        }
     }
 
     #[test]
     fn unknown_announce_flag_bits_are_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
-        datagram[PacketHeader::SIZE + 7] = 0x03;
+        datagram[FLAGS_AT] = 0x03;
 
         assert_eq!(
             DiscoveryMessage::from_datagram(&datagram),
@@ -311,7 +398,7 @@ mod tests {
     #[test]
     fn announced_name_length_beyond_the_limit_is_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
-        datagram[PacketHeader::SIZE + 8] = 200;
+        datagram[PacketHeader::SIZE + 1 + ANNOUNCE_FIXED_LEN - 1] = 200;
 
         assert!(matches!(
             DiscoveryMessage::from_datagram(&datagram),

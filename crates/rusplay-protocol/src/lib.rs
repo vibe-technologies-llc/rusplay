@@ -14,7 +14,7 @@ mod video;
 pub use crate::{
     control::{ControlMessage, ControlPacket},
     cursor::{CursorImage, CursorMessage},
-    discovery::DiscoveryMessage,
+    discovery::{DiscoveryMessage, HostId},
     error::ProtocolError,
     fec::FecHeader,
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},
