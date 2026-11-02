@@ -150,13 +150,20 @@ paths:
 
 - The settings page is data-driven. `settings/schema.rs` is one static `FIELDS` table with a row
   per option: dotted TOML path, label, unit, `Kind` (flag, bounded integer, decimal, choice,
-  multi-choice, text, IP address, resolution, frame rate, key/value pairs), whether it is
+  multi-choice, primaries, text, IP address, resolution, frame rate, key/value pairs), whether it is
   optional, and `when` conditions. `settings/form.rs` (`FormModel`, no gpui types) holds one
   `Value` per row, converts a `Config` into rows and rows back into a TOML table that is
   deserialized into `Config` and then `validate()`d. `settings/view.rs` renders rows by `Kind`:
   toggles for flags, segmented buttons for up to four choices, dropdowns beyond that (optional
   choices gain a `(none)` entry), chips for multi-choices, `TextField` for numbers and text, and
   an editable list for `params`.
+- `Kind::Primaries` (`settings/primaries.rs`) is one text value: a named set, or
+  `custom RX,RY GX,GY BX,BY WX,WY` for a `primaries.custom` table. The view shows a dropdown of
+  the names plus `custom` (choosing it seeds the BT.709 points, or keeps the edited ones) and,
+  while the value is custom, a text input for the points. Parsing builds the TOML table and
+  checks it by deserializing a `ColorPrimaries`, so a degenerate gamut is a field error
+  (`PrimariesRejected`) before the config is assembled. The coverage tests include a config with
+  `ColorPrimaries::Custom` in all three primaries rows.
 - A new `rusplay-config` option needs a row in `FIELDS`; tests fail until it has one:
   `every_serialized_option_has_a_form_field` walks populated configs for every encoder and decoder
   backend and `every_choice_option_is_accepted_by_the_config` feeds each listed choice through

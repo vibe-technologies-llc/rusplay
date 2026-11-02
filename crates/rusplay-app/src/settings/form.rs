@@ -8,7 +8,10 @@ use rusplay_config::{
 use thiserror::Error;
 use toml::{Table, Value as Toml};
 
-use crate::settings::schema::{Condition, FIELDS, Field, Kind, Section};
+use crate::settings::{
+    primaries,
+    schema::{Condition, FIELDS, Field, Kind, Section},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Pair {
@@ -46,6 +49,12 @@ pub enum FieldError {
     DuplicateParameter(String),
     #[error("{0} is not one of the options")]
     UnknownChoice(String),
+    #[error(
+        "expected one name, or custom followed by the red, green, blue and white points as X,Y"
+    )]
+    NotPrimaries,
+    #[error("these points do not describe a usable gamut")]
+    PrimariesRejected,
     #[error("the value does not fit this setting")]
     WrongShape,
 }
@@ -374,6 +383,7 @@ fn read_value(table: &Table, field: &Field) -> Value {
         }
         Kind::Resolution => Value::Text(found.map(resolution_text).unwrap_or_default()),
         Kind::FrameRate => Value::Text(found.map(frame_rate_text).unwrap_or_default()),
+        Kind::Primaries => Value::Text(found.map(primaries::text_of).unwrap_or_default()),
     }
 }
 
@@ -444,6 +454,7 @@ fn text_value(text: &str, kind: Kind, optional: bool) -> Result<Option<Toml>, Fi
             .map_err(|_| FieldError::NotAnAddress)?,
         Kind::Resolution => resolution_value(text)?,
         Kind::FrameRate => frame_rate_value(text)?,
+        Kind::Primaries => primaries::value(text)?,
         Kind::Flag | Kind::MultiChoice(_) | Kind::Pairs => return Err(FieldError::WrongShape),
     };
 
@@ -522,8 +533,8 @@ mod tests {
 
     use rusplay_config::{EncoderParams, NvencPreset, X264Tune, X265Tune};
     use rusplay_core::{
-        ColorPrimaries, ContentLightLevel, FrameRate, Luminance, MasteringDisplay,
-        MatrixCoefficients, Resolution, TransferFunction,
+        Chromaticities, Chromaticity, ColorPrimaries, ContentLightLevel, FrameRate, Luminance,
+        MasteringDisplay, MatrixCoefficients, Resolution, TransferFunction,
     };
 
     use super::*;
@@ -548,6 +559,26 @@ mod tests {
         config.video.encoder = encoder;
 
         config
+    }
+
+    fn with_custom_primaries(base: &Config) -> Config {
+        let mut custom = base.clone();
+        let wide = ColorPrimaries::Custom(
+            Chromaticities::new(
+                Chromaticity::from_xy(0.708, 0.292).unwrap(),
+                Chromaticity::from_xy(0.17, 0.797).unwrap(),
+                Chromaticity::from_xy(0.131, 0.046).unwrap(),
+                Chromaticity::D65,
+            )
+            .unwrap(),
+        );
+        custom.video.color.primaries = wide;
+        custom.color.target.primaries = Some(wide);
+        if let Some(mastering) = &mut custom.video.color.hdr.mastering {
+            mastering.primaries = wide;
+        }
+
+        custom
     }
 
     fn populated_configs() -> Vec<Config> {
@@ -652,7 +683,9 @@ mod tests {
             config
         });
 
-        with_encoders.chain(with_decoders).collect()
+        let custom = with_custom_primaries(&base);
+
+        with_encoders.chain(with_decoders).chain([custom]).collect()
     }
 
     fn leaf_paths(prefix: &str, value: &Toml, out: &mut BTreeSet<String>) {
@@ -675,7 +708,10 @@ mod tests {
 
     fn covered(path: &str) -> bool {
         FIELDS.iter().any(|field| {
-            let grouped = matches!(field.kind, Kind::Resolution | Kind::FrameRate | Kind::Pairs);
+            let grouped = matches!(
+                field.kind,
+                Kind::Resolution | Kind::FrameRate | Kind::Pairs | Kind::Primaries
+            );
             path == field.path
                 || (grouped
                     && path
@@ -758,6 +794,54 @@ mod tests {
                 assert!(model.build().is_ok(), "{} = {option}", field.path);
             }
         }
+    }
+
+    #[test]
+    fn every_named_primaries_option_is_accepted_by_the_config() {
+        let fields = [
+            first_with_path("video.color.primaries"),
+            first_with_path("color.target.primaries"),
+            first_with_path("video.color.hdr.mastering.primaries"),
+        ];
+
+        for index in fields {
+            for name in crate::settings::schema::PRIMARIES {
+                let mut model = form(&Config::default());
+                model.set_text(index, *name);
+                model.set_flag(first_with_path("input.hotkeys"), false);
+
+                assert!(model.build().is_ok(), "{} = {name}", FIELDS[index].path);
+            }
+        }
+    }
+
+    #[test]
+    fn custom_primaries_are_kept_and_edited_through_the_form() {
+        let custom = populated_configs().pop().unwrap();
+        let target = first_with_path("color.target.primaries");
+        let mut model = form(&custom);
+
+        assert!(
+            model
+                .text(first_with_path("video.color.primaries"))
+                .starts_with("custom ")
+        );
+        assert_eq!(model.build().unwrap(), custom);
+
+        model.set_text(target, "custom 0.68,0.32 0.265,0.69 0.15,0.06 0.3127,0.329");
+        let edited = model.build().unwrap();
+        assert_ne!(edited.color.target.primaries, custom.color.target.primaries);
+        assert!(matches!(
+            edited.color.target.primaries,
+            Some(ColorPrimaries::Custom(_))
+        ));
+
+        model.set_text(target, "custom 0.1,0.1 0.2,0.2 0.3,0.3 0.3127,0.329");
+        assert_eq!(
+            model.check_field(target),
+            Err(FieldError::PrimariesRejected)
+        );
+        assert!(model.build().is_err());
     }
 
     #[test]

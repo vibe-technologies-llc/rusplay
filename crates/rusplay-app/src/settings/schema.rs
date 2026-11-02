@@ -39,6 +39,7 @@ pub enum Kind {
     Integer { min: i64, max: i64 },
     Decimal,
     Choice(&'static [&'static str]),
+    Primaries,
     MultiChoice(&'static [&'static str]),
     Text,
     Address,
@@ -86,7 +87,7 @@ const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
 const CHROMA: &[&str] = &["4:2:0", "4:2:2", "4:4:4"];
 const BIT_DEPTHS: &[&str] = &["eight", "ten", "twelve"];
-const PRIMARIES: &[&str] = &[
+pub const PRIMARIES: &[&str] = &[
     "bt709",
     "display-p3",
     "dci-p3",
@@ -353,7 +354,7 @@ pub static FIELDS: &[Field] = &[
         "Colour",
         "video.color.primaries",
         "Primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     ),
     field(
         Section::Video,
@@ -398,7 +399,7 @@ pub static FIELDS: &[Field] = &[
         "HDR metadata",
         "video.color.hdr.mastering.primaries",
         "Mastering display primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     )
     .optional(),
     field(
@@ -1321,7 +1322,7 @@ pub static FIELDS: &[Field] = &[
         "Display target",
         "color.target.primaries",
         "Primaries",
-        Kind::Choice(PRIMARIES),
+        Kind::Primaries,
     )
     .optional(),
     field(

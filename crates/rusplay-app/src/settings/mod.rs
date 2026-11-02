@@ -1,4 +1,5 @@
 mod form;
+mod primaries;
 mod role;
 mod schema;
 mod view;
