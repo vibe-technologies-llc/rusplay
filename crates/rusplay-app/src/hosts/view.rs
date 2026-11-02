@@ -89,6 +89,17 @@ impl HostsView {
         remembered
     }
 
+    pub fn request_connection(&mut self, target: &str, cx: &mut Context<Self>) {
+        match self.hosts.find(target) {
+            Ok(index) => {
+                self.hosts.select(index);
+                self.connect(cx);
+                cx.notify();
+            }
+            Err(error) => notify(Notice::Failure(error.to_string()), cx),
+        }
+    }
+
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.reload_global(cx);
 

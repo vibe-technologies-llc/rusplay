@@ -14,6 +14,10 @@ pub enum HostError {
     NameTooLong { len: usize, max: usize },
     #[error("a host name must not contain control characters")]
     NameControlCharacter,
+    #[error("no host in the host book is named or addressed {target:?}")]
+    UnknownHost { target: String },
+    #[error("{count} hosts in the host book are named {target:?}")]
+    AmbiguousHost { target: String, count: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +122,41 @@ impl HostList {
             })
             .map_err(|_| HostError::InvalidAddress {
                 text: trimmed.to_owned(),
+            })
+    }
+
+    pub fn find(&self, target: &str) -> Result<usize, HostError> {
+        let target = target.trim();
+        let named: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.name.eq_ignore_ascii_case(target))
+            .map(|(index, _)| index)
+            .collect();
+
+        match named.as_slice() {
+            [index] => return Ok(*index),
+            [] => {}
+            many => {
+                return Err(HostError::AmbiguousHost {
+                    target: target.to_owned(),
+                    count: many.len(),
+                });
+            }
+        }
+
+        let address = self
+            .parse_address(target)
+            .map_err(|_| HostError::UnknownHost {
+                target: target.to_owned(),
+            })?;
+
+        self.entries
+            .iter()
+            .position(|entry| entry.address == address)
+            .ok_or_else(|| HostError::UnknownHost {
+                target: target.to_owned(),
             })
     }
 
@@ -520,6 +559,41 @@ mod tests {
         hosts.add("b", "10.0.0.2").unwrap();
 
         assert_ne!(hosts.entries()[0].id, first);
+    }
+
+    #[test]
+    fn a_host_is_found_by_name_or_address() {
+        let mut hosts = list();
+        hosts.add("Desk", "10.0.0.2").unwrap();
+        hosts.add("lap", "10.0.0.3:9000").unwrap();
+
+        assert_eq!(hosts.find("desk"), Ok(0));
+        assert_eq!(hosts.find("  LAP "), Ok(1));
+        assert_eq!(hosts.find("10.0.0.2"), Ok(0));
+        assert_eq!(hosts.find("10.0.0.3:9000"), Ok(1));
+        assert!(matches!(
+            hosts.find("10.0.0.3"),
+            Err(HostError::UnknownHost { .. })
+        ));
+        assert!(matches!(
+            hosts.find("nothing"),
+            Err(HostError::UnknownHost { .. })
+        ));
+    }
+
+    #[test]
+    fn a_name_shared_by_several_hosts_is_ambiguous() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+        hosts.add("Desk", "10.0.0.3").unwrap();
+
+        assert_eq!(
+            hosts.find("desk"),
+            Err(HostError::AmbiguousHost {
+                target: "desk".to_owned(),
+                count: 2
+            })
+        );
     }
 
     #[test]

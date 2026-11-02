@@ -39,6 +39,7 @@ paths:
 
 | Module | Role |
 |---|---|
+| `cli` | `lexopt` argument parsing for `rusplay` (`Launch`), pure and unit tested |
 | `app` | Root view: page content, status bar, global focus and quit actions |
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
@@ -48,6 +49,14 @@ paths:
 | `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls |
 | `theme` | The colour palette, one function per colour |
 
+- Arguments (`cli.rs`): `--connect <NAME|ADDRESS>` looks the host up in the host book
+  (`HostList::find`: a case-insensitive unique name first, then an address, with the configured
+  port when none is given) once the window exists (`Context::defer_in`) and goes through the same
+  `HostsView::connect` as the Connect button, so the host's profile applies and an unpaired host
+  gives the usual "Pair first" notice; an unknown or ambiguous target is a failure notice and the
+  app stays open on the Hosts page. `--exit-on-disconnect` quits on any `StreamEvent::Ended` (a
+  failed connect included, whose message goes to stderr) and when the stream view cannot be
+  opened. A usage error exits with status 2.
 - Views never write to the status bar directly: they emit `NoticeRaised` and the root subscribes.
 - The client config is `client.toml` under `$XDG_CONFIG_HOME/rusplay/`, or `$HOME/.config/rusplay/`
   when the XDG file does not exist, resolved by `ConfigEnvironment` in `rusplay-config` (the same

@@ -21,6 +21,7 @@ vaapi = ["rusplay-client/vaapi"]
 [dependencies]
 gpui.workspace = true
 gpui_platform = { workspace = true, features = ["wayland"] }
+lexopt.workspace = true
 raw-window-handle.workspace = true
 rusplay-client = { workspace = true, features = ["window"] }
 rusplay-config.workspace = true
