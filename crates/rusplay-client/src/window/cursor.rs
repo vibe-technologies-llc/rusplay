@@ -296,7 +296,7 @@ mod tests {
             pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
                 .ok()?;
 
-        Some(Gpu { device, queue })
+        Some(Gpu::new(device, queue))
     }
 
     fn state(visible: bool) -> CursorState {

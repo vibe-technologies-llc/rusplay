@@ -291,3 +291,10 @@ paths:
   reference and the GPU see identical inputs. Colour conversion is compared code by code with
   `reference::convert` (f64) after `reference::unpack` reads the frame back through its
   `FrameLayout`, within one code value.
+
+- `fault.rs` is the GPU error boundary shared by `rusplay-host` and `rusplay-client`. `GpuFault`
+  names a wgpu validation, out-of-memory or internal error (wrapping the `wgpu::Error`) or
+  `TextureTooLarge`. `GpuFaults::install` makes a device's uncaptured-error handler record the first
+  fault instead of panicking; `GpuFaults::guard` runs work inside the three error scopes and returns the
+  scoped or recorded fault ahead of the work's own error; `check_extent` refuses a resolution beyond
+  `max_texture_dimension_2d`. Both session crates hold the `GpuFaults` in their `Gpu`.

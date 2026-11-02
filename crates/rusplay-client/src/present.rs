@@ -60,10 +60,11 @@ pub(crate) fn run(
 ) -> Result<(), ClientError> {
     let mut stage = PresentStage::new(gpu, options);
 
+    let guard = stage.gpu.clone();
     let result = loop {
         let step = match links.input.take_or_nudge() {
-            Taken::Value(video) => stage.present(video, &mut links),
-            Taken::Nudged => stage.retarget(&mut links),
+            Taken::Value(video) => guard.guard(|| stage.present(video, &mut links)),
+            Taken::Nudged => guard.guard(|| stage.retarget(&mut links)),
             Taken::Closed => break Ok(()),
         };
         if let Err(error) = step {
@@ -184,6 +185,8 @@ impl PresentStage {
             return Ok(());
         }
 
+        self.gpu.check_extent(target)?;
+
         let device = &self.gpu.device;
         let Some(output) = self.outputs.acquire(device, target) else {
             links.counters.frames_unpresented.increment();
@@ -233,6 +236,7 @@ impl PresentStage {
         links: &mut PresentLinks,
     ) -> Result<(), ClientError> {
         let source = video.decoded.resolution;
+        self.gpu.check_extent(source)?;
         let decoded = FrameColor::of_stream(video.color, video.decoded.format);
         let display = links.sink.color_target().unwrap_or(self.options.display);
         let device = &self.gpu.device;
@@ -259,6 +263,7 @@ impl PresentStage {
         };
 
         let target = links.target.lock().unwrap_or(source);
+        self.gpu.check_extent(target)?;
         let Some(output) = self.outputs.acquire(device, target) else {
             links.counters.frames_unpresented.increment();
             return Ok(());
@@ -779,7 +784,7 @@ mod tests {
         device
             .features()
             .contains(rusplay_scale::DMABUF_FEATURES)
-            .then_some(Gpu { device, queue })
+            .then(|| Gpu::new(device, queue))
     }
 
     fn ivf_frames(name: &str) -> Vec<Vec<u8>> {

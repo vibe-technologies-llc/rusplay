@@ -4,7 +4,3 @@
 
 # Networking
 - [M] `net-reconnect-blinded-peer-id`: the `PeerId` is cleartext in every reconnect `Hello` (`rusplay-protocol/src/reconnect.rs`), so a passive observer can track a device, and a flood of `Hello`s from many spoofed source addresses can still fill the 64-entry attempt table of `ReconnectResponder` (shared by `SessionTakeover`) and evict the genuine attempt. Replace the id with a per-attempt blinded one (HMAC of the client nonce under the secret, tried against each store record) or make the host's challenge stateless; either changes the `Hello` encoding and bumps `ProtocolVersion::CURRENT`
-
-# GPU
-- [M] `gpu-uncaptured-errors`: neither `rusplay-host/src/gpu.rs:15-28` nor the client installs `on_uncaptured_error` or uses error scopes, and wgpu's default handler panics, which `panic = "abort"` turns into a dead `rusplay-hostd` or app. Reachable from a capture wider than `max_texture_dimension_2d` (`rusplay-host/src/pipeline.rs:700-719`, `749-758`, no limit check) or video-memory exhaustion. Wrap texture creation and the per-frame submit in error scopes mapped to `HostError`/`ClientError`, check sizes against the device limits, and install a handler that routes anything left to the session error
-

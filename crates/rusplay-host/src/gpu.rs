@@ -1,14 +1,26 @@
+use rusplay_core::Resolution;
+use rusplay_scale::{GpuFaults, check_extent};
+
 use crate::HostError;
 
 #[derive(Debug, Clone)]
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub faults: GpuFaults,
 }
 
 impl Gpu {
     pub fn open() -> Result<Self, HostError> {
         pollster::block_on(request())
+    }
+
+    pub fn guard<T>(&self, work: impl FnOnce() -> Result<T, HostError>) -> Result<T, HostError> {
+        self.faults.guard(&self.device, work)
+    }
+
+    pub fn check_extent(&self, resolution: Resolution) -> Result<(), HostError> {
+        Ok(check_extent(&self.device, resolution)?)
     }
 }
 
@@ -25,5 +37,11 @@ async fn request() -> Result<Gpu, HostError> {
         .await
         .map_err(HostError::GpuDevice)?;
 
-    Ok(Gpu { device, queue })
+    let faults = GpuFaults::install(&device);
+
+    Ok(Gpu {
+        device,
+        queue,
+        faults,
+    })
 }

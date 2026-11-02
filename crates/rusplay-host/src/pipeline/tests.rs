@@ -4,7 +4,7 @@ use std::os::fd::OwnedFd;
 
 use rusplay_capture::{BufferLease, DRM_FORMAT_MOD_LINEAR, DrmFourcc};
 use rusplay_core::{BitDepth, ChromaSubsampling, ColorPrimaries, TransferFunction, pq_from_nits};
-use rusplay_scale::{ScaleError, udmabuf};
+use rusplay_scale::{GpuFault, ScaleError, udmabuf};
 
 use super::*;
 
@@ -460,4 +460,73 @@ fn a_fence_the_gpu_cannot_wait_on_falls_back_to_the_cpu_wait() {
 
     assert!(pipeline.fence_waiter.is_some());
     assert!(fence.is_none());
+}
+
+#[test]
+fn a_capture_wider_than_the_device_limit_is_an_error_not_an_abort() {
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let limit = gpu.device.limits().max_texture_dimension_2d;
+    let mut pipeline = GpuPipeline::new(gpu, Config::default(), None);
+    let mut oversized = frame(*b"XR24", srgb(), |_| 0);
+    oversized.resolution = Resolution::new(limit + 1, 1);
+
+    let result = pipeline.encode(&oversized, true);
+
+    assert!(matches!(
+        result,
+        Err(HostError::Gpu(GpuFault::TextureTooLarge { width, limit: found, .. }))
+            if width == limit + 1 && found == limit
+    ));
+}
+
+#[test]
+fn a_stream_resolution_past_the_device_limit_is_an_error_not_an_abort() {
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let limit = gpu.device.limits().max_texture_dimension_2d;
+    let mut config = Config::default();
+    config.video.resolution = Some(Resolution::new(1, limit + 1));
+    let mut pipeline = GpuPipeline::new(gpu, config, None);
+
+    let result = pipeline.encode(&frame(*b"XR24", srgb(), |_| 0), true);
+
+    assert!(matches!(
+        result,
+        Err(HostError::Gpu(GpuFault::TextureTooLarge { height, .. })) if height == limit + 1
+    ));
+}
+
+#[test]
+fn a_gpu_error_raised_between_frames_ends_the_next_frame_with_it() {
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let side = gpu.device.limits().max_texture_dimension_2d + 1;
+    let mut pipeline = GpuPipeline::new(gpu.clone(), Config::default(), None);
+
+    drop(gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("rusplay-test-oversized"),
+        size: wgpu::Extent3d {
+            width: side,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    }));
+    let repeated = pipeline.repeat(Timestamp::ZERO, false);
+    let after = pipeline.encode(&frame(*b"XR24", srgb(), |_| 0), true);
+
+    assert!(matches!(
+        repeated,
+        Err(HostError::Gpu(GpuFault::Validation(_)))
+    ));
+    assert!(!matches!(after, Err(HostError::Gpu(_))));
 }

@@ -72,7 +72,7 @@ async fn request_gpu() -> Option<Gpu> {
         .await
         .ok()?;
 
-    Some(Gpu { device, queue })
+    Some(Gpu::new(device, queue))
 }
 
 pub fn stream_description() -> StreamDescription {

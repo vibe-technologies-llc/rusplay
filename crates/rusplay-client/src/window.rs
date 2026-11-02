@@ -163,7 +163,7 @@ impl StreamWindow {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
                 .map_err(ClientError::WindowDevice)?;
-        let gpu = Gpu { device, queue };
+        let gpu = Gpu::new(device, queue);
 
         let display = display_for(config)?;
         let options = SurfaceOptions::choose(&surface, &adapter, config, &display)?;
@@ -516,7 +516,8 @@ impl Presenter {
             if let Some(image) = display {
                 self.follow(&image, shared);
             }
-            self.draw(layout)?;
+            let gpu = self.gpu.clone();
+            gpu.guard(|| self.draw(layout))?;
         }
 
         self.frame = None;
@@ -561,6 +562,8 @@ impl Presenter {
                 self.configured = None;
             }
         }
+
+        self.gpu.check_extent(layout.pixels)?;
 
         if self.configured != Some(layout.pixels) {
             self.surface
