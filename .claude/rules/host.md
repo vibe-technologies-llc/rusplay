@@ -72,7 +72,9 @@ paths:
     scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
-    `network.pacing_window_percent` of the frame interval in bursts at least 250 µs apart, so a
+    `network.pacing_window_percent` of the frame interval, the shorter of the configured
+    `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
+    faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
     frame never waits behind the previous one's pacing for long.
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
@@ -140,7 +142,8 @@ paths:
     stage on the `CaptureFeed` so it survives sessions) and the client scales to the stream. The
     stage sends nothing until a frame has been captured, and a capture resize counts as a
     change, so it sends a message even while the cursor sits still.
-- Encode → send is a `sync_channel` of two encoded frames filled with `try_send`. A full queue
+- Encode → send is a `sync_channel` of one encoded frame filled with `try_send` (a deeper queue
+  only adds latency behind a frame still being paced). A full queue
   drops the frame without consuming a frame number and forces the next frame to be a keyframe,
   because later frames would reference the dropped one.
 - Keyframes: a `RequestKeyframe { frame }` forces the next encode to be a keyframe unless a

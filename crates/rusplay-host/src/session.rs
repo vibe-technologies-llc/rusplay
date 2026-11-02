@@ -26,14 +26,13 @@ use crate::{
     negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
-    send::{self, SendLinks, SendOptions},
+    send::{self, Pacing, SendLinks, SendOptions},
     shared::{Shared, StopOnDrop},
 };
 
 const FEC_BLOCK_DATA_SHARDS: u8 = 32;
-const SEND_QUEUE_FRAMES: usize = 2;
+const SEND_QUEUE_FRAMES: usize = 1;
 const INPUT_QUEUE_DATAGRAMS: usize = 256;
-const PERCENT: u32 = 100;
 
 pub struct HostSession {
     config: Config,
@@ -267,15 +266,18 @@ fn image_repeat(config: &Config) -> Option<Duration> {
 
 fn send_options(config: &Config) -> SendOptions {
     let network = &config.network;
-    let pacing_window = network
+    let pacing = network
         .pacing
         .then(|| config.video.frame_rate.frame_interval())
         .flatten()
-        .map(|interval| interval * u32::from(network.pacing_window_percent) / PERCENT);
+        .map(|frame_interval| Pacing {
+            frame_interval,
+            window_percent: network.pacing_window_percent,
+        });
 
     SendOptions {
         fec: FecScheme::for_overhead(FEC_BLOCK_DATA_SHARDS, network.fec_overhead_percent),
-        pacing_window,
+        pacing,
     }
 }
 

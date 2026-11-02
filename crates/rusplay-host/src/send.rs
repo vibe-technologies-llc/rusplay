@@ -16,11 +16,53 @@ const IDLE_WAKE: Duration = Duration::from_millis(20);
 const MIN_BURST_GAP: Duration = Duration::from_micros(250);
 const MICROS_PER_MILLI: u128 = 1_000;
 const BITS_PER_BYTE: u128 = 8;
+const PERCENT: u32 = 100;
+const CADENCE_SMOOTHING: u32 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Pacing {
+    pub frame_interval: Duration,
+    pub window_percent: u8,
+}
+
+impl Pacing {
+    fn window(self, measured: Option<Duration>) -> Duration {
+        let interval = measured.map_or(self.frame_interval, |measured| {
+            measured.min(self.frame_interval)
+        });
+
+        interval * u32::from(self.window_percent) / PERCENT
+    }
+}
+
+#[derive(Debug, Default)]
+struct FrameCadence {
+    last_captured_micros: Option<u64>,
+    smoothed: Option<Duration>,
+}
+
+impl FrameCadence {
+    fn observe(&mut self, captured_micros: u64) {
+        let gap = self
+            .last_captured_micros
+            .replace(captured_micros)
+            .and_then(|last| captured_micros.checked_sub(last))
+            .filter(|gap| *gap > 0)
+            .map(Duration::from_micros);
+        let Some(gap) = gap else {
+            return;
+        };
+
+        self.smoothed = Some(self.smoothed.map_or(gap, |smoothed| {
+            (smoothed * (CADENCE_SMOOTHING - 1) + gap) / CADENCE_SMOOTHING
+        }));
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SendOptions {
     pub fec: FecScheme,
-    pub pacing_window: Option<Duration>,
+    pub pacing: Option<Pacing>,
 }
 
 pub(crate) struct SendLinks {
@@ -46,11 +88,14 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
     )?;
 
     let mut payload = Vec::new();
+    let mut cadence = FrameCadence::default();
 
     while !links.shared.stopped() {
         match links.queue.recv_timeout(IDLE_WAKE) {
             Ok(outgoing) => {
-                send_frame(&mut packetizer, &mut payload, options, &outgoing, links)?;
+                cadence.observe(outgoing.captured_micros);
+                let window = options.pacing.map(|pacing| pacing.window(cadence.smoothed));
+                send_frame(&mut packetizer, &mut payload, window, &outgoing, links)?;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -63,7 +108,7 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 fn send_frame(
     packetizer: &mut Packetizer,
     payload: &mut Vec<u8>,
-    options: SendOptions,
+    window: Option<Duration>,
     outgoing: &Outgoing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
@@ -75,7 +120,7 @@ fn send_frame(
     payload.extend_from_slice(&outgoing.frame.data);
     let datagrams = packetizer.packetize(outgoing.number, outgoing.frame.keyframe, payload)?;
 
-    match options.pacing_window {
+    match window {
         Some(window) => send_paced(&datagrams, window, links)?,
         None => send_all(&datagrams, links)?,
     }
@@ -164,6 +209,44 @@ mod tests {
         assert!(
             plan.pacer.interval_for(100_000)
                 >= window.checked_sub(Duration::from_micros(10)).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_cadence_follows_the_spacing_of_captured_frames() {
+        let mut cadence = FrameCadence::default();
+
+        cadence.observe(1_000);
+        let first = cadence.smoothed;
+        cadence.observe(8_000);
+        let second = cadence.smoothed;
+        for step in 2..200 {
+            cadence.observe(1_000 + step * 8_000);
+        }
+
+        assert_eq!(first, None);
+        assert_eq!(second, Some(Duration::from_millis(7)));
+        assert!(
+            cadence.smoothed.unwrap().abs_diff(Duration::from_millis(8))
+                < Duration::from_micros(10)
+        );
+    }
+
+    #[test]
+    fn the_window_is_a_share_of_the_faster_of_the_measured_and_configured_interval() {
+        let pacing = Pacing {
+            frame_interval: Duration::from_millis(16),
+            window_percent: 50,
+        };
+
+        assert_eq!(pacing.window(None), Duration::from_millis(8));
+        assert_eq!(
+            pacing.window(Some(Duration::from_millis(4))),
+            Duration::from_millis(2)
+        );
+        assert_eq!(
+            pacing.window(Some(Duration::from_millis(33))),
+            Duration::from_millis(8)
         );
     }
 
