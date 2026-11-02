@@ -122,6 +122,7 @@ fn linearising_inverts_the_converter_transfer() {
             chroma_filter: ScaleFilter::Hermite,
             chroma_siting: ChromaSiting::Left,
             row_alignment: 4,
+            extent_alignment: 1,
         };
         let linearise = LineariseSettings {
             hdr,

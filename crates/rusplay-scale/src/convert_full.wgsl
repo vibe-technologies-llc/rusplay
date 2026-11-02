@@ -5,17 +5,20 @@
 
 @compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn convert_full(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.luma_stride || id.y >= params.luma_size.y {
+    if id.x >= params.luma_stride || id.y >= params.luma_extent.y {
         return;
     }
 
     var word = 0u;
     for (var index = 0u; index < samples_per_word(); index++) {
         let x = id.x * samples_per_word() + index;
-        if x < params.luma_size.x {
-            let ycc = encoded_ycc(textureLoad(source, vec2<i32>(i32(x), i32(id.y)), 0));
+        if x < params.luma_extent.x {
+            let texel = min(vec2<u32>(x, id.y), params.luma_size - 1u);
+            let ycc = encoded_ycc(textureLoad(source, vec2<i32>(texel), 0));
             word |= quantize(ycc.x, params.luma_quant) << sample_bit_offset(index);
-            textureStore(chroma, vec2<i32>(i32(x), i32(id.y)), vec4<f32>(ycc.yz, 0.0, 0.0));
+            if all(vec2<u32>(x, id.y) == texel) {
+                textureStore(chroma, vec2<i32>(texel), vec4<f32>(ycc.yz, 0.0, 0.0));
+            }
         }
     }
 

@@ -19,7 +19,7 @@ fn filtered_chroma(x: u32, y: u32) -> vec2<f32> {
 
 @compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn pack_chroma(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.chroma_stride || id.y >= params.chroma_size.y {
+    if id.x >= params.chroma_stride || id.y >= params.chroma_extent.y {
         return;
     }
 
@@ -30,8 +30,9 @@ fn pack_chroma(@builtin(global_invocation_id) id: vec3<u32>) {
         let sample = id.x * samples_per_word() + index;
         let x = select(sample, sample / 2u, interleaved);
         let component = select(id.z, sample % 2u, interleaved);
-        if x < params.chroma_size.x {
-            let value = filtered_chroma(x, id.y)[component];
+        if x < params.chroma_extent.x {
+            let texel = min(vec2<u32>(x, id.y), params.chroma_size - 1u);
+            let value = filtered_chroma(texel.x, texel.y)[component];
             word |= quantize(value, params.chroma_quant) << sample_bit_offset(index);
         }
     }

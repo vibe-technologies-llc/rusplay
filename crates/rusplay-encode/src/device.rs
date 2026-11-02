@@ -2,6 +2,9 @@ use rusplay_core::{BitDepth, ChromaSubsampling, DrmFourcc, PixelFormat, Plane, R
 
 use crate::{Backend, EncodeError};
 
+pub const VAAPI_CODED_ALIGNMENT: u32 = 16;
+const UNPADDED: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceMemory {
     DmaBuf,
@@ -19,6 +22,7 @@ pub struct DeviceInput {
     pub memory: DeviceMemory,
     pub planes: DevicePlanes,
     pub fourcc: DrmFourcc,
+    pub extent_alignment: u32,
 }
 
 impl DeviceInput {
@@ -27,6 +31,7 @@ impl DeviceInput {
             memory,
             planes,
             fourcc: DrmFourcc::from_code(code),
+            extent_alignment: UNPADDED,
         }
     }
 
@@ -38,7 +43,24 @@ impl DeviceInput {
     }
 }
 
+const fn coded_alignment(backend: Backend) -> u32 {
+    match backend {
+        Backend::Vaapi => VAAPI_CODED_ALIGNMENT,
+        Backend::Nvenc | Backend::X264 | Backend::X265 | Backend::SvtAv1 => UNPADDED,
+    }
+}
+
 pub const fn device_input(backend: Backend, format: PixelFormat) -> Option<DeviceInput> {
+    match device_layout(backend, format) {
+        Some(input) => Some(DeviceInput {
+            extent_alignment: coded_alignment(backend),
+            ..input
+        }),
+        None => None,
+    }
+}
+
+const fn device_layout(backend: Backend, format: PixelFormat) -> Option<DeviceInput> {
     use DeviceMemory::{DmaBuf, OpaqueFd};
     use DevicePlanes::{Planar, SemiPlanar};
 

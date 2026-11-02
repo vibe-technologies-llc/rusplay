@@ -251,7 +251,8 @@ paths:
     4:2:0 as a DMA-BUF in `NV12`/`P010`/`P012`; NVENC 4:2:0 `NV12`/`P010`, 4:2:2 `NV16`/`P210` and 4:4:4 `YU24`/`Q410`
     as an opaque fd), and `GpuPipeline::new` keeps it only when `rusplay_scale::can_export` says the
     device exports that handle type. The converter then writes semi-planar, or `PlanarHigh` (MSB
-    samples) for 4:4:4, with 256-byte rows (`HANDOFF_ROW_ALIGNMENT`) straight into memory from
+    samples) for 4:4:4, with 256-byte rows (`HANDOFF_ROW_ALIGNMENT`), padded to the device input's
+    `extent_alignment` with repeated edges (`ConvertSettings::extent_alignment`), straight into memory from
     `ColorConverter::create_exported_frame`, once `check_device_layout` has accepted the planes
     (`Handoff::accepts`; a unit test runs every hardware format at several sizes through it).
     After the submit the encode thread waits for that submission alone (`PollType::Wait` with its
@@ -357,7 +358,7 @@ paths:
   shared-memory fallback (or fails without one). It skips visibly (`src/hardware.rs`, a failure
   under `RUSPLAY_REQUIRE_HW=1`) without a GPU adapter, and the DMA-BUF tests also without
   `/dev/udmabuf` or the import feature. `src/pipeline/tests/handoff.rs`
-  encodes a moving pattern with VAAPI AV1 (8 and 10-bit, at 640x360, and at 402x226 in an ignored test tracked in `docs/BUGS.md`) once through the
+  encodes a moving pattern with VAAPI AV1 (8 and 10-bit, at 640x360 and at 402x226, off the coded block grid) once through the
   hand-off and once through the readback, decodes both with rav1d and requires identical samples
   (the hand-off must also have stayed on), checks that a failing encoder turns the hand-off off,
   and holds the ignored 4K timing test; each skips visibly without the backend and format.

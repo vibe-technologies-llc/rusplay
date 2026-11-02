@@ -4,7 +4,7 @@
 
 @compute @workgroup_size(WORKGROUP_X, WORKGROUP_Y)
 fn convert_direct(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x >= params.luma_stride || id.y >= params.luma_size.y {
+    if id.x >= params.luma_stride || id.y >= params.luma_extent.y {
         return;
     }
 
@@ -16,11 +16,12 @@ fn convert_direct(@builtin(global_invocation_id) id: vec3<u32>) {
     var cr_word = 0u;
     for (var index = 0u; index < per_word; index++) {
         let x = id.x * per_word + index;
-        if x >= params.luma_size.x {
+        if x >= params.luma_extent.x {
             continue;
         }
 
-        let ycc = encoded_ycc(textureLoad(source, vec2<i32>(i32(x), i32(id.y)), 0));
+        let texel = min(vec2<u32>(x, id.y), params.luma_size - 1u);
+        let ycc = encoded_ycc(textureLoad(source, vec2<i32>(texel), 0));
         let cb = quantize(ycc.y, params.chroma_quant);
         let cr = quantize(ycc.z, params.chroma_quant);
 

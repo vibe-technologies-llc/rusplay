@@ -173,7 +173,14 @@ mod tests {
     const GPU_ROW_ALIGNMENT: u32 = 4;
 
     fn layout(resolution: Resolution, format: PixelFormat) -> FrameLayout {
-        FrameLayout::packed(resolution, format, PlaneLayout::Planar, GPU_ROW_ALIGNMENT).unwrap()
+        FrameLayout::packed(
+            resolution,
+            format,
+            PlaneLayout::Planar,
+            GPU_ROW_ALIGNMENT,
+            1,
+        )
+        .unwrap()
     }
 
     fn numbered(layout: &FrameLayout) -> Vec<u8> {

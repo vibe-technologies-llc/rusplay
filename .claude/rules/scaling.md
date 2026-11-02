@@ -142,6 +142,10 @@ paths:
   multiple of `row_alignment` (a power of two of at least 4, `DEFAULT_ROW_ALIGNMENT` is
   wgpu's 256 so a plane can be copied straight into a texture). Shaders write whole `u32`
   words, one invocation per word, so no atomics are needed and row padding is zero.
+  `extent_alignment` (a power of two, 1 for none; `ExtentAlignmentInvalid` otherwise) pads the
+  picture to `ConvertSettings::extent()`: each plane holds `rows` rows (`height` stays the
+  visible count) and its stride covers the padded width, and the shaders fill the padding by
+  repeating the last column and row, for an encoder that reads whole coded blocks.
   `ColorConverter::encode` refuses a frame created for another layout (`FrameLayoutMismatch`).
 - Y'CbCr to RGB on the client is `RgbConverter` (`unpack.rs`, `unpack_*.wgsl`), reading a
   `YuvFrame` upload buffer laid out by `FrameLayout::packed` (planar or semi-planar, any depth).

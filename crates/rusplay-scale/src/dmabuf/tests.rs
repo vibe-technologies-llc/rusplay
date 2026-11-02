@@ -216,6 +216,7 @@ fn encode_yuv(gpu: &Gpu, pipelines: &ScalePipelines, settings: &RgbConvertSettin
             chroma_filter: ScaleFilter::Hermite,
             chroma_siting: settings.chroma_siting,
             row_alignment: settings.row_alignment,
+            extent_alignment: 1,
         },
     )
     .unwrap();

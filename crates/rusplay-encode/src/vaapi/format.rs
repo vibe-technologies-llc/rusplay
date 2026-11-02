@@ -1,6 +1,6 @@
 use rusplay_core::{
     BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, DrmFourcc, MatrixCoefficients,
-    PixelFormat, TransferFunction,
+    PixelFormat, Resolution, TransferFunction,
 };
 
 use crate::{
@@ -108,14 +108,18 @@ fn put_u16(data: &mut [u8], at: usize, value: u16) {
     data[at..at + 2].copy_from_slice(&value.to_le_bytes());
 }
 
-pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout) {
+pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, padded: Resolution) {
     let format = view.format;
     let wide = format.depth != BitDepth::Eight;
     let shift = 16 - u32::from(format.depth.bits());
     let [luma, cb, cr] = view.planes;
-    let width = luma.width;
-    let rows = luma.rows;
+    let width = padded.width as usize;
+    let rows = padded.height as usize;
+    let chroma_width = width.div_ceil(2);
+    let chroma_rows = rows.div_ceil(2);
     let get = |plane: &crate::input::YuvPlane<'_>, x: usize, y: usize| {
+        let x = x.min(plane.width.saturating_sub(1));
+        let y = y.min(plane.rows.saturating_sub(1));
         sample(plane.data, plane.stride, wide, x, y)
     };
 
@@ -132,9 +136,9 @@ pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout) {
                     }
                 }
             }
-            for y in 0..cb.rows {
+            for y in 0..chroma_rows {
                 let row = layout.offsets[1] + y * layout.pitches[1];
-                for x in 0..cb.width {
+                for x in 0..chroma_width {
                     let (u, v) = (get(&cb, x, y), get(&cr, x, y));
                     if wide {
                         put_u16(data, row + 4 * x, u << shift);
@@ -149,9 +153,9 @@ pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout) {
         ChromaSubsampling::Yuv422 => {
             for y in 0..rows {
                 let row = layout.offsets[0] + y * layout.pitches[0];
-                for pair in 0..cb.width {
-                    let left = get(&luma, (2 * pair).min(width - 1), y);
-                    let right = get(&luma, (2 * pair + 1).min(width - 1), y);
+                for pair in 0..chroma_width {
+                    let left = get(&luma, 2 * pair, y);
+                    let right = get(&luma, 2 * pair + 1, y);
                     let quad = [left, get(&cb, pair, y), right, get(&cr, pair, y)];
                     for (index, value) in quad.into_iter().enumerate() {
                         if wide {

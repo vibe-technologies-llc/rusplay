@@ -79,12 +79,16 @@ pub struct ConvertSettings {
     pub chroma_filter: ScaleFilter,
     pub chroma_siting: ChromaSiting,
     pub row_alignment: u32,
+    pub extent_alignment: u32,
 }
 
 impl ConvertSettings {
     fn validate(&self) -> Result<(), ScaleError> {
         if self.resolution.pixel_count() == 0 {
             return Err(ScaleError::EmptySource(self.resolution));
+        }
+        if !self.extent_alignment.is_power_of_two() {
+            return Err(ScaleError::ExtentAlignmentInvalid(self.extent_alignment));
         }
 
         if !self.hdr.reference_white_in_range() {
@@ -168,6 +172,10 @@ impl ConvertSettings {
         chroma_size(self.resolution, self.format.chroma)
     }
 
+    pub fn extent(&self) -> Resolution {
+        padded_extent(self.resolution, self.extent_alignment)
+    }
+
     pub fn quantization(&self) -> Quantization {
         Quantization::new(self.format.depth, self.range)
     }
@@ -229,6 +237,15 @@ impl Quantization {
     }
 }
 
+pub fn padded_extent(resolution: Resolution, alignment: u32) -> Resolution {
+    let alignment = alignment.max(1);
+
+    Resolution::new(
+        resolution.width.next_multiple_of(alignment),
+        resolution.height.next_multiple_of(alignment),
+    )
+}
+
 pub(crate) fn chroma_size(resolution: Resolution, chroma: ChromaSubsampling) -> (u32, u32) {
     let (width, height) = resolution_pair(resolution);
 
@@ -246,12 +263,19 @@ pub struct Plane {
     pub stride: u32,
     pub width: u32,
     pub height: u32,
+    pub rows: u32,
 }
 
 impl Plane {
     pub fn size(&self) -> u64 {
-        u64::from(self.stride) * u64::from(self.height)
+        u64::from(self.stride) * u64::from(self.rows)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaneShape {
+    visible: (u32, u32),
+    padded: (u32, u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -270,6 +294,7 @@ impl FrameLayout {
             settings.format,
             settings.layout,
             settings.row_alignment,
+            settings.extent_alignment,
         )
     }
 
@@ -278,32 +303,41 @@ impl FrameLayout {
         format: PixelFormat,
         layout: PlaneLayout,
         alignment: u32,
+        extent_alignment: u32,
     ) -> Result<Self, ScaleError> {
         if alignment < MIN_ROW_ALIGNMENT || !alignment.is_power_of_two() {
             return Err(ScaleError::RowAlignmentInvalid(alignment));
         }
+        if !extent_alignment.is_power_of_two() {
+            return Err(ScaleError::ExtentAlignmentInvalid(extent_alignment));
+        }
 
         let depth = format.depth;
         let bytes_per_sample = if depth.bits() <= 8 { 1 } else { 2 };
-        let (width, height) = resolution_pair(resolution);
-        let (chroma_width, chroma_height) = chroma_size(resolution, format.chroma);
+        let extent = padded_extent(resolution, extent_alignment);
+        let luma = PlaneShape {
+            visible: resolution_pair(resolution),
+            padded: resolution_pair(extent),
+        };
+        let chroma = PlaneShape {
+            visible: chroma_size(resolution, format.chroma),
+            padded: chroma_size(extent, format.chroma),
+        };
 
-        let shapes: &[(PlaneContent, u32, u32)] = match layout {
+        let shapes: &[(PlaneContent, PlaneShape)] = match layout {
             PlaneLayout::Planar | PlaneLayout::PlanarHigh => &[
-                (PlaneContent::Luma, width, height),
-                (PlaneContent::Cb, chroma_width, chroma_height),
-                (PlaneContent::Cr, chroma_width, chroma_height),
+                (PlaneContent::Luma, luma),
+                (PlaneContent::Cb, chroma),
+                (PlaneContent::Cr, chroma),
             ],
-            PlaneLayout::SemiPlanar => &[
-                (PlaneContent::Luma, width, height),
-                (PlaneContent::CbCr, chroma_width, chroma_height),
-            ],
+            PlaneLayout::SemiPlanar => &[(PlaneContent::Luma, luma), (PlaneContent::CbCr, chroma)],
         };
 
         let mut planes = Vec::with_capacity(shapes.len());
         let mut size = 0_u64;
-        for &(content, plane_width, plane_height) in shapes {
-            let row_bytes = u64::from(plane_width)
+        for &(content, shape) in shapes {
+            let ((plane_width, plane_height), (columns, rows)) = (shape.visible, shape.padded);
+            let row_bytes = u64::from(columns)
                 * u64::from(content.samples_per_pixel())
                 * u64::from(bytes_per_sample);
             let stride = u32::try_from(row_bytes.next_multiple_of(u64::from(alignment)))
@@ -314,6 +348,7 @@ impl FrameLayout {
                 stride,
                 width: plane_width,
                 height: plane_height,
+                rows,
             };
             size += plane.size();
             planes.push(plane);
@@ -536,7 +571,7 @@ impl PackStage {
                 &pipelines.convert.table_layout,
                 &[params, &firsts, &weights],
             ),
-            words: (chroma.stride / 4, chroma.height),
+            words: (chroma.stride / 4, chroma.rows),
             layers: if last.content == PlaneContent::Cr {
                 2
             } else {
@@ -600,7 +635,7 @@ impl ConvertPlan {
         };
 
         Ok(Self {
-            luma_words: (luma.stride / 4, luma.height),
+            luma_words: (luma.stride / 4, luma.rows),
             path,
         })
     }
@@ -732,6 +767,8 @@ fn params_bytes(
     let quantization = settings.quantization();
     let (width, height) = resolution_pair(settings.resolution);
     let (chroma_width, chroma_height) = settings.chroma_size();
+    let extent = settings.extent();
+    let (chroma_extent_width, chroma_extent_height) = chroma_size(extent, settings.format.chroma);
     let word = |bytes: u64| {
         u32::try_from(bytes / WORD_BYTES).map_err(|_| ScaleError::FrameTooLarge { bytes })
     };
@@ -781,6 +818,10 @@ fn params_bytes(
         float(settings.hlg_exponent()),
         0,
         0,
+        extent.width,
+        extent.height,
+        chroma_extent_width,
+        chroma_extent_height,
     ];
 
     Ok(words.iter().flat_map(|word| word.to_ne_bytes()).collect())
@@ -814,10 +855,20 @@ mod tests {
             chroma_filter: ScaleFilter::Hermite,
             chroma_siting: ChromaSiting::Left,
             row_alignment: DEFAULT_ROW_ALIGNMENT,
+            extent_alignment: 1,
         }
     }
 
     fn convert_on_gpu(image: &Image, settings: ConvertSettings) -> Option<SamplePlanes> {
+        let (bytes, layout) = convert_bytes_on_gpu(image, settings)?;
+
+        Some(reference::unpack(&bytes, &layout))
+    }
+
+    fn convert_bytes_on_gpu(
+        image: &Image,
+        settings: ConvertSettings,
+    ) -> Option<(Vec<u8>, FrameLayout)> {
         let gpu = testing::gpu()?;
 
         let pipelines = ScalePipelines::new(&gpu.device);
@@ -832,7 +883,7 @@ mod tests {
         });
         let bytes = testing::download_buffer(gpu, frame.buffer());
 
-        Some(reference::unpack(&bytes, frame.layout()))
+        Some((bytes, frame.layout().clone()))
     }
 
     fn max_code_difference(actual: &SamplePlanes, expected: &SamplePlanes) -> u32 {
@@ -1423,6 +1474,95 @@ mod tests {
         assert_eq!(pixel(&limited_planes, 6), [32, 240, 118]);
         assert_eq!(pixel(&full_planes, 0), [1023, 512, 512]);
         assert_eq!(pixel(&full_planes, 2), [0, 512, 512]);
+    }
+
+    fn whole_extent(layout: &FrameLayout, settings: &ConvertSettings) -> FrameLayout {
+        let extent = settings.extent();
+        let (chroma_columns, _) = chroma_size(extent, settings.format.chroma);
+        let mut whole = layout.clone();
+        for plane in &mut whole.planes {
+            plane.width = match plane.content {
+                PlaneContent::Luma => extent.width,
+                PlaneContent::Cb | PlaneContent::Cr | PlaneContent::CbCr => chroma_columns,
+            };
+            plane.height = plane.rows;
+        }
+        whole
+    }
+
+    fn edge_sample(plane: &[Vec<u32>], visible: &Plane, sample: usize, row: usize) -> u32 {
+        let per_pixel = visible.content.samples_per_pixel() as usize;
+        let pixel = (sample / per_pixel).min(visible.width as usize - 1);
+        let row = row.min(visible.height as usize - 1);
+
+        plane[row][pixel * per_pixel + sample % per_pixel]
+    }
+
+    #[test]
+    fn the_padded_extent_repeats_the_picture_edges() {
+        let cases = [
+            (
+                ChromaSubsampling::Yuv420,
+                BitDepth::Eight,
+                PlaneLayout::SemiPlanar,
+                ScaleFilter::Hermite,
+            ),
+            (
+                ChromaSubsampling::Yuv420,
+                BitDepth::Ten,
+                PlaneLayout::SemiPlanar,
+                ScaleFilter::EwaLanczos,
+            ),
+            (
+                ChromaSubsampling::Yuv422,
+                BitDepth::Eight,
+                PlaneLayout::Planar,
+                ScaleFilter::Lanczos3,
+            ),
+            (
+                ChromaSubsampling::Yuv444,
+                BitDepth::Ten,
+                PlaneLayout::PlanarHigh,
+                ScaleFilter::Hermite,
+            ),
+        ];
+
+        for (chroma, depth, layout, chroma_filter) in cases {
+            let unpadded = ConvertSettings {
+                chroma_filter,
+                ..settings((19, 11), chroma, depth, layout)
+            };
+            let padded = ConvertSettings {
+                extent_alignment: 16,
+                ..unpadded
+            };
+            let image = Image::pattern(19, 11, 7);
+
+            let Some(expected) = convert_on_gpu(&image, unpadded) else {
+                return;
+            };
+            let (bytes, frame_layout) = convert_bytes_on_gpu(&image, padded).unwrap();
+            let visible = reference::unpack(&bytes, &frame_layout);
+            let whole = reference::unpack(&bytes, &whole_extent(&frame_layout, &padded));
+
+            assert_eq!(padded.extent(), Resolution::new(32, 16));
+            assert_eq!(frame_layout.planes[0].rows, 16);
+            assert_eq!(visible, expected, "{padded:?}");
+            for ((plane, visible_plane), shape) in
+                whole.iter().zip(&visible).zip(&frame_layout.planes)
+            {
+                for (row, samples) in plane.iter().enumerate() {
+                    for (sample, value) in samples.iter().enumerate() {
+                        assert_eq!(
+                            *value,
+                            edge_sample(visible_plane, shape, sample, row),
+                            "{padded:?} {:?} row {row} sample {sample}",
+                            shape.content
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

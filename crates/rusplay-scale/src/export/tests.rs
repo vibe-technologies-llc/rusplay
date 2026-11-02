@@ -32,6 +32,7 @@ fn convert_settings(size: (u32, u32), depth: BitDepth, layout: PlaneLayout) -> C
         chroma_filter: ScaleFilter::Hermite,
         chroma_siting: ChromaSiting::Left,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
+        extent_alignment: 1,
     }
 }
 

@@ -162,6 +162,7 @@ mod tests {
                         format,
                         handoff.layout(),
                         HANDOFF_ROW_ALIGNMENT,
+                        handoff.input.extent_alignment,
                     )
                     .unwrap();
 

@@ -36,19 +36,23 @@ fn convert_rows(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_inv
     }
     workgroupBarrier();
 
-    if id.x >= params.luma_stride || id.y >= params.luma_size.y {
+    if id.x >= params.luma_stride || id.y >= params.luma_extent.y {
         return;
     }
 
     var luma_word = 0u;
     for (var index = 0u; index < per_word; index++) {
         let x = id.x * per_word + index;
-        if x < params.luma_size.x {
+        if x < params.luma_extent.x {
             let entry = base + u32(i32(x) - low);
             luma_word |= quantize(tile_luma[entry], params.luma_quant) << sample_bit_offset(index);
         }
     }
     output[params.luma_offset + id.y * params.luma_stride + id.x] = luma_word;
+
+    if id.y >= params.luma_size.y {
+        return;
+    }
 
     for (var index = 0u; index < chroma_per_word; index++) {
         let x = id.x * chroma_per_word + index;
