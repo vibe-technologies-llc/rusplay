@@ -488,7 +488,7 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Leave { surface, .. } if surface == state.surface => {
                 state.keyboard_focused = false;
-                let transition = state.with_core(CaptureCore::release);
+                let transition = state.with_core(CaptureCore::focus_lost);
                 state.apply(transition);
             }
             wl_keyboard::Event::Key {

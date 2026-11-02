@@ -14,6 +14,10 @@ pub enum InputError {
     GamepadSlotOutOfRange(u8),
     #[error("touch slot {0} is outside the supported range")]
     TouchSlotOutOfRange(u8),
+    #[error("keycode {0} is outside the supported range")]
+    KeycodeOutOfRange(u32),
+    #[error("pointer button {0} is outside the supported range")]
+    ButtonOutOfRange(u32),
     #[error("gamepad slot {slot} has no rumble effect {id}")]
     RumbleEffectUnknown { slot: u8, id: i64 },
     #[error("a pointer value is not a finite number")]

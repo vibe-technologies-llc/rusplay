@@ -59,8 +59,8 @@ impl<F: GamepadFactory> GamepadPool<F> {
             .ok_or(InputError::GamepadSlotOutOfRange(slot))?;
 
         match event {
+            GamepadEvent::Connected if entry.is_some() => Ok(()),
             GamepadEvent::Connected => {
-                *entry = None;
                 *entry = Some(Slot {
                     device: self.factory.create(slot)?,
                     mapper: Xbox360Mapper::default(),
@@ -221,10 +221,25 @@ mod tests {
     }
 
     #[test]
-    fn reconnecting_creates_a_fresh_device() {
+    fn connecting_an_occupied_slot_keeps_its_device() {
+        let (mut pool, log) = pool(4);
+
+        pool.handle(0, GamepadEvent::Connected).unwrap();
+        pool.handle(0, button(true)).unwrap();
+        pool.handle(0, GamepadEvent::Connected).unwrap();
+        pool.handle(0, button(false)).unwrap();
+
+        assert_eq!(pool.factory.created, vec![0]);
+        assert!(pool.is_connected(0));
+        assert_eq!(log.borrow().len(), 2);
+    }
+
+    #[test]
+    fn disconnecting_then_connecting_creates_a_fresh_device() {
         let (mut pool, _) = pool(4);
 
         pool.handle(0, GamepadEvent::Connected).unwrap();
+        pool.handle(0, GamepadEvent::Disconnected).unwrap();
         pool.handle(0, GamepadEvent::Connected).unwrap();
 
         assert_eq!(pool.factory.created, vec![0, 0]);

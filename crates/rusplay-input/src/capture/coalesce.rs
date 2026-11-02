@@ -89,6 +89,12 @@ impl EventCoalescer {
                     slot: pending_slot,
                     event: GamepadEvent::Connected | GamepadEvent::Disconnected,
                 } if *pending_slot == slot => return None,
+                InputEvent::Key { .. }
+                | InputEvent::PointerButton { .. }
+                | InputEvent::Gamepad {
+                    event: GamepadEvent::Button { .. },
+                    ..
+                } => return None,
                 _ => {}
             }
         }
@@ -185,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn an_axis_keeps_only_its_latest_value_per_slot() {
+    fn an_axis_keeps_only_its_latest_value_per_slot_between_buttons() {
         let mut coalescer = EventCoalescer::new();
         let press = InputEvent::Gamepad {
             slot: 0,
@@ -198,18 +204,62 @@ mod tests {
         coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.1));
         coalescer.push(press);
         coalescer.push(axis(0, GamepadAxis::LEFT_Y, 0.3));
+        coalescer.push(axis(0, GamepadAxis::LEFT_Y, 0.4));
         coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.7));
         coalescer.push(axis(1, GamepadAxis::LEFT_X, 0.2));
 
         assert_eq!(
             drained(&mut coalescer),
             vec![
-                axis(0, GamepadAxis::LEFT_X, 0.7),
+                axis(0, GamepadAxis::LEFT_X, 0.1),
                 press,
-                axis(0, GamepadAxis::LEFT_Y, 0.3),
+                axis(0, GamepadAxis::LEFT_Y, 0.4),
+                axis(0, GamepadAxis::LEFT_X, 0.7),
                 axis(1, GamepadAxis::LEFT_X, 0.2),
             ]
         );
+    }
+
+    #[test]
+    fn an_axis_is_not_merged_across_a_pad_button() {
+        let press = InputEvent::Gamepad {
+            slot: 0,
+            event: GamepadEvent::Button {
+                button: GamepadButton::SOUTH,
+                pressed: true,
+            },
+        };
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(axis(0, GamepadAxis::LEFT_TRIGGER, 0.2));
+        coalescer.push(press);
+        coalescer.push(axis(0, GamepadAxis::LEFT_TRIGGER, 1.0));
+
+        assert_eq!(
+            drained(&mut coalescer),
+            vec![
+                axis(0, GamepadAxis::LEFT_TRIGGER, 0.2),
+                press,
+                axis(0, GamepadAxis::LEFT_TRIGGER, 1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_axis_is_not_merged_across_a_key_or_pointer_button() {
+        let click = InputEvent::PointerButton {
+            button: 0x110,
+            pressed: true,
+        };
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.1));
+        coalescer.push(key(true));
+        coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.2));
+        coalescer.push(click);
+        coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.3));
+
+        assert_eq!(coalescer.len(), 5);
     }
 
     #[test]

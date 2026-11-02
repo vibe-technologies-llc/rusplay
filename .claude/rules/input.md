@@ -37,7 +37,10 @@ paths:
   no uinput for keyboard and pointer. `ashpd` (`remote_desktop`, tokio) opens the session and
   `ConnectToEIS` hands over the socket; the pure-Rust `reis` crate speaks the EI protocol, so no
   libei C library is linked.
-- `libei::mapping` is pure and unit-tested: `translate` turns an `InputEvent` into an `EiRequest`,
+- `libei::mapping` is pure and unit-tested: `translate` turns an `InputEvent` into an `EiRequest`
+  (keycodes at or above `KeySet::CAPACITY` are `KeycodeOutOfRange` and buttons outside
+  `0x110..0x120` are `ButtonOutOfRange`, so nothing is injected that the held-state repair
+  cannot release),
   and `AbsoluteMapper` turns normalised stream coordinates into the logical pixels of the regions
   the EIS server advertises. `LibeiInjector` only holds the connection state around them.
 - `LibeiInjector::connect` performs the EI handshake with a blocking read (the portal socket
@@ -125,7 +128,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
 - `xbox360::Xbox360Mapper` (event to evdev `Report`) and `GamepadPool` (slot bookkeeping over a
   `GamepadFactory`) are pure and tested with fakes; only `uinput` touches the kernel.
   `GamepadPool::handle` enforces the slot limit (`GamepadSlotOutOfRange`, limit
-  `input.max_gamepads`, default 4, valid 1..=16), creates the device on `Connected`, drops it on
+  `input.max_gamepads`, default 4, valid 1..=16), creates the device on `Connected` (ignored for a slot that is already connected, so a failed
+  re-creation cannot leave a held pad without a device), drops it on
   `Disconnected` (the kernel removes the pad) and rejects button and axis events for a slot that
   is not connected (`GamepadNotConnected`).
 - `SplitSink` routes `InputEvent::Gamepad` to the gamepad sink and everything else to the
@@ -163,7 +167,9 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   is engaged: a button press while released engages (and the click is swallowed, its release too),
   and so does the release chord. `release` (chord, window focus lost, shutdown) first emits key and
   button releases for everything it had forwarded as held, so the host never keeps a stuck key.
-  Keys that were already down when it engaged are swallowed until released.
+  Keys that were already down when it engaged are swallowed until released. `focus_lost` (keyboard
+  leave) clears the physical-key set before releasing, because keys released while unfocused
+  are never reported.
 - The release chord is `input.release_chord`, any left or right modifier of each member
   (`ctrl-alt-shift` by default), detected on the press that completes it, which is not forwarded.
   Pressing it again re-engages.

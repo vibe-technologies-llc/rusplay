@@ -1,5 +1,8 @@
-use crate::{InputError, InputEvent, TouchEvent};
+use std::ops::Range;
 
+use crate::{InputError, InputEvent, KeySet, TouchEvent};
+
+const BUTTON_CODES: Range<u32> = 0x110..0x120;
 const VALUE120_PER_NOTCH: f64 = 120.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +46,11 @@ impl EiRequest {
 
 pub fn translate(event: InputEvent) -> Result<EiRequest, InputError> {
     match event {
-        InputEvent::Key { keycode, pressed } => Ok(EiRequest::Key {
+        InputEvent::Key { keycode, pressed } if keycode < KeySet::CAPACITY => Ok(EiRequest::Key {
             code: keycode,
             pressed,
         }),
+        InputEvent::Key { keycode, .. } => Err(InputError::KeycodeOutOfRange(keycode)),
         InputEvent::PointerMotion { dx, dy } => Ok(EiRequest::MotionRelative {
             dx: narrow(dx)?,
             dy: narrow(dy)?,
@@ -55,10 +59,13 @@ pub fn translate(event: InputEvent) -> Result<EiRequest, InputError> {
             x: narrow(x)?.clamp(0.0, 1.0),
             y: narrow(y)?.clamp(0.0, 1.0),
         }),
-        InputEvent::PointerButton { button, pressed } => Ok(EiRequest::Button {
-            code: button,
-            pressed,
-        }),
+        InputEvent::PointerButton { button, pressed } if BUTTON_CODES.contains(&button) => {
+            Ok(EiRequest::Button {
+                code: button,
+                pressed,
+            })
+        }
+        InputEvent::PointerButton { button, .. } => Err(InputError::ButtonOutOfRange(button)),
         InputEvent::Scroll { dx, dy } => Ok(EiRequest::Scroll120 {
             dx: notches_to_value120(dx)?,
             dy: notches_to_value120(dy)?,
@@ -215,6 +222,42 @@ mod tests {
             },
             mapping_id: id.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn keycodes_the_held_state_cannot_track_are_rejected() {
+        let last = translate(InputEvent::Key {
+            keycode: KeySet::CAPACITY - 1,
+            pressed: true,
+        });
+        let beyond = translate(InputEvent::Key {
+            keycode: KeySet::CAPACITY,
+            pressed: true,
+        });
+
+        assert!(last.is_ok());
+        assert!(matches!(
+            beyond,
+            Err(InputError::KeycodeOutOfRange(code)) if code == KeySet::CAPACITY
+        ));
+    }
+
+    #[test]
+    fn buttons_outside_the_mouse_range_are_rejected() {
+        let button = |button| {
+            translate(InputEvent::PointerButton {
+                button,
+                pressed: true,
+            })
+        };
+
+        assert!(button(0x110).is_ok());
+        assert!(button(0x11f).is_ok());
+        assert!(matches!(button(30), Err(InputError::ButtonOutOfRange(30))));
+        assert!(matches!(
+            button(0x120),
+            Err(InputError::ButtonOutOfRange(0x120))
+        ));
     }
 
     #[test]

@@ -348,6 +348,12 @@ impl CaptureCore {
         Transition::Engaged
     }
 
+    pub fn focus_lost(&mut self, out: &mut Vec<InputEvent>) -> Transition {
+        self.down.clear();
+
+        self.release(out)
+    }
+
     pub fn release(&mut self, out: &mut Vec<InputEvent>) -> Transition {
         if !self.engaged {
             return Transition::Unchanged;
@@ -745,6 +751,35 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn keys_released_while_unfocused_do_not_linger_in_the_down_set() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        core.key(KEY_LEFT_ALT, true, &mut out);
+        core.focus_lost(&mut out);
+        out.clear();
+
+        core.engage();
+        core.key(KEY_LEFT_ALT, true, &mut out);
+        core.key(KEY_LEFT_ALT, false, &mut out);
+
+        assert_eq!(out, vec![key(KEY_LEFT_ALT, true), key(KEY_LEFT_ALT, false)]);
+    }
+
+    #[test]
+    fn losing_focus_releases_everything_held_and_forgets_the_down_keys() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        core.key(KEY_A, true, &mut out);
+        out.clear();
+
+        let transition = core.focus_lost(&mut out);
+
+        assert_eq!(transition, Transition::Released);
+        assert_eq!(out, vec![key(KEY_A, false)]);
+        assert!(core.down.is_empty());
     }
 
     fn locked(caps: bool, num: bool) -> LockState {
