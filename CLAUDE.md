@@ -30,7 +30,8 @@ Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale
 `net` builds on `protocol` and `config`, and the media crates (`capture`, `encode`, `decode`,
 `audio`, `input`) build on `core`/`config`. `host` and `client` compose them, and the two binaries
 depend only on `host`/`client`/`config`. No crate depends upward, and no media crate depends on
-`net`.
+`net`. `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
+commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders.
 
 ## Invariants
 
@@ -57,6 +58,7 @@ depend only on `host`/`client`/`config`. No crate depends upward, and no media c
 | Format | `rust-formatter` (never `cargo fmt`/`rustfmt`) |
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
+| Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
 | App with decoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software` |

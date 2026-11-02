@@ -66,6 +66,10 @@ paths:
   library is `LibraryNotFound`, a missing symbol `SymbolMissing`. Moving to a newer SDK means
   updating those structs and their tests together.
 
+  `fuzz/` is the one exception outside the table: `libfuzzer-sys` compiles LLVM's C++ libFuzzer,
+  which cargo-fuzz requires, and lives only in that crate (own `[workspace]`, never a dependency
+  of anything under `crates/`).
+
   Pure-Rust choices already made: `wayland-client` and `wayland-protocols` (`client`, `staging`)
   for the compositor's output colour description in `rusplay-client`, on wayland-rs's pure-Rust
   backend, `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
