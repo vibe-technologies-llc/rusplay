@@ -174,6 +174,14 @@ paths:
     the modifier kept one, `DmaBufTexture::channels`), so swizzled formats such as `BX24` go
     through the `Lineariser` like any other channel order. `Gpu::open` creates the device with
     `rusplay_scale::device_descriptor`, which is what makes import possible.
+  - wgpu's default error handler panics, which `panic = "abort"` makes a dead daemon, so `Gpu::open`
+    installs `rusplay_scale::GpuFaults` as the device's uncaptured-error handler and
+    `GpuPipeline::encode` runs each frame inside `Gpu::guard`: error scopes for validation,
+    out-of-memory and internal errors, then a check of anything the handler recorded. Each comes out as
+    `HostError::Gpu(GpuFault)`, which ends the session like any stage error; `repeat` checks the
+    recorded faults too. A capture or stream resolution beyond the device's
+    `max_texture_dimension_2d` is refused up front with `GpuFault::TextureTooLarge`. A `Gpu` built
+    some other way needs its own `GpuFaults::install`.
   - `feed_from_session(session, config, gpu)`, behind both `open_portal_capture(config, gpu)` and
     the combined input session of `open_portal`, keeps the capture's own format order (10-bit
     first above 8 bits) restricted to `UPLOAD_FORMATS`, and offers for each one the modifiers

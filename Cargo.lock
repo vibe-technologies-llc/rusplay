@@ -4889,6 +4889,7 @@ version = "0.1.0"
 dependencies = [
  "ash",
  "half",
+ "parking_lot 0.13.0",
  "pollster 1.0.1",
  "rusplay-core",
  "rustix",

@@ -7,7 +7,7 @@ use rusplay_encode::{EncodeError, input::fourcc_text};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
 use rusplay_protocol::ProtocolError;
-use rusplay_scale::ScaleError;
+use rusplay_scale::{GpuFault, ScaleError};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +59,8 @@ pub enum HostError {
     Protocol(#[from] ProtocolError),
     #[error(transparent)]
     Scale(#[from] ScaleError),
+    #[error(transparent)]
+    Gpu(#[from] GpuFault),
     #[error("no gpu adapter is available")]
     NoGpuAdapter,
     #[error("failed to open the gpu device")]

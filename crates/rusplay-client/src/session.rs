@@ -19,6 +19,7 @@ use rusplay_net::{
     pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::StreamDescription;
+use rusplay_scale::{GpuFaults, check_extent};
 
 use crate::{
     AudioOutput, ClientError, ClientStats, DisplayImage, FrameSink, LatestCursor, Stage,
@@ -41,6 +42,34 @@ const DECODE_STACK_BYTES: usize = 8 * 1024 * 1024;
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub faults: GpuFaults,
+}
+
+impl Gpu {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+        let faults = GpuFaults::install(&device);
+
+        Self::with_faults(device, queue, faults)
+    }
+
+    pub const fn with_faults(device: wgpu::Device, queue: wgpu::Queue, faults: GpuFaults) -> Self {
+        Self {
+            device,
+            queue,
+            faults,
+        }
+    }
+
+    pub fn guard<T>(
+        &self,
+        work: impl FnOnce() -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        self.faults.guard(&self.device, work)
+    }
+
+    pub fn check_extent(&self, resolution: Resolution) -> Result<(), ClientError> {
+        Ok(check_extent(&self.device, resolution)?)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -519,5 +548,61 @@ impl Drop for ClientStream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.join().ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusplay_scale::GpuFault;
+
+    use super::*;
+    use crate::testing;
+
+    #[test]
+    fn a_resolution_past_the_device_limit_is_a_client_error() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+        let limit = gpu.device.limits().max_texture_dimension_2d;
+
+        let refused = gpu.check_extent(Resolution::new(limit + 1, 1));
+        let allowed = gpu.check_extent(Resolution::new(limit, limit));
+
+        assert!(matches!(
+            refused,
+            Err(ClientError::Gpu(GpuFault::TextureTooLarge { .. }))
+        ));
+        assert!(allowed.is_ok());
+    }
+
+    #[test]
+    fn a_guarded_gpu_error_is_a_client_error_not_an_abort() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+        let side = gpu.device.limits().max_texture_dimension_2d + 1;
+
+        let result = gpu.guard(|| {
+            drop(gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("rusplay-test-oversized"),
+                size: wgpu::Extent3d {
+                    width: side,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            }));
+            Ok(())
+        });
+
+        assert!(matches!(
+            result,
+            Err(ClientError::Gpu(GpuFault::Validation(_)))
+        ));
     }
 }

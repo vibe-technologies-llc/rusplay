@@ -7,7 +7,7 @@ use rusplay_decode::DecodeError;
 use rusplay_input::InputError;
 use rusplay_net::NetError;
 use rusplay_protocol::ProtocolError;
-use rusplay_scale::ScaleError;
+use rusplay_scale::{GpuFault, ScaleError};
 use thiserror::Error;
 use wayland_client::{
     ConnectError, DispatchError,
@@ -62,6 +62,8 @@ pub enum ClientError {
     Protocol(#[from] ProtocolError),
     #[error(transparent)]
     Scale(#[from] ScaleError),
+    #[error(transparent)]
+    Gpu(#[from] GpuFault),
     #[error("failed to spawn the {stage} thread")]
     SpawnStage {
         stage: Stage,

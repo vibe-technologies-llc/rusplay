@@ -289,10 +289,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
             rusplay_client::FrameSink::present(&mut latest.clone(), frame);
         }
     };
-    let client_gpu = rusplay_client::Gpu {
-        device: gpu.device.clone(),
-        queue: gpu.queue.clone(),
-    };
+    let client_gpu = client_gpu(&gpu);
     let heard = HeardAudio::default();
     let session = ClientSession::new(client_config());
     let stream = session
@@ -457,10 +454,7 @@ fn moving_box_feed() -> Arc<CaptureFeed> {
 }
 
 fn client_gpu(gpu: &Gpu) -> rusplay_client::Gpu {
-    rusplay_client::Gpu {
-        device: gpu.device.clone(),
-        queue: gpu.queue.clone(),
-    }
+    rusplay_client::Gpu::with_faults(gpu.device.clone(), gpu.queue.clone(), gpu.faults.clone())
 }
 
 fn encodes_anything(config: &Config) -> bool {

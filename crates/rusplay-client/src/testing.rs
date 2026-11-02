@@ -20,7 +20,7 @@ pub(crate) fn gpu() -> Option<Gpu> {
             pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
                 .ok()?;
 
-        Some(Gpu { device, queue })
+        Some(Gpu::new(device, queue))
     })
     .clone()
 }

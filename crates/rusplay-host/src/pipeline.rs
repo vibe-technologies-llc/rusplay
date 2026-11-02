@@ -682,10 +682,16 @@ impl GpuPipeline {
         }
         Ok(encoder.encoder.encode(input)?)
     }
-}
 
-impl VideoPipeline for GpuPipeline {
-    fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
+    fn encode_frame(
+        &mut self,
+        frame: &Frame,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        self.gpu.check_extent(frame.resolution)?;
+        self.gpu
+            .check_extent(self.config.video.resolution.unwrap_or(frame.resolution))?;
+
         let Some(mut source) = self.upload(frame)? else {
             return Ok(None);
         };
@@ -702,12 +708,21 @@ impl VideoPipeline for GpuPipeline {
         self.read_back(frame.timestamp)?;
         self.encode_input(keyframe)
     }
+}
+
+impl VideoPipeline for GpuPipeline {
+    fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
+        let gpu = self.gpu.clone();
+
+        gpu.guard(|| self.encode_frame(frame, keyframe))
+    }
 
     fn repeat(
         &mut self,
         timestamp: Timestamp,
         keyframe: bool,
     ) -> Result<Option<EncodedFrame>, HostError> {
+        self.gpu.faults.check()?;
         if let Some(input) = &mut self.input {
             input.timestamp = timestamp;
         }

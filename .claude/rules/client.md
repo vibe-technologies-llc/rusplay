@@ -101,6 +101,11 @@ paths:
   `clock_offset_micros` is the current offset. The first pong arrives within a round trip of the
   handshake; frames before it carry no figure. The test host's clock is skewed by an hour so the
   loopback test fails if the offset is ignored.
+- `Gpu` carries the device's `GpuFaults` (`Gpu::new` installs the uncaptured-error handler; tests that
+  share a device use `Gpu::with_faults`). The present stage runs each frame and retarget, and the
+  window thread each draw, inside `Gpu::guard`, so a wgpu validation, out-of-memory or internal error
+  becomes `ClientError::Gpu(GpuFault)` instead of wgpu's panic, and decoded, target and window sizes
+  past `max_texture_dimension_2d` are refused up front with `GpuFault::TextureTooLarge`.
 - Present runs on the app's `Gpu` (device and queue): CPU planes are written row by row into the
   `RgbConverter` upload buffer through `Queue::write_buffer_with` (the one unavoidable copy for
   software decode), unpacked to `rgba16float` at the source resolution, taken through the colour

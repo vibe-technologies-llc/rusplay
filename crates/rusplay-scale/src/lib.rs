@@ -6,6 +6,7 @@ mod convert;
 mod dmabuf;
 mod error;
 mod export;
+mod fault;
 mod gpu;
 mod kernel;
 mod linearise;
@@ -40,6 +41,7 @@ pub use crate::{
     },
     error::ScaleError,
     export::{ExportedFrame, MemoryHandle, can_export},
+    fault::{GpuFault, GpuFaults, check_extent},
     gpu::ScalePipelines,
     kernel::{Geometry, Kernel},
     linearise::{ChannelOrder, LineariseSettings, Lineariser, SourceChannels, TexelPacking},
