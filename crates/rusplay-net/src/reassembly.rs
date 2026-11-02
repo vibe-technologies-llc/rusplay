@@ -307,7 +307,10 @@ struct PendingFrame {
     fragment_count: Option<u16>,
     shard_len: Option<usize>,
     frame_bytes: Option<u32>,
-    fragments: Vec<Option<Vec<u8>>>,
+    buffer: Vec<u8>,
+    tail: Option<Vec<u8>>,
+    last_len: Option<usize>,
+    have: Vec<bool>,
     present: usize,
     recovered: u16,
     blocks: Vec<ParityBlock>,
@@ -322,7 +325,10 @@ impl PendingFrame {
             fragment_count: None,
             shard_len: None,
             frame_bytes: None,
-            fragments: Vec::new(),
+            buffer: Vec::new(),
+            tail: None,
+            last_len: None,
+            have: Vec::new(),
             present: 0,
             recovered: 0,
             blocks: Vec::new(),
@@ -385,18 +391,47 @@ impl PendingFrame {
         self.fragment_count = Some(count);
         self.shard_len = shard_len;
         self.keyframe |= header.flags.contains(PacketFlags::KEYFRAME);
-        if self.fragments.len() != usize::from(count) {
-            self.fragments.resize(usize::from(count), None);
-        }
+        self.prepare(count);
 
-        let slot = &mut self.fragments[usize::from(index)];
-        if slot.is_some() {
+        if self.have[usize::from(index)] {
             return Ok(Inserted::Duplicate);
         }
 
-        *slot = Some(payload.to_vec());
+        if is_last {
+            self.last_len = Some(payload.len());
+        }
+        self.store(index, payload);
+        self.have[usize::from(index)] = true;
         self.present += 1;
         Ok(Inserted::New)
+    }
+
+    fn prepare(&mut self, count: u16) {
+        if self.have.len() != usize::from(count) {
+            self.have.resize(usize::from(count), false);
+        }
+
+        let Some(shard_len) = self.shard_len else {
+            return;
+        };
+
+        if self.buffer.is_empty() {
+            self.buffer = vec![0; usize::from(count) * shard_len];
+            if let Some(tail) = self.tail.take() {
+                let start = (usize::from(count) - 1) * shard_len;
+                self.buffer[start..start + tail.len()].copy_from_slice(&tail);
+            }
+        }
+    }
+
+    fn store(&mut self, index: u16, payload: &[u8]) {
+        let Some(shard_len) = self.shard_len else {
+            self.tail = Some(payload.to_vec());
+            return;
+        };
+
+        let start = usize::from(index) * shard_len;
+        self.buffer[start..start + payload.len()].copy_from_slice(payload);
     }
 
     fn insert_parity(
@@ -462,9 +497,7 @@ impl PendingFrame {
         self.shard_len = Some(shard_len);
         self.frame_bytes = Some(fec.frame_bytes);
         self.keyframe |= header.flags.contains(PacketFlags::KEYFRAME);
-        if self.fragments.len() != usize::from(count) {
-            self.fragments.resize(usize::from(count), None);
-        }
+        self.prepare(count);
 
         let position = known.unwrap_or_else(|| {
             self.blocks.push(ParityBlock {
@@ -533,40 +566,33 @@ impl PendingFrame {
         shard_len: Option<usize>,
         frame_bytes: Option<u32>,
     ) -> Result<(), NetError> {
-        for (index, fragment) in self.fragments.iter().enumerate() {
-            let Some(fragment) = fragment else { continue };
-            let index = u16::try_from(index).unwrap_or(u16::MAX);
+        let Some(len) = self.last_len else {
+            return Ok(());
+        };
+        let index = count - 1;
 
-            if !fragment_fits(index, fragment.len(), count, shard_len, frame_bytes) {
-                return Err(NetError::FragmentLengthMismatch {
-                    frame: self.frame,
-                    index,
-                    len: fragment.len(),
-                });
-            }
+        if fragment_fits(index, len, count, shard_len, frame_bytes) {
+            Ok(())
+        } else {
+            Err(NetError::FragmentLengthMismatch {
+                frame: self.frame,
+                index,
+                len,
+            })
         }
-
-        Ok(())
     }
 
     fn try_recover(&mut self) -> Result<(), NetError> {
-        let (Some(count), Some(shard_len), Some(frame_bytes)) =
-            (self.fragment_count, self.shard_len, self.frame_bytes)
-        else {
+        let (Some(shard_len), Some(_)) = (self.shard_len, self.frame_bytes) else {
             return Ok(());
         };
-
-        let last_len = frame_bytes as usize - (usize::from(count) - 1) * shard_len;
 
         for position in 0..self.blocks.len() {
             let block = self.blocks[position].block;
             let first = usize::from(block.first_fragment);
             let range = first..first + usize::from(block.data_shards);
 
-            let missing = range
-                .clone()
-                .filter(|index| self.fragments[*index].is_none())
-                .count();
+            let missing = range.clone().filter(|index| !self.have[*index]).count();
             let received = self.blocks[position].received;
             if missing == 0 || received < missing || self.blocks[position].decoded_with == received
             {
@@ -574,34 +600,25 @@ impl PendingFrame {
             }
             self.blocks[position].decoded_with = received;
 
-            let padded: Vec<(usize, Vec<u8>)> = range
+            let present = range
                 .clone()
-                .filter_map(|index| {
-                    let fragment = self.fragments[index].as_ref()?;
-                    let mut shard = fragment.clone();
-                    shard.resize(shard_len, 0);
-                    Some((index - first, shard))
-                })
-                .collect();
+                .filter(|index| self.have[*index])
+                .map(|index| {
+                    let start = index * shard_len;
+                    (index - first, &self.buffer[start..start + shard_len])
+                });
             let parity = self.blocks[position]
                 .shards
                 .iter()
                 .enumerate()
                 .filter_map(|(index, shard)| Some((index, shard.as_deref()?)));
+            let restored = block.recover(present, parity)?;
 
-            let restored = block.recover(
-                padded
-                    .iter()
-                    .map(|(index, shard)| (*index, shard.as_slice())),
-                parity,
-            )?;
-
-            for (relative, mut shard) in restored {
+            for (relative, shard) in restored {
                 let index = first + relative;
-                if index + 1 == usize::from(count) {
-                    shard.truncate(last_len);
-                }
-                self.fragments[index] = Some(shard);
+                let start = index * shard_len;
+                self.buffer[start..start + shard_len].copy_from_slice(&shard);
+                self.have[index] = true;
                 self.present += 1;
                 self.recovered += 1;
             }
@@ -610,8 +627,19 @@ impl PendingFrame {
         Ok(())
     }
 
-    fn assemble(self) -> Result<ReassembledFrame, NetError> {
-        let data: Vec<u8> = self.fragments.into_iter().flatten().flatten().collect();
+    fn assemble(mut self) -> Result<ReassembledFrame, NetError> {
+        let data = match (self.shard_len, self.fragment_count) {
+            (Some(shard_len), Some(count)) => {
+                let total = match (self.last_len, self.frame_bytes) {
+                    (Some(last), _) => (usize::from(count) - 1) * shard_len + last,
+                    (None, Some(bytes)) => bytes as usize,
+                    (None, None) => self.buffer.len(),
+                };
+                self.buffer.truncate(total);
+                self.buffer
+            }
+            _ => self.tail.take().unwrap_or_default(),
+        };
 
         if let Some(expected) = self.frame_bytes
             && data.len() != expected as usize
@@ -761,6 +789,22 @@ mod tests {
         let events = feed(&mut rx, Instant::now(), &datagrams);
 
         assert_eq!(frames(&events)[0].data, data);
+    }
+
+    #[test]
+    fn a_short_tail_arriving_first_lands_in_its_slot() {
+        let data = frame_data(SHARD_LEN * 4 + 13, 6);
+
+        for scheme in [FecScheme::None, FecScheme::for_overhead(4, 50)] {
+            let mut tx = packetizer(StreamKind::Video, scheme);
+            let mut rx = reassembler(StreamKind::Video);
+
+            let mut datagrams = tx.packetize(0, false, &data).unwrap();
+            datagrams.reverse();
+            let events = feed(&mut rx, Instant::now(), &datagrams);
+
+            assert_eq!(frames(&events)[0].data, data);
+        }
     }
 
     #[test]
