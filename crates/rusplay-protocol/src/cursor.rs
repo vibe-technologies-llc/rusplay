@@ -253,4 +253,24 @@ mod tests {
             Err(ProtocolError::TrailingBytes { extra: 1 })
         );
     }
+
+    #[test]
+    fn every_strict_prefix_of_a_cursor_message_is_rejected() {
+        let position_only = CursorMessage {
+            x: 1,
+            y: 2,
+            space: Resolution::new(1920, 1080),
+            visible: true,
+            image: None,
+        };
+
+        for message in [position_only, with_image()] {
+            let mut buf = Vec::new();
+            message.encode(&mut buf).unwrap();
+
+            for cut in 0..buf.len() {
+                assert!(CursorMessage::decode(&buf[..cut]).is_err());
+            }
+        }
+    }
 }

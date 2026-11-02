@@ -335,4 +335,31 @@ mod tests {
 
         assert_eq!(sequence.admit(3), InputAdmission::Current);
     }
+
+    #[test]
+    fn every_prefix_of_an_input_datagram_is_rejected_or_reads_without_panicking() {
+        let current = section(&[&[1, 2, 3], &[4]]);
+        let previous = section(&[&[9, 9]]);
+        let mut datagram = Vec::new();
+        InputPacket {
+            sequence: 9,
+            current: &current,
+            previous: &previous,
+        }
+        .write(&mut datagram)
+        .unwrap();
+
+        let current_end = InputPacket::OVERHEAD + current.len();
+
+        for cut in 0..=datagram.len() {
+            let read = InputPacket::read(&datagram[..cut]);
+
+            assert_eq!(read.is_ok(), cut >= current_end);
+            if let Ok(packet) = read {
+                for records in [packet.current_records(), packet.previous_records()] {
+                    records.for_each(drop);
+                }
+            }
+        }
+    }
 }

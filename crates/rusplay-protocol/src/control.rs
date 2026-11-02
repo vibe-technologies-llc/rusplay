@@ -555,4 +555,23 @@ mod tests {
             Err(ProtocolError::BufferTooShort { .. })
         ));
     }
+
+    #[test]
+    fn every_strict_prefix_of_a_control_packet_is_rejected() {
+        let mut packets: Vec<_> = every_message()
+            .into_iter()
+            .map(|message| ControlPacket::Message { id: 7, message })
+            .collect();
+        packets.push(ControlPacket::Ack { id: 7 });
+
+        for packet in packets {
+            let mut buf = [0; ControlPacket::MAX_ENCODED_LEN];
+            let len = packet.write(&mut buf).unwrap();
+
+            for cut in 0..len {
+                assert!(ControlPacket::read(&buf[..cut]).is_err());
+            }
+            assert_eq!(ControlPacket::read(&buf[..len]), Ok(packet));
+        }
+    }
 }

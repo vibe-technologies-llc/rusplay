@@ -239,12 +239,10 @@ impl Reassembler {
     }
 
     fn drop_lost_through(&mut self, frame: u32, events: &mut Vec<ReassemblyEvent>) {
-        while self
+        for lost in self
             .pending
-            .first()
-            .is_some_and(|first| !is_newer(first.frame, frame))
+            .extract_if(.., |pending| !is_newer(pending.frame, frame))
         {
-            let lost = self.pending.remove(0);
             self.stats.frames_lost += 1;
             events.push(ReassemblyEvent::FrameLost { frame: lost.frame });
         }
@@ -863,6 +861,59 @@ mod tests {
         assert_eq!(rx.next_timeout(), Some(start + Duration::from_millis(100)));
     }
 
+    fn first_fragment(tx: &mut Packetizer, frame: u32) -> Vec<u8> {
+        tx.packetize(frame, false, &frame_data(SHARD_LEN * 2, 0))
+            .unwrap()
+            .swap_remove(0)
+    }
+
+    #[test]
+    fn timeouts_terminate_when_frame_numbers_span_more_than_half_the_range() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::None);
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let later = start + Duration::from_millis(60);
+        let expired = start + Duration::from_millis(120);
+        let mut events = Vec::new();
+
+        rx.push(&first_fragment(&mut tx, 0), start, &mut events)
+            .unwrap();
+        rx.push(&first_fragment(&mut tx, 0xAAAA_AAAA), later, &mut events)
+            .unwrap();
+        rx.push(&first_fragment(&mut tx, 0x5555_5555), start, &mut events)
+            .unwrap();
+        rx.poll_timeouts(expired, &mut events);
+
+        assert_eq!(rx.pending_frames(), 1);
+        assert_eq!(lost(&events), [0, 0x5555_5555]);
+    }
+
+    #[test]
+    fn arbitrary_frame_numbers_never_stall_the_timeout_sweep() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::None);
+        let limits = ReassemblyLimits {
+            max_pending_frames: 64,
+            ..ReassemblyLimits::default()
+        };
+        let mut rx = Reassembler::new(StreamKind::Video, limits);
+        let start = Instant::now();
+        let mut events = Vec::new();
+        let mut state = 0x9E37_79B9_u32;
+
+        for step in 0..2_000_u32 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+
+            let now = start + Duration::from_millis(u64::from(step) * 9);
+            let _ = rx.push(&first_fragment(&mut tx, state), now, &mut events);
+            rx.poll_timeouts(now, &mut events);
+            events.clear();
+
+            assert!(rx.pending_frames() <= limits.max_pending_frames);
+        }
+    }
+
     #[test]
     fn fec_recovers_lost_data_fragments() {
         let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(8, 50));
@@ -1285,5 +1336,30 @@ mod tests {
         assert_eq!(limits.frame_timeout, Duration::from_millis(40));
         assert_eq!(limits.max_pending_frames, 3);
         assert_eq!(limits.max_fragments, 500);
+    }
+
+    #[test]
+    fn every_prefix_of_a_data_or_parity_datagram_is_handled_without_panicking() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let datagrams = tx
+            .packetize(0, true, &frame_data(SHARD_LEN * 4 + 20, 3))
+            .unwrap();
+
+        assert!(datagrams.iter().any(|datagram| parity_of(datagram)));
+
+        for datagram in &datagrams {
+            for cut in 0..datagram.len() {
+                let mut rx = reassembler(StreamKind::Video);
+                let mut events = Vec::new();
+
+                let pushed = rx.push(&datagram[..cut], Instant::now(), &mut events);
+
+                if cut < PacketHeader::SIZE {
+                    assert!(pushed.is_err());
+                }
+                rx.poll_timeouts(Instant::now() + Duration::from_secs(1), &mut events);
+                assert_eq!(rx.pending_frames(), 0);
+            }
+        }
     }
 }

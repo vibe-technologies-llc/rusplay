@@ -634,4 +634,16 @@ pub(crate) mod tests {
             Err(ProtocolError::DegenerateGamut)
         );
     }
+
+    #[test]
+    fn every_strict_prefix_of_a_description_is_rejected() {
+        for description in [hdr_description(), sdr_description()] {
+            let mut out = Vec::new();
+            description.write(&mut out);
+
+            for cut in 0..out.len() {
+                assert!(StreamDescription::read(&mut Reader::new(&out[..cut], 0)).is_err());
+            }
+        }
+    }
 }

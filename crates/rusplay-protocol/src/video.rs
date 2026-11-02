@@ -66,4 +66,23 @@ mod tests {
 
         assert_eq!(body, [0u8; 0]);
     }
+
+    #[test]
+    fn every_strict_prefix_of_the_header_is_rejected() {
+        let mut frame = Vec::new();
+        VideoFrameHeader {
+            captured_micros: 0x0102_0304_0506_0708,
+        }
+        .write(&mut frame);
+
+        for cut in 0..VideoFrameHeader::SIZE {
+            assert_eq!(
+                VideoFrameHeader::parse(&frame[..cut]),
+                Err(ProtocolError::BufferTooShort {
+                    needed: VideoFrameHeader::SIZE,
+                    available: cut,
+                })
+            );
+        }
+    }
 }

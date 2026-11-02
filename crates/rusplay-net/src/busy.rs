@@ -109,4 +109,31 @@ mod tests {
             assert_eq!(busy_reply(&datagram), None);
         }
     }
+
+    #[test]
+    fn every_prefix_of_a_handshake_start_is_answered_or_ignored_without_panicking() {
+        let datagrams = [
+            PairingMessage::Start {
+                attempt: 7,
+                spake: [1; PairingMessage::SPAKE_LEN],
+                name: ClientName::EMPTY,
+            }
+            .to_datagram()
+            .unwrap(),
+            ReconnectMessage::Hello {
+                attempt: 9,
+                peer: PeerId([3; PeerId::LEN]),
+                nonce: [4; ReconnectMessage::NONCE_LEN],
+            }
+            .to_datagram()
+            .unwrap(),
+        ];
+
+        for datagram in datagrams {
+            for cut in 0..datagram.len() {
+                assert_eq!(busy_reply(&datagram[..cut]), None);
+            }
+            assert!(busy_reply(&datagram).is_some());
+        }
+    }
 }
