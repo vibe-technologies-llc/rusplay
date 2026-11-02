@@ -319,8 +319,11 @@ Software encoders take a `rusplay_capture::Frame` whose buffer is `FrameBuffer::
   `width * bytes_per_sample`. The three planes follow each other in `data`, Y then U then V, each
   plane `rows * pitch` bytes. The chroma pitch is `ceil(stride / 2)` where chroma is
   horizontally subsampled (4:2:0, 4:2:2) and `stride` for 4:4:4. Chroma rows are `ceil(height / 2)`
-  for 4:2:0 and `height` otherwise. A shorter buffer is `FrameBufferTooShort`, a narrower stride
-  `FrameStrideTooSmall`.
+  for 4:2:0 and `height` otherwise. A shorter buffer is `FrameBufferTooShort`. The luma stride
+  must be at least `width * bytes_per_sample` and the derived chroma pitch at least
+  `chroma_width * bytes_per_sample`, else `FrameStrideTooSmall` (an odd width at minimum stride
+  with 10/12-bit 4:2:0 or 4:2:2 trips the chroma check); either pitch not a multiple of the sample
+  size is `FrameStrideMisaligned`, since the backends read `u16` samples.
 - Samples follow `video.color`: range, matrix and transfer are signalled in the stream, never
   applied by the encoder.
 - `rusplay_encode::input` holds the contract in code: `fourcc_for`, `pixel_format_of` and

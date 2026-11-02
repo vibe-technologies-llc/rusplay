@@ -66,6 +66,8 @@ pub enum EncodeError {
     },
     #[error("frame stride of {actual} bytes is below the {minimum} bytes a row needs")]
     FrameStrideTooSmall { minimum: usize, actual: usize },
+    #[error("frame stride of {stride} bytes is not a multiple of the {alignment} byte sample size")]
+    FrameStrideMisaligned { stride: usize, alignment: usize },
     #[error("frame buffer holds {actual} bytes but its planes need {needed}")]
     FrameBufferTooShort { needed: usize, actual: usize },
     #[error("the {backend} encoder does not support {rate_control:?} rate control")]
