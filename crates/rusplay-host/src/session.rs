@@ -219,7 +219,7 @@ impl HostSession {
                 microphone: microphone.is_some().then_some(microphone_sender),
                 configured: configured_format(&self.config.video),
             },
-        );
+        )?;
         stream.spawn(Stage::Control, move || control.run())?;
 
         if let Some(feed) = &self.input {

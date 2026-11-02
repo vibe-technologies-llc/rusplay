@@ -32,8 +32,8 @@ pub use crate::{
         PairingStep, PairingTiming, Pin, ResponderOutput, pair_as_client, pair_as_host,
     },
     peers::{
-        MAX_PEER_NAME_BYTES, PEER_SECRET_LEN, PeerRecord, PeerSecret, PeerStore, StoreExposure,
-        write_owner_only,
+        MAX_PEER_NAME_BYTES, MAX_PEERS, PEER_SECRET_LEN, PeerRecord, PeerSecret, PeerStore,
+        StoreExposure, write_owner_only,
     },
     reassembly::{
         ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReassemblyStats,

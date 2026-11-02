@@ -19,8 +19,8 @@ use rusplay_core::{
 };
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
-    Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectTiming,
-    Transport, TransportOptions, pair_as_client, reconnect_as_client,
+    Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectInitiator,
+    ReconnectTiming, Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
     ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
@@ -1225,13 +1225,8 @@ fn known_peer(fixture: &Fixture, byte: u8) -> PeerRecord {
 
 fn forged_takeover(fixture: &Fixture, record: &PeerRecord) -> ReconnectRejection {
     let attacker = TestClient::bind(fixture.address);
-    let attempt = 0x5eed;
-    let hello = ReconnectMessage::Hello {
-        attempt,
-        peer: record.id(),
-        nonce: [3; ReconnectMessage::NONCE_LEN],
-    };
-    attacker.send_datagram(&hello.to_datagram().unwrap());
+    let mut initiator = ReconnectInitiator::new(record).unwrap();
+    attacker.send_datagram(initiator.outgoing().unwrap());
 
     let mut buf = vec![0; usize::from(network().mtu)];
     let (len, _) = attacker
@@ -1243,12 +1238,12 @@ fn forged_takeover(fixture: &Fixture, record: &PeerRecord) -> ReconnectRejection
         ReconnectMessage::from_datagram(&buf[..len]),
         Ok(ReconnectMessage::Challenge { .. })
     ));
+    initiator.handle(&buf[..len]).unwrap();
 
-    let proof = ReconnectMessage::Proof {
-        attempt,
-        proof: [9; ReconnectMessage::PROOF_LEN],
-    };
-    attacker.send_datagram(&proof.to_datagram().unwrap());
+    let mut forged = initiator.outgoing().unwrap().to_vec();
+    let last = forged.len() - 1;
+    forged[last] ^= 0xFF;
+    attacker.send_datagram(&forged);
     let (len, _) = attacker
         .transport
         .recv_from_timeout(&mut buf, WAIT)

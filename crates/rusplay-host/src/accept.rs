@@ -7,7 +7,8 @@ use std::{
 use parking_lot::RwLock;
 use rusplay_config::NetworkConfig;
 use rusplay_net::{
-    NetError, PairingResponder, PeerRecord, PeerStore, Pin, ReconnectResponder, Transport,
+    NetError, PairingResponder, PeerRecord, PeerStore, Pin, ReconnectResponder, ReconnectTiming,
+    Transport,
 };
 use rusplay_protocol::{ClientName, PacketHeader, PeerId, StreamKind};
 
@@ -69,7 +70,7 @@ pub(crate) fn accept(
     let timeout = Duration::from_millis(u64::from(network.pairing_timeout_ms));
     let deadline = Instant::now() + timeout;
     let mut pairing = pin.map(|pin| PairingResponder::new(pin, network.pairing_max_attempts));
-    let mut reconnect = ReconnectResponder::new();
+    let mut reconnect = ReconnectResponder::new(ReconnectTiming::from(network))?;
     let mut buf = vec![0; usize::from(network.mtu)];
 
     loop {

@@ -5,7 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use hkdf::Hkdf;
+use hkdf::{
+    Hkdf,
+    hmac::{Hmac, KeyInit, Mac},
+};
 use parking_lot::RwLock;
 use rusplay_config::NetworkConfig;
 use rusplay_protocol::{PeerId, ReconnectMessage, ReconnectRejection};
@@ -22,10 +25,15 @@ use crate::{
 
 const LINGER_RETRANSMITS: u32 = 3;
 const RECEIVE_BUFFER_LEN: usize = 2048;
-const MAX_TRACKED_ATTEMPTS: usize = 64;
-const MAX_ATTEMPTS_PER_SOURCE: usize = 4;
+const MAX_REMEMBERED_ACCEPTANCES: usize = 64;
+const COOKIE_KEY_LEN: usize = 32;
+const HMAC_BLOCK_LEN: usize = 64;
+const BLIND_LABEL: &[u8] = b"rusplay reconnect blind";
+const COOKIE_LABEL: &[u8] = b"rusplay reconnect cookie";
 
 type Nonce = [u8; ReconnectMessage::NONCE_LEN];
+type Blind = [u8; ReconnectMessage::BLIND_LEN];
+type Cookie = [u8; ReconnectMessage::COOKIE_LEN];
 type Proof = [u8; ReconnectMessage::PROOF_LEN];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,8 +69,56 @@ fn random_attempt() -> Result<u32, NetError> {
     Ok(u32::from_be_bytes(bytes))
 }
 
-fn proofs_match(a: &Proof, b: &Proof) -> bool {
+fn tags_match(a: &[u8; 32], b: &[u8; 32]) -> bool {
     a.ct_eq(b).into()
+}
+
+fn keyed_hash(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
+    let mut block = [0; HMAC_BLOCK_LEN];
+    block[..key.len()].copy_from_slice(key);
+    let mut mac = Hmac::<Sha256>::new(&block.into());
+    block.zeroize();
+
+    for part in parts {
+        mac.update(part);
+    }
+
+    mac.finalize().into_bytes().into()
+}
+
+fn blind_for(secret: &PeerSecret, attempt: u32, nonce: &Nonce) -> Blind {
+    keyed_hash(
+        secret.as_bytes(),
+        &[BLIND_LABEL, &attempt.to_be_bytes(), nonce],
+    )
+}
+
+fn blinded_record<'a>(
+    candidates: impl IntoIterator<Item = &'a PeerRecord>,
+    attempt: u32,
+    nonce: &Nonce,
+    blind: &Blind,
+) -> Option<&'a PeerRecord> {
+    candidates
+        .into_iter()
+        .find(|record| tags_match(&blind_for(record.secret(), attempt, nonce), blind))
+}
+
+pub(crate) fn is_blinded_by(record: &PeerRecord, message: &ReconnectMessage) -> bool {
+    match message {
+        ReconnectMessage::Hello {
+            attempt,
+            nonce,
+            blind,
+        }
+        | ReconnectMessage::Proof {
+            attempt,
+            nonce,
+            blind,
+            ..
+        } => blinded_record([record], *attempt, nonce, blind).is_some(),
+        _ => false,
+    }
 }
 
 struct Schedule {
@@ -87,13 +143,15 @@ impl Schedule {
         peer: &PeerId,
         attempt: u32,
         client_nonce: &Nonce,
-        host_nonce: &Nonce,
+        cookie: &Cookie,
     ) -> Result<Self, NetError> {
-        let mut salt = Vec::with_capacity(PeerId::LEN + 4 + 2 * ReconnectMessage::NONCE_LEN);
+        let mut salt = Vec::with_capacity(
+            PeerId::LEN + 4 + ReconnectMessage::NONCE_LEN + ReconnectMessage::COOKIE_LEN,
+        );
         salt.extend_from_slice(&peer.0);
         salt.extend_from_slice(&attempt.to_be_bytes());
         salt.extend_from_slice(client_nonce);
-        salt.extend_from_slice(host_nonce);
+        salt.extend_from_slice(cookie);
 
         let hkdf = Hkdf::<Sha256>::new(Some(&salt), secret.as_bytes());
         let expand = |label: &[u8]| -> Result<[u8; KEY_LEN], NetError> {
@@ -137,6 +195,7 @@ pub struct ReconnectInitiator {
     peer: PeerId,
     secret: PeerSecret,
     client_nonce: Nonce,
+    blind: Blind,
     hello: Vec<u8>,
     stage: InitiatorStage,
 }
@@ -155,19 +214,20 @@ impl ReconnectInitiator {
     pub fn new(record: &PeerRecord) -> Result<Self, NetError> {
         let attempt = random_attempt()?;
         let client_nonce = random_nonce()?;
-        let peer = record.id();
+        let blind = blind_for(record.secret(), attempt, &client_nonce);
         let hello = ReconnectMessage::Hello {
             attempt,
-            peer,
             nonce: client_nonce,
+            blind,
         }
         .to_datagram()?;
 
         Ok(Self {
             attempt,
-            peer,
+            peer: record.id(),
             secret: record.secret().clone(),
             client_nonce,
+            blind,
             hello,
             stage: InitiatorStage::AwaitChallenge,
         })
@@ -200,8 +260,8 @@ impl ReconnectInitiator {
             std::mem::replace(&mut self.stage, InitiatorStage::Finished),
             message,
         ) {
-            (InitiatorStage::AwaitChallenge, ReconnectMessage::Challenge { nonce, proof, .. }) => {
-                self.accept_challenge(&nonce, &proof)
+            (InitiatorStage::AwaitChallenge, ReconnectMessage::Challenge { cookie, proof, .. }) => {
+                self.accept_challenge(&cookie, &proof)
             }
             (InitiatorStage::AwaitAccepted { keys, .. }, ReconnectMessage::Accepted { .. }) => {
                 Ok(ReconnectStep::Complete(keys))
@@ -215,7 +275,7 @@ impl ReconnectInitiator {
 
     fn accept_challenge(
         &mut self,
-        host_nonce: &Nonce,
+        cookie: &Cookie,
         host_proof: &Proof,
     ) -> Result<ReconnectStep, NetError> {
         let schedule = Schedule::derive(
@@ -223,15 +283,18 @@ impl ReconnectInitiator {
             &self.peer,
             self.attempt,
             &self.client_nonce,
-            host_nonce,
+            cookie,
         )?;
 
-        if !proofs_match(&schedule.host_proof, host_proof) {
+        if !tags_match(&schedule.host_proof, host_proof) {
             return Err(NetError::ReconnectAuthentication);
         }
 
         let proof = ReconnectMessage::Proof {
             attempt: self.attempt,
+            nonce: self.client_nonce,
+            blind: self.blind,
+            cookie: *cookie,
             proof: schedule.client_proof,
         }
         .to_datagram()?;
@@ -244,21 +307,20 @@ impl ReconnectInitiator {
     }
 }
 
-enum EntryState {
-    Awaiting {
-        expected_proof: Proof,
-        keys: Option<SessionKeys>,
-    },
-    Accepted,
+struct CookieKey([u8; COOKIE_KEY_LEN]);
+
+impl Drop for CookieKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
 }
 
-struct Entry {
+struct Acceptance {
     attempt: u32,
+    cookie: Cookie,
     origin: SocketAddr,
-    peer: PeerId,
-    client_nonce: Nonce,
+    expires: Instant,
     reply: Vec<u8>,
-    state: EntryState,
 }
 
 #[derive(Debug)]
@@ -273,27 +335,34 @@ pub struct ReconnectOutput {
     pub accepted: Option<ReconnectAccepted>,
 }
 
-#[derive(Default)]
 pub struct ReconnectResponder {
-    entries: VecDeque<Entry>,
+    key: CookieKey,
+    epoch: Instant,
+    cookie_period: Duration,
+    acceptances: VecDeque<Acceptance>,
 }
 
 impl fmt::Debug for ReconnectResponder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReconnectResponder")
-            .field("tracked_attempts", &self.entries.len())
+            .field("cookie_period", &self.cookie_period)
+            .field("acceptances", &self.acceptances.len())
             .finish_non_exhaustive()
     }
 }
 
 impl ReconnectResponder {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new(timing: ReconnectTiming) -> Result<Self, NetError> {
+        let mut key = CookieKey([0; COOKIE_KEY_LEN]);
+        fill_random(&mut key.0)?;
 
-    pub fn tracked_attempts(&self) -> usize {
-        self.entries.len()
+        Ok(Self {
+            key,
+            epoch: Instant::now(),
+            cookie_period: timing.timeout.max(Duration::from_millis(1)),
+            acceptances: VecDeque::new(),
+        })
     }
 
     pub fn handle(
@@ -302,166 +371,190 @@ impl ReconnectResponder {
         from: SocketAddr,
         store: &PeerStore,
     ) -> Result<ReconnectOutput, NetError> {
-        match ReconnectMessage::from_datagram(datagram)? {
+        let message = ReconnectMessage::from_datagram(datagram)?;
+        self.respond(&message, from, store.iter(), Instant::now())
+    }
+
+    pub(crate) fn respond<'a>(
+        &mut self,
+        message: &ReconnectMessage,
+        from: SocketAddr,
+        candidates: impl IntoIterator<Item = &'a PeerRecord>,
+        now: Instant,
+    ) -> Result<ReconnectOutput, NetError> {
+        match *message {
             ReconnectMessage::Hello {
                 attempt,
-                peer,
                 nonce,
-            } => self.on_hello(attempt, from, peer, nonce, store),
-            ReconnectMessage::Proof { attempt, proof } => {
-                self.on_proof(attempt, from, &proof, store)
-            }
+                blind,
+            } => self.on_hello(attempt, &nonce, &blind, from, candidates, now),
+            ReconnectMessage::Proof {
+                attempt,
+                nonce,
+                blind,
+                cookie,
+                proof,
+            } => self.on_proof(
+                &Presented {
+                    attempt,
+                    nonce,
+                    blind,
+                    cookie,
+                    proof,
+                },
+                from,
+                candidates,
+                now,
+            ),
             _ => Ok(ReconnectOutput::default()),
         }
     }
 
-    fn on_hello(
-        &mut self,
-        attempt: u32,
-        from: SocketAddr,
-        peer: PeerId,
-        client_nonce: Nonce,
-        store: &PeerStore,
-    ) -> Result<ReconnectOutput, NetError> {
-        if let Some(entry) = self.entries.iter().find(|entry| entry.attempt == attempt) {
-            return Ok(
-                if entry.origin == from && entry.peer == peer && entry.client_nonce == client_nonce
-                {
-                    reply_with(entry.reply.clone())
-                } else {
-                    ReconnectOutput::default()
-                },
-            );
-        }
+    fn period_index(&self, now: Instant) -> u64 {
+        let elapsed = now.saturating_duration_since(self.epoch).as_nanos();
+        u64::try_from(elapsed / self.cookie_period.as_nanos()).unwrap_or(u64::MAX)
+    }
 
-        let Some(record) = store.get(&peer) else {
+    fn cookie(
+        &self,
+        period: u64,
+        from: SocketAddr,
+        attempt: u32,
+        nonce: &Nonce,
+        blind: &Blind,
+    ) -> Cookie {
+        let (family, address) = match from.ip() {
+            IpAddr::V4(ip) => (4, ip.to_ipv6_mapped().octets()),
+            IpAddr::V6(ip) => (6, ip.octets()),
+        };
+
+        keyed_hash(
+            &self.key.0,
+            &[
+                COOKIE_LABEL,
+                &period.to_be_bytes(),
+                &[family],
+                &address,
+                &from.port().to_be_bytes(),
+                &attempt.to_be_bytes(),
+                nonce,
+                blind,
+            ],
+        )
+    }
+
+    fn cookie_is_fresh(&self, presented: &Presented, from: SocketAddr, now: Instant) -> bool {
+        let current = self.period_index(now);
+
+        [Some(current), current.checked_sub(1)]
+            .into_iter()
+            .flatten()
+            .any(|period| {
+                let expected = self.cookie(
+                    period,
+                    from,
+                    presented.attempt,
+                    &presented.nonce,
+                    &presented.blind,
+                );
+                tags_match(&expected, &presented.cookie)
+            })
+    }
+
+    fn on_hello<'a>(
+        &self,
+        attempt: u32,
+        nonce: &Nonce,
+        blind: &Blind,
+        from: SocketAddr,
+        candidates: impl IntoIterator<Item = &'a PeerRecord>,
+        now: Instant,
+    ) -> Result<ReconnectOutput, NetError> {
+        let Some(record) = blinded_record(candidates, attempt, nonce, blind) else {
             return rejection(attempt, ReconnectRejection::UnknownPeer);
         };
 
-        let host_nonce = random_nonce()?;
-        let schedule =
-            Schedule::derive(record.secret(), &peer, attempt, &client_nonce, &host_nonce)?;
-        let reply = ReconnectMessage::Challenge {
-            attempt,
-            nonce: host_nonce,
-            proof: schedule.host_proof,
-        }
-        .to_datagram()?;
+        let cookie = self.cookie(self.period_index(now), from, attempt, nonce, blind);
+        let schedule = Schedule::derive(record.secret(), &record.id(), attempt, nonce, &cookie)?;
 
-        self.make_room(from.ip());
-        self.entries.push_back(Entry {
-            attempt,
-            origin: from,
-            peer,
-            client_nonce,
-            reply: reply.clone(),
-            state: EntryState::Awaiting {
-                expected_proof: schedule.client_proof,
-                keys: Some(schedule.host_keys()),
-            },
-        });
-
-        Ok(reply_with(reply))
-    }
-
-    fn make_room(&mut self, source: IpAddr) {
-        let own: Vec<usize> = (0..self.entries.len())
-            .filter(|index| self.entries[*index].origin.ip() == source)
-            .collect();
-
-        let victim = if own.len() >= MAX_ATTEMPTS_PER_SOURCE {
-            self.answered_or_oldest(&own)
-        } else if self.entries.len() >= MAX_TRACKED_ATTEMPTS {
-            let everyone: Vec<usize> = (0..self.entries.len()).collect();
-            self.first_answered(&everyone)
-                .or_else(|| self.oldest_of_busiest_source())
-        } else {
-            None
-        };
-
-        if let Some(index) = victim {
-            self.entries.remove(index);
-        }
-    }
-
-    fn first_answered(&self, candidates: &[usize]) -> Option<usize> {
-        candidates
-            .iter()
-            .copied()
-            .find(|index| matches!(self.entries[*index].state, EntryState::Accepted))
-    }
-
-    fn answered_or_oldest(&self, candidates: &[usize]) -> Option<usize> {
-        self.first_answered(candidates)
-            .or_else(|| candidates.first().copied())
-    }
-
-    fn oldest_of_busiest_source(&self) -> Option<usize> {
-        let mut busiest: Option<(IpAddr, usize)> = None;
-
-        for entry in &self.entries {
-            let source = entry.origin.ip();
-            let tracked = self
-                .entries
-                .iter()
-                .filter(|other| other.origin.ip() == source)
-                .count();
-
-            if busiest.is_none_or(|(_, most)| tracked > most) {
-                busiest = Some((source, tracked));
+        Ok(reply_with(
+            ReconnectMessage::Challenge {
+                attempt,
+                cookie,
+                proof: schedule.host_proof,
             }
-        }
-
-        let (source, _) = busiest?;
-        self.entries
-            .iter()
-            .position(|entry| entry.origin.ip() == source)
+            .to_datagram()?,
+        ))
     }
 
-    fn on_proof(
+    fn on_proof<'a>(
         &mut self,
-        attempt: u32,
+        presented: &Presented,
         from: SocketAddr,
-        proof: &Proof,
-        store: &PeerStore,
+        candidates: impl IntoIterator<Item = &'a PeerRecord>,
+        now: Instant,
     ) -> Result<ReconnectOutput, NetError> {
-        let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.attempt == attempt && entry.origin == from)
-        else {
-            return Ok(ReconnectOutput::default());
-        };
+        self.acceptances
+            .retain(|acceptance| acceptance.expires > now);
 
-        let entry = &mut self.entries[index];
-        let EntryState::Awaiting {
-            expected_proof,
-            keys,
-        } = &mut entry.state
-        else {
-            return Ok(reply_with(entry.reply.clone()));
-        };
-
-        if store.get(&entry.peer).is_none() {
-            self.entries.remove(index);
-            return rejection(attempt, ReconnectRejection::UnknownPeer);
+        let attempt = presented.attempt;
+        if let Some(acceptance) = self.acceptances.iter().find(|acceptance| {
+            acceptance.attempt == attempt
+                && acceptance.origin == from
+                && tags_match(&acceptance.cookie, &presented.cookie)
+        }) {
+            return Ok(reply_with(acceptance.reply.clone()));
         }
 
-        if !proofs_match(expected_proof, proof) {
+        if !self.cookie_is_fresh(presented, from, now) {
+            return Ok(ReconnectOutput::default());
+        }
+
+        let Some(record) = blinded_record(candidates, attempt, &presented.nonce, &presented.blind)
+        else {
+            return rejection(attempt, ReconnectRejection::UnknownPeer);
+        };
+
+        let peer = record.id();
+        let schedule = Schedule::derive(
+            record.secret(),
+            &peer,
+            attempt,
+            &presented.nonce,
+            &presented.cookie,
+        )?;
+        if !tags_match(&schedule.client_proof, &presented.proof) {
             return rejection(attempt, ReconnectRejection::Authentication);
         }
 
-        let keys = keys.take();
-        let peer = entry.peer;
         let accepted = ReconnectMessage::Accepted { attempt }.to_datagram()?;
-        entry.reply.clone_from(&accepted);
-        entry.state = EntryState::Accepted;
+        if self.acceptances.len() >= MAX_REMEMBERED_ACCEPTANCES {
+            self.acceptances.pop_front();
+        }
+        self.acceptances.push_back(Acceptance {
+            attempt,
+            cookie: presented.cookie,
+            origin: from,
+            expires: now + 2 * self.cookie_period,
+            reply: accepted.clone(),
+        });
 
         Ok(ReconnectOutput {
             reply: Some(accepted),
-            accepted: keys.map(|keys| ReconnectAccepted { peer, keys }),
+            accepted: Some(ReconnectAccepted {
+                peer,
+                keys: schedule.host_keys(),
+            }),
         })
     }
+}
+
+struct Presented {
+    attempt: u32,
+    nonce: Nonce,
+    blind: Blind,
+    cookie: Cookie,
+    proof: Proof,
 }
 
 fn reply_with(datagram: Vec<u8>) -> ReconnectOutput {
@@ -572,6 +665,7 @@ mod tests {
     const ORIGIN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 4000);
     const INTRUDER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)), 4000);
     const LOOPBACK: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    const COOKIE_PERIOD: Duration = Duration::from_secs(5);
 
     fn secret(byte: u8) -> PeerSecret {
         PeerSecret::from_bytes([byte; PEER_SECRET_LEN])
@@ -589,8 +683,29 @@ mod tests {
         store
     }
 
+    fn responder() -> ReconnectResponder {
+        ReconnectResponder::new(ReconnectTiming {
+            retransmit: Duration::from_millis(20),
+            timeout: COOKIE_PERIOD,
+        })
+        .unwrap()
+    }
+
     fn start(initiator: &ReconnectInitiator) -> Vec<u8> {
         initiator.outgoing().unwrap().to_vec()
+    }
+
+    fn handle_at(
+        responder: &mut ReconnectResponder,
+        datagram: &[u8],
+        from: SocketAddr,
+        store: &PeerStore,
+        now: Instant,
+    ) -> ReconnectOutput {
+        let message = ReconnectMessage::from_datagram(datagram).unwrap();
+        responder
+            .respond(&message, from, store.iter(), now)
+            .unwrap()
     }
 
     fn challenge_for(
@@ -605,18 +720,27 @@ mod tests {
             .unwrap()
     }
 
-    fn handshake(
+    fn challenged(
         initiator: &mut ReconnectInitiator,
         responder: &mut ReconnectResponder,
         store: &PeerStore,
-    ) -> (SessionKeys, ReconnectAccepted) {
+    ) -> Vec<u8> {
         let challenge = challenge_for(initiator, responder, store);
         assert!(matches!(
             initiator.handle(&challenge),
             Ok(ReconnectStep::Pending)
         ));
+        start(initiator)
+    }
 
-        let output = responder.handle(&start(initiator), ORIGIN, store).unwrap();
+    fn handshake(
+        initiator: &mut ReconnectInitiator,
+        responder: &mut ReconnectResponder,
+        store: &PeerStore,
+    ) -> (SessionKeys, ReconnectAccepted) {
+        let proof = challenged(initiator, responder, store);
+
+        let output = responder.handle(&proof, ORIGIN, store).unwrap();
         let accepted = output.accepted.unwrap();
         let Ok(ReconnectStep::Complete(client)) = initiator.handle(&output.reply.unwrap()) else {
             panic!("client did not complete");
@@ -658,19 +782,40 @@ mod tests {
         reason
     }
 
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
     #[test]
     fn known_peer_reconnects_with_working_session_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
+        let mut responder = responder();
 
         let (client, accepted) = handshake(&mut initiator, &mut responder, &store);
 
         assert_eq!(accepted.peer, laptop.id());
         assert_keys_interoperate(&client, &accepted.keys);
         assert!(initiator.outgoing().is_none());
+    }
+
+    #[test]
+    fn the_right_peer_is_found_among_many() {
+        let directory = tempfile::tempdir().unwrap();
+        let records: Vec<PeerRecord> = (1..=20)
+            .map(|byte| record(&format!("peer {byte}"), byte))
+            .collect();
+        let store = store_with(&directory, "clients", &records);
+        let mut initiator = ReconnectInitiator::new(&records[13]).unwrap();
+        let mut responder = responder();
+
+        let (_, accepted) = handshake(&mut initiator, &mut responder, &store);
+
+        assert_eq!(accepted.peer, records[13].id());
     }
 
     #[test]
@@ -681,8 +826,7 @@ mod tests {
 
         let sealed = |_: u8| {
             let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-            let mut responder = ReconnectResponder::new();
-            let (client, _) = handshake(&mut initiator, &mut responder, &store);
+            let (client, _) = handshake(&mut initiator, &mut responder(), &store);
             seal_probe(&client)
         };
 
@@ -696,10 +840,41 @@ mod tests {
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
 
-        let first = challenge_for(&initiator, &mut ReconnectResponder::new(), &store);
-        let second = challenge_for(&initiator, &mut ReconnectResponder::new(), &store);
+        let first = challenge_for(&initiator, &mut responder(), &store);
+        let second = challenge_for(&initiator, &mut responder(), &store);
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn an_observer_cannot_link_two_hellos_of_the_same_peer() {
+        let laptop = record("laptop", 1);
+
+        let first = start(&ReconnectInitiator::new(&laptop).unwrap());
+        let second = start(&ReconnectInitiator::new(&laptop).unwrap());
+        let (
+            Ok(ReconnectMessage::Hello {
+                nonce: first_nonce,
+                blind: first_blind,
+                ..
+            }),
+            Ok(ReconnectMessage::Hello {
+                nonce: second_nonce,
+                blind: second_blind,
+                ..
+            }),
+        ) = (
+            ReconnectMessage::from_datagram(&first),
+            ReconnectMessage::from_datagram(&second),
+        )
+        else {
+            panic!("expected two hellos");
+        };
+
+        assert_ne!(first_blind, second_blind);
+        assert_ne!(first_nonce, second_nonce);
+        assert!(!contains(&first, &laptop.id().0));
+        assert!(!contains(&second, &laptop.id().0));
     }
 
     #[test]
@@ -708,12 +883,12 @@ mod tests {
         let store = store_with(&directory, "clients", &[record("laptop", 1)]);
         let stranger = record("stranger", 9);
         let mut initiator = ReconnectInitiator::new(&stranger).unwrap();
-        let mut responder = ReconnectResponder::new();
+        let mut responder = responder();
 
         let reply = challenge_for(&initiator, &mut responder, &store);
 
         assert_eq!(rejection_of(&reply), ReconnectRejection::UnknownPeer);
-        assert_eq!(responder.tracked_attempts(), 0);
+        assert!(responder.acceptances.is_empty());
         assert!(matches!(
             initiator.handle(&reply),
             Err(NetError::ReconnectRejected {
@@ -723,13 +898,24 @@ mod tests {
     }
 
     #[test]
+    fn a_hello_blinded_with_a_wrong_secret_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = store_with(&directory, "clients", &[record("laptop", 1)]);
+        let impostor = ReconnectInitiator::new(&record("laptop", 2)).unwrap();
+
+        let reply = challenge_for(&impostor, &mut responder(), &store);
+
+        assert_eq!(rejection_of(&reply), ReconnectRejection::UnknownPeer);
+    }
+
+    #[test]
     fn peer_with_a_wrong_secret_never_authenticates() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut impostor = ReconnectInitiator::new(&laptop).unwrap();
         impostor.secret = secret(2);
-        let mut responder = ReconnectResponder::new();
+        let mut responder = responder();
 
         let challenge = challenge_for(&impostor, &mut responder, &store);
 
@@ -746,9 +932,8 @@ mod tests {
         let laptop = record("laptop", 1);
         let fake_store = store_with(&directory, "fake", &[record("laptop", 1)]);
         let mut real = ReconnectInitiator::new(&laptop).unwrap();
-        let mut fake_host = ReconnectResponder::new();
 
-        let mut challenge = challenge_for(&real, &mut fake_host, &fake_store);
+        let mut challenge = challenge_for(&real, &mut responder(), &fake_store);
         let last = challenge.len() - 1;
         challenge[last] ^= 1;
 
@@ -764,11 +949,9 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&initiator, &mut responder, &store);
-        initiator.handle(&challenge).unwrap();
+        let mut responder = responder();
 
-        let mut proof = start(&initiator);
+        let mut proof = challenged(&mut initiator, &mut responder, &store);
         let last = proof.len() - 1;
         proof[last] ^= 1;
         let output = responder.handle(&proof, ORIGIN, &store).unwrap();
@@ -786,116 +969,71 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&initiator, &mut responder, &store);
-        initiator.handle(&challenge).unwrap();
+        let mut responder = responder();
+        let genuine = challenged(&mut initiator, &mut responder, &store);
 
-        let forged = ReconnectMessage::Proof {
-            attempt: initiator.attempt(),
-            proof: [0; ReconnectMessage::PROOF_LEN],
-        }
-        .to_datagram()
-        .unwrap();
+        let mut forged = genuine.clone();
+        let last = forged.len() - 1;
+        forged[last] ^= 0xFF;
         responder.handle(&forged, ORIGIN, &store).unwrap();
-        let output = responder
-            .handle(&start(&initiator), ORIGIN, &store)
-            .unwrap();
+        let output = responder.handle(&genuine, ORIGIN, &store).unwrap();
 
-        assert!(output.accepted.is_some());
-    }
-
-    fn hello_from(
-        responder: &mut ReconnectResponder,
-        store: &PeerStore,
-        record: &PeerRecord,
-        source: SocketAddr,
-    ) -> ReconnectInitiator {
-        let initiator = ReconnectInitiator::new(record).unwrap();
-        responder.handle(&start(&initiator), source, store).unwrap();
-        initiator
-    }
-
-    fn source(index: u8) -> SocketAddr {
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 1, index)), 4000)
-    }
-
-    #[test]
-    fn one_source_cannot_push_another_sources_attempt_out() {
-        let directory = tempfile::tempdir().unwrap();
-        let laptop = record("laptop", 1);
-        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
-        let mut responder = ReconnectResponder::new();
-        let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
-        let challenge = challenge_for(&genuine, &mut responder, &store);
-        genuine.handle(&challenge).unwrap();
-
-        for _ in 0..200 {
-            hello_from(&mut responder, &store, &laptop, INTRUDER);
-        }
-        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
-
-        assert!(output.accepted.is_some());
-        assert_eq!(responder.tracked_attempts(), 1 + MAX_ATTEMPTS_PER_SOURCE);
-    }
-
-    #[test]
-    fn answered_attempts_are_evicted_before_live_ones() {
-        let directory = tempfile::tempdir().unwrap();
-        let laptop = record("laptop", 1);
-        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
-        let mut responder = ReconnectResponder::new();
-        let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
-        let challenge = challenge_for(&genuine, &mut responder, &store);
-        genuine.handle(&challenge).unwrap();
-
-        let mut finished = ReconnectInitiator::new(&laptop).unwrap();
-        let reply = responder
-            .handle(&start(&finished), source(200), &store)
-            .unwrap()
-            .reply
-            .unwrap();
-        finished.handle(&reply).unwrap();
-        responder
-            .handle(&start(&finished), source(200), &store)
-            .unwrap();
-
-        for index in 0..(MAX_TRACKED_ATTEMPTS - 2) {
-            let index = u8::try_from(index).unwrap();
-            hello_from(&mut responder, &store, &laptop, source(index));
-        }
-        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
-
-        hello_from(&mut responder, &store, &laptop, source(250));
-        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
-
-        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
         assert!(output.accepted.is_some());
     }
 
     #[test]
-    fn the_busiest_source_gives_way_when_the_table_is_full() {
+    fn a_proof_with_a_forged_cookie_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
-        let mut responder = ReconnectResponder::new();
+        let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+        let mut responder = responder();
+
+        let mut proof = challenged(&mut initiator, &mut responder, &store);
+        let cookie_at = proof.len() - ReconnectMessage::PROOF_LEN - 1;
+        proof[cookie_at] ^= 1;
+        let output = responder.handle(&proof, ORIGIN, &store).unwrap();
+
+        assert!(output.reply.is_none());
+        assert!(output.accepted.is_none());
+    }
+
+    #[test]
+    fn a_hello_leaves_no_state_on_the_host() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let initiator = ReconnectInitiator::new(&laptop).unwrap();
+        let mut responder = responder();
+
+        challenge_for(&initiator, &mut responder, &store);
+
+        assert!(responder.acceptances.is_empty());
+    }
+
+    #[test]
+    fn a_flood_of_spoofed_hellos_does_not_prevent_a_genuine_reconnect() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut responder = responder();
         let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
-        let challenge = challenge_for(&genuine, &mut responder, &store);
-        genuine.handle(&challenge).unwrap();
+        let proof = challenged(&mut genuine, &mut responder, &store);
+        let captured = start(&ReconnectInitiator::new(&laptop).unwrap());
 
-        for _ in 0..MAX_ATTEMPTS_PER_SOURCE {
-            hello_from(&mut responder, &store, &laptop, INTRUDER);
+        for index in 0..4096_u32 {
+            let [_, _, high, low] = index.to_be_bytes();
+            let spoofed = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 1, high, low)), 4000);
+            let stranger = ReconnectInitiator::new(&record("stranger", 7)).unwrap();
+            responder
+                .handle(&start(&stranger), spoofed, &store)
+                .unwrap();
+            responder.handle(&captured, spoofed, &store).unwrap();
         }
-        for index in 0..(MAX_TRACKED_ATTEMPTS - 1 - MAX_ATTEMPTS_PER_SOURCE) {
-            let index = u8::try_from(index).unwrap();
-            hello_from(&mut responder, &store, &laptop, source(index));
-        }
-        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+        let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
-        hello_from(&mut responder, &store, &laptop, source(250));
-        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
-
-        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
         assert!(output.accepted.is_some());
+        assert_eq!(responder.acceptances.len(), 1);
     }
 
     #[test]
@@ -904,11 +1042,9 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&initiator, &mut responder, &store);
-        initiator.handle(&challenge).unwrap();
+        let mut responder = responder();
 
-        let proof = start(&initiator);
+        let proof = challenged(&mut initiator, &mut responder, &store);
         let replayed = responder.handle(&proof, INTRUDER, &store).unwrap();
         let genuine = responder.handle(&proof, ORIGIN, &store).unwrap();
 
@@ -918,19 +1054,84 @@ mod tests {
     }
 
     #[test]
-    fn a_retransmitted_hello_from_another_address_gets_no_challenge() {
+    fn a_hello_echoed_from_another_address_gets_a_challenge_bound_to_that_address() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
+        let mut responder = responder();
 
-        challenge_for(&initiator, &mut responder, &store);
+        let genuine = challenge_for(&initiator, &mut responder, &store);
         let echoed = responder
             .handle(&start(&initiator), INTRUDER, &store)
+            .unwrap()
+            .reply
             .unwrap();
 
-        assert!(echoed.reply.is_none());
+        assert_ne!(genuine, echoed);
+        assert!(echoed.len() <= start(&initiator).len());
+    }
+
+    #[test]
+    fn a_cookie_outlives_one_period_but_expires_after_two() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut responder = responder();
+        let issued = Instant::now();
+
+        let mut late = ReconnectInitiator::new(&laptop).unwrap();
+        let reply = handle_at(&mut responder, &start(&late), ORIGIN, &store, issued);
+        late.handle(&reply.reply.unwrap()).unwrap();
+        let mut expired = ReconnectInitiator::new(&laptop).unwrap();
+        let reply = handle_at(&mut responder, &start(&expired), ORIGIN, &store, issued);
+        expired.handle(&reply.reply.unwrap()).unwrap();
+
+        let in_time = handle_at(
+            &mut responder,
+            &start(&late),
+            ORIGIN,
+            &store,
+            issued + COOKIE_PERIOD,
+        );
+        let too_late = handle_at(
+            &mut responder,
+            &start(&expired),
+            ORIGIN,
+            &store,
+            issued + 2 * COOKIE_PERIOD + Duration::from_millis(1),
+        );
+
+        assert!(in_time.accepted.is_some());
+        assert!(too_late.reply.is_none());
+        assert!(too_late.accepted.is_none());
+    }
+
+    #[test]
+    fn a_replayed_proof_after_its_cookie_expired_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+        let mut responder = responder();
+        let issued = Instant::now();
+        let reply = handle_at(&mut responder, &start(&initiator), ORIGIN, &store, issued);
+        initiator.handle(&reply.reply.unwrap()).unwrap();
+        let proof = start(&initiator);
+
+        let first = handle_at(&mut responder, &proof, ORIGIN, &store, issued);
+        let replayed = handle_at(
+            &mut responder,
+            &proof,
+            ORIGIN,
+            &store,
+            issued + 3 * COOKIE_PERIOD,
+        );
+
+        assert!(first.accepted.is_some());
+        assert!(replayed.reply.is_none());
+        assert!(replayed.accepted.is_none());
+        assert!(responder.acceptances.is_empty());
     }
 
     #[test]
@@ -940,9 +1141,8 @@ mod tests {
         let mut store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         store.forget(&laptop.id()).unwrap();
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
 
-        let reply = challenge_for(&initiator, &mut responder, &store);
+        let reply = challenge_for(&initiator, &mut responder(), &store);
 
         assert_eq!(rejection_of(&reply), ReconnectRejection::UnknownPeer);
     }
@@ -953,21 +1153,18 @@ mod tests {
         let laptop = record("laptop", 1);
         let mut store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&initiator, &mut responder, &store);
-        initiator.handle(&challenge).unwrap();
+        let mut responder = responder();
+        let proof = challenged(&mut initiator, &mut responder, &store);
 
         store.forget(&laptop.id()).unwrap();
-        let output = responder
-            .handle(&start(&initiator), ORIGIN, &store)
-            .unwrap();
+        let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert_eq!(
             rejection_of(&output.reply.unwrap()),
             ReconnectRejection::UnknownPeer
         );
         assert!(output.accepted.is_none());
-        assert_eq!(responder.tracked_attempts(), 0);
+        assert!(responder.acceptances.is_empty());
     }
 
     #[test]
@@ -976,13 +1173,12 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
+        let mut responder = responder();
 
         let first = challenge_for(&initiator, &mut responder, &store);
         let again = challenge_for(&initiator, &mut responder, &store);
 
         assert_eq!(first, again);
-        assert_eq!(responder.tracked_attempts(), 1);
     }
 
     #[test]
@@ -991,10 +1187,8 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&initiator, &mut responder, &store);
-        initiator.handle(&challenge).unwrap();
-        let proof = start(&initiator);
+        let mut responder = responder();
+        let proof = challenged(&mut initiator, &mut responder, &store);
 
         let first = responder.handle(&proof, ORIGIN, &store).unwrap();
         let second = responder.handle(&proof, ORIGIN, &store).unwrap();
@@ -1010,13 +1204,10 @@ mod tests {
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut old = ReconnectInitiator::new(&laptop).unwrap();
-        let mut responder = ReconnectResponder::new();
-        let challenge = challenge_for(&old, &mut responder, &store);
-        old.handle(&challenge).unwrap();
-        let captured = start(&old);
+        let captured = challenged(&mut old, &mut responder(), &store);
 
         let attacker = ReconnectInitiator::new(&laptop).unwrap();
-        let mut fresh_responder = ReconnectResponder::new();
+        let mut fresh_responder = responder();
         challenge_for(&attacker, &mut fresh_responder, &store);
         let output = fresh_responder.handle(&captured, ORIGIN, &store).unwrap();
 
@@ -1025,21 +1216,18 @@ mod tests {
     }
 
     #[test]
-    fn tracked_attempts_are_bounded_overall_and_per_source() {
+    fn remembered_acceptances_are_bounded() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
-        let mut many_sources = ReconnectResponder::new();
-        let mut one_source = ReconnectResponder::new();
+        let mut responder = responder();
 
-        for index in 0..MAX_TRACKED_ATTEMPTS * 2 {
-            let index = u8::try_from(index).unwrap();
-            hello_from(&mut many_sources, &store, &laptop, source(index));
-            hello_from(&mut one_source, &store, &laptop, ORIGIN);
+        for _ in 0..MAX_REMEMBERED_ACCEPTANCES + 8 {
+            let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+            handshake(&mut initiator, &mut responder, &store);
         }
 
-        assert_eq!(many_sources.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
-        assert_eq!(one_source.tracked_attempts(), MAX_ATTEMPTS_PER_SOURCE);
+        assert_eq!(responder.acceptances.len(), MAX_REMEMBERED_ACCEPTANCES);
     }
 
     #[test]
@@ -1077,13 +1265,12 @@ mod tests {
     fn pairing_datagrams_are_not_reconnect_traffic() {
         let directory = tempfile::tempdir().unwrap();
         let store = store_with(&directory, "clients", &[]);
-        let mut responder = ReconnectResponder::new();
         let pairing = rusplay_protocol::PairingMessage::Done { attempt: 1 }
             .to_datagram()
             .unwrap();
 
         assert!(matches!(
-            responder.handle(&pairing, ORIGIN, &store),
+            responder().handle(&pairing, ORIGIN, &store),
             Err(NetError::Protocol(_))
         ));
     }
@@ -1157,7 +1344,7 @@ mod tests {
         let known = client_store.iter().next().unwrap().clone();
 
         let host = thread::spawn(move || {
-            let mut responder = ReconnectResponder::new();
+            let mut responder = ReconnectResponder::new(timing()).unwrap();
             let (peer, accepted) =
                 reconnect_as_host(&host_transport, &mut responder, &host_store, timing()).unwrap();
             host_transport.install_session(&accepted.keys);
@@ -1190,17 +1377,13 @@ mod tests {
         let host_addr = host_transport.local_addr().unwrap();
 
         let host = thread::spawn(move || {
-            let mut responder = ReconnectResponder::new();
-            reconnect_as_host(
-                &host_transport,
-                &mut responder,
-                &host_store,
-                ReconnectTiming {
-                    retransmit: Duration::from_millis(20),
-                    timeout: Duration::from_millis(400),
-                },
-            )
-            .map(|(peer, _)| peer)
+            let host_timing = ReconnectTiming {
+                retransmit: Duration::from_millis(20),
+                timeout: Duration::from_millis(400),
+            };
+            let mut responder = ReconnectResponder::new(host_timing).unwrap();
+            reconnect_as_host(&host_transport, &mut responder, &host_store, host_timing)
+                .map(|(peer, _)| peer)
         });
         let client = reconnect_as_client(&client_transport, host_addr, &laptop, timing());
 

@@ -83,6 +83,10 @@ pub enum NetError {
     PeerStoreDirectory { path: PathBuf, source: io::Error },
     #[error("peer store {path} is corrupt at line {line}")]
     PeerStoreCorrupt { path: PathBuf, line: usize },
+    #[error("peer store {path} holds more than {capacity} peers")]
+    PeerStoreTooLarge { path: PathBuf, capacity: usize },
+    #[error("peer store is full at {capacity} peers")]
+    PeerStoreFull { capacity: usize },
     #[error("failed to read the host id file {path}")]
     HostIdRead { path: PathBuf, source: io::Error },
     #[error("failed to write the host id file {path}")]

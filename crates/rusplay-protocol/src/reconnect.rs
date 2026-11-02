@@ -56,16 +56,19 @@ impl TryFrom<u8> for ReconnectRejection {
 pub enum ReconnectMessage {
     Hello {
         attempt: u32,
-        peer: PeerId,
         nonce: [u8; ReconnectMessage::NONCE_LEN],
+        blind: [u8; ReconnectMessage::BLIND_LEN],
     },
     Challenge {
         attempt: u32,
-        nonce: [u8; ReconnectMessage::NONCE_LEN],
+        cookie: [u8; ReconnectMessage::COOKIE_LEN],
         proof: [u8; ReconnectMessage::PROOF_LEN],
     },
     Proof {
         attempt: u32,
+        nonce: [u8; ReconnectMessage::NONCE_LEN],
+        blind: [u8; ReconnectMessage::BLIND_LEN],
+        cookie: [u8; ReconnectMessage::COOKIE_LEN],
         proof: [u8; ReconnectMessage::PROOF_LEN],
     },
     Accepted {
@@ -79,9 +82,14 @@ pub enum ReconnectMessage {
 
 impl ReconnectMessage {
     pub const NONCE_LEN: usize = 32;
+    pub const BLIND_LEN: usize = 32;
+    pub const COOKIE_LEN: usize = 32;
     pub const PROOF_LEN: usize = 32;
+    const HELLO_LEN: usize = Self::NONCE_LEN + Self::BLIND_LEN;
+    const CHALLENGE_LEN: usize = Self::COOKIE_LEN + Self::PROOF_LEN;
+    const PROOF_BODY_LEN: usize = Self::HELLO_LEN + Self::CHALLENGE_LEN;
     pub const MAX_ENCODED_LEN: usize =
-        PacketHeader::SIZE + TAG_AND_ATTEMPT_LEN + PeerId::LEN + Self::NONCE_LEN + Self::PROOF_LEN;
+        PacketHeader::SIZE + TAG_AND_ATTEMPT_LEN + Self::PROOF_BODY_LEN;
 
     pub const fn attempt(&self) -> u32 {
         match self {
@@ -103,7 +111,8 @@ impl ReconnectMessage {
             fragment_index: 0,
             fragment_count: 1,
         };
-        let mut datagram = vec![0; PacketHeader::SIZE];
+        let mut datagram = Vec::with_capacity(Self::MAX_ENCODED_LEN);
+        datagram.resize(PacketHeader::SIZE, 0);
         header.write(&mut datagram)?;
 
         let tag = match self {
@@ -117,15 +126,26 @@ impl ReconnectMessage {
         datagram.extend_from_slice(&self.attempt().to_be_bytes());
 
         match self {
-            Self::Hello { peer, nonce, .. } => {
-                datagram.extend_from_slice(&peer.0);
+            Self::Hello { nonce, blind, .. } => {
                 datagram.extend_from_slice(nonce);
+                datagram.extend_from_slice(blind);
             }
-            Self::Challenge { nonce, proof, .. } => {
-                datagram.extend_from_slice(nonce);
+            Self::Challenge { cookie, proof, .. } => {
+                datagram.extend_from_slice(cookie);
                 datagram.extend_from_slice(proof);
             }
-            Self::Proof { proof, .. } => datagram.extend_from_slice(proof),
+            Self::Proof {
+                nonce,
+                blind,
+                cookie,
+                proof,
+                ..
+            } => {
+                datagram.extend_from_slice(nonce);
+                datagram.extend_from_slice(blind);
+                datagram.extend_from_slice(cookie);
+                datagram.extend_from_slice(proof);
+            }
             Self::Accepted { .. } => {}
             Self::Rejected { reason, .. } => datagram.push(*reason as u8),
         }
@@ -158,9 +178,9 @@ impl ReconnectMessage {
         let attempt = u32::from_be_bytes(*attempt_bytes);
 
         let body_len = match tag {
-            TAG_HELLO => PeerId::LEN + Self::NONCE_LEN,
-            TAG_CHALLENGE => Self::NONCE_LEN + Self::PROOF_LEN,
-            TAG_PROOF => Self::PROOF_LEN,
+            TAG_HELLO => Self::HELLO_LEN,
+            TAG_CHALLENGE => Self::CHALLENGE_LEN,
+            TAG_PROOF => Self::PROOF_BODY_LEN,
             TAG_ACCEPTED => 0,
             TAG_REJECTED => 1,
             unknown => return Err(ProtocolError::UnknownReconnectTag(unknown)),
@@ -179,20 +199,25 @@ impl ReconnectMessage {
             });
         }
 
+        let mut fields = Fields(body);
+
         Ok(match tag {
             TAG_HELLO => Self::Hello {
                 attempt,
-                peer: PeerId(fixed(&body[..PeerId::LEN])),
-                nonce: fixed(&body[PeerId::LEN..]),
+                nonce: fields.take(),
+                blind: fields.take(),
             },
             TAG_CHALLENGE => Self::Challenge {
                 attempt,
-                nonce: fixed(&body[..Self::NONCE_LEN]),
-                proof: fixed(&body[Self::NONCE_LEN..]),
+                cookie: fields.take(),
+                proof: fields.take(),
             },
             TAG_PROOF => Self::Proof {
                 attempt,
-                proof: fixed(body),
+                nonce: fields.take(),
+                blind: fields.take(),
+                cookie: fields.take(),
+                proof: fields.take(),
             },
             TAG_ACCEPTED => Self::Accepted { attempt },
             _ => Self::Rejected {
@@ -200,6 +225,16 @@ impl ReconnectMessage {
                 reason: ReconnectRejection::try_from(body[0])?,
             },
         })
+    }
+}
+
+struct Fields<'a>(&'a [u8]);
+
+impl Fields<'_> {
+    fn take<const N: usize>(&mut self) -> [u8; N] {
+        let (field, rest) = self.0.split_at(N);
+        self.0 = rest;
+        fixed(field)
     }
 }
 
@@ -217,17 +252,20 @@ mod tests {
         [
             ReconnectMessage::Hello {
                 attempt: 0xA1B2_C3D4,
-                peer: PeerId([5; PeerId::LEN]),
-                nonce: [6; ReconnectMessage::NONCE_LEN],
+                nonce: [5; ReconnectMessage::NONCE_LEN],
+                blind: [6; ReconnectMessage::BLIND_LEN],
             },
             ReconnectMessage::Challenge {
                 attempt: 1,
-                nonce: [8; ReconnectMessage::NONCE_LEN],
+                cookie: [8; ReconnectMessage::COOKIE_LEN],
                 proof: [9; ReconnectMessage::PROOF_LEN],
             },
             ReconnectMessage::Proof {
                 attempt: 2,
-                proof: [10; ReconnectMessage::PROOF_LEN],
+                nonce: [10; ReconnectMessage::NONCE_LEN],
+                blind: [11; ReconnectMessage::BLIND_LEN],
+                cookie: [12; ReconnectMessage::COOKIE_LEN],
+                proof: [13; ReconnectMessage::PROOF_LEN],
             },
             ReconnectMessage::Accepted { attempt: 3 },
             ReconnectMessage::Rejected {
@@ -245,6 +283,25 @@ mod tests {
             assert_eq!(ReconnectMessage::from_datagram(&datagram), Ok(message));
             assert!(datagram.len() <= ReconnectMessage::MAX_ENCODED_LEN);
         }
+    }
+
+    #[test]
+    fn fields_keep_their_order_on_the_wire() {
+        let datagram = every_message()[2].to_datagram().unwrap();
+        let body = &datagram[PacketHeader::SIZE + TAG_AND_ATTEMPT_LEN..];
+
+        assert_eq!(body.len(), 4 * 32);
+        assert!(body[..32].iter().all(|byte| *byte == 10));
+        assert!(body[32..64].iter().all(|byte| *byte == 11));
+        assert!(body[64..96].iter().all(|byte| *byte == 12));
+        assert!(body[96..].iter().all(|byte| *byte == 13));
+    }
+
+    #[test]
+    fn the_challenge_is_no_larger_than_the_hello() {
+        let [hello, challenge, ..] = every_message().map(|message| message.to_datagram().unwrap());
+
+        assert!(challenge.len() <= hello.len());
     }
 
     #[test]

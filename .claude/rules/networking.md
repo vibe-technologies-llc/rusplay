@@ -226,27 +226,32 @@ paths:
   client's while a session runs, so a second client fails at once with `PairingRejected` or
   `ReconnectRejected` instead of timing out. The reply is shorter than the request, is sent
   best effort (a send failure never ends the session) and is never sent to a datagram that is
-  not a first handshake message. A reconnect `Hello` carrying the running session's own
-  `PeerId` is the exception (below).
+  not a first handshake message. A reconnect `Hello` blinded by the running session's own
+  peer is the exception (below).
 - Session takeover: `SessionTakeover` (sans-IO, per running session) wraps a
-  `ReconnectResponder` for the session's `PeerId`. A `Hello` for any other peer, known or not, is
-  `Busy`; a `Hello` for the session's peer runs the full mutual challenge-response against the
-  `PeerStore`, from whichever address it arrives (a restarted client has a new port, a roaming
-  one a new IP). `ReconnectResponder` records the address of a `Hello` per attempt and honours a
-  `Proof` only from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
-  address alone is never trusted. Only the final `Accepted` yields keys, and only then does the
-  host act (`host.md`). A forged proof is `Rejected(Authentication)` and leaves the session as it
-  was. Takeover stays within one address family, since the packetizers are sized for it.
+  `ReconnectResponder` for the session's `PeerId` and checks a `Hello`'s blind against that one
+  record only (one HMAC, however large the store). A `Hello` blinded by any other secret, known
+  peer or not, is `Busy`, and so is the session peer's own once it is forgotten (its secret is
+  gone, so its blind is unrecognisable); a `Hello` from the session's peer runs the full mutual
+  challenge-response, from whichever address it arrives (a restarted client has a new port, a
+  roaming one a new IP). The cookie binds the `Proof` to the address that got the `Challenge`,
+  so a sniffed proof replayed from elsewhere changes nothing; a source address alone is never
+  trusted. Only the final `Accepted` yields keys, and only then does the host act (`host.md`). A
+  forged proof is `Rejected(Authentication)` and leaves the session as it was. Takeover stays
+  within one address family, since the packetizers are sized for it.
 - Known limits: a PIN is single use, and a LAN attacker can burn the attempt budget with garbage
   `Start`s, which only denies pairing and never grants access.
 - A completed pairing also yields a long-term `PeerSecret` (`PairingOutcome::secret`, HKDF
   `rusplay peer secret` from the same SPAKE2 key), identical on both sides. Its `PeerId` is the
-  first 16 bytes of SHA-256 over a domain label and the secret, so ids need no extra wire field.
+  first 16 bytes of SHA-256 over a domain label and the secret. It never travels on the wire.
 
 ## Remembered peers
 
-- `PeerStore` is a plain list of `PeerRecord`s (id, name of at most 64 bytes without control
-  characters, secret) used on both sides: the host's paired clients and the client's paired hosts.
+- `PeerStore` is a plain list of at most `MAX_PEERS` (256) `PeerRecord`s (id, name of at most 64
+  bytes without control characters, secret) used on both sides: the host's paired clients and the
+  client's paired hosts. The cap bounds the work of matching a reconnect blind (below): `remember`
+  refuses a new peer when full (`PeerStoreFull`, re-remembering a known one still works) and a file
+  with more lines fails to load (`PeerStoreTooLarge`).
   The file is one line per peer, `<id hex> <secret hex> <name>`; loading refuses a malformed line,
   an id that is not the secret's, and duplicates (`PeerStoreCorrupt` with the line number).
 - Files live in `$XDG_STATE_HOME/rusplay/` (fallback `~/.local/state/rusplay/`, relative values
@@ -266,23 +271,36 @@ paths:
   they differ, keeping the old records if the new file is corrupt.
   The write path is `write_owner_only`, shared with the client's host book (`client.md`).
 - Reconnect is a mutual challenge-response on `StreamKind::Reconnect` (unsealed, like pairing):
-  `Hello` (random attempt id, `PeerId`, 32-byte client nonce), `Challenge` (host nonce plus the
-  host proof), `Proof` (client proof), `Accepted` and `Rejected` (`UnknownPeer`,
-  `Authentication`, `Busy`).
-  Both proofs and both direction keys are HKDF-SHA256 outputs keyed by the secret and salted with
-  peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
-  secret and freshness from both sides, a reflected message never verifies, and session keys are
-  never reused across reconnects. The client checks the host proof before it sends its own.
-- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps up to 64
-  attempts, each bound to the address of its `Hello` (retransmitted `Hello`/`Proof` from that
-  address are answered from cache, from any other address ignored), re-checks the store when the
-  `Proof` arrives, and keeps an attempt alive after a bad `Proof` so a forged one cannot spoil the
-  genuine client's attempt. A source IP may hold at most 4 attempts and evicts its own oldest
-  (answered first) when it starts another; when the whole table is full an answered attempt goes
-  first, then the oldest attempt of the source holding the most, so one flooding host cannot push
-  another's attempt out. Floods from many spoofed addresses can still do it (the `PeerId` is
-  cleartext in the `Hello`). An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
-  falls back to PIN pairing.
+  `Hello` (random attempt id, 32-byte client nonce, 32-byte blind), `Challenge` (32-byte cookie
+  plus the host proof), `Proof` (the `Hello`'s nonce and blind, the cookie, the client proof),
+  `Accepted` and `Rejected` (`UnknownPeer`, `Authentication`, `Busy`).
+- Blinding: the `PeerId` never travels. The blind is HMAC-SHA256 under the peer secret over a
+  label, the attempt id and the client nonce, so two `Hello`s of one device share nothing a passive
+  observer can link. The host finds the record by recomputing the blind for each store record
+  (constant-time compare, at most `MAX_PEERS` HMACs per `Hello` or `Proof`). No match is
+  `Rejected(UnknownPeer)`, so a wrong secret and an unknown peer look alike.
+- Stateless challenge: `ReconnectResponder` holds a random per-process cookie key and creates no
+  per-attempt state for a `Hello`. The cookie is HMAC-SHA256 under that key over a label, the
+  cookie period index, the source address (family, IP, port), the attempt, the client nonce and
+  the blind; it doubles as the host nonce. A period is `network.reconnect_timeout_ms` counted
+  from the responder's creation, and a `Proof` is honoured only while its cookie matches the
+  current or the previous period (so it lives one to two periods) and only from the address it
+  was issued to; anything else is ignored without a reply. The `Proof` carries everything the
+  host needs to recompute the cookie, find the record and derive the schedule. A retransmitted
+  `Hello` gets the same `Challenge` within a period, and the `Challenge` is no larger than the
+  `Hello`, so a reflected one is no amplification. A flood of `Hello`s from any number of
+  spoofed addresses therefore costs only CPU and can never displace a genuine attempt.
+- Both proofs and both direction keys are HKDF-SHA256 outputs keyed by the secret and salted with
+  peer id, attempt, client nonce and cookie, each under its own label, so a proof proves knowledge
+  of the secret and freshness from both sides, a reflected message never verifies, and session
+  keys are never reused across reconnects. The client checks the host proof before it sends its
+  own.
+- The secret is 256 bits, so reconnect has no attempt budget, and a bad `Proof` is answered
+  `Rejected(Authentication)` without touching anything. The only state is created after a valid
+  `Proof`: up to 64 acceptances (attempt, cookie, address, the `Accepted` datagram), kept until
+  the cookie can no longer verify, so a retransmitted `Proof` is answered `Accepted` again
+  without new keys. Only peers that proved the secret can fill it. A peer forgotten between
+  `Hello` and `Proof` is `Rejected(UnknownPeer)`; the client then falls back to PIN pairing.
 - `reconnect_as_client`/`reconnect_as_host` mirror the pairing drivers, bounded by
   `network.reconnect_timeout_ms`; the host lingers after success to repeat `Accepted`.
 

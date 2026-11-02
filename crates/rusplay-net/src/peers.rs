@@ -18,6 +18,7 @@ use crate::NetError;
 
 pub const PEER_SECRET_LEN: usize = 32;
 pub const MAX_PEER_NAME_BYTES: usize = 64;
+pub const MAX_PEERS: usize = 256;
 
 const APP_DIR: &str = "rusplay";
 const HOST_FILE: &str = "paired-clients";
@@ -286,6 +287,12 @@ impl PeerStore {
     }
 
     pub fn remember(&mut self, record: PeerRecord) -> Result<(), NetError> {
+        if self.records.len() >= MAX_PEERS && self.get(&record.id).is_none() {
+            return Err(NetError::PeerStoreFull {
+                capacity: MAX_PEERS,
+            });
+        }
+
         let mut records: Vec<PeerRecord> = self
             .records
             .iter()
@@ -461,6 +468,13 @@ fn parse(text: &str, path: &Path) -> Result<Vec<PeerRecord>, NetError> {
     let mut records: Vec<PeerRecord> = Vec::new();
 
     for (index, line) in text.lines().enumerate() {
+        if index >= MAX_PEERS {
+            return Err(NetError::PeerStoreTooLarge {
+                path: path.to_owned(),
+                capacity: MAX_PEERS,
+            });
+        }
+
         let corrupt = || NetError::PeerStoreCorrupt {
             path: path.to_owned(),
             line: index + 1,
@@ -500,6 +514,52 @@ mod tests {
 
     fn record(name: &str, byte: u8) -> PeerRecord {
         PeerRecord::new(name, secret(byte)).unwrap()
+    }
+
+    fn store_text(count: usize) -> String {
+        (0..count)
+            .map(|index| {
+                let mut bytes = [0; PEER_SECRET_LEN];
+                bytes[..8].copy_from_slice(&(index as u64).to_be_bytes());
+                render(&[PeerRecord::new("peer", PeerSecret::from_bytes(bytes)).unwrap()])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_full_store_refuses_a_new_peer_but_keeps_updating_known_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        fs::write(&path, store_text(MAX_PEERS)).unwrap();
+        let mut store = PeerStore::open(path).unwrap();
+
+        let known = store.iter().next().unwrap().clone();
+        let refused = store.remember(record("newcomer", 0xEE));
+        let renamed = store.remember(PeerRecord::new("renamed", known.secret().clone()).unwrap());
+
+        assert!(matches!(
+            refused,
+            Err(NetError::PeerStoreFull {
+                capacity: MAX_PEERS
+            })
+        ));
+        assert!(renamed.is_ok());
+        assert_eq!(store.len(), MAX_PEERS);
+    }
+
+    #[test]
+    fn a_store_file_beyond_the_capacity_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        fs::write(&path, store_text(MAX_PEERS + 1)).unwrap();
+
+        assert!(matches!(
+            PeerStore::open(path),
+            Err(NetError::PeerStoreTooLarge {
+                capacity: MAX_PEERS,
+                ..
+            })
+        ));
     }
 
     #[test]
