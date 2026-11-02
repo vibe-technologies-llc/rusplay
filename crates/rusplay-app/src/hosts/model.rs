@@ -424,6 +424,7 @@ mod tests {
         DiscoveredHost {
             address: address.parse().unwrap(),
             name: name.to_owned(),
+            busy: false,
         }
     }
 

@@ -1,5 +1,9 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -45,6 +49,7 @@ impl DiscoveryOptions {
 pub struct DiscoveredHost {
     pub address: SocketAddr,
     pub name: String,
+    pub busy: bool,
 }
 
 #[derive(Debug)]
@@ -52,6 +57,7 @@ pub struct DiscoveryResponder {
     socket: UdpSocket,
     port: u16,
     name: String,
+    busy: Arc<AtomicBool>,
 }
 
 impl DiscoveryResponder {
@@ -64,6 +70,7 @@ impl DiscoveryResponder {
         let announce = DiscoveryMessage::Announce {
             nonce: 0,
             port: host_port,
+            busy: false,
             name: name.to_owned(),
         };
         announce.to_datagram()?;
@@ -83,7 +90,14 @@ impl DiscoveryResponder {
             socket,
             port: host_port,
             name: name.to_owned(),
+            busy: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    #[must_use]
+    pub fn with_busy_flag(mut self, busy: Arc<AtomicBool>) -> Self {
+        self.busy = busy;
+        self
     }
 
     pub fn bind_with_options(
@@ -120,6 +134,7 @@ impl DiscoveryResponder {
         let reply = DiscoveryMessage::Announce {
             nonce,
             port: self.port,
+            busy: self.busy.load(Ordering::Relaxed),
             name: self.name.clone(),
         }
         .to_datagram()?;
@@ -190,6 +205,7 @@ impl DiscoveryBrowser {
             let Ok(DiscoveryMessage::Announce {
                 nonce: echoed,
                 port,
+                busy,
                 name,
             }) = DiscoveryMessage::from_datagram(&buf[..len])
             else {
@@ -202,7 +218,11 @@ impl DiscoveryBrowser {
 
             let address = SocketAddr::new(from.ip(), port);
             if !hosts.iter().any(|host| host.address == address) {
-                hosts.push(DiscoveredHost { address, name });
+                hosts.push(DiscoveredHost {
+                    address,
+                    name,
+                    busy,
+                });
             }
         }
     }
@@ -279,8 +299,38 @@ mod tests {
             [DiscoveredHost {
                 address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 47_800),
                 name: "couch-pc".to_owned(),
+                busy: false,
             }]
         );
+    }
+
+    #[test]
+    fn the_announce_follows_the_responders_busy_flag() {
+        let busy = Arc::new(AtomicBool::new(true));
+        let idle = responder("idle", 1111);
+        let mid_session = Arc::new(
+            DiscoveryResponder::bind(LOOPBACK, None, 2222, "mid-session")
+                .unwrap()
+                .with_busy_flag(Arc::clone(&busy)),
+        );
+        let servers = [serve(&idle, 1), serve(&mid_session, 1)];
+        let browser = DiscoveryBrowser::new(vec![
+            idle.local_addr().unwrap(),
+            mid_session.local_addr().unwrap(),
+        ])
+        .unwrap();
+
+        let mut found = browser.scan(SCAN).unwrap();
+
+        for server in servers {
+            server.join().unwrap();
+        }
+        found.sort_by_key(|host| host.address.port());
+        let states: Vec<(&str, bool)> = found
+            .iter()
+            .map(|host| (host.name.as_str(), host.busy))
+            .collect();
+        assert_eq!(states, [("idle", false), ("mid-session", true)]);
     }
 
     #[test]
@@ -341,6 +391,7 @@ mod tests {
         let forged = DiscoveryMessage::Announce {
             nonce: 12345,
             port: 9,
+            busy: false,
             name: "evil".to_owned(),
         }
         .to_datagram()

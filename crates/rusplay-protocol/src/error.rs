@@ -32,6 +32,8 @@ pub enum ProtocolError {
     },
     #[error("unknown discovery message tag {0}")]
     UnknownDiscoveryTag(u8),
+    #[error("discovery announce flags {0:#04x} carry unknown bits")]
+    UnknownDiscoveryFlags(u8),
     #[error("host name of {len} bytes exceeds the limit of {max}")]
     DiscoveryNameTooLong { len: usize, max: usize },
     #[error("host name is not valid utf-8")]

@@ -10,7 +10,7 @@
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
 
 # Networking
-- [S] `net-announce-busy`: add a busy flag to `Announce` so a client's host list can show a host that is mid-session before the user tries to connect; the discovery responder runs on its own thread, so `HostSession` has to expose its busy state to it; a protocol version bump
+- [S] `app-host-list-busy`: show `DiscoveredHost::busy` in the app's host list (`HostList::merge_discovered` and its view) so a host that is mid-session reads as busy before the user tries to connect; the announce already carries the flag
 - [S] `net-announce-host-id`: carry a stable host id (the id of a host key or a random id kept in the state directory) in `DiscoveryMessage::Announce`, with a protocol version bump, so the app matches a discovered host to its saved pairing across a rename or address change instead of by display name and address (`HostList::merge_discovered`)
 
 # Client app

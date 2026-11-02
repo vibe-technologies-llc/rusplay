@@ -2,16 +2,27 @@ use crate::{PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamKin
 
 const TAG_QUERY: u8 = 0;
 const TAG_ANNOUNCE: u8 = 1;
+const FLAG_BUSY: u8 = 1;
+const KNOWN_FLAGS: u8 = FLAG_BUSY;
+const ANNOUNCE_FIXED_LEN: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryMessage {
-    Query { nonce: u32 },
-    Announce { nonce: u32, port: u16, name: String },
+    Query {
+        nonce: u32,
+    },
+    Announce {
+        nonce: u32,
+        port: u16,
+        busy: bool,
+        name: String,
+    },
 }
 
 impl DiscoveryMessage {
     pub const MAX_NAME_LEN: usize = 64;
-    pub const MAX_ENCODED_LEN: usize = PacketHeader::SIZE + 1 + 4 + 2 + 1 + Self::MAX_NAME_LEN;
+    pub const MAX_ENCODED_LEN: usize =
+        PacketHeader::SIZE + 1 + ANNOUNCE_FIXED_LEN + Self::MAX_NAME_LEN;
 
     pub fn nonce(&self) -> u32 {
         match self {
@@ -27,7 +38,12 @@ impl DiscoveryMessage {
                 payload.push(TAG_QUERY);
                 payload.extend_from_slice(&nonce.to_be_bytes());
             }
-            Self::Announce { nonce, port, name } => {
+            Self::Announce {
+                nonce,
+                port,
+                busy,
+                name,
+            } => {
                 let len = u8::try_from(name.len())
                     .ok()
                     .filter(|len| usize::from(*len) <= Self::MAX_NAME_LEN)
@@ -43,6 +59,7 @@ impl DiscoveryMessage {
                 payload.push(TAG_ANNOUNCE);
                 payload.extend_from_slice(&nonce.to_be_bytes());
                 payload.extend_from_slice(&port.to_be_bytes());
+                payload.push(if *busy { FLAG_BUSY } else { 0 });
                 payload.push(len);
                 payload.extend_from_slice(name.as_bytes());
             }
@@ -94,12 +111,19 @@ impl DiscoveryMessage {
 
     fn read_announce(body: &[u8]) -> Result<Self, ProtocolError> {
         let nonce = read_nonce(body)?;
-        let fixed = body.get(4..7).ok_or(ProtocolError::BufferTooShort {
-            needed: 7,
-            available: body.len(),
-        })?;
+        let fixed = body
+            .get(4..ANNOUNCE_FIXED_LEN)
+            .ok_or(ProtocolError::BufferTooShort {
+                needed: ANNOUNCE_FIXED_LEN,
+                available: body.len(),
+            })?;
         let port = u16::from_be_bytes([fixed[0], fixed[1]]);
-        let name_len = usize::from(fixed[2]);
+        let flags = fixed[2];
+        let name_len = usize::from(fixed[3]);
+
+        if flags & !KNOWN_FLAGS != 0 {
+            return Err(ProtocolError::UnknownDiscoveryFlags(flags));
+        }
 
         if name_len > Self::MAX_NAME_LEN {
             return Err(ProtocolError::DiscoveryNameTooLong {
@@ -108,15 +132,20 @@ impl DiscoveryMessage {
             });
         }
 
-        expect_exact(body, 7 + name_len)?;
-        let name = String::from_utf8(body[7..].to_vec())
+        expect_exact(body, ANNOUNCE_FIXED_LEN + name_len)?;
+        let name = String::from_utf8(body[ANNOUNCE_FIXED_LEN..].to_vec())
             .map_err(|_| ProtocolError::InvalidDiscoveryName)?;
 
         if name.chars().any(char::is_control) {
             return Err(ProtocolError::DiscoveryNameControlCharacter);
         }
 
-        Ok(Self::Announce { nonce, port, name })
+        Ok(Self::Announce {
+            nonce,
+            port,
+            busy: flags & FLAG_BUSY != 0,
+            name,
+        })
     }
 }
 
@@ -150,6 +179,7 @@ mod tests {
         DiscoveryMessage::Announce {
             nonce: 0xCAFE_F00D,
             port: 47_800,
+            busy: false,
             name: name.to_owned(),
         }
     }
@@ -180,7 +210,33 @@ mod tests {
 
         assert_eq!(
             &datagram[PacketHeader::SIZE..],
-            [1, 0xCA, 0xFE, 0xF0, 0x0D, 0xBA, 0xB8, 2, b'a', b'b']
+            [1, 0xCA, 0xFE, 0xF0, 0x0D, 0xBA, 0xB8, 0, 2, b'a', b'b']
+        );
+    }
+
+    #[test]
+    fn the_busy_flag_round_trips_and_sets_the_low_flag_bit() {
+        let message = DiscoveryMessage::Announce {
+            nonce: 1,
+            port: 2,
+            busy: true,
+            name: "ab".to_owned(),
+        };
+
+        let datagram = message.to_datagram().unwrap();
+
+        assert_eq!(datagram[PacketHeader::SIZE + 7], 1);
+        assert_eq!(DiscoveryMessage::from_datagram(&datagram), Ok(message));
+    }
+
+    #[test]
+    fn unknown_announce_flag_bits_are_rejected() {
+        let mut datagram = announce("ab").to_datagram().unwrap();
+        datagram[PacketHeader::SIZE + 7] = 0x03;
+
+        assert_eq!(
+            DiscoveryMessage::from_datagram(&datagram),
+            Err(ProtocolError::UnknownDiscoveryFlags(0x03))
         );
     }
 
@@ -255,7 +311,7 @@ mod tests {
     #[test]
     fn announced_name_length_beyond_the_limit_is_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
-        datagram[PacketHeader::SIZE + 7] = 200;
+        datagram[PacketHeader::SIZE + 8] = 200;
 
         assert!(matches!(
             DiscoveryMessage::from_datagram(&datagram),

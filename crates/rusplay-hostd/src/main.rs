@@ -134,6 +134,7 @@ fn serve(config: Config) -> Result<(), HostdError> {
         &host.config().network,
         address.port(),
         host.config().peers.host_name.as_deref(),
+        host.busy_flag(),
     )?;
 
     loop {

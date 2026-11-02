@@ -45,6 +45,9 @@ paths:
   stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
+  - `HostSession::busy_flag()` is an `Arc<AtomicBool>` that every `HostStream` raises when it
+    is created and lowers when it is dropped (`BusyGuard`), for the discovery responder
+    (`rusplay-hostd`) to announce; accepting and pairing alone do not raise it.
   - The encode, send and control threads apply `ThreadTuning` (`src/priority.rs`) as the first
     thing they do: `network.frame_thread_nice` (default -5, 0 leaves the thread alone) through
     `setpriority`, which Linux applies to the calling thread, and, on the send thread only,

@@ -36,10 +36,12 @@ impl Responder {
         network: &NetworkConfig,
         host_port: u16,
         configured_name: Option<&str>,
+        busy: Arc<AtomicBool>,
     ) -> Result<Self, ResponderError> {
         let name = announced_name(configured_name, system_hostname());
         let responder = DiscoveryResponder::bind_with_options(network.into(), host_port, &name)
-            .map_err(ResponderError::Bind)?;
+            .map_err(ResponderError::Bind)?
+            .with_busy_flag(busy);
 
         Self::spawn(responder)
     }
