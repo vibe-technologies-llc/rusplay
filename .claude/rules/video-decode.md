@@ -149,7 +149,7 @@ paths:
   primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
   colour reader both go through it.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
-  header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
+  header when each picture is decoded, and so does the chroma siting (`SignalledColor::chroma_siting`: VUI `chroma_sample_loc_type_top_field`, AV1 `chroma_sample_position`, rav1d's `chr` in the software decoder); mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
   (emulation prevention removed) and AV1 metadata OBUs. `HdrTracker` keeps them per coded video
   sequence: an IDR (H.264), an IRAP (HEVC) or a key frame (AV1) replaces them with what its access
@@ -249,6 +249,11 @@ paths:
   sequence, with the decoder's expected hold count and `flush` completing it). Regenerated
   fixtures need new hashes. Every VAAPI test returns early when the render node, the codec or the
   profile is missing.
+- The reference logic has device-free unit tests next to it: `src/vaapi/h264/dpb/tests.rs` (marking
+  by every MMCO, sliding window, initial and modified lists for frames and fields, the three
+  order count types), `src/vaapi/hevc/tests.rs` (order count unwrapping, the RPS helpers,
+  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing).
+  They build `PoolSurface::detached` surfaces, which carry an id and an empty image.
 - No available encoder writes field pictures (x264 only does MBAFF), so
   `src/vaapi/tests/fields.rs` is a tiny H.264 writer for PAFF streams: 128x64 frames of 16
   macroblocks per field, CAVLC, Main profile. Intra fields are I_PCM with a luma pattern and

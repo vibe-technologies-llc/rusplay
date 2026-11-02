@@ -296,6 +296,23 @@ pub(super) struct PoolSurface {
     pub(super) image: Arc<DmaBufImage>,
 }
 
+#[cfg(test)]
+impl PoolSurface {
+    pub(super) fn detached(id: SurfaceId) -> Self {
+        Self {
+            id,
+            image: Arc::new(DmaBufImage {
+                fourcc: DrmFourcc::NV12,
+                modifier: 0,
+                width: 0,
+                height: 0,
+                objects: Vec::new(),
+                planes: Vec::new(),
+            }),
+        }
+    }
+}
+
 pub(super) struct SurfacePool {
     display: Rc<Display>,
     rt_format: u32,

@@ -427,6 +427,10 @@ impl<K: PartialEq + Clone> GroupCache<K> {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()

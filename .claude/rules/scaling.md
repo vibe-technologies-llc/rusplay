@@ -82,7 +82,7 @@ paths:
   per-scaler `GroupCache` keyed by `TextureView`: a least-recently-used cache (a hit moves the
   entry to the back, so a view used every frame survives a stream of new ones) of
   `CACHED_FRAME_GROUPS` entries by default, resized by `set_frame_capacity` on `Scaler`,
-  `ColorConverter`, `RgbConverter` and `Lineariser` for a swapchain cycling more buffers. Sources are bound as non-filterable float textures, so any
+  `ColorConverter`, `RgbConverter`, `Lineariser` and `ColorMapper` for a swapchain cycling more buffers; reconfiguring keeps the capacity. The client sets `IMPORT_CACHE_ENTRIES` (the decoder surface pool bound) on every one it builds. Sources are bound as non-filterable float textures, so any
   float format can be the input; destinations are `rgba16float`.
 - RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
   before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's
@@ -105,7 +105,7 @@ paths:
   computes Y'CbCr there and packs luma straight into the output buffer. Chroma is then
   downscaled in gamma space (as every encoder expects) with `scaling.downscale.chroma_filter`
   through `TapTable`s at an exact 2:1 ratio, so odd sizes round the chroma plane up and the
-  edge clamps. Horizontal siting is `ChromaSiting::Left` by default and set by `scaling.chroma_siting` for both the host and the client (the enum lives in `rusplay-core`; MPEG-2/H.264/HEVC type 0,
+  edge clamps. Horizontal siting is `ChromaSiting::Left` by default and set by `scaling.chroma_siting` for the host and for the client (which prefers the siting its decoder reads from the stream) (the enum lives in `rusplay-core`; MPEG-2/H.264/HEVC type 0,
   co-sited with even luma columns, a phase of -0.5 source pixels) or `Center`; vertical 4:2:0
   siting is always centred. The chroma plane is built by one of three paths.
   4:4:4 is one dispatch (`convert_direct`): each invocation owns one output word of luma and

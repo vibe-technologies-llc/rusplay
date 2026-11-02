@@ -1,7 +1,14 @@
-use crate::color::{
-    ColorPrimaries, ColorRange, ColorSpace, ContentLightLevel, MasteringDisplay,
-    MatrixCoefficients, TransferFunction,
+use crate::{
+    color::{
+        ColorPrimaries, ColorRange, ColorSpace, ContentLightLevel, MasteringDisplay,
+        MatrixCoefficients, TransferFunction,
+    },
+    scale::ChromaSiting,
 };
+
+const AV1_CHROMA_POSITION_VERTICAL: u32 = 1;
+const AV1_CHROMA_POSITION_COLOCATED: u32 = 2;
+const VUI_CHROMA_LOCATION_TYPES: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct SignalledColor {
@@ -11,6 +18,7 @@ pub struct SignalledColor {
     pub range: Option<ColorRange>,
     pub mastering: Option<MasteringDisplay>,
     pub content_light: Option<ContentLightLevel>,
+    pub chroma_siting: Option<ChromaSiting>,
 }
 
 impl SignalledColor {
@@ -32,6 +40,37 @@ impl SignalledColor {
             } else {
                 ColorRange::Limited
             }),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub const fn with_vui_chroma_location(self, location_type: u32) -> Self {
+        let chroma_siting = if location_type >= VUI_CHROMA_LOCATION_TYPES {
+            None
+        } else if location_type.is_multiple_of(2) {
+            Some(ChromaSiting::Left)
+        } else {
+            Some(ChromaSiting::Center)
+        };
+
+        Self {
+            chroma_siting,
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub const fn with_av1_chroma_position(self, position: u32) -> Self {
+        let chroma_siting = match position {
+            AV1_CHROMA_POSITION_VERTICAL | AV1_CHROMA_POSITION_COLOCATED => {
+                Some(ChromaSiting::Left)
+            }
+            _ => None,
+        };
+
+        Self {
+            chroma_siting,
             ..self
         }
     }
@@ -106,6 +145,44 @@ mod tests {
         let signalled = SignalledColor::default().with_h273_codes(2, 2, 2);
 
         assert_eq!(signalled, SignalledColor::default());
+    }
+
+    #[test]
+    fn vui_chroma_location_types_signal_the_horizontal_siting() {
+        let siting = |location| {
+            SignalledColor::default()
+                .with_vui_chroma_location(location)
+                .chroma_siting
+        };
+
+        for left in [0, 2, 4] {
+            assert_eq!(siting(left), Some(ChromaSiting::Left));
+        }
+        for center in [1, 3, 5] {
+            assert_eq!(siting(center), Some(ChromaSiting::Center));
+        }
+        assert_eq!(siting(6), None);
+    }
+
+    #[test]
+    fn av1_chroma_positions_are_left_sited_when_known() {
+        let siting = |position| {
+            SignalledColor::default()
+                .with_av1_chroma_position(position)
+                .chroma_siting
+        };
+
+        assert_eq!(siting(0), None);
+        assert_eq!(siting(1), Some(ChromaSiting::Left));
+        assert_eq!(siting(2), Some(ChromaSiting::Left));
+        assert_eq!(siting(3), None);
+    }
+
+    #[test]
+    fn the_siting_does_not_change_the_colour_description() {
+        let signalled = SignalledColor::default().with_vui_chroma_location(1);
+
+        assert_eq!(signalled.over(ColorSpace::default()), ColorSpace::default());
     }
 
     #[test]

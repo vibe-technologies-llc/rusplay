@@ -6,7 +6,7 @@ use rusplay_scale::{
     OutputLight, ScalePipelines, SourceChannels, ToneMapping,
 };
 
-use crate::{ClientError, FrameColor};
+use crate::{ClientError, FrameColor, present::FRAME_VIEW_CAPACITY};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MappingOptions {
@@ -188,21 +188,21 @@ impl ColorStage {
 
         let route = ColorRoute::plan(source, target, &self.options)?;
         if let Some(settings) = route.linearise {
-            match &mut self.lineariser {
-                Some(lineariser) => {
-                    lineariser.configure(device, settings)?;
-                }
-                None => {
-                    self.lineariser = Some(Lineariser::new(&self.pipelines, device, settings)?);
-                }
+            if let Some(lineariser) = &mut self.lineariser {
+                lineariser.configure(device, settings)?;
+            } else {
+                let mut lineariser = Lineariser::new(&self.pipelines, device, settings)?;
+                lineariser.set_frame_capacity(FRAME_VIEW_CAPACITY);
+                self.lineariser = Some(lineariser);
             }
         }
         if let Some(settings) = route.map {
-            match &mut self.mapper {
-                Some(mapper) => {
-                    mapper.configure(device, settings)?;
-                }
-                None => self.mapper = Some(ColorMapper::new(&self.pipelines, device, settings)?),
+            if let Some(mapper) = &mut self.mapper {
+                mapper.configure(device, settings)?;
+            } else {
+                let mut mapper = ColorMapper::new(&self.pipelines, device, settings)?;
+                mapper.set_frame_capacity(FRAME_VIEW_CAPACITY);
+                self.mapper = Some(mapper);
             }
         }
         if let Some(settings) = route.chain {

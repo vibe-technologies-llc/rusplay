@@ -35,8 +35,8 @@ pub use crate::{
     },
     dmabuf::{
         DMABUF_FEATURES, DmaBuf, DmaBufFormat, DmaBufImporter, DmaBufPlane, DmaBufTexture,
-        GpuFenceWait, GpuFenceWaiter, WriteFence, device_descriptor, release_after_submission,
-        request_fence_wait_device, wait_for_writes,
+        GpuFenceWait, GpuFenceWaiter, IMPORT_CACHE_ENTRIES, WriteFence, device_descriptor,
+        release_after_submission, request_fence_wait_device, wait_for_writes,
     },
     error::ScaleError,
     export::{ExportedFrame, MemoryHandle, can_export},

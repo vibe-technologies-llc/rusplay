@@ -18,7 +18,7 @@ use crate::{ChannelOrder, ScaleError, SourceChannels};
 
 pub const DMABUF_FEATURES: wgpu::Features = wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
 
-const IMPORT_CACHE_ENTRIES: usize = 16;
+pub const IMPORT_CACHE_ENTRIES: usize = 16;
 
 pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
     wgpu::DeviceDescriptor {

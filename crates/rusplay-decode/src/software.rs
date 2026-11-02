@@ -253,7 +253,8 @@ impl OwnedPicture {
             let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
             color = color
                 .with_h273_codes(code(sequence.pri), code(sequence.trc), code(sequence.mtrx))
-                .with_full_range(sequence.color_range != 0);
+                .with_full_range(sequence.color_range != 0)
+                .with_av1_chroma_position(sequence.chr);
         }
         if let Some(display) = self.0.mastering_display {
             let display = unsafe { display.as_ref() };

@@ -10,12 +10,12 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::ScalingConfig;
-use rusplay_core::{Resolution, Timestamp};
+use rusplay_core::{ChromaSiting, Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout, OutputLight,
-    PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
-    YuvFrame,
+    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
+    IMPORT_CACHE_ENTRIES, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
+    ScalePipelines, ScaleSettings, Scaler, Sigmoid, YuvFrame,
 };
 
 #[cfg(test)]
@@ -34,6 +34,7 @@ const OUTPUT_TEXTURES: usize = 4;
 const UPLOAD_ROW_ALIGNMENT: u32 = 4;
 const DECODED_PLANES: usize = 3;
 const SCRATCH_TEXTURES: usize = 2;
+const FRAME_VIEW_CAPACITY: usize = IMPORT_CACHE_ENTRIES;
 
 pub(crate) type SharedTarget = Arc<Mutex<Option<Resolution>>>;
 
@@ -85,7 +86,8 @@ enum UnpackInput {
     Planes(DmaBufTexture),
 }
 
-struct ScratchTexture {
+#[derive(Clone)]
+struct Image {
     texture: Arc<wgpu::Texture>,
     view: wgpu::TextureView,
 }
@@ -93,16 +95,11 @@ struct ScratchTexture {
 #[derive(Default)]
 struct Scratch {
     resolution: Option<Resolution>,
-    textures: Vec<ScratchTexture>,
+    textures: Vec<Image>,
 }
 
 impl Scratch {
-    fn ensure(
-        &mut self,
-        device: &wgpu::Device,
-        resolution: Resolution,
-        count: usize,
-    ) -> &[ScratchTexture] {
+    fn ensure(&mut self, device: &wgpu::Device, resolution: Resolution, count: usize) -> &[Image] {
         if self.resolution != Some(resolution) {
             self.resolution = Some(resolution);
             self.textures.clear();
@@ -110,7 +107,7 @@ impl Scratch {
         while self.textures.len() < count {
             let texture = Arc::new(create_texture(device, "rusplay-client-scratch", resolution));
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.textures.push(ScratchTexture { texture, view });
+            self.textures.push(Image { texture, view });
         }
 
         &self.textures
@@ -118,7 +115,7 @@ impl Scratch {
 }
 
 struct Retained {
-    texture: Arc<wgpu::Texture>,
+    image: Image,
     presented: Resolution,
     sigmoid: bool,
     frame: u32,
@@ -198,8 +195,8 @@ impl PresentStage {
         });
         if target == retained.source {
             encoder.copy_texture_to_texture(
-                retained.texture.as_image_copy(),
-                output.as_image_copy(),
+                retained.image.texture.as_image_copy(),
+                output.texture.as_image_copy(),
                 wgpu::Extent3d {
                     width: target.width,
                     height: target.height,
@@ -213,21 +210,19 @@ impl PresentStage {
                 target,
                 retained.sigmoid,
             );
-            let source_view = retained
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
             ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
                 device,
                 &mut encoder,
-                &source_view,
-                &output_view,
+                &retained.image.view,
+                &output.view,
             );
         }
         self.gpu.queue.submit([encoder.finish()]);
         retained.presented = target;
 
-        links.sink.present(retained.frame(Instant::now(), output));
+        links
+            .sink
+            .present(retained.frame(Instant::now(), output.texture));
 
         Ok(())
     }
@@ -243,18 +238,15 @@ impl PresentStage {
         let device = &self.gpu.device;
         let route = self.color.route(device, decoded, display)?;
 
-        let (layout, input) = match &video.decoded.buffer {
-            DecodedBuffer::Cpu(_) => (PlaneLayout::Planar, UnpackInput::Upload),
-            DecodedBuffer::DmaBuf(frame) => {
-                let importer = match &mut self.importer {
-                    Some(importer) => importer,
-                    None => self.importer.insert(DmaBufImporter::new(device)?),
-                };
-                let planes = importer.import(&describe(frame.image())?)?;
-                (PlaneLayout::SemiPlanar, UnpackInput::Planes(planes))
-            }
-        };
-        let settings = convert_settings(&self.options, source, decoded, route.unpack, layout);
+        let (layout, input) = unpack_input(&mut self.importer, device, &video.decoded.buffer)?;
+        let settings = convert_settings(
+            &self.options,
+            source,
+            decoded,
+            route.unpack,
+            layout,
+            video.siting,
+        );
         let unpacker = ensure_unpacker(&self.pipelines, device, &mut self.unpacker, settings)?;
 
         let lease = match &video.decoded.buffer {
@@ -271,7 +263,6 @@ impl PresentStage {
             links.counters.frames_unpresented.increment();
             return Ok(());
         };
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
         let scale = (target != source)
             .then(|| scale_settings(&self.options.scaling, source, target, !display.is_hdr()));
 
@@ -284,10 +275,10 @@ impl PresentStage {
             .ensure(device, source, (passes - 1).min(SCRATCH_TEXTURES));
         let unscaled = scale
             .is_some()
-            .then(|| Arc::clone(&scratch[(passes - 2) % SCRATCH_TEXTURES].texture));
+            .then(|| scratch[(passes - 2) % SCRATCH_TEXTURES].clone());
         let chain = Chain {
             scratch,
-            output: &output_view,
+            output: &output.view,
             passes,
         };
         let mut pass = 0;
@@ -314,7 +305,7 @@ impl PresentStage {
                 device,
                 &mut encoder,
                 chain.source(pass),
-                &output_view,
+                &output.view,
             );
         }
         self.gpu.queue.submit([encoder.finish()]);
@@ -322,7 +313,7 @@ impl PresentStage {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
         let retained = Retained {
-            texture: unscaled.unwrap_or_else(|| Arc::clone(&output)),
+            image: unscaled.unwrap_or_else(|| output.clone()),
             presented: target,
             sigmoid: !display.is_hdr(),
             frame: video.number,
@@ -336,10 +327,30 @@ impl PresentStage {
 
         let submitted_at = Instant::now();
         record_presented(&links.counters, video.captured_micros, submitted_at);
-        links.sink.present(retained.frame(submitted_at, output));
+        links
+            .sink
+            .present(retained.frame(submitted_at, output.texture));
         self.retained = Some(retained);
 
         Ok(())
+    }
+}
+
+fn unpack_input(
+    importer: &mut Option<DmaBufImporter>,
+    device: &wgpu::Device,
+    buffer: &DecodedBuffer,
+) -> Result<(PlaneLayout, UnpackInput), ClientError> {
+    match buffer {
+        DecodedBuffer::Cpu(_) => Ok((PlaneLayout::Planar, UnpackInput::Upload)),
+        DecodedBuffer::DmaBuf(frame) => {
+            let importer = match importer {
+                Some(importer) => importer,
+                None => importer.insert(DmaBufImporter::new(device)?),
+            };
+            let planes = importer.import(&describe(frame.image())?)?;
+            Ok((PlaneLayout::SemiPlanar, UnpackInput::Planes(planes)))
+        }
     }
 }
 
@@ -351,7 +362,7 @@ fn record_presented(counters: &Counters, captured_micros: u64, submitted_at: Ins
 }
 
 struct Chain<'a> {
-    scratch: &'a [ScratchTexture],
+    scratch: &'a [Image],
     output: &'a wgpu::TextureView,
     passes: usize,
 }
@@ -469,6 +480,7 @@ fn convert_settings(
     color: FrameColor,
     output: OutputLight,
     layout: PlaneLayout,
+    signalled_siting: Option<ChromaSiting>,
 ) -> RgbConvertSettings {
     RgbConvertSettings {
         resolution,
@@ -479,7 +491,7 @@ fn convert_settings(
         transfer: color.space.transfer,
         output,
         chroma_filter: options.scaling.upscale.chroma_filter,
-        chroma_siting: options.scaling.chroma_siting,
+        chroma_siting: signalled_siting.unwrap_or(options.scaling.chroma_siting),
         row_alignment: UPLOAD_ROW_ALIGNMENT,
     }
 }
@@ -497,10 +509,14 @@ fn ensure_unpacker<'a>(
             unpacker.upload = None;
             unpacker
         }
-        None => Unpacker {
-            converter: RgbConverter::new(pipelines, device, settings)?,
-            upload: None,
-        },
+        None => {
+            let mut converter = RgbConverter::new(pipelines, device, settings)?;
+            converter.set_frame_capacity(FRAME_VIEW_CAPACITY);
+            Unpacker {
+                converter,
+                upload: None,
+            }
+        }
     };
 
     Ok(slot.insert(unpacker))
@@ -512,12 +528,13 @@ fn ensure_scaler<'a>(
     slot: &'a mut Option<Scaler>,
     settings: ScaleSettings,
 ) -> Result<&'a mut Scaler, ClientError> {
-    let scaler = match slot.take() {
-        Some(mut scaler) => {
-            scaler.configure(device, settings)?;
-            scaler
-        }
-        None => Scaler::new(pipelines, device, settings)?,
+    let scaler = if let Some(mut scaler) = slot.take() {
+        scaler.configure(device, settings)?;
+        scaler
+    } else {
+        let mut scaler = Scaler::new(pipelines, device, settings)?;
+        scaler.set_frame_capacity(FRAME_VIEW_CAPACITY);
+        scaler
     };
 
     Ok(slot.insert(scaler))
@@ -628,32 +645,30 @@ fn check_planes(cpu: &CpuFrame, layout: &FrameLayout) -> Result<(), ClientError>
 #[derive(Default)]
 struct OutputPool {
     resolution: Option<Resolution>,
-    textures: Vec<Arc<wgpu::Texture>>,
+    images: Vec<Image>,
 }
 
 impl OutputPool {
-    fn acquire(
-        &mut self,
-        device: &wgpu::Device,
-        resolution: Resolution,
-    ) -> Option<Arc<wgpu::Texture>> {
+    fn acquire(&mut self, device: &wgpu::Device, resolution: Resolution) -> Option<Image> {
         if self.resolution != Some(resolution) {
             self.resolution = Some(resolution);
-            self.textures.clear();
+            self.images.clear();
         }
 
         if let Some(free) = self
-            .textures
+            .images
             .iter()
-            .find(|texture| Arc::strong_count(texture) == 1)
+            .find(|image| Arc::strong_count(&image.texture) == 1)
         {
-            return Some(Arc::clone(free));
+            return Some(free.clone());
         }
 
-        if self.textures.len() < OUTPUT_TEXTURES {
+        if self.images.len() < OUTPUT_TEXTURES {
             let texture = Arc::new(create_texture(device, "rusplay-client-output", resolution));
-            self.textures.push(Arc::clone(&texture));
-            return Some(texture);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let image = Image { texture, view };
+            self.images.push(image.clone());
+            return Some(image);
         }
 
         None
@@ -678,6 +693,62 @@ fn create_texture(device: &wgpu::Device, label: &str, resolution: Resolution) ->
             | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod siting_tests {
+    use rusplay_config::Config;
+    use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat};
+
+    use super::*;
+
+    fn settings_for(configured: ChromaSiting, signalled: Option<ChromaSiting>) -> ChromaSiting {
+        let mut scaling = Config::default().scaling;
+        scaling.chroma_siting = configured;
+        let options = PresentOptions {
+            scaling,
+            mapping: MappingOptions::from(&Config::default().color),
+            display: ColorVolume::srgb_display(),
+        };
+        let color = FrameColor::of_stream(
+            ColorSpace::default(),
+            PixelFormat {
+                chroma: ChromaSubsampling::Yuv420,
+                depth: BitDepth::Eight,
+            },
+        );
+
+        convert_settings(
+            &options,
+            Resolution::new(64, 64),
+            color,
+            OutputLight::Encoded,
+            PlaneLayout::Planar,
+            signalled,
+        )
+        .chroma_siting
+    }
+
+    #[test]
+    fn the_signalled_siting_wins_over_the_configured_one() {
+        assert_eq!(
+            settings_for(ChromaSiting::Left, Some(ChromaSiting::Center)),
+            ChromaSiting::Center
+        );
+        assert_eq!(
+            settings_for(ChromaSiting::Center, Some(ChromaSiting::Left)),
+            ChromaSiting::Left
+        );
+    }
+
+    #[test]
+    fn an_unsignalled_stream_uses_the_configured_siting() {
+        assert_eq!(
+            settings_for(ChromaSiting::Center, None),
+            ChromaSiting::Center
+        );
+        assert_eq!(settings_for(ChromaSiting::Left, None), ChromaSiting::Left);
+    }
 }
 
 #[cfg(all(test, feature = "software", feature = "vaapi"))]
@@ -812,11 +883,13 @@ mod tests {
             let Some(picture) = decoder.decode(&frame).unwrap() else {
                 continue;
             };
+            let siting = picture.color.chroma_siting;
             let video = DecodedVideo {
                 decoded: picture,
                 number,
                 keyframe: frame.keyframe,
                 color: config.video.color,
+                siting,
                 captured_micros: 0,
                 received_at: Instant::now(),
                 decoded_at: Instant::now(),

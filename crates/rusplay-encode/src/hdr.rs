@@ -187,6 +187,7 @@ pub(crate) mod fixtures {
             range: Some(color.range),
             mastering: color.hdr.mastering,
             content_light: color.hdr.content_light,
+            chroma_siting: None,
         }
     }
 }

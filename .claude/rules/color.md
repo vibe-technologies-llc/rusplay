@@ -84,7 +84,7 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
 - `SignalledColor` is what a bitstream said: every field optional (primaries, transfer, matrix,
   range, mastering display, content light). `with_h273_codes` maps codes and leaves unknown or
   unspecified (2) ones unset (transfer codes 6, 14 and 15 and matrix code 5 are the BT.709 and
-  BT.601 aliases), `with_full_range` sets the range, and `over(ColorSpace)` replaces
+  BT.601 aliases), `with_full_range` sets the range, `with_vui_chroma_location` (H.264/HEVC types 0 to 5, odd is centred) and `with_av1_chroma_position` (vertical and co-located are both left, so AV1 never signals centred) set `chroma_siting`, which `over` does not touch because it is not part of a `ColorSpace`, and `over(ColorSpace)` replaces
   exactly the fields that were signalled. `ColorPrimaries::from_chromaticities` names a known
   set when the chromaticities match it exactly and is `Custom` otherwise, which is how mastering
   display primaries read from SEI or AV1 metadata come back as `Bt2020` or `DisplayP3`.
