@@ -3,8 +3,9 @@
 - **No comments, in any language.** No `//`, `///`, `//!` or `/* */` in Rust, none in WGSL
   shaders, none in TOML manifests. What a comment would say becomes a name, a type or an extracted
   function; design rationale goes into these rules files or `docs/`. When touching a file that
-  has a comment, delete it. Checked by `scripts/check-comments.sh` and the `PostToolUse` hook
-  `.claude/hooks/rust-edit.sh`, which rejects an edit that adds one.
+  has a comment, delete it. Checked by `scripts/check-comments.sh`, which scans every `*.rs`, `*.wgsl` and
+  `*.toml` outside `target/`, and the `PostToolUse` hook `.claude/hooks/rust-edit.sh`, which
+  rejects an edit to one of those files that adds one.
 - **Paragraphs by kind.** Group bindings together, then assertions, then the next bindings, with
   a blank line between groups. Binding the subject of a test is its own paragraph. A preference,
   not a law, when following the data flow reads better.

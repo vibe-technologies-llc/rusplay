@@ -11,7 +11,7 @@ file=$(perl -MJSON::PP -e '
 
 case "$file" in
     *.rs) rust-formatter --quiet "$file" >/dev/null 2>&1 ;;
-    *.wgsl) ;;
+    *.wgsl | *.toml) ;;
     *) exit 0 ;;
 esac
 
