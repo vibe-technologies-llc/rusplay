@@ -2,9 +2,9 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, Sender},
+        mpsc::{Receiver, RecvTimeoutError, Sender},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use rusplay_config::VideoDecoderConfig;
@@ -17,6 +17,8 @@ use crate::{
     slot::Slot,
     stats::Counters,
 };
+
+const STOP_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub(crate) struct DecodedVideo {
@@ -80,7 +82,18 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
     let mut active = None;
     let mut skipping = false;
 
-    while let Ok(input) = links.queue.recv() {
+    loop {
+        let input = match links.queue.recv_timeout(STOP_POLL) {
+            Ok(input) => input,
+            Err(RecvTimeoutError::Timeout) => {
+                if links.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+
         if links.stop.load(Ordering::Relaxed) {
             break;
         }
@@ -175,5 +188,34 @@ mod tests {
 
         assert!(matches!(result, Err(ClientError::Decode(_))));
         assert_eq!(links.counters.snapshot().frames_decoded, 0);
+    }
+
+    #[test]
+    fn the_stop_flag_ends_decode_while_the_queue_sender_is_alive() {
+        let (queue, queued) = mpsc::sync_channel(4);
+        let (feedback, _feedback_received) = mpsc::channel();
+        let output = Arc::new(Slot::new());
+        let links = DecodeLinks {
+            queue: queued,
+            output: Arc::clone(&output),
+            feedback,
+            stop: Arc::new(AtomicBool::new(false)),
+            counters: Arc::new(Counters::default()),
+        };
+        let stop = Arc::clone(&links.stop);
+        let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+        let (finished, finished_received) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            finished.send(run(&config, &links)).ok();
+        });
+        stop.store(true, Ordering::Relaxed);
+
+        let result = finished_received.recv_timeout(Duration::from_secs(10));
+        worker.join().unwrap();
+
+        assert!(matches!(result, Ok(Ok(()))));
+        assert!(output.take().is_none());
+        drop(queue);
     }
 }

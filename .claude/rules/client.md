@@ -79,6 +79,10 @@ paths:
   full queue drops the `Open` and the first frame opens the decoder as before. The decoder is also
   reopened when a frame's description names another codec; an open failure ends the stream with
   `Decode`, and `connect` does not wait for it.
+  The decode loop waits on the queue with a 50 ms `recv_timeout` and checks the stop flag on each
+  wake, so a stage that fails while `connect` still holds the queue's sender (the audio decoder
+  failing to open) stops the decode thread, which closes the slot and ends present, instead of
+  leaving `connect` joined on stages that never end.
 - Encoded frames carry the host's capture time (`VideoFrameHeader`, stripped by the receive
   stage) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
   `PresentedFrame::captured`. `PresentedFrame` also has `received_at`, `decoded_at` and
