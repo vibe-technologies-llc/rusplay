@@ -145,6 +145,11 @@ impl Scaler {
         Ok(reconfigured)
     }
 
+    pub fn set_frame_capacity(&mut self, frames: usize) {
+        self.sources.set_capacity(frames);
+        self.destinations.set_capacity(frames);
+    }
+
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -378,12 +383,14 @@ pub(crate) const fn resolution_pair(resolution: Resolution) -> (u32, u32) {
 #[derive(Debug)]
 pub(crate) struct GroupCache<K> {
     entries: VecDeque<(K, wgpu::BindGroup)>,
+    capacity: usize,
 }
 
 impl<K> Default for GroupCache<K> {
     fn default() -> Self {
         Self {
             entries: VecDeque::with_capacity(CACHED_FRAME_GROUPS),
+            capacity: CACHED_FRAME_GROUPS,
         }
     }
 }
@@ -394,16 +401,30 @@ impl<K: PartialEq + Clone> GroupCache<K> {
         key: &K,
         create: impl FnOnce() -> wgpu::BindGroup,
     ) -> wgpu::BindGroup {
-        if let Some((_, group)) = self.entries.iter().find(|(cached, _)| cached == key) {
-            return group.clone();
+        let hit = self
+            .entries
+            .iter()
+            .position(|(cached, _)| cached == key)
+            .and_then(|position| self.entries.remove(position));
+        if let Some(entry) = hit {
+            let group = entry.1.clone();
+            self.entries.push_back(entry);
+            return group;
         }
 
         let group = create();
-        if self.entries.len() == CACHED_FRAME_GROUPS {
+        while self.entries.len() >= self.capacity {
             self.entries.pop_front();
         }
         self.entries.push_back((key.clone(), group.clone()));
         group
+    }
+
+    pub(crate) fn set_capacity(&mut self, frames: usize) {
+        self.capacity = frames.max(1);
+        while self.entries.len() > self.capacity {
+            self.entries.pop_front();
+        }
     }
 
     #[cfg(test)]
@@ -746,6 +767,62 @@ mod tests {
         }
 
         assert_eq!(groups.len(), CACHED_FRAME_GROUPS);
+    }
+
+    #[test]
+    fn a_recently_used_view_survives_a_stream_of_new_ones() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+        let mut groups = GroupCache::<wgpu::TextureView>::default();
+        let steady = testing::view(&testing::upload(gpu, &Image::pattern(4, 4, 0)));
+        let mut created = 0;
+
+        for _ in 0..CACHED_FRAME_GROUPS * 3 {
+            let fresh = testing::view(&testing::upload(gpu, &Image::pattern(4, 4, 1)));
+            for view in [&steady, &fresh] {
+                groups.get_or_create(view, || {
+                    created += 1;
+                    pipelines.source_group(&gpu.device, view)
+                });
+            }
+        }
+
+        assert_eq!(created, 1 + CACHED_FRAME_GROUPS * 3);
+        assert_eq!(groups.len(), CACHED_FRAME_GROUPS);
+    }
+
+    #[test]
+    fn the_cache_follows_the_frame_capacity() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+        let mut groups = GroupCache::<wgpu::TextureView>::default();
+        let views: Vec<_> = (0..16)
+            .map(|seed| testing::view(&testing::upload(gpu, &Image::pattern(4, 4, seed))))
+            .collect();
+        let mut created = 0;
+
+        groups.set_capacity(views.len());
+        for _ in 0..3 {
+            for view in &views {
+                groups.get_or_create(view, || {
+                    created += 1;
+                    pipelines.source_group(&gpu.device, view)
+                });
+            }
+        }
+
+        assert_eq!(created, views.len());
+        assert_eq!(groups.len(), views.len());
+
+        groups.set_capacity(2);
+
+        assert_eq!(groups.len(), 2);
     }
 
     #[test]

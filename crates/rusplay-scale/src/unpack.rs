@@ -154,6 +154,14 @@ impl RgbConverter {
         })
     }
 
+    pub fn set_frame_capacity(&mut self, frames: usize) {
+        self.inputs.set_capacity(frames);
+        self.planes.set_capacity(frames);
+        self.targets.set_capacity(frames);
+        self.lut_targets.set_capacity(frames);
+        self.chain_targets.set_capacity(frames);
+    }
+
     pub fn settings(&self) -> RgbConvertSettings {
         self.settings
     }

@@ -79,8 +79,10 @@ paths:
   is allocated on the per-frame path except a bind group for a frame view not seen recently.
 - Bind groups are split by lifetime: group 0 is the source texture, group 1 the storage
   destination, group 2 the pass's tables and params. Frame views get groups 0 and 1 from a small
-  per-scaler `GroupCache` keyed by `TextureView` (`CACHED_FRAME_GROUPS` entries), sized for a
-  capture or decode swapchain cycling a few buffers. Sources are bound as non-filterable float textures, so any
+  per-scaler `GroupCache` keyed by `TextureView`: a least-recently-used cache (a hit moves the
+  entry to the back, so a view used every frame survives a stream of new ones) of
+  `CACHED_FRAME_GROUPS` entries by default, resized by `set_frame_capacity` on `Scaler`,
+  `ColorConverter`, `RgbConverter` and `Lineariser` for a swapchain cycling more buffers. Sources are bound as non-filterable float textures, so any
   float format can be the input; destinations are `rgba16float`.
 - RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
   before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's

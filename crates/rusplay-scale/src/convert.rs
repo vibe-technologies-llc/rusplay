@@ -402,6 +402,11 @@ impl ColorConverter {
         })
     }
 
+    pub fn set_frame_capacity(&mut self, frames: usize) {
+        self.sources.set_capacity(frames);
+        self.outputs.set_capacity(frames);
+    }
+
     pub fn settings(&self) -> ConvertSettings {
         self.settings
     }
