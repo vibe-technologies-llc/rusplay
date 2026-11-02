@@ -203,7 +203,8 @@ paths:
     sRGB source in a format with an sRGB view is read through that view; anything else is
     linearised by a `Lineariser` at the capture size (PQ and HLG as display light relative to the
     source's reference white); then scale, map and convert with `InputLight::Linear`. Upscaling is
-    always in linear light, since the sigmoid needs it.
+    always in linear light, since the sigmoid needs it. The sigmoid is left off when the source transfer is PQ or HLG, whose linear
+    light runs above reference white and would be clamped by the sigmoid's 0..1 input.
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
