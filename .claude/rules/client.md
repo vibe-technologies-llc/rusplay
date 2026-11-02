@@ -334,14 +334,17 @@ paths:
 
 ## Host book
 
-- `HostBook` is the client's saved hosts: `SavedHost { name, address, peer, profile }`. It owns
+- `HostBook` is the client's saved hosts: `SavedHost { name, address, host_id, peer, profile }`. It owns
   the `PeerStore` from `PeerStore::open_client` (secrets, keyed by `PeerId`) and a sibling text
   file, the store's path with `.book` added (`paired-hosts.book` by default, so
-  `peers.client_file` moves both). The book holds no secret: line one is `rusplay-host-book 2`,
-  then one line per host, `<peer id hex or -> <address> <name>`, optionally followed by the
-  host's profile as TOML, one tab-prefixed line per TOML line. Version 1 (no profile lines) still
-  loads, with empty profiles, and the next `save` writes version 2; a newer version is refused.
-  Loading refuses a bad header, address, id or name, duplicate addresses or ids, a profile line
+  `peers.client_file` moves both). The book holds no secret: line one is `rusplay-host-book 3`,
+  then one line per host, `<peer id hex or -> <host id hex or -> <address> <name>`, optionally followed by the
+  host's profile as TOML, one tab-prefixed line per TOML line. `host_id` is the
+  `HostId` the host announces in discovery (absent for a host never seen announcing, or one that
+  announces none; the all-zero id is stored as absent). Version 1 (no profile lines) and version 2
+  (no host id field) still load, with empty profiles and no host ids, and the next `save` writes
+  version 3; a newer version is refused.
+  Loading refuses a bad header, address, peer id, host id or name, duplicate addresses, peer ids or host ids, a profile line
   before any host or in a version 1 book, and a profile that is not valid `HostProfile` TOML
   (unknown keys included) with `HostBookCorrupt` and the line number; an id missing from the
   store loads as unpaired.

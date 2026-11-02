@@ -8,10 +8,6 @@
 # Colour
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
 
-# Networking
-- [S] `app-host-list-busy`: show `DiscoveredHost::busy` in the app's host list (`HostList::merge_discovered` and its view) so a host that is mid-session reads as busy before the user tries to connect; the announce already carries the flag
-- [S] `app-host-list-match-id`: match a discovered host to its saved pairing by `DiscoveredHost::id` (the announce already carries it) instead of by display name and address in `HostList::merge_discovered`, and store the id with the saved host (`rusplay-client` host book) so a rename or an address change keeps the pairing
-
 # Client app
 - [S] `app-stream-stats-end-to-end`: add the capture-to-present figure to the stream header's statistics (`stats.rs` in `rusplay-app` shows client-side latency only, from `PresentedFrame`'s `received_at`, `decoded_at` and `submitted_at`), using `ClientStats::capture_to_present`, and a picture overlay, which has to be drawn in `compose.wgsl` or an extra subsurface since the stream subsurface sits above gpui's surface
 - [XL] `app-host-mode`: host from the desktop app. `ui.md` calls the app a thin shell over `rusplay-client` and `rusplay-host`, but `rusplay-app` does not depend on `rusplay-host` at all; either build a hosting page (portal session, PIN display, paired clients, stats) or correct the rule. Split before starting

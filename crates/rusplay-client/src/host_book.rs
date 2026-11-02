@@ -6,23 +6,26 @@ use std::{
 
 use rusplay_config::{ConfigError, HostProfile, PeersConfig};
 use rusplay_net::{MAX_PEER_NAME_BYTES, PeerRecord, PeerStore, write_owner_only};
-use rusplay_protocol::PeerId;
+use rusplay_protocol::{HostId, PeerId};
 
 use crate::ClientError;
 
 const HEADER_PREFIX: &str = "rusplay-host-book ";
 const FIRST_VERSION: u32 = 1;
 const PROFILE_VERSION: u32 = 2;
-const CURRENT_VERSION: u32 = PROFILE_VERSION;
+const HOST_ID_VERSION: u32 = 3;
+const CURRENT_VERSION: u32 = HOST_ID_VERSION;
 const PROFILE_LINE_MARK: char = '\t';
 const UNPAIRED: &str = "-";
 const BOOK_EXTENSION: &str = "book";
 const PEER_ID_HEX_LEN: usize = PeerId::LEN * 2;
+const NO_HOST_ID: &str = "-";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedHost {
     pub name: String,
     pub address: SocketAddr,
+    pub host_id: Option<HostId>,
     pub peer: Option<PeerRecord>,
     pub profile: HostProfile,
 }
@@ -101,6 +104,11 @@ fn render(hosts: &[SavedHost]) -> Result<String, ConfigError> {
             None => text.push_str(UNPAIRED),
         }
         text.push(' ');
+        match host.host_id.filter(|id| !id.is_none()) {
+            Some(id) => text.push_str(&id.to_string()),
+            None => text.push_str(NO_HOST_ID),
+        }
+        text.push(' ');
         text.push_str(&host.address.to_string());
         text.push(' ');
         text.push_str(&host.name);
@@ -126,6 +134,18 @@ fn parse_version(header: Option<&str>) -> Option<u32> {
 
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= MAX_PEER_NAME_BYTES && !name.chars().any(char::is_control)
+}
+
+fn parse_host_id(text: &str) -> Result<Option<HostId>, ()> {
+    if text == NO_HOST_ID {
+        return Ok(None);
+    }
+
+    match HostId::from_hex(text) {
+        Some(id) if id.is_none() => Ok(None),
+        Some(id) => Ok(Some(id)),
+        None => Err(()),
+    }
 }
 
 fn valid_peer_id(text: &str) -> bool {
@@ -175,14 +195,25 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
 
         finish_profile(&mut hosts, profile.take(), &corrupt)?;
 
-        let mut fields = line.splitn(3, ' ');
-        let (Some(id), Some(address), Some(name)) = (fields.next(), fields.next(), fields.next())
+        let field_count = if version >= HOST_ID_VERSION { 4 } else { 3 };
+        let mut fields = line.splitn(field_count, ' ');
+        let id = fields.next();
+        let host_id_text = if version >= HOST_ID_VERSION {
+            fields.next()
+        } else {
+            Some(NO_HOST_ID)
+        };
+        let (Some(id), Some(host_id_text), Some(address), Some(name)) =
+            (id, host_id_text, fields.next(), fields.next())
         else {
             return Err(corrupt(line_number));
         };
 
         let address: SocketAddr = address.parse().map_err(|_| corrupt(line_number))?;
-        let duplicate = hosts.iter().any(|host| host.address == address)
+        let host_id = parse_host_id(host_id_text).map_err(|()| corrupt(line_number))?;
+        let duplicate = hosts
+            .iter()
+            .any(|host| host.address == address || (host_id.is_some() && host.host_id == host_id))
             || (id != UNPAIRED && paired_ids.contains(&id));
         if !valid_peer_id(id) || !valid_name(name) || duplicate {
             return Err(corrupt(line_number));
@@ -199,6 +230,7 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
         hosts.push(SavedHost {
             name: name.to_owned(),
             address,
+            host_id,
             peer,
             profile: HostProfile::default(),
         });
@@ -235,6 +267,7 @@ mod tests {
 
     const HEADER_V1: &str = "rusplay-host-book 1";
     const HEADER_V2: &str = "rusplay-host-book 2";
+    const HEADER_V3: &str = "rusplay-host-book 3";
 
     fn record(name: &str, byte: u8) -> PeerRecord {
         PeerRecord::new(name, PeerSecret::from_bytes([byte; 32])).unwrap()
@@ -244,8 +277,16 @@ mod tests {
         SavedHost {
             name: name.to_owned(),
             address: address.parse().unwrap(),
+            host_id: None,
             peer,
             profile: HostProfile::default(),
+        }
+    }
+
+    fn identified(name: &str, address: &str, byte: u8) -> SavedHost {
+        SavedHost {
+            host_id: Some(HostId([byte; HostId::LEN])),
+            ..host(name, address, None)
         }
     }
 
@@ -411,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_book_loads_without_profiles_and_is_saved_as_version_two() {
+    fn a_version_one_book_loads_without_profiles_and_is_saved_as_version_three() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("paired-hosts.book");
         fs::write(
@@ -426,7 +467,7 @@ mod tests {
 
         assert_eq!(loaded.len(), 2);
         assert!(loaded.iter().all(|host| host.profile.is_empty()));
-        assert!(fs::read_to_string(&path).unwrap().starts_with(HEADER_V2));
+        assert!(fs::read_to_string(&path).unwrap().starts_with(HEADER_V3));
         assert_eq!(open(directory.path()).hosts(), loaded);
     }
 
@@ -440,7 +481,7 @@ mod tests {
             .unwrap();
 
         let text = fs::read_to_string(book.path()).unwrap();
-        assert_eq!(text, format!("{HEADER_V2}\n- 10.0.0.3:47800 Den\n"));
+        assert_eq!(text, format!("{HEADER_V3}\n- - 10.0.0.3:47800 Den\n"));
     }
 
     #[test]
@@ -461,7 +502,92 @@ mod tests {
                 format!("{HEADER_V1}\n- 10.0.0.2:1 a\n\tpresent_mode = \"fifo\"\n"),
                 3,
             ),
-            ("rusplay-host-book 3\n".to_owned(), 1),
+            ("rusplay-host-book 4\n".to_owned(), 1),
+        ];
+
+        for (text, line) in cases {
+            fs::write(&path, &text).unwrap();
+
+            let result = HostBook::from_store(
+                PeerStore::open(directory.path().join("paired-hosts")).unwrap(),
+            );
+
+            assert!(
+                matches!(result, Err(ClientError::HostBookCorrupt { line: found, .. }) if found == line),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_ids_survive_a_reload_next_to_hosts_without_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut book = open(directory.path());
+        let hosts = vec![
+            identified("desk", "10.0.0.2:47800", 7),
+            host("plain", "10.0.0.3:47800", None),
+            SavedHost {
+                peer: Some(record("lap", 2)),
+                ..identified("lap", "10.0.0.4:47800", 9)
+            },
+        ];
+
+        book.save(hosts.clone()).unwrap();
+        let reloaded = open(directory.path());
+
+        assert_eq!(reloaded.hosts(), hosts);
+        assert_eq!(reloaded.hosts()[1].host_id, None);
+    }
+
+    #[test]
+    fn a_version_two_book_loads_without_host_ids_and_keeps_profiles() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("paired-hosts.book");
+        fs::write(
+            &path,
+            format!("{HEADER_V2}\n- 10.0.0.2:47800 old name\n\tkeyboard = false\n- 10.0.0.3:47800 other\n"),
+        )
+        .unwrap();
+
+        let mut book = open(directory.path());
+        let loaded = book.hosts().to_vec();
+        book.save(loaded.clone()).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.iter().all(|host| host.host_id.is_none()));
+        assert_eq!(loaded[0].name, "old name");
+        assert_eq!(loaded[0].profile.keyboard, Some(false));
+        assert!(fs::read_to_string(&path).unwrap().starts_with(HEADER_V3));
+        assert_eq!(open(directory.path()).hosts(), loaded);
+    }
+
+    #[test]
+    fn the_unset_announced_id_is_stored_as_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut book = open(directory.path());
+        let zeroed = SavedHost {
+            host_id: Some(HostId::NONE),
+            ..host("a", "10.0.0.2:47800", None)
+        };
+
+        book.save(vec![zeroed]).unwrap();
+
+        assert_eq!(open(directory.path()).hosts()[0].host_id, None);
+    }
+
+    #[test]
+    fn corrupt_host_ids_are_refused_with_the_line_number() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("paired-hosts.book");
+        let id = HostId([7; HostId::LEN]).to_string();
+        let cases = [
+            (format!("{HEADER_V3}\n- zz 10.0.0.2:1 a\n"), 2),
+            (format!("{HEADER_V3}\n- 0707 10.0.0.2:1 a\n"), 2),
+            (format!("{HEADER_V3}\n- 10.0.0.2:1 a\n"), 2),
+            (
+                format!("{HEADER_V3}\n- {id} 10.0.0.2:1 a\n- {id} 10.0.0.3:1 b\n"),
+                3,
+            ),
         ];
 
         for (text, line) in cases {

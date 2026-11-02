@@ -367,6 +367,7 @@ impl HostsView {
                                     .child(host.name.clone()),
                             )
                             .children(host.peer.is_some().then(|| badge("Paired", Tone::Success)))
+                            .children(host.busy.then(|| badge("Busy", Tone::Warning)))
                             .child(origin),
                     )
                     .child(
@@ -785,7 +786,9 @@ fn field_label(label: &'static str) -> impl IntoElement + use<> {
 }
 
 fn availability_color(host: &HostEntry) -> gpui::Rgba {
-    if host.online {
+    if host.busy {
+        theme::warning()
+    } else if host.online {
         theme::success()
     } else {
         theme::text_subtle()
@@ -794,6 +797,7 @@ fn availability_color(host: &HostEntry) -> gpui::Rgba {
 
 const fn availability(host: &HostEntry) -> &'static str {
     match (host.online, host.origin) {
+        (true, _) if host.busy => "busy in a session",
         (true, HostOrigin::Discovered) => "found on the network",
         (true, HostOrigin::Added) => "online",
         (false, _) => "not seen",

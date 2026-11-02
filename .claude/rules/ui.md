@@ -76,11 +76,19 @@ paths:
   scan blocks for `network.discovery_scan_ms`) when the app starts, on each switch to the Hosts
   page and from the Refresh button, one scan at a time. The options come from the client config
   re-read for that scan (`network.discovery_port`, `discovery_group`). `HostList::merge_discovered`
-  matches announces to entries by address first, then by a unique display name for a saved entry
-  that was not seen at its address (the host moved), keeps a saved entry's own name, and adds the
-  rest as `HostOrigin::Discovered` entries that disappear again when a later scan misses them.
-  Pairing turns a discovered entry into an added one. Announces carry no host id, so the name
-  match is a hint; pairing authenticates the host.
+  matches announces to entries in three passes: by the announced `HostId` (an entry's `host_id`;
+  the id wins over everything, so a rename or a new address keeps the saved entry, which follows
+  the announce to its new address unless another entry holds that address), then by address (an
+  entry without an id learns the announced one; an entry with a different id is a different
+  host and is not matched), then, for an announce still unplaced, by a unique display name among
+  saved entries that have no id yet (a book from before ids, or a host that announces none).
+  It keeps a saved entry's own name, adds the rest as `HostOrigin::Discovered` entries carrying
+  the announced id, and drops them again when a later scan misses them. Each scan also sets
+  `HostEntry::busy` from the announce (cleared for hosts not seen), which shows as a `Busy`
+  badge, a warning-coloured dot and "busy in a session" on the row. The announce is
+  unauthenticated, so the id is a hint; pairing authenticates the host. Learning an id is a
+  change to `saved_hosts`, so the scan is persisted. `Change address` clears the entry's id: the
+  next scan learns whichever host answers at the new address. Selection is kept by entry id.
 - Saved hosts live in the client host book (`rusplay_client::HostBook`, `client.md`), opened once
   at startup from the config's `peers` section; a change to `peers.client_file` applies at the
   next start. `HostList` maps between entries and `SavedHost`s: `from_saved` at startup and
