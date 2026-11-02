@@ -3,7 +3,7 @@ use std::{
     ffi::OsString,
     fmt, fs,
     io::{self, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -25,6 +25,8 @@ const CLIENT_FILE: &str = "paired-hosts";
 const STAGING_SUFFIX: &str = "new";
 const OWNER_ONLY_FILE: u32 = 0o600;
 const OWNER_ONLY_DIRECTORY: u32 = 0o700;
+const GROUP_AND_OTHER_BITS: u32 = 0o077;
+const PERMISSION_BITS: u32 = 0o777;
 const ID_DOMAIN: &[u8] = b"rusplay peer id";
 
 #[derive(Clone)]
@@ -154,22 +156,65 @@ impl FileStamp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreExposure {
+    ReadableByOthers { mode: u32 },
+    OwnedByAnotherUser { uid: u32 },
+}
+
+impl fmt::Display for StoreExposure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadableByOthers { mode } => {
+                write!(formatter, "is readable by other users (mode {mode:04o})")
+            }
+            Self::OwnedByAnotherUser { uid } => {
+                write!(formatter, "is owned by another user (uid {uid})")
+            }
+        }
+    }
+}
+
+impl StoreExposure {
+    fn of(metadata: &fs::Metadata) -> Option<Self> {
+        let uid = metadata.uid();
+        if uid != rustix::process::geteuid().as_raw() {
+            return Some(Self::OwnedByAnotherUser { uid });
+        }
+
+        let mode = metadata.mode() & PERMISSION_BITS;
+        (mode & GROUP_AND_OTHER_BITS != 0).then_some(Self::ReadableByOthers { mode })
+    }
+}
+
+struct Loaded {
+    records: Vec<PeerRecord>,
+    stamp: Option<FileStamp>,
+    exposure: Option<StoreExposure>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PeerStore {
     path: PathBuf,
     records: Vec<PeerRecord>,
     stamp: Option<FileStamp>,
+    exposure: Option<StoreExposure>,
 }
 
 impl PeerStore {
     pub fn open(path: PathBuf) -> Result<Self, NetError> {
-        let (records, stamp) = load(&path)?;
+        let loaded = load(&path)?;
 
         Ok(Self {
             path,
-            records,
-            stamp,
+            records: loaded.records,
+            stamp: loaded.stamp,
+            exposure: loaded.exposure,
         })
+    }
+
+    pub const fn exposure(&self) -> Option<StoreExposure> {
+        self.exposure
     }
 
     pub fn is_stale(&self) -> bool {
@@ -181,9 +226,10 @@ impl PeerStore {
             return Ok(false);
         }
 
-        let (records, stamp) = load(&self.path)?;
-        self.records = records;
-        self.stamp = stamp;
+        let loaded = load(&self.path)?;
+        self.records = loaded.records;
+        self.stamp = loaded.stamp;
+        self.exposure = loaded.exposure;
         Ok(true)
     }
 
@@ -198,9 +244,25 @@ impl PeerStore {
     fn open_for(role: PeerRole, configured: Option<&PathBuf>) -> Result<Self, NetError> {
         match configured {
             Some(path) => Self::open(path.clone()),
-            None => default_path(role, env::var_os("XDG_STATE_HOME"), env::var_os("HOME"))
-                .and_then(Self::open),
+            None => Self::open_in_state(role, env::var_os("XDG_STATE_HOME"), env::var_os("HOME")),
         }
+    }
+
+    fn open_in_state(
+        role: PeerRole,
+        xdg_state_home: Option<OsString>,
+        home: Option<OsString>,
+    ) -> Result<Self, NetError> {
+        let path = default_path(role, xdg_state_home, home)?;
+
+        if let Some(directory) = path.parent() {
+            tighten_owned_directory(directory).map_err(|source| NetError::PeerStoreDirectory {
+                path: directory.to_owned(),
+                source,
+            })?;
+        }
+
+        Self::open(path)
     }
 
     pub fn path(&self) -> &Path {
@@ -268,10 +330,18 @@ impl PeerStore {
     }
 }
 
-fn load(path: &Path) -> Result<(Vec<PeerRecord>, Option<FileStamp>), NetError> {
+fn load(path: &Path) -> Result<Loaded, NetError> {
     let stamp = FileStamp::of(path).ok();
+    let exposure = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| StoreExposure::of(&metadata));
+
     let records = match fs::read_to_string(path) {
-        Ok(text) => parse(&text, path)?,
+        Ok(mut text) => {
+            let parsed = parse(&text, path);
+            text.zeroize();
+            parsed?
+        }
         Err(source) if source.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(source) => {
             return Err(NetError::PeerStoreRead {
@@ -281,7 +351,26 @@ fn load(path: &Path) -> Result<(Vec<PeerRecord>, Option<FileStamp>), NetError> {
         }
     };
 
-    Ok((records, stamp))
+    Ok(Loaded {
+        records,
+        stamp,
+        exposure,
+    })
+}
+
+fn tighten_owned_directory(directory: &Path) -> io::Result<()> {
+    let metadata = match fs::metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(source),
+    };
+
+    let owned = metadata.uid() == rustix::process::geteuid().as_raw();
+    if metadata.is_dir() && owned && metadata.mode() & GROUP_AND_OTHER_BITS != 0 {
+        fs::set_permissions(directory, fs::Permissions::from_mode(OWNER_ONLY_DIRECTORY))?;
+    }
+
+    Ok(())
 }
 
 pub fn write_owner_only(path: &Path, text: &str) -> io::Result<()> {
@@ -386,9 +475,9 @@ fn parse(text: &str, path: &Path) -> Result<Vec<PeerRecord>, NetError> {
         let id = decode_hex::<{ PeerId::LEN }>(id)
             .map(PeerId)
             .ok_or_else(corrupt)?;
-        let secret = decode_hex::<PEER_SECRET_LEN>(secret)
-            .map(PeerSecret::from_bytes)
-            .ok_or_else(corrupt)?;
+        let mut secret_bytes = decode_hex::<PEER_SECRET_LEN>(secret).ok_or_else(corrupt)?;
+        let secret = PeerSecret::from_bytes(secret_bytes);
+        secret_bytes.zeroize();
         let record = PeerRecord::new(name, secret).map_err(|_| corrupt())?;
 
         if record.id != id || records.iter().any(|existing| existing.id == id) {
@@ -403,8 +492,6 @@ fn parse(text: &str, path: &Path) -> Result<Vec<PeerRecord>, NetError> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use super::*;
 
     fn secret(byte: u8) -> PeerSecret {
@@ -670,6 +757,61 @@ mod tests {
             default_path(PeerRole::Host, None, None),
             Err(NetError::NoStateDirectory)
         ));
+    }
+
+    #[test]
+    fn an_existing_permissive_state_directory_is_tightened_on_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("rusplay");
+        fs::create_dir(&state).unwrap();
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
+
+        PeerStore::open_in_state(
+            PeerRole::Host,
+            Some(directory.path().as_os_str().to_owned()),
+            None,
+        )
+        .unwrap();
+
+        let mode = fs::metadata(&state).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, OWNER_ONLY_DIRECTORY);
+    }
+
+    #[test]
+    fn a_missing_state_directory_is_left_for_the_first_write() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let store = PeerStore::open_in_state(
+            PeerRole::Client,
+            Some(directory.path().as_os_str().to_owned()),
+            None,
+        )
+        .unwrap();
+
+        assert!(store.is_empty());
+        assert!(!directory.path().join("rusplay").exists());
+    }
+
+    #[test]
+    fn a_group_or_world_readable_store_reports_its_exposure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("peers");
+        let mut store = PeerStore::open(path.clone()).unwrap();
+        store.remember(record("laptop", 1)).unwrap();
+        let private = PeerStore::open(path.clone()).unwrap().exposure();
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let shared = PeerStore::open(path).unwrap().exposure();
+
+        assert_eq!(private, None);
+        assert_eq!(
+            shared,
+            Some(StoreExposure::ReadableByOthers { mode: 0o644 })
+        );
+        assert_eq!(
+            shared.unwrap().to_string(),
+            "is readable by other users (mode 0644)"
+        );
     }
 
     #[test]

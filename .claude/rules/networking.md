@@ -236,8 +236,12 @@ paths:
 - Files live in `$XDG_STATE_HOME/rusplay/` (fallback `~/.local/state/rusplay/`, relative values
   ignored): `paired-clients` for the host, `paired-hosts` for the client. `peers.host_file` and
   `peers.client_file` override them (`PeerStore::open_host`/`open_client`). The directory is
-  created `0700`; writes go to a freshly created `0600` staging file that is synced and renamed over
-  the store, so a crash leaves the old file and a stale permissive staging file is never reused.
+  created `0700`, and an existing default state directory owned by the user is tightened to
+  `0700` when the store opens (a directory named through `peers.host_file`/`peers.client_file` is
+  never touched). `load` zeroizes the text holding the hex secrets and
+  `PeerStore::exposure` reports a store file that is group or world readable or owned by another
+  user (`StoreExposure`), for the caller to warn on; `rusplay-hostd` prints it. Writes go to a
+  freshly created `0600` staging file that is synced and renamed over the store, so a crash leaves the old file and a stale permissive staging file is never reused.
   `remember` and `forget` persist before they change the in-memory list, so a failed write changes
   nothing. `forget` is the revocation API; the host shares the store as
   `RwLock<PeerStore>` so a forget applies to the next datagram. Another process can edit the

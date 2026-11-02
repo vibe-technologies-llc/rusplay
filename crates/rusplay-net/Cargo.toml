@@ -13,7 +13,7 @@ parking_lot.workspace = true
 reed-solomon-simd = { workspace = true, features = ["std"] }
 rusplay-config.workspace = true
 rusplay-protocol.workspace = true
-rustix = { workspace = true, features = ["net", "rand", "std", "time"] }
+rustix = { workspace = true, features = ["net", "process", "rand", "std", "time"] }
 sha2.workspace = true
 spake2 = { workspace = true, features = ["getrandom", "std"] }
 subtle.workspace = true
