@@ -18,6 +18,11 @@ pub struct ScalingConfig {
 
 impl ScalingConfig {
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
+        if self.upscale.chroma_filter.is_polar() {
+            return Err(ConfigError::UpscaleChromaFilterPolar(
+                self.upscale.chroma_filter,
+            ));
+        }
         if !ANTIRINGING_RANGE.contains(&self.upscale.antiringing) {
             return Err(ConfigError::AntiringingOutOfRange(self.upscale.antiringing));
         }
@@ -100,6 +105,32 @@ mod tests {
         assert!(defaults.sigmoid);
         assert!((defaults.sigmoid_center - 0.75).abs() < f32::EPSILON);
         assert!((defaults.sigmoid_slope - 6.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn polar_upscale_chroma_filter_is_rejected() {
+        let polar = ScalingConfig {
+            upscale: UpscaleConfig {
+                chroma_filter: ScaleFilter::EwaLanczos,
+                ..UpscaleConfig::default()
+            },
+            ..ScalingConfig::default()
+        };
+        let separable = ScalingConfig {
+            upscale: UpscaleConfig {
+                chroma_filter: ScaleFilter::Mitchell,
+                ..UpscaleConfig::default()
+            },
+            ..ScalingConfig::default()
+        };
+
+        assert!(matches!(
+            polar.validate(),
+            Err(ConfigError::UpscaleChromaFilterPolar(
+                ScaleFilter::EwaLanczos
+            ))
+        ));
+        assert!(separable.validate().is_ok());
     }
 
     #[test]

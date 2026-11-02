@@ -1,5 +1,6 @@
 use std::{io, net::Ipv4Addr, path::PathBuf};
 
+use rusplay_core::ScaleFilter;
 use thiserror::Error;
 
 use crate::input::{HotkeyKey, ReleaseChord};
@@ -19,6 +20,8 @@ pub enum ConfigError {
     InvalidFrameRate { numerator: u32, denominator: u32 },
     #[error("video bitrate must be greater than zero")]
     ZeroVideoBitrate,
+    #[error("stream resolution {width}x{height} has a zero side")]
+    EmptyStreamResolution { width: u32, height: u32 },
     #[error("hdr reference white {0} nits is outside 1..=10000")]
     ReferenceWhiteOutOfRange(u32),
     #[error("hdr peak luminance {0} nits is outside 1..=10000")]
@@ -163,6 +166,8 @@ pub enum ConfigError {
     Serialize { source: toml::ser::Error },
     #[error("failed to create config directory {path}")]
     CreateDirectory { path: PathBuf, source: io::Error },
+    #[error("upscale chroma filter {0} is not separable")]
+    UpscaleChromaFilterPolar(ScaleFilter),
     #[error("failed to write config file {path}")]
     Write { path: PathBuf, source: io::Error },
 }
@@ -172,6 +177,8 @@ impl ConfigError {
         match self {
             Self::InvalidFrameRate { .. } => Some("video.frame_rate"),
             Self::ZeroVideoBitrate => Some("video.bitrate_kbps"),
+            Self::EmptyStreamResolution { .. } => Some("video.resolution"),
+            Self::UpscaleChromaFilterPolar(_) => Some("scaling.upscale.chroma_filter"),
             Self::ReferenceWhiteOutOfRange(_) => Some("video.color.hdr.reference_white_nits"),
             Self::PeakLuminanceOutOfRange(_) => Some("video.color.hdr.peak_nits"),
             Self::MasteringLuminanceInverted { .. } => Some("video.color.hdr.mastering.min_nits"),

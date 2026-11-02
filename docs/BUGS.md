@@ -50,8 +50,6 @@
 - [S] `scale-identity-axis-kernel`: `Scaler` builds both passes with `TapTable::build(kernel, n, n')` even when an axis keeps its length (`rusplay-scale/src/scaler.rs:226-239`), so Mitchell and the Robidoux cubics blur an axis that is not resized and the pass is wasted; interpolating kernels are exact there, so the defaults are unaffected. Use `TapTable::identity` (or skip the pass) on an unchanged axis, as the conversion path already does
 
 # Configuration
-- [S] `config-upscale-chroma-filter-polar`: `ScalingConfig::validate` (`rusplay-config/src/scaling.rs:19-35`) accepts an EWA filter for `scaling.upscale.chroma_filter`, the app offers the whole list (`rusplay-app/src/settings/schema.rs:1261`), and `RgbConverter` then fails every frame with `UpsampleChromaFilterNotSeparable` (`rusplay-scale/src/unpack.rs:61-65`). Reject polar filters there with their own `ConfigError` and limit the app's choices
-- [S] `config-video-resolution-zero`: `VideoConfig::validate` (`rusplay-config/src/video.rs:51-90`) never checks `video.resolution`, so a zero width or height validates and fails at session start as the scaler's `EmptyTarget`. Add `EmptyStreamResolution` with a test
 - [S] `config-path-resolvers-diverge`: `ConfigEnvironment::config_path` (`rusplay-config/src/paths.rs:40-55`) picks `$XDG_CONFIG_HOME` or else `~/.config`, while `rusplay-hostd/src/discovery.rs:32-68` keeps its own copy that tries the XDG file and falls back to `~/.config` when it does not exist. With `XDG_CONFIG_HOME` set and `host.toml` only under `~/.config`, hostd reads one file and the app's Host settings (`rusplay-app/src/settings/role.rs:16`) edit another. Expose one candidate list from `rusplay-config` and use it in both
 
 # Input

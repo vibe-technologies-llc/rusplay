@@ -56,6 +56,16 @@ impl VideoConfig {
             });
         }
 
+        if let Some(resolution) = self
+            .resolution
+            .filter(|resolution| resolution.pixel_count() == 0)
+        {
+            return Err(ConfigError::EmptyStreamResolution {
+                width: resolution.width,
+                height: resolution.height,
+            });
+        }
+
         if self.bitrate_kbps == 0 {
             return Err(ConfigError::ZeroVideoBitrate);
         }
@@ -356,5 +366,31 @@ mod tests {
 
         config.present_frame_latency = 3;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn stream_resolution_with_a_zero_side_is_rejected() {
+        let mut config = VideoConfig::default();
+
+        config.resolution = Some(Resolution::new(1920, 1080));
+        assert!(config.validate().is_ok());
+
+        config.resolution = Some(Resolution::new(0, 1080));
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::EmptyStreamResolution {
+                width: 0,
+                height: 1080
+            })
+        ));
+
+        config.resolution = Some(Resolution::new(1920, 0));
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::EmptyStreamResolution {
+                width: 1920,
+                height: 0
+            })
+        ));
     }
 }
