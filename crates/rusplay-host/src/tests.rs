@@ -270,6 +270,66 @@ fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> Box<dyn Pipe
     })
 }
 
+struct LosesFirstKeyframe {
+    inner: FakePipeline,
+    lost: bool,
+}
+
+impl VideoPipeline for LosesFirstKeyframe {
+    fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
+        if keyframe && !self.lost {
+            self.lost = true;
+            self.inner.resolution = Some(frame.resolution);
+            return Ok(None);
+        }
+
+        self.inner.encode(frame, keyframe)
+    }
+
+    fn repeat(
+        &mut self,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        if keyframe && !self.lost {
+            self.lost = true;
+            return Ok(None);
+        }
+
+        self.inner.repeat(timestamp, keyframe)
+    }
+
+    fn set_bitrate(&mut self, kbps: u32) -> Result<(), HostError> {
+        self.inner.set_bitrate(kbps)
+    }
+
+    fn stream_format(&self) -> Option<StreamFormat> {
+        self.inner.stream_format()
+    }
+}
+
+struct LosesFirstKeyframeFactory;
+
+impl PipelineFactory for LosesFirstKeyframeFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        Ok(FormatSet::ALL)
+    }
+
+    fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
+        Ok(Box::new(LosesFirstKeyframe {
+            inner: FakePipeline {
+                format,
+                last: None,
+                encoded: 1,
+                resolution: None,
+                stream: None,
+                bitrate: Arc::default(),
+            },
+            lost: false,
+        }))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReceivedFrame {
     number: u32,
@@ -772,6 +832,22 @@ fn a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe() 
     );
     assert_eq!(stats.frames_repeated, 1);
     assert_eq!(stats.keyframe_requests, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_keyframe_the_pipeline_failed_to_produce_is_forced_again_on_the_next_frame() {
+    let fixture = Fixture::new(host_config());
+    let serving = fixture.serve(Some(pin()), feed(80), Box::new(LosesFirstKeyframeFactory));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+    client.send(ControlMessage::RequestKeyframe { frame: 1_000 });
+    let recovered = client.pump_until(|client| client.frames.iter().any(|frame| frame.keyframe));
+
+    assert!(recovered);
     stream.stop().unwrap();
 }
 

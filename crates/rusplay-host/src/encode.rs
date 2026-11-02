@@ -143,7 +143,6 @@ impl EncodeStage {
                 }
                 None => continue,
             };
-            self.force_keyframe = false;
 
             let Some(encoded) = encoded else {
                 continue;
@@ -195,6 +194,7 @@ impl EncodeStage {
         }) {
             Ok(()) => {
                 self.next_number = number.wrapping_add(1);
+                self.force_keyframe = false;
                 if keyframe {
                     self.last_keyframe = Some(number);
                 }

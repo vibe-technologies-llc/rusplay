@@ -143,7 +143,9 @@ paths:
   keyframe numbered after `frame` was already sent (`keyframe_requests_ignored`), since the
   client repeats its request until one arrives. Requests coalesce to the earliest frame. With no
   new capture frame pending, the pipeline re-encodes its last encoder input as a keyframe
-  (`frames_repeated`), so a static screen still answers.
+  (`frames_repeated`), so a static screen still answers. The forced flag is cleared only once a frame reached the send queue, so a
+  pipeline that produced nothing (an import that fell back to shared memory, a repeat with no
+  input yet) or a full queue leaves the next frame a keyframe.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
   - DMA-BUF frames are the default path and are never copied: `GpuPipeline` imports them with its
     own `DmaBufImporter` (created on the first DMA-BUF frame, its cache keeping a capture
