@@ -11,7 +11,7 @@ use std::{
 
 use rusplay_core::Resolution;
 
-use crate::{EncodeError, VaCall, VaStatus, vaapi::ffi};
+use crate::{EncodeError, VaCall, VaStatus, obu::AccessUnit, vaapi::ffi};
 
 pub(super) type Profile = ffi::VAProfile;
 pub(super) type Entrypoint = ffi::VAEntrypoint;
@@ -442,16 +442,16 @@ impl CodedBuffer {
         self.buffer.id
     }
 
-    pub(super) fn read(&self) -> Result<Vec<u8>, EncodeError> {
+    pub(super) fn read(&self, delimit: bool) -> Result<Vec<u8>, EncodeError> {
         let mut segment = self.buffer.map()?.cast::<ffi::VACodedBufferSegment>();
-        let mut data = Vec::new();
+        let mut unit = AccessUnit::new(delimit);
         let mut overflow = false;
 
         while !segment.is_null() {
             let current = unsafe { segment.read() };
             overflow |= current.status & ffi::VA_CODED_BUF_STATUS_SLICE_OVERFLOW_MASK != 0;
             if !current.buf.is_null() {
-                data.extend_from_slice(unsafe {
+                unit.push(unsafe {
                     slice::from_raw_parts(current.buf.cast::<u8>(), usize_of(current.size))
                 });
             }
@@ -466,7 +466,7 @@ impl CodedBuffer {
             });
         }
 
-        Ok(data)
+        Ok(unit.finish())
     }
 }
 

@@ -476,7 +476,7 @@ impl Session {
             codec: Codec::Hevc,
             timestamp: Timestamp::from_micros(u64::try_from(output.pts).unwrap_or(0)),
             keyframe: output.sliceType == sys::X265_TYPE_IDR,
-            data,
+            data: data.into(),
         }))
     }
 

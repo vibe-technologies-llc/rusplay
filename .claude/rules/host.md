@@ -78,9 +78,10 @@ paths:
     leaves the announcement pending and the control stage sends it on its next pass; an
     undeliverable announcement that is still the latest is sent again.
   - `rusplay-host-send` passes each encoded frame's `VideoFrameHeader` to the packetizer as a
-    prefix (`packetize_prefixed`, one reused 8-byte buffer, the frame is not copied) and owns the video `Packetizer` (created after the keys are installed, FEC
+    prefix (`packetize_into`, one reused 8-byte buffer, the frame is not joined) into one reused
+    `DatagramArena`, owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
-    frame with `send_batch`. With `network.pacing` a frame is spread over
+    frame with `send_arena`, which seals the datagrams in place. With `network.pacing` a frame is spread over
     `network.pacing_window_percent` of the frame interval, the shorter of the configured
     `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
     faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a

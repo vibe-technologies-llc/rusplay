@@ -1,3 +1,4 @@
+mod arena;
 mod batch;
 mod busy;
 mod control;
@@ -16,6 +17,7 @@ mod takeover;
 mod transport;
 
 pub use crate::{
+    arena::DatagramArena,
     batch::RecvBatch,
     busy::busy_reply,
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},

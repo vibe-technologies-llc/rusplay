@@ -87,8 +87,8 @@ paths:
   wake, so a stage that fails while `connect` still holds the queue's sender (the audio decoder
   failing to open) stops the decode thread, which closes the slot and ends present, instead of
   leaving `connect` joined on stages that never end.
-- Encoded frames carry the host's capture time (`VideoFrameHeader`, stripped by the receive
-  stage) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
+- Encoded frames carry the host's capture time (`VideoFrameHeader`, skipped by the receive
+  stage through `FrameBytes::skipping`, so the reassembled frame is not moved) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
   `PresentedFrame::captured`. `PresentedFrame` also has `received_at`, `decoded_at` and
   `submitted_at` instants.
 - Latency (`clock.rs`): `ClockSync` (receive-owned, sans-IO) turns `ClockPong`s into a host minus

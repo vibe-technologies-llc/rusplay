@@ -6,7 +6,8 @@ paths:
 # Video decode
 
 - `VideoDecoder` is the backend-neutral trait: one `EncodedFrame` (a whole access unit / temporal
-  unit) in, at most one `DecodedFrame` out, plus `flush` for the frames a reordering stream
+  unit; its `data` is a `FrameBytes` that derefs to the payload and may skip a leading prefix of
+  its allocation, so decoders read it as `&[u8]`) in, at most one `DecodedFrame` out, plus `flush` for the frames a reordering stream
   still holds. Backends are VAAPI, NVDEC and software, each behind
   its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
   config's backend and returns `BackendNotCompiled` when that feature is off and

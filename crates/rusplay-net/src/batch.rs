@@ -2,6 +2,7 @@ use std::{
     fmt,
     io::{self, IoSlice},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
+    ops::Range,
     os::fd::AsRawFd,
     ptr,
     time::Duration,
@@ -12,7 +13,7 @@ use rustix::{
     net::{MMsgHdr, SendAncillaryBuffer, SendFlags, addr::SocketAddrArg, sendmmsg},
 };
 
-use crate::{NetError, Transport, transport::seal_with};
+use crate::{DatagramArena, NetError, Transport, transport::seal_with};
 
 const MAX_MESSAGES_PER_CALL: usize = 1024;
 const MIN_READ_TIMEOUT: Duration = Duration::from_micros(1);
@@ -136,23 +137,54 @@ impl Transport {
             .iter()
             .map(|datagram| seal_with(cipher.as_deref(), datagram))
             .collect::<Result<Vec<_>, _>>()?;
+        let wire: Vec<[IoSlice<'_>; 2]> = sealed
+            .iter()
+            .map(|datagram| [IoSlice::new(datagram.as_ref()), IoSlice::new(&[])])
+            .collect();
+
+        self.send_wire(&wire, peer)
+    }
+
+    pub fn send_arena(
+        &self,
+        arena: &mut DatagramArena,
+        range: Range<usize>,
+        peer: SocketAddr,
+    ) -> Result<usize, NetError> {
+        let budget = self.max_datagram_len(&peer);
+        if let Some(oversized) = range
+            .clone()
+            .map(|index| arena.plain_len(index))
+            .find(|len| *len > budget)
+        {
+            return Err(NetError::DatagramTooLarge {
+                size: oversized,
+                mtu: self.mtu(),
+            });
+        }
+
+        if let Some(cipher) = self.current_cipher() {
+            arena.seal(range.clone(), &cipher)?;
+        }
+        let wire: Vec<[IoSlice<'_>; 2]> = range.map(|index| arena.wire(index)).collect();
+
+        self.send_wire(&wire, peer)
+    }
+
+    fn send_wire(&self, wire: &[[IoSlice<'_>; 2]], peer: SocketAddr) -> Result<usize, NetError> {
         let address = peer.as_any();
         let mut sent = 0;
 
-        while sent < sealed.len() {
-            let chunk = &sealed[sent..sealed.len().min(sent + MAX_MESSAGES_PER_CALL)];
-            let slices: Vec<[IoSlice<'_>; 1]> = chunk
-                .iter()
-                .map(|datagram| [IoSlice::new(datagram.as_ref())])
-                .collect();
+        while sent < wire.len() {
+            let chunk = &wire[sent..wire.len().min(sent + MAX_MESSAGES_PER_CALL)];
             let mut controls: Vec<SendAncillaryBuffer<'_, '_, '_>> = chunk
                 .iter()
                 .map(|_| SendAncillaryBuffer::default())
                 .collect();
-            let mut messages: Vec<MMsgHdr<'_>> = slices
+            let mut messages: Vec<MMsgHdr<'_>> = chunk
                 .iter()
                 .zip(controls.iter_mut())
-                .map(|(slice, control)| MMsgHdr::new_with_addr(&address, slice, control))
+                .map(|(slices, control)| MMsgHdr::new_with_addr(&address, slices, control))
                 .collect();
 
             match sendmmsg(self.socket(), &mut messages, SendFlags::empty()) {
@@ -565,5 +597,120 @@ mod tests {
 
         assert!(count >= 1);
         assert_eq!(collect(&batch)[0], datagrams(1)[0]);
+    }
+
+    fn arena_of(sender: &Transport, peer: SocketAddr, frame: u32, data: &[u8]) -> DatagramArena {
+        use rusplay_protocol::StreamKind;
+
+        use crate::{FecScheme, Packetizer};
+
+        let mut arena = DatagramArena::new();
+        Packetizer::new(
+            StreamKind::Video,
+            sender.max_datagram_len(&peer),
+            FecScheme::for_overhead(8, 25),
+        )
+        .unwrap()
+        .packetize_into(&mut arena, frame, true, &[], data)
+        .unwrap();
+
+        arena
+    }
+
+    fn receive_all(receiver: &Transport, expected: usize) -> Vec<Vec<u8>> {
+        let mut batch = RecvBatch::new(64, 2048);
+        let mut collected = Vec::new();
+        while collected.len() < expected {
+            receiver.recv_batch(&mut batch).unwrap();
+            collected.extend(collect(&batch));
+        }
+
+        collected
+    }
+
+    #[test]
+    fn an_arena_travels_in_the_clear_without_a_session() {
+        let sender = bind(LOOPBACK_V4);
+        let receiver = bind(LOOPBACK_V4);
+        let peer = receiver.local_addr().unwrap();
+        let data: Vec<u8> = (0..=u8::MAX).cycle().take(9_000).collect();
+        let mut arena = arena_of(&sender, peer, 1, &data);
+        let expected = arena.to_vecs();
+
+        let count = expected.len();
+
+        let sent = sender.send_arena(&mut arena, 0..count, peer).unwrap();
+
+        assert_eq!(sent, expected.len());
+        assert_eq!(receive_all(&receiver, expected.len()), expected);
+    }
+
+    #[test]
+    fn a_sealed_arena_is_opened_by_the_receiver() {
+        use crate::SessionKeys;
+
+        let sender = bind(LOOPBACK_V4);
+        let receiver = bind(LOOPBACK_V4);
+        let peer = receiver.local_addr().unwrap();
+        sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
+        receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+        let data: Vec<u8> = (0..=u8::MAX).rev().cycle().take(9_000).collect();
+        let mut arena = arena_of(&sender, peer, 1, &data);
+        let expected = arena.to_vecs();
+
+        let count = expected.len();
+
+        let sent = sender.send_arena(&mut arena, 0..count, peer).unwrap();
+
+        assert_eq!(sent, expected.len());
+        assert_eq!(receive_all(&receiver, expected.len()), expected);
+        assert_eq!(receiver.rejected_datagrams(), 0);
+    }
+
+    #[test]
+    fn a_partly_sent_arena_range_continues_where_it_stopped() {
+        use crate::SessionKeys;
+
+        let sender = bind(LOOPBACK_V4);
+        let receiver = bind(LOOPBACK_V4);
+        let peer = receiver.local_addr().unwrap();
+        sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
+        receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+        let mut arena = arena_of(&sender, peer, 1, &[5; 6_000]);
+        let expected = arena.to_vecs();
+        let split = expected.len() / 2;
+
+        sender.send_arena(&mut arena, 0..split, peer).unwrap();
+        sender
+            .send_arena(&mut arena, split..expected.len(), peer)
+            .unwrap();
+
+        assert_eq!(receive_all(&receiver, expected.len()), expected);
+    }
+
+    #[test]
+    fn an_oversized_arena_datagram_is_refused() {
+        use rusplay_protocol::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind};
+
+        let sender = bind(LOOPBACK_V4);
+        let peer = bind(LOOPBACK_V4).local_addr().unwrap();
+        let header = PacketHeader {
+            version: ProtocolVersion::CURRENT,
+            stream: StreamKind::Video,
+            flags: PacketFlags::empty(),
+            sequence: 0,
+            frame: 0,
+            fragment_index: 0,
+            fragment_count: 1,
+        };
+        let mut arena = DatagramArena::new();
+        arena
+            .push(&header, None, sender.max_datagram_len(&peer))
+            .unwrap();
+
+        assert!(matches!(
+            sender.send_arena(&mut arena, 0..1, peer),
+            Err(NetError::DatagramTooLarge { .. })
+        ));
     }
 }

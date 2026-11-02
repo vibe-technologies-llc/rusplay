@@ -58,7 +58,7 @@ fn hevc_mastering_sei_holds_until_the_next_irap() {
     sei.extend_from_slice(&10_000_000_u32.to_be_bytes());
     sei.extend_from_slice(&50_u32.to_be_bytes());
     sei.push(0x80);
-    let mut keyframe = frames[0].data.clone();
+    let mut keyframe = frames[0].data.to_vec();
     keyframe.extend_from_slice(&sei);
     let mut reader = ColorReader::new(Codec::Hevc);
 

@@ -1,4 +1,5 @@
 use std::{
+    ops::Range,
     sync::{
         Arc,
         mpsc::{Receiver, RecvTimeoutError},
@@ -7,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_net::{FecScheme, Pacer, Packetizer, Transport};
+use rusplay_net::{DatagramArena, FecScheme, Pacer, Packetizer, Transport};
 use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
 use crate::{HostError, encode::Outgoing, shared::Shared};
@@ -110,6 +111,7 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
     )?;
 
     let mut header = Vec::with_capacity(VideoFrameHeader::SIZE);
+    let mut arena = DatagramArena::new();
     let mut cadence = FrameCadence::default();
 
     while !links.shared.stopped() {
@@ -119,7 +121,14 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
                 let pacing = options
                     .pacing
                     .map(|pacing| pacing.for_frame(cadence.smoothed));
-                send_frame(&mut packetizer, &mut header, pacing, &outgoing, links)?;
+                send_frame(
+                    &mut packetizer,
+                    &mut arena,
+                    &mut header,
+                    pacing,
+                    &outgoing,
+                    links,
+                )?;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -131,6 +140,7 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
 fn send_frame(
     packetizer: &mut Packetizer,
+    arena: &mut DatagramArena,
     header: &mut Vec<u8>,
     pacing: Option<FramePacing>,
     outgoing: &Outgoing,
@@ -141,7 +151,8 @@ fn send_frame(
         captured_micros: outgoing.captured_micros,
     }
     .write(header);
-    let datagrams = packetizer.packetize_prefixed(
+    packetizer.packetize_into(
+        arena,
         outgoing.number,
         outgoing.frame.keyframe,
         header,
@@ -149,13 +160,13 @@ fn send_frame(
     )?;
 
     match pacing {
-        Some(pacing) => send_paced(&datagrams, pacing, links)?,
-        None => send_all(&datagrams, links)?,
+        Some(pacing) => send_paced(arena, pacing, links)?,
+        None => send_all(arena, 0..arena.len(), links)?,
     }
 
     let counters = &links.shared.counters;
     counters.frames_sent.increment();
-    counters.datagrams_sent.add(datagrams.len() as u64);
+    counters.datagrams_sent.add(arena.len() as u64);
     if outgoing.frame.keyframe {
         counters.keyframes_sent.increment();
     }
@@ -164,16 +175,16 @@ fn send_frame(
 }
 
 fn send_paced(
-    datagrams: &[Vec<u8>],
+    arena: &mut DatagramArena,
     pacing: FramePacing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
-    let total: usize = datagrams.iter().map(Vec::len).sum();
-    let plan = BurstPlan::new(datagrams.len(), total, pacing);
+    let count = arena.len();
+    let plan = BurstPlan::new(count, arena.plain_bytes(0..count), pacing);
     let started = Instant::now();
     let mut sent_bytes = 0;
 
-    for (index, burst) in datagrams.chunks(plan.datagrams_per_burst).enumerate() {
+    for (index, first) in (0..count).step_by(plan.datagrams_per_burst).enumerate() {
         if index > 0 {
             let due = started + plan.pacer.interval_for(sent_bytes);
             let wait = due.saturating_duration_since(Instant::now());
@@ -182,20 +193,26 @@ fn send_paced(
             }
         }
 
-        send_all(burst, links)?;
-        sent_bytes += burst.iter().map(Vec::len).sum::<usize>();
+        let burst = first..count.min(first + plan.datagrams_per_burst);
+        send_all(arena, burst.clone(), links)?;
+        sent_bytes += arena.plain_bytes(burst);
     }
 
     Ok(())
 }
 
-fn send_all(datagrams: &[Vec<u8>], links: &SendLinks) -> Result<(), HostError> {
-    let mut sent = 0;
+fn send_all(
+    arena: &mut DatagramArena,
+    range: Range<usize>,
+    links: &SendLinks,
+) -> Result<(), HostError> {
+    let mut sent = range.start;
 
-    while sent < datagrams.len() {
-        let progress = links
-            .transport
-            .send_batch(&datagrams[sent..], links.shared.client.address())?;
+    while sent < range.end {
+        let progress =
+            links
+                .transport
+                .send_arena(arena, sent..range.end, links.shared.client.address())?;
         if progress == 0 {
             thread::yield_now();
         }

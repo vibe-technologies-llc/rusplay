@@ -10,7 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::NetworkConfig;
-use rusplay_core::{Codec, EncodedFrame, FormatSet, Timestamp};
+use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
 use rusplay_input::RumbleCommand;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
@@ -455,8 +455,7 @@ impl ReceiveStage {
             return Ok(Flow::Continue);
         };
         let captured_micros = header.captured_micros;
-        let mut data = frame.data;
-        data.drain(..VideoFrameHeader::SIZE);
+        let data = FrameBytes::skipping(frame.data, VideoFrameHeader::SIZE);
 
         if let Some(latency) = self
             .links

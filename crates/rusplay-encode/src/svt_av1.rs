@@ -478,7 +478,7 @@ impl Session {
             codec: Codec::Av1,
             timestamp: Timestamp::from_micros(u64::try_from(pts).unwrap_or(0)),
             keyframe: picture_type == sys::EbAv1PictureType_EB_AV1_KEY_PICTURE,
-            data,
+            data: data.into(),
         }))
     }
 }
