@@ -25,6 +25,8 @@ const CODEC: Codec = Codec::H264;
 const NAL_HEADER_LEN: usize = 1;
 const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
+const MAX_MACROBLOCKS: u64 = 139_264;
+const MACROBLOCK_SIZE: u32 = 16;
 const BASELINE_PROFILE_IDC: u8 = 66;
 const ZIGZAG_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 const ZIGZAG_8X8: [usize; 64] = [
@@ -370,7 +372,25 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
     }
 }
 
-fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
+fn check_size(sps: &Sps) -> Result<(), DecodeError> {
+    let (width, height) = (sps.width(), sps.height());
+    let macroblocks = u64::from(width / MACROBLOCK_SIZE) * u64::from(height / MACROBLOCK_SIZE);
+
+    if macroblocks > MAX_MACROBLOCKS {
+        return Err(DecodeError::ResolutionUnsupported {
+            backend: crate::Backend::Vaapi,
+            codec: CODEC,
+            width,
+            height,
+        });
+    }
+
+    Ok(())
+}
+
+pub(super) fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
+    check_size(sps)?;
+
     let chroma = match sps.chroma_format_idc {
         1 => ChromaSubsampling::Yuv420,
         2 => ChromaSubsampling::Yuv422,

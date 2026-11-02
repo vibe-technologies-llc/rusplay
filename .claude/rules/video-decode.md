@@ -157,7 +157,9 @@ paths:
   for the inter frames between them. The resolved `SignalledColor` lives on the `Stream` and is
   copied into every frame it outputs. A malformed SEI or metadata payload is ignored.
 - The stream format (VA profile, chroma, bit depth, coded size) is read from the SPS / sequence
-  header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
+  header; a change rebuilds the `Session` and surface pool. An H.264 SPS above level
+  6.2's 139264 macroblocks is `ResolutionUnsupported`, checked before `cros-codecs` divides by the
+  macroblock count. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
   `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
 - Surfaces are driver-allocated (`vaCreateSurfaces` with the RT format and decoder/export usage

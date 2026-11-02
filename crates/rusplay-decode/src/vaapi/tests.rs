@@ -318,6 +318,44 @@ fn h264_without_reordering_by_construction_is_held_for_nothing() {
 }
 
 #[test]
+fn h264_rejects_a_picture_size_beyond_level_6_2_instead_of_dividing_by_zero() {
+    let mut oversized = sps(Profile::High, 0);
+    oversized.pic_width_in_mbs_minus1 = u16::MAX;
+    oversized.pic_height_in_map_units_minus1 = u16::MAX;
+
+    assert!(matches!(
+        h264::stream_format(&oversized),
+        Err(DecodeError::ResolutionUnsupported {
+            codec: Codec::H264,
+            width: 1_048_576,
+            height: 1_048_576,
+            ..
+        })
+    ));
+
+    oversized.frame_mbs_only_flag = false;
+    oversized.pic_height_in_map_units_minus1 = 32767;
+
+    assert!(matches!(
+        h264::stream_format(&oversized),
+        Err(DecodeError::ResolutionUnsupported { .. })
+    ));
+}
+
+#[test]
+fn h264_accepts_the_largest_level_6_2_picture() {
+    let mut largest = sps(Profile::High, 0);
+    largest.chroma_format_idc = 1;
+    largest.pic_width_in_mbs_minus1 = 511;
+    largest.pic_height_in_map_units_minus1 = 271;
+
+    let format = h264::stream_format(&largest).unwrap();
+
+    assert_eq!(format.coded.width, 8192);
+    assert_eq!(format.coded.height, 4352);
+}
+
+#[test]
 fn h264_follows_the_bitstream_restrictions() {
     let mut restricted = sps(Profile::High, 0);
     restricted.vui_parameters_present_flag = true;
