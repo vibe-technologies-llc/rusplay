@@ -43,6 +43,7 @@ pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) ->
         .number("rumble_commands", stats.rumble_commands)
         .number("rumble_failures", stats.rumble_failures)
         .number("gamepad_failures", stats.gamepad_failures)
+        .number("thread_priority_failures", stats.thread_priority_failures)
         .number("bitrate_hints_sent", stats.bitrate_hints_sent)
         .optional("bitrate_target_kbps", stats.bitrate_target_kbps)
         .optional("rtt_us", stats.rtt.map(|rtt| rtt.as_micros()))

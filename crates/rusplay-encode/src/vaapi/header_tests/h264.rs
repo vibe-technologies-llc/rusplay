@@ -211,7 +211,9 @@ fn vui_signals_colour_timing_and_restrictions() {
                 assert_eq!(vui.colour_primaries, case.primaries);
                 assert_eq!(vui.transfer_characteristics, case.transfer);
                 assert_eq!(vui.matrix_coefficients, case.matrix);
-                assert!(!vui.chroma_loc_info_present_flag);
+                assert!(vui.chroma_loc_info_present_flag);
+                assert_eq!(vui.chroma_sample_loc_type_top_field, 0);
+                assert_eq!(vui.chroma_sample_loc_type_bottom_field, 0);
                 assert!(vui.timing_info_present_flag);
                 assert_eq!(vui.num_units_in_tick, frame_rate.denominator);
                 assert_eq!(vui.time_scale, frame_rate.numerator * 2);

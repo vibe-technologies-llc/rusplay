@@ -238,7 +238,12 @@ fn colour_config_signals_the_colour_description() {
             assert_eq!(config.color_range, colour.full_range);
             assert_eq!(config.subsampling_x, case.subsampled);
             assert_eq!(config.subsampling_y, case.subsampled);
-            assert_eq!(config.chroma_sample_position, ChromaSamplePosition::Unknown);
+            let position = if case.subsampled {
+                ChromaSamplePosition::Vertical
+            } else {
+                ChromaSamplePosition::Unknown
+            };
+            assert_eq!(config.chroma_sample_position, position);
             assert!(!config.separate_uv_delta_q);
         }
     }

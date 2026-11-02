@@ -414,7 +414,9 @@ fn vui_signals_colour_timing_and_restrictions() {
                 assert_eq!(vui.colour_primaries, u32::from(case.primaries));
                 assert_eq!(vui.transfer_characteristics, u32::from(case.transfer));
                 assert_eq!(vui.matrix_coeffs, u32::from(case.matrix));
-                assert!(!vui.chroma_loc_info_present_flag);
+                assert!(vui.chroma_loc_info_present_flag);
+                assert_eq!(vui.chroma_sample_loc_type_top_field, 0);
+                assert_eq!(vui.chroma_sample_loc_type_bottom_field, 0);
                 assert!(!vui.neutral_chroma_indication_flag);
                 assert!(!vui.field_seq_flag);
                 assert!(!vui.frame_field_info_present_flag);
