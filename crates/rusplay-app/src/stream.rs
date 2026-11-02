@@ -1,6 +1,5 @@
 use std::{
     cell::RefCell,
-    net::SocketAddr,
     rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
@@ -17,7 +16,7 @@ use rusplay_client::{
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 
 use crate::{
-    hosts::HostEntry,
+    hosts::{HostEntry, HostId},
     notice::{Notice, error_chain},
     session::{self, SessionError},
     stats::{FrameTimings, StatsSampler, StreamRates, TimingSink},
@@ -30,10 +29,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
     Paired {
-        address: SocketAddr,
+        host: HostId,
+        name: String,
         peer: PeerRecord,
     },
     Notice(Notice),
+    Abandoned,
     Ended(Notice),
 }
 
@@ -41,6 +42,7 @@ pub enum StreamEvent {
 enum Phase {
     Connecting,
     Streaming,
+    Abandoned,
     Ended,
 }
 
@@ -157,6 +159,13 @@ impl StreamView {
     }
 
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.phase == Phase::Connecting {
+            self.live.borrow_mut().stop().ok();
+            self.phase = Phase::Abandoned;
+            cx.emit(StreamEvent::Abandoned);
+            return;
+        }
+
         self.finish(cx);
     }
 
@@ -199,6 +208,18 @@ impl StreamView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.phase == Phase::Abandoned {
+            if let Ok(stream) = result {
+                self.report_pairing(&stream, cx);
+                stream.stop().ok();
+            }
+            self.phase = Phase::Ended;
+            cx.emit(StreamEvent::Ended(Notice::Info(format!(
+                "Connection to {} cancelled",
+                self.host.name
+            ))));
+            return;
+        }
         if self.phase != Phase::Connecting {
             return;
         }
@@ -217,18 +238,7 @@ impl StreamView {
             }
         };
 
-        if let Some(secret) = stream.paired_secret() {
-            match PeerRecord::new(&self.host.name, secret.clone()) {
-                Ok(peer) => cx.emit(StreamEvent::Paired {
-                    address: self.host.address,
-                    peer,
-                }),
-                Err(error) => cx.emit(StreamEvent::Notice(Notice::Failure(format!(
-                    "Paired with {}, but the pairing cannot be remembered: {error}",
-                    self.host.name
-                )))),
-            }
-        }
+        self.report_pairing(&stream, cx);
 
         let captured = {
             let mut live = self.live.borrow_mut();
@@ -259,6 +269,24 @@ impl StreamView {
             }
         }));
         cx.notify();
+    }
+
+    fn report_pairing(&self, stream: &ClientStream, cx: &mut Context<Self>) {
+        let Some(secret) = stream.paired_secret() else {
+            return;
+        };
+
+        match PeerRecord::new(&self.host.name, secret.clone()) {
+            Ok(peer) => cx.emit(StreamEvent::Paired {
+                host: self.host.id,
+                name: self.host.name.clone(),
+                peer,
+            }),
+            Err(error) => cx.emit(StreamEvent::Notice(Notice::Failure(format!(
+                "Paired with {}, but the pairing cannot be remembered: {error}",
+                self.host.name
+            )))),
+        }
     }
 
     fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -362,7 +390,7 @@ impl StreamView {
                 self.host.name,
                 chord_label(self.input.release_chord)
             ),
-            Phase::Ended => format!("Session with {} ended", self.host.name),
+            Phase::Abandoned | Phase::Ended => format!("Session with {} ended", self.host.name),
         }
     }
 }

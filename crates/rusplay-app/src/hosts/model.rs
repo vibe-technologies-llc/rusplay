@@ -22,8 +22,12 @@ pub enum HostOrigin {
     Discovered,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostId(u64);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostEntry {
+    pub id: HostId,
     pub name: String,
     pub address: SocketAddr,
     pub peer: Option<PeerRecord>,
@@ -37,6 +41,7 @@ pub struct HostList {
     default_port: u16,
     entries: Vec<HostEntry>,
     selected: Option<usize>,
+    next_id: u64,
 }
 
 impl HostList {
@@ -45,13 +50,24 @@ impl HostList {
             default_port,
             entries: Vec::new(),
             selected: None,
+            next_id: 0,
         }
     }
 
+    fn allocate_id(&mut self) -> HostId {
+        let id = HostId(self.next_id);
+        self.next_id += 1;
+
+        id
+    }
+
     pub fn from_saved(default_port: u16, saved: &[SavedHost]) -> Self {
-        let entries = saved
+        let mut list = Self::new(default_port);
+
+        list.entries = saved
             .iter()
             .map(|host| HostEntry {
+                id: list.allocate_id(),
                 name: host.name.clone(),
                 address: host.address,
                 peer: host.peer.clone(),
@@ -61,11 +77,7 @@ impl HostList {
             })
             .collect();
 
-        Self {
-            default_port,
-            entries,
-            selected: None,
-        }
+        list
     }
 
     pub fn saved_hosts(&self) -> Vec<SavedHost> {
@@ -118,7 +130,9 @@ impl HostList {
 
         let name = display_name(name, address)?;
 
+        let id = self.allocate_id();
         self.entries.push(HostEntry {
+            id,
             name,
             address,
             peer: None,
@@ -185,12 +199,8 @@ impl HostList {
         }
     }
 
-    pub fn remember_peer(&mut self, address: SocketAddr, peer: PeerRecord) -> bool {
-        match self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.address == address)
-        {
+    pub fn remember_peer(&mut self, id: HostId, peer: PeerRecord) -> bool {
+        match self.entries.iter_mut().find(|entry| entry.id == id) {
             Some(entry) => {
                 entry.peer = Some(peer);
                 entry.origin = HostOrigin::Added;
@@ -227,7 +237,9 @@ impl HostList {
             if self.move_saved_host(host, &unmatched) {
                 continue;
             }
+            let id = self.allocate_id();
             new_hosts.push(HostEntry {
+                id,
                 name: announced_name(host),
                 address: host.address,
                 peer: None,
@@ -413,8 +425,11 @@ mod tests {
         hosts.add("b", "10.0.0.2").unwrap();
         let record = PeerRecord::new("b", PeerSecret::from_bytes([7; 32])).unwrap();
 
-        assert!(hosts.remember_peer("10.0.0.2:47800".parse().unwrap(), record.clone()));
-        assert!(!hosts.remember_peer("10.0.0.9:47800".parse().unwrap(), record.clone()));
+        let known = hosts.entries()[1].id;
+        let unknown = HostId(99);
+
+        assert!(hosts.remember_peer(known, record.clone()));
+        assert!(!hosts.remember_peer(unknown, record.clone()));
 
         assert_eq!(hosts.entries()[0].peer, None);
         assert_eq!(hosts.entries()[1].peer, Some(record));
@@ -471,6 +486,43 @@ mod tests {
     }
 
     #[test]
+    fn a_pairing_is_remembered_after_the_host_changed_address() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+        let id = hosts.entries()[0].id;
+        let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
+
+        hosts.merge_discovered(&[found("desk", "10.0.0.9:47800")]);
+
+        assert!(hosts.remember_peer(id, record.clone()));
+        assert_eq!(hosts.entries()[0].peer, Some(record));
+    }
+
+    #[test]
+    fn a_pairing_for_a_removed_host_is_reported_as_missed() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+        let id = hosts.entries()[0].id;
+        let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
+
+        hosts.remove(0);
+
+        assert!(!hosts.remember_peer(id, record));
+    }
+
+    #[test]
+    fn ids_are_not_reused_after_a_removal() {
+        let mut hosts = list();
+        hosts.add("a", "10.0.0.1").unwrap();
+        let first = hosts.entries()[0].id;
+
+        hosts.remove(0);
+        hosts.add("b", "10.0.0.2").unwrap();
+
+        assert_ne!(hosts.entries()[0].id, first);
+    }
+
+    #[test]
     fn ambiguous_names_are_not_matched_by_name() {
         let mut hosts = list();
         hosts.add("desk", "10.0.0.2").unwrap();
@@ -509,7 +561,8 @@ mod tests {
         hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
         let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
 
-        hosts.remember_peer("10.0.0.2:47800".parse().unwrap(), record);
+        let id = hosts.entries()[0].id;
+        hosts.remember_peer(id, record);
         hosts.merge_discovered(&[]);
 
         assert_eq!(hosts.entries().len(), 1);
@@ -542,7 +595,8 @@ mod tests {
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.add("b", "10.0.0.2").unwrap();
         let record = PeerRecord::new("a", PeerSecret::from_bytes([7; 32])).unwrap();
-        hosts.remember_peer("10.0.0.1:47800".parse().unwrap(), record.clone());
+        let id = hosts.entries()[0].id;
+        hosts.remember_peer(id, record.clone());
 
         assert!(matches!(
             hosts.set_address(0, "10.0.0.2"),
@@ -563,7 +617,8 @@ mod tests {
         let mut hosts = list();
         hosts.add("a", "10.0.0.1").unwrap();
         let record = PeerRecord::new("a", PeerSecret::from_bytes([7; 32])).unwrap();
-        hosts.remember_peer("10.0.0.1:47800".parse().unwrap(), record);
+        let id = hosts.entries()[0].id;
+        hosts.remember_peer(id, record);
 
         assert!(hosts.forget_pairing(0));
         assert!(!hosts.forget_pairing(0));

@@ -84,8 +84,13 @@ paths:
   (`SessionError::HostProfile`).
 - A host without a remembered pairing needs the PIN the host shows; a successful PIN connect
   hands back `ClientStream::paired_secret`, which `StreamView` turns into a `PeerRecord` (named
-  after the host entry) and the root stores on the entry, so later connects use
-  `Credentials::Peer`, also after a restart. `Rename`, `Change address` (both read the Name and
+  after the host entry) and the root stores on the entry, found by its stable `HostId` (not the
+  address, which a discovery merge can change), so later connects use `Credentials::Peer`, also
+  after a restart. A host that left the list meanwhile gives a failure notice instead of losing
+  the pairing silently. Disconnecting while the connect still runs emits `StreamEvent::Abandoned`:
+  the window is stopped at once but the root keeps the view in `abandoned` until the connect
+  returns, so a pairing the host already stored is still reported (`Paired`) before the new
+  stream is stopped and the view ends. `Rename`, `Change address` (both read the Name and
   Address fields; the pairing is kept, it is keyed by the secret and not the address) and
   `Forget pairing` act on the selected entry; renaming or re-addressing a discovered entry saves
   it. Names follow `MAX_PEER_NAME_BYTES` and carry no control characters, since they are written
