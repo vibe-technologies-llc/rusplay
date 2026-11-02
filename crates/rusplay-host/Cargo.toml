@@ -28,6 +28,7 @@ rusplay-input.workspace = true
 rusplay-net.workspace = true
 rusplay-protocol.workspace = true
 rusplay-scale.workspace = true
+rustix = { workspace = true, features = ["process", "thread"] }
 thiserror.workspace = true
 wgpu.workspace = true
 

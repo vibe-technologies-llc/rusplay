@@ -11,6 +11,7 @@ const MTU_RANGE: RangeInclusive<u16> = 576..=9000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
 const PACING_WINDOW_RANGE: RangeInclusive<u8> = 1..=100;
+const NICE_RANGE: RangeInclusive<i8> = -20..=19;
 const KBPS_PER_MBPS: u32 = 1_000;
 const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
@@ -24,6 +25,8 @@ pub struct NetworkConfig {
     pub pacing: bool,
     pub pacing_window_percent: u8,
     pub pacing_max_mbps: u32,
+    pub frame_thread_nice: i8,
+    pub send_timer_slack_us: u32,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
     pub reassembly_max_pending_frames: u8,
@@ -63,6 +66,8 @@ impl Default for NetworkConfig {
             pacing: true,
             pacing_window_percent: 50,
             pacing_max_mbps: 0,
+            frame_thread_nice: -5,
+            send_timer_slack_us: 1,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
             reassembly_max_pending_frames: 8,
@@ -109,6 +114,12 @@ impl NetworkConfig {
         if !PACING_WINDOW_RANGE.contains(&self.pacing_window_percent) {
             return Err(ConfigError::PacingWindowOutOfRange(
                 self.pacing_window_percent,
+            ));
+        }
+
+        if !NICE_RANGE.contains(&self.frame_thread_nice) {
+            return Err(ConfigError::FrameThreadNiceOutOfRange(
+                self.frame_thread_nice,
             ));
         }
 
@@ -328,6 +339,29 @@ mod tests {
         assert_eq!(NetworkConfig::default().pacing_max_kbps(), None);
         assert_eq!(capped.pacing_max_kbps(), Some(940_000));
         assert!(capped.validate().is_ok());
+    }
+
+    #[test]
+    fn the_frame_thread_nice_value_must_be_a_valid_nice_level() {
+        for nice in [-21, 20] {
+            let config = NetworkConfig {
+                frame_thread_nice: nice,
+                ..NetworkConfig::default()
+            };
+
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::FrameThreadNiceOutOfRange(found)) if found == nice
+            ));
+        }
+        for nice in [-20, 0, 19] {
+            let config = NetworkConfig {
+                frame_thread_nice: nice,
+                ..NetworkConfig::default()
+            };
+
+            assert!(config.validate().is_ok());
+        }
     }
 
     #[test]

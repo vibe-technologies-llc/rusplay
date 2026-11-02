@@ -45,6 +45,12 @@ paths:
   stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
+  - The encode, send and control threads apply `ThreadTuning` (`src/priority.rs`) as the first
+    thing they do: `network.frame_thread_nice` (default -5, 0 leaves the thread alone) through
+    `setpriority`, which Linux applies to the calling thread, and, on the send thread only,
+    `network.send_timer_slack_us` (default 1, 0 leaves the kernel's) through
+    `PR_SET_TIMERSLACK`, so the pacer's short sleeps do not overshoot. A refused request (no
+    `RLIMIT_NICE` headroom) is silent and the thread runs at its default.
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
     session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels

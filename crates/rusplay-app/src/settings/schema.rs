@@ -81,6 +81,7 @@ const POSITIVE_U32: Kind = Kind::Integer {
     max: u32::MAX as i64,
 };
 
+const NICE: Kind = Kind::Integer { min: -20, max: 19 };
 const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
@@ -801,6 +802,21 @@ pub static FIELDS: &[Field] = &[
         U32,
     )
     .unit("Mbps"),
+    field(
+        Section::Network,
+        "Transport",
+        "network.frame_thread_nice",
+        "Frame thread nice value",
+        NICE,
+    ),
+    field(
+        Section::Network,
+        "Transport",
+        "network.send_timer_slack_us",
+        "Send thread timer slack",
+        U32,
+    )
+    .unit("us"),
     field(
         Section::Network,
         "Transport",

@@ -26,6 +26,7 @@ use crate::{
     negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
+    priority::ThreadTuning,
     send::{self, Pacing, SendLinks, SendOptions},
     shared::{Shared, StopOnDrop},
 };
@@ -154,6 +155,7 @@ impl HostSession {
         let mut stream = HostStream {
             stages: Vec::new(),
             shared: Arc::clone(&shared),
+            tuning: ThreadTuning::from_config(network),
         };
 
         let outbox = Arc::new(ControlOutbox::new(
@@ -286,6 +288,7 @@ fn send_options(config: &Config) -> SendOptions {
 pub struct HostStream {
     stages: Vec<(Stage, JoinHandle<Result<(), HostError>>)>,
     shared: Arc<Shared>,
+    tuning: ThreadTuning,
 }
 
 impl HostStream {
@@ -349,8 +352,10 @@ impl HostStream {
             builder = builder.stack_size(bytes);
         }
         let guard = StopOnDrop(Arc::clone(&self.shared));
+        let tuning = self.tuning;
         let spawned = builder.spawn(move || {
             let _guard = guard;
+            tuning.apply(stage);
             body()
         });
 
