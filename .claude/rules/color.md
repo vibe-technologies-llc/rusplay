@@ -83,7 +83,8 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
   (`MasteringLuminanceInverted`).
 - `SignalledColor` is what a bitstream said: every field optional (primaries, transfer, matrix,
   range, mastering display, content light). `with_h273_codes` maps codes and leaves unknown or
-  unspecified (2) ones unset, `with_full_range` sets the range, and `over(ColorSpace)` replaces
+  unspecified (2) ones unset (transfer codes 6, 14 and 15 and matrix code 5 are the BT.709 and
+  BT.601 aliases), `with_full_range` sets the range, and `over(ColorSpace)` replaces
   exactly the fields that were signalled. `ColorPrimaries::from_chromaticities` names a known
   set when the chromaticities match it exactly and is `Custom` otherwise, which is how mastering
   display primaries read from SEI or AV1 metadata come back as `Bt2020` or `DisplayP3`.
