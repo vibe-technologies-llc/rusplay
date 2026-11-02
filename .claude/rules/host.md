@@ -37,7 +37,8 @@ paths:
   shared by the control and encode stages; each lock is held for one channel call, never across
   a socket wait. Four to six named threads, each returning `Result<(), HostError>`, share
   `Shared` (stop flag, the streaming flag, `Counters`, the capture mailbox). Any stage that ends
-  stops the others; `wait`/`stop` join all of them and return the first error, and dropping the
+  stops the others, and so does a panic (every thread body runs inside a `StopOnDrop` guard, so
+  an unwinding build never leaves control sending keepalives); `wait`/`stop` join all of them and return the first error, and dropping the
   stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).

@@ -30,7 +30,7 @@ use rusplay_protocol::{
 use tempfile::TempDir;
 
 use crate::{
-    Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream,
+    Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream, Stage,
     encode::PipelineFactory,
     pipeline::{StreamFormat, VideoPipeline},
 };
@@ -936,6 +936,37 @@ fn a_silent_client_times_out() {
     assert!(matches!(
         wait_for_end(stream),
         Err(HostError::ClientSilent(_))
+    ));
+}
+
+struct PanickingFactory;
+
+impl PipelineFactory for PanickingFactory {
+    fn encodable(&mut self) -> Result<FormatSet, HostError> {
+        Ok(FormatSet::ALL)
+    }
+
+    fn build(self: Box<Self>, _format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {
+        panic!("the encoder fell over");
+    }
+}
+
+#[test]
+fn a_stage_that_panics_ends_a_session_whose_client_still_answers() {
+    let fixture = Fixture::new(host_config());
+    let serving = fixture.serve(Some(pin()), feed(1), Box::new(PanickingFactory));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let ended = client.pump_until(|_| stream.is_finished());
+
+    assert!(ended);
+    assert!(matches!(
+        stream.wait(),
+        Err(HostError::StagePanicked {
+            stage: Stage::Encode
+        })
     ));
 }
 

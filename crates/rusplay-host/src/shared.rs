@@ -58,3 +58,11 @@ impl Shared {
         drop(self.mailbox.close());
     }
 }
+
+pub(crate) struct StopOnDrop(pub Arc<Shared>);
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}

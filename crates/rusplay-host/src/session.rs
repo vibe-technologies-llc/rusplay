@@ -27,7 +27,7 @@ use crate::{
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
     send::{self, SendLinks, SendOptions},
-    shared::Shared,
+    shared::{Shared, StopOnDrop},
 };
 
 const FEC_BLOCK_DATA_SHARDS: u8 = 32;
@@ -344,7 +344,11 @@ impl HostStream {
         if let Some(bytes) = stack_bytes {
             builder = builder.stack_size(bytes);
         }
-        let spawned = builder.spawn(body);
+        let guard = StopOnDrop(Arc::clone(&self.shared));
+        let spawned = builder.spawn(move || {
+            let _guard = guard;
+            body()
+        });
 
         match spawned {
             Ok(handle) => {
