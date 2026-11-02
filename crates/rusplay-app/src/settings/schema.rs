@@ -640,6 +640,13 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("frames"),
     field(
+        Section::Video,
+        "Presentation",
+        "video.stats_overlay",
+        "Statistics over the picture",
+        Kind::Flag,
+    ),
+    field(
         Section::Audio,
         "Stream",
         "audio.codec",

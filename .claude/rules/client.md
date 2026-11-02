@@ -330,6 +330,18 @@ paths:
   `round((position - hotspot) * target / space)` (the subtraction saturates), clipped by the
   picture. A shape whose image or scaled size exceeds the device's `max_texture_dimension_2d` is
   not drawn and counts once per shape and size in `StreamWindow::cursors_skipped`.
+- Statistics overlay (`window/overlay.rs`): `StreamWindow::set_overlay(Option<OverlayText>)` sets up
+  to `MAX_OVERLAY_LINES` lines of at most `MAX_OVERLAY_COLUMNS` characters, drawn in the picture's
+  top-left corner. The subsurface sits above gpui's surface, so the overlay is part of
+  `compose.wgsl` and not a separate surface. `OverlayLayer` rasterizes the text on the CPU from a
+  built-in 5x7 bitmap font (`window/overlay/font.rs`: space, digits, letters shown in capitals,
+  and `.,:-/%+()=_`; anything else is `?`) into an `r8unorm` ink mask scaled by
+  `target.height / 540` (at least 1), and re-uploads it only when the text or the scale changes.
+  The shader blends it after the cursor in linear target light: the rectangle darkens the picture
+  by a constant plate alpha and the ink is 1.0, the target's reference white, and the result is
+  encoded and dithered with everything else. `None`, blank text or a mask past
+  `max_texture_dimension_2d` draws nothing. The overlay is stored in `Pending` like the layout,
+  so setting it wakes the window thread and a static picture redraws with the retained frame.
 - Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
   `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
   `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`
@@ -346,7 +358,7 @@ paths:
   are unit tested in `window/choice.rs` without one.
 - GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
   blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
-  and origin, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
+  and origin, the overlay's pixels inside its rectangle only and nothing drawn without one, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked
   by running the app.
 
 ## Host book

@@ -160,8 +160,15 @@ paths:
   counter deltas into per-second rates and the timing deltas into average and peak client latency
   (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
   line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
-  underruns) appear only while non-zero. The figures are client side only: the end-to-end time
-  waits on `app-stream-stats-end-to-end`.
+  underruns) appear only while non-zero. The line starts with the capture-to-present figure
+  (`ClientStats::capture_to_present`, with `capture_to_receive` and `capture_to_decode` as its
+  stages, from the host clock offset; absent until the first clock pong) followed by the client
+  side latency measured from `PresentedFrame`.
+  With `video.stats_overlay` (default off) the same rates are also drawn over the picture, for
+  when the header is hidden: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
+  hands it to `StreamWindow::set_overlay` on every new sample and on the toggle. The overlay
+  follows the same `Hide stats`/`Show stats` button and stats hotkey as the header line, so
+  it is the control that remains in fullscreen.
   With `network.stats_json` the same poll also writes the raw `ClientStats` to stdout as JSON
   lines (`JsonReporter` in `stats.rs`, formatting in `rusplay-client`): one every
   `network.stats_log_interval_ms` (`0` turns the periodic ones off) with `"phase":"interval"`, and

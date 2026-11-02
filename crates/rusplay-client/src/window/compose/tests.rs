@@ -64,7 +64,7 @@ fn render_view(
     encoding: &DisplayEncoding,
     picture: &wgpu::TextureView,
     size: (u32, u32),
-    cursor: Option<([f32; 4], CursorPlacement)>,
+    cursor: Option<([f32; 4], Placement)>,
     format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
     let target = testing::texture(
@@ -92,6 +92,7 @@ fn render_view(
             encoder,
             picture,
             cursor.as_ref().map(|(view, placement)| (view, *placement)),
+            None,
             &target_view,
             format,
         );
@@ -103,7 +104,7 @@ fn render(
     gpu: &Gpu,
     encoding: &DisplayEncoding,
     picture: &Picture<'_>,
-    cursor: Option<([f32; 4], CursorPlacement)>,
+    cursor: Option<([f32; 4], Placement)>,
     format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
     let view = testing::upload(gpu, picture.width, picture.height, picture.texels)
@@ -119,7 +120,7 @@ fn render(
     )
 }
 
-fn composed_rgba8(gpu: &Gpu, cursor: Option<([f32; 4], CursorPlacement)>) -> Vec<u8> {
+fn composed_rgba8(gpu: &Gpu, cursor: Option<([f32; 4], Placement)>) -> Vec<u8> {
     let texels = flat(WIDTH, HEIGHT, [0.25, 0.25, 0.25, 1.0]);
     let picture = Picture {
         width: WIDTH,
@@ -185,7 +186,7 @@ fn the_cursor_is_blended_premultiplied_inside_its_rectangle_only() {
     let Some(gpu) = testing::gpu() else {
         return;
     };
-    let placement = CursorPlacement {
+    let placement = Placement {
         origin: [3, 1],
         size: [2, 2],
     };
@@ -204,7 +205,7 @@ fn a_cursor_partly_off_the_picture_is_clipped() {
     let Some(gpu) = testing::gpu() else {
         return;
     };
-    let placement = CursorPlacement {
+    let placement = Placement {
         origin: [-1, -1],
         size: [2, 2],
     };
@@ -320,7 +321,7 @@ fn extended_linear_keeps_wide_gamut_colours_as_negative_bt709_values() {
         height: 1,
         texels: &texels,
     };
-    let placement = CursorPlacement {
+    let placement = Placement {
         origin: [2, 0],
         size: [1, 1],
     };

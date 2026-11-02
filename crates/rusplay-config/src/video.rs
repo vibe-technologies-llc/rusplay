@@ -27,6 +27,7 @@ pub struct VideoConfig {
     pub decode_queue_frames: u8,
     pub present_mode: PresentMode,
     pub present_frame_latency: u8,
+    pub stats_overlay: bool,
 }
 
 impl Default for VideoConfig {
@@ -45,6 +46,7 @@ impl Default for VideoConfig {
             decode_queue_frames: 3,
             present_mode: PresentMode::default(),
             present_frame_latency: 1,
+            stats_overlay: false,
         }
     }
 }
@@ -351,6 +353,14 @@ mod tests {
 
         assert_eq!(config.present_mode, PresentMode::Immediate);
         assert_eq!(VideoConfig::default().present_mode, PresentMode::Mailbox);
+    }
+
+    #[test]
+    fn the_stats_overlay_is_off_by_default() {
+        let parsed: VideoConfig = toml::from_str("stats_overlay = true").unwrap();
+
+        assert!(!VideoConfig::default().stats_overlay);
+        assert!(parsed.stats_overlay);
     }
 
     #[test]

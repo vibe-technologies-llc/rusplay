@@ -6,7 +6,7 @@ use rusplay_core::Resolution;
 use rusplay_protocol::CursorImage;
 use rusplay_scale::{ScalePipelines, Scaler};
 
-use crate::{ClientError, CursorState, present, stats::Counter, window::compose::CursorPlacement};
+use crate::{ClientError, CursorState, present, stats::Counter, window::compose::Placement};
 
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const LINEAR_TEXEL_BYTES: u32 = 8;
@@ -80,7 +80,7 @@ impl CursorLayer {
         encoder: &mut wgpu::CommandEncoder,
         cursor: &CursorState,
         target: Resolution,
-    ) -> Result<Option<(wgpu::TextureView, CursorPlacement)>, ClientError> {
+    ) -> Result<Option<(wgpu::TextureView, Placement)>, ClientError> {
         let Some(image) = cursor.image.as_ref().filter(|_| cursor.visible) else {
             return Ok(None);
         };
@@ -100,7 +100,7 @@ impl CursorLayer {
             return Ok(None);
         }
 
-        let placement = CursorPlacement {
+        let placement = Placement {
             origin: [
                 scaled_offset(
                     cursor.x.saturating_sub(i32::from(image.hotspot_x)),

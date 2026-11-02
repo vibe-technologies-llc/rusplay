@@ -102,6 +102,7 @@ pub struct StreamView {
     engaged: bool,
     pointer: Option<(PointerMode, ActivePointer)>,
     show_stats: bool,
+    stats_overlay: bool,
     sampler: StatsSampler,
     json_reporter: Option<JsonReporter>,
     rates: Option<StreamRates>,
@@ -126,6 +127,7 @@ impl StreamView {
         let sink = TimingSink::new(stream_window.sink(), Arc::clone(&timings));
         let address = host.address;
         let input = config.input;
+        let stats_overlay = config.video.stats_overlay;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
 
         let connecting = cx.background_spawn(async move {
@@ -149,6 +151,7 @@ impl StreamView {
             engaged: false,
             pointer: None,
             show_stats: true,
+            stats_overlay,
             sampler: StatsSampler::new(timings),
             json_reporter,
             rates: None,
@@ -195,7 +198,18 @@ impl StreamView {
 
     fn toggle_stats(&mut self, cx: &mut Context<Self>) {
         self.show_stats = !self.show_stats;
+        self.sync_overlay();
         cx.notify();
+    }
+
+    fn sync_overlay(&self) {
+        let text = (self.stats_overlay && self.show_stats)
+            .then(|| self.rates.as_ref().map(StreamRates::overlay))
+            .flatten();
+
+        if let Some(window) = &self.live.borrow().window {
+            window.set_overlay(text);
+        }
     }
 
     fn run_action(&mut self, action: ClientAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -358,6 +372,7 @@ impl StreamView {
             .and_then(|stats| self.sampler.sample(Instant::now(), stats))
         {
             self.rates = Some(rates);
+            self.sync_overlay();
             cx.notify();
         }
 

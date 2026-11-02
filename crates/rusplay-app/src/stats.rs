@@ -7,7 +7,7 @@ use std::{
 };
 
 use rusplay_client::{
-    ClientStats, ColorVolume, FrameSink, PresentedFrame, StatsPhase, StatsSchedule,
+    ClientStats, ColorVolume, FrameSink, OverlayText, PresentedFrame, StatsPhase, StatsSchedule,
     stats_json_line, unix_millis_now,
 };
 use rusplay_config::NetworkConfig;
@@ -98,6 +98,23 @@ impl ClientLatency {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EndToEnd {
+    pub receive: Option<Duration>,
+    pub decode: Option<Duration>,
+    pub present: Duration,
+}
+
+impl EndToEnd {
+    fn from_stats(stats: &ClientStats) -> Option<Self> {
+        Some(Self {
+            receive: stats.capture_to_receive,
+            decode: stats.capture_to_decode,
+            present: stats.capture_to_present?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StreamRates {
     pub received_fps: f64,
     pub presented_fps: f64,
@@ -108,6 +125,7 @@ pub struct StreamRates {
     pub decode_errors: f64,
     pub audio_underruns: f64,
     pub latency: Option<ClientLatency>,
+    pub end_to_end: Option<EndToEnd>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -162,12 +180,46 @@ impl StreamRates {
             decode_errors: rate(now.decode_errors, before.decode_errors),
             audio_underruns: rate(now.audio_underruns, before.audio_underruns),
             latency,
+            end_to_end: EndToEnd::from_stats(now),
         })
+    }
+
+    pub fn overlay(&self) -> OverlayText {
+        let mut lines = vec![format!(
+            "{:.0} FPS  RECV {:.0}  LOST {:.1}/S",
+            self.presented_fps, self.received_fps, self.frames_lost
+        )];
+
+        if let Some(end_to_end) = self.end_to_end {
+            lines.push(format!("E2E {:.1} MS", millis(end_to_end.present)));
+            lines.extend(
+                end_to_end
+                    .receive
+                    .map(|time| format!("  RX {:.1} MS", millis(time))),
+            );
+            lines.extend(
+                end_to_end
+                    .decode
+                    .map(|time| format!("  DEC {:.1} MS", millis(time))),
+            );
+        }
+        if let Some(latency) = self.latency {
+            lines.push(format!(
+                "CLIENT {:.1} MS  PEAK {:.1}",
+                millis(latency.total()),
+                millis(latency.peak)
+            ));
+        }
+
+        OverlayText::new(lines)
     }
 
     pub fn summary(&self) -> String {
         let mut parts = vec![format!("{:.0} fps", self.presented_fps)];
 
+        if let Some(end_to_end) = self.end_to_end {
+            parts.push(end_to_end.summary());
+        }
         if let Some(latency) = self.latency {
             parts.push(format!(
                 "{:.1} ms client (decode {:.1}, present {:.1}, peak {:.1})",
@@ -195,6 +247,25 @@ impl StreamRates {
         );
 
         parts.join(" · ")
+    }
+}
+
+impl EndToEnd {
+    fn summary(self) -> String {
+        let stages = [("receive", self.receive), ("decode", self.decode)]
+            .into_iter()
+            .filter_map(|(label, time)| time.map(|time| format!("{label} {:.1}", millis(time))))
+            .collect::<Vec<_>>();
+
+        if stages.is_empty() {
+            format!("{:.1} ms capture to present", millis(self.present))
+        } else {
+            format!(
+                "{:.1} ms capture to present ({})",
+                millis(self.present),
+                stages.join(", ")
+            )
+        }
     }
 }
 
@@ -401,11 +472,80 @@ mod tests {
                 present: Duration::from_micros(500),
                 peak: Duration::from_micros(6_500),
             }),
+            end_to_end: None,
         };
 
         assert_eq!(
             rates.summary(),
             "60 fps · 2.5 ms client (decode 2.0, present 0.5, peak 6.5) · received 60 fps · lost 0.0/s · recovered 1.5/s · keyframe requests 2.0/s"
+        );
+    }
+
+    fn measured_rates() -> StreamRates {
+        let start = Instant::now();
+        let before = reading(start);
+        let mut after = reading(start + Duration::from_secs(1));
+        after.stats.frames_presented = 60;
+        after.stats.frames_received = 60;
+        after.stats.capture_to_receive = Some(Duration::from_micros(3_100));
+        after.stats.capture_to_decode = Some(Duration::from_micros(9_000));
+        after.stats.capture_to_present = Some(Duration::from_micros(12_340));
+        after.totals = TimingTotals {
+            frames: 4,
+            decode_micros: 8_000,
+            present_micros: 2_000,
+        };
+
+        StreamRates::between(&before, &after, 6_500).unwrap()
+    }
+
+    #[test]
+    fn the_capture_to_present_figure_comes_from_the_client_stats() {
+        let rates = measured_rates();
+
+        let end_to_end = rates.end_to_end.unwrap();
+
+        assert_eq!(end_to_end.present, Duration::from_micros(12_340));
+        assert_eq!(end_to_end.receive, Some(Duration::from_micros(3_100)));
+        assert_eq!(end_to_end.decode, Some(Duration::from_micros(9_000)));
+        assert!(
+            rates
+                .summary()
+                .starts_with("60 fps · 12.3 ms capture to present (receive 3.1, decode 9.0) · ")
+        );
+    }
+
+    #[test]
+    fn without_a_clock_offset_there_is_no_end_to_end_figure() {
+        let start = Instant::now();
+        let rates =
+            StreamRates::between(&reading(start), &reading(start + Duration::from_secs(1)), 0)
+                .unwrap();
+
+        assert_eq!(rates.end_to_end, None);
+        assert!(!rates.summary().contains("capture to present"));
+        assert!(
+            !rates
+                .overlay()
+                .lines()
+                .iter()
+                .any(|line| line.contains("E2E"))
+        );
+    }
+
+    #[test]
+    fn the_overlay_lists_rates_end_to_end_and_client_latency() {
+        let overlay = measured_rates().overlay();
+
+        assert_eq!(
+            overlay.lines(),
+            [
+                "60 FPS  RECV 60  LOST 0.0/S",
+                "E2E 12.3 MS",
+                "  RX 3.1 MS",
+                "  DEC 9.0 MS",
+                "CLIENT 2.5 MS  PEAK 6.5",
+            ]
         );
     }
 }

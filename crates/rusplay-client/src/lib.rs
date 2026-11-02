@@ -36,7 +36,9 @@ pub use rusplay_protocol::{CursorImage, HostId, StreamDescription};
 pub use rusplay_scale::{ColorVolume, OutputLight};
 
 #[cfg(feature = "window")]
-pub use crate::window::{LogicalArea, StreamWindow, WaylandTarget, WindowLayout, WindowSink};
+pub use crate::window::{
+    LogicalArea, OverlayText, StreamWindow, WaylandTarget, WindowLayout, WindowSink,
+};
 pub use crate::{
     audio::default_audio_output,
     color::FrameColor,

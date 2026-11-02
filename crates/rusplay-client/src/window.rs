@@ -5,6 +5,7 @@ mod dither;
 mod follow;
 mod layout;
 mod output;
+mod overlay;
 mod surface;
 
 use std::{
@@ -24,7 +25,10 @@ use rusplay_input::{
 };
 use rusplay_scale::ColorVolume;
 
-pub use crate::window::layout::{LogicalArea, WindowLayout};
+pub use crate::window::{
+    layout::{LogicalArea, WindowLayout},
+    overlay::OverlayText,
+};
 use crate::{
     ClientError, ClientStream, DisplayImage, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
     cursor::CursorWatcher,
@@ -36,6 +40,7 @@ use crate::{
         cursor::CursorLayer,
         follow::DisplayFollower,
         output::{Display, SurfaceOutput},
+        overlay::OverlayLayer,
         surface::ChildSurface,
     },
 };
@@ -46,6 +51,7 @@ struct Pending {
     layout: Option<WindowLayout>,
     cursor: Option<LatestCursor>,
     display: Option<DisplayImage>,
+    overlay: Option<Arc<OverlayText>>,
     dirty: bool,
     stop: bool,
 }
@@ -66,6 +72,18 @@ impl Shared {
             color_target: Mutex::new(color_target),
             cursors_skipped: Arc::new(Counter::default()),
         }
+    }
+
+    fn set_overlay(&self, overlay: Option<OverlayText>) {
+        let mut pending = self.pending.lock();
+        if pending.overlay.as_deref() == overlay.as_ref() {
+            return;
+        }
+
+        pending.overlay = overlay.map(Arc::new);
+        pending.dirty = true;
+        drop(pending);
+        self.wake.notify_one();
     }
 
     fn update<R>(&self, change: impl FnOnce(&mut Pending) -> R) -> R {
@@ -175,6 +193,7 @@ impl StreamWindow {
                 config.scaling,
                 Arc::clone(&shared.cursors_skipped),
             ),
+            overlay_layer: OverlayLayer::default(),
             gpu: gpu.clone(),
             surface,
             adapter,
@@ -188,6 +207,7 @@ impl StreamWindow {
             mapped: false,
             frame: None,
             cursor: None,
+            overlay: None,
         };
 
         let worker = Arc::clone(&shared);
@@ -236,6 +256,10 @@ impl StreamWindow {
         WindowSink {
             shared: Arc::clone(&self.shared),
         }
+    }
+
+    pub fn set_overlay(&self, overlay: Option<OverlayText>) {
+        self.shared.set_overlay(overlay);
     }
 
     pub fn follow_cursor(&self, cursor: &LatestCursor) {
@@ -482,11 +506,13 @@ struct Presenter {
     options: SurfaceOptions,
     composer: Composer,
     cursor_layer: CursorLayer,
+    overlay_layer: OverlayLayer,
     configured: Option<Resolution>,
     destination: Option<(u32, u32)>,
     mapped: bool,
     frame: Option<PresentedFrame>,
     cursor: Option<LatestCursor>,
+    overlay: Option<Arc<OverlayText>>,
 }
 
 impl Presenter {
@@ -510,6 +536,7 @@ impl Presenter {
                 if let Some(cursor) = pending.cursor.take() {
                     self.cursor = Some(cursor);
                 }
+                self.overlay.clone_from(&pending.overlay);
                 (pending.layout, pending.display.take())
             };
 
@@ -614,12 +641,20 @@ impl Presenter {
             None => None,
         };
 
+        let overlay = self.overlay_layer.prepare(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.overlay.as_deref(),
+            layout.pixels,
+        );
+
         self.composer.encode(
             &self.gpu.device,
             &self.gpu.queue,
             &mut encoder,
             &picture,
             cursor.as_ref().map(|(view, placement)| (view, *placement)),
+            overlay.as_ref().map(|(view, placement)| (view, *placement)),
             &target,
             format,
         );

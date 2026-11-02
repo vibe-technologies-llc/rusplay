@@ -15,12 +15,15 @@ struct Params {
     dither: u32,
     noise_size: u32,
     bayer_bits: u32,
+    overlay_origin: vec2<i32>,
+    overlay_size: vec2<i32>,
 }
 
 @group(0) @binding(0) var picture: texture_2d<f32>;
 @group(0) @binding(1) var cursor: texture_2d<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
 @group(0) @binding(3) var noise: texture_2d<f32>;
+@group(0) @binding(4) var overlay: texture_2d<f32>;
 
 const TRANSFER_LINEAR: u32 = 0u;
 const TRANSFER_SRGB: u32 = 1u;
@@ -29,6 +32,8 @@ const TRANSFER_GAMMA22: u32 = 3u;
 const TRANSFER_PQ: u32 = 4u;
 const TRANSFER_HLG: u32 = 5u;
 const TRANSFER_EXTENDED_LINEAR: u32 = 6u;
+
+const OVERLAY_PLATE: f32 = 0.55;
 
 const DITHER_ORDERED: u32 = 1u;
 const DITHER_BLUE_NOISE: u32 = 2u;
@@ -136,8 +141,7 @@ fn quantize(encoded: vec3<f32>, pixel: vec2<u32>) -> vec3<f32> {
     return min(code, vec3<f32>(steps)) / steps;
 }
 
-fn composed(pixel: vec2<i32>) -> vec3<f32> {
-    let below = textureLoad(picture, pixel, 0).rgb;
+fn with_cursor(pixel: vec2<i32>, below: vec3<f32>) -> vec3<f32> {
     let local = pixel - params.cursor_origin;
     let inside = all(local >= vec2<i32>(0)) && all(local < params.cursor_size);
 
@@ -148,6 +152,23 @@ fn composed(pixel: vec2<i32>) -> vec3<f32> {
     let over = textureLoad(cursor, local, 0);
     let coverage = clamp(over.a, 0.0, 1.0);
     return apply(params.cursor_to_target, max(over.rgb, vec3<f32>(0.0))) + below * (1.0 - coverage);
+}
+
+fn with_overlay(pixel: vec2<i32>, below: vec3<f32>) -> vec3<f32> {
+    let local = pixel - params.overlay_origin;
+    let inside = all(local >= vec2<i32>(0)) && all(local < params.overlay_size);
+
+    if !inside {
+        return below;
+    }
+
+    let ink = clamp(textureLoad(overlay, local, 0).r, 0.0, 1.0);
+    return mix(below * (1.0 - OVERLAY_PLATE), vec3<f32>(1.0), ink);
+}
+
+fn composed(pixel: vec2<i32>) -> vec3<f32> {
+    let below = textureLoad(picture, pixel, 0).rgb;
+    return with_overlay(pixel, with_cursor(pixel, below));
 }
 
 @vertex

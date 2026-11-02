@@ -8,7 +8,9 @@ use crate::window::{
 };
 
 const SHADER: &str = include_str!("compose.wgsl");
-const PARAMS_WORDS: usize = 40;
+const ENCODING_WORDS: usize = 40;
+const OVERLAY_WORDS: usize = 4;
+const PARAMS_WORDS: usize = ENCODING_WORDS + OVERLAY_WORDS;
 const PARAMS_BYTES: u64 = PARAMS_WORDS as u64 * 4;
 const PQ_PEAK_NITS: f64 = 10_000.0;
 const HLG_REFERENCE_GAMMA: f64 = 1.2;
@@ -17,7 +19,7 @@ const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
 const NOISE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CursorPlacement {
+pub(crate) struct Placement {
     pub origin: [i32; 2],
     pub size: [u32; 2],
 }
@@ -28,9 +30,10 @@ pub(crate) struct Composer {
     pipeline_layout: wgpu::PipelineLayout,
     shader: wgpu::ShaderModule,
     pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
-    encoding: [u32; PARAMS_WORDS],
+    encoding: [u32; ENCODING_WORDS],
     params: wgpu::Buffer,
     no_cursor: wgpu::TextureView,
+    no_overlay: wgpu::TextureView,
     noise: wgpu::TextureView,
 }
 
@@ -56,6 +59,7 @@ impl Composer {
                     count: None,
                 },
                 texture_entry(3),
+                texture_entry(4),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -80,6 +84,13 @@ impl Composer {
             wgpu::TextureFormat::Rgba16Float,
         )
         .create_view(&wgpu::TextureViewDescriptor::default());
+        let no_overlay = single_texture(
+            device,
+            "rusplay-compose-no-overlay",
+            1,
+            wgpu::TextureFormat::R8Unorm,
+        )
+        .create_view(&wgpu::TextureViewDescriptor::default());
         let noise = upload_noise(device, queue);
 
         Self {
@@ -90,6 +101,7 @@ impl Composer {
             encoding: encoding_words(encoding),
             params,
             no_cursor,
+            no_overlay,
             noise,
         }
     }
@@ -105,20 +117,24 @@ impl Composer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         picture: &wgpu::TextureView,
-        cursor: Option<(&wgpu::TextureView, CursorPlacement)>,
+        cursor: Option<(&wgpu::TextureView, Placement)>,
+        overlay: Option<(&wgpu::TextureView, Placement)>,
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
     ) {
-        let placement = cursor.map_or(
-            CursorPlacement {
-                origin: [0, 0],
-                size: [0, 0],
-            },
-            |(_, placement)| placement,
-        );
-        queue.write_buffer(&self.params, 0, &params_bytes(placement, &self.encoding));
+        let placements = [cursor, overlay].map(|layer| {
+            layer.map_or(
+                Placement {
+                    origin: [0, 0],
+                    size: [0, 0],
+                },
+                |(_, placement)| placement,
+            )
+        });
+        queue.write_buffer(&self.params, 0, &params_bytes(placements, &self.encoding));
 
         let cursor_view = cursor.map_or(&self.no_cursor, |(view, _)| view);
+        let overlay_view = overlay.map_or(&self.no_overlay, |(view, _)| view);
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("rusplay-compose"),
             layout: &self.layout,
@@ -138,6 +154,10 @@ impl Composer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(&self.noise),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(overlay_view),
                 },
             ],
         });
@@ -315,9 +335,9 @@ fn push_rows(words: &mut Vec<u32>, matrix: Matrix3) {
     }
 }
 
-fn encoding_words(encoding: &DisplayEncoding) -> [u32; PARAMS_WORDS] {
+fn encoding_words(encoding: &DisplayEncoding) -> [u32; ENCODING_WORDS] {
     let target = encoding.target.primaries;
-    let mut words = Vec::with_capacity(PARAMS_WORDS);
+    let mut words = Vec::with_capacity(ENCODING_WORDS);
     words.extend([0; 4]);
     push_rows(
         &mut words,
@@ -354,16 +374,21 @@ fn encoding_words(encoding: &DisplayEncoding) -> [u32; PARAMS_WORDS] {
         BAYER_BITS,
     ]);
 
-    let mut fixed = [0; PARAMS_WORDS];
+    let mut fixed = [0; ENCODING_WORDS];
     fixed.copy_from_slice(&words);
     fixed
 }
 
-fn params_bytes(placement: CursorPlacement, encoding: &[u32; PARAMS_WORDS]) -> Vec<u8> {
+fn placement_words(placement: Placement) -> [i32; 4] {
     let size = placement
         .size
         .map(|dimension| i32::try_from(dimension).unwrap_or(i32::MAX));
-    let cursor = [placement.origin[0], placement.origin[1], size[0], size[1]];
+
+    [placement.origin[0], placement.origin[1], size[0], size[1]]
+}
+
+fn params_bytes(placements: [Placement; 2], encoding: &[u32; ENCODING_WORDS]) -> Vec<u8> {
+    let [cursor, overlay] = placements.map(placement_words);
 
     cursor
         .iter()
@@ -373,6 +398,7 @@ fn params_bytes(placement: CursorPlacement, encoding: &[u32; PARAMS_WORDS]) -> V
                 .iter()
                 .flat_map(|word| word.to_le_bytes()),
         )
+        .chain(overlay.iter().flat_map(|word| word.to_le_bytes()))
         .collect()
 }
 
