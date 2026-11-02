@@ -253,6 +253,7 @@ enum EntryState {
 
 struct Entry {
     attempt: u32,
+    origin: SocketAddr,
     peer: PeerId,
     client_nonce: Nonce,
     reply: Vec<u8>,
@@ -297,6 +298,7 @@ impl ReconnectResponder {
     pub fn handle(
         &mut self,
         datagram: &[u8],
+        from: SocketAddr,
         store: &PeerStore,
     ) -> Result<ReconnectOutput, NetError> {
         match ReconnectMessage::from_datagram(datagram)? {
@@ -304,8 +306,10 @@ impl ReconnectResponder {
                 attempt,
                 peer,
                 nonce,
-            } => self.on_hello(attempt, peer, nonce, store),
-            ReconnectMessage::Proof { attempt, proof } => self.on_proof(attempt, &proof, store),
+            } => self.on_hello(attempt, from, peer, nonce, store),
+            ReconnectMessage::Proof { attempt, proof } => {
+                self.on_proof(attempt, from, &proof, store)
+            }
             _ => Ok(ReconnectOutput::default()),
         }
     }
@@ -313,13 +317,15 @@ impl ReconnectResponder {
     fn on_hello(
         &mut self,
         attempt: u32,
+        from: SocketAddr,
         peer: PeerId,
         client_nonce: Nonce,
         store: &PeerStore,
     ) -> Result<ReconnectOutput, NetError> {
         if let Some(entry) = self.entries.iter().find(|entry| entry.attempt == attempt) {
             return Ok(
-                if entry.peer == peer && entry.client_nonce == client_nonce {
+                if entry.origin == from && entry.peer == peer && entry.client_nonce == client_nonce
+                {
                     reply_with(entry.reply.clone())
                 } else {
                     ReconnectOutput::default()
@@ -346,6 +352,7 @@ impl ReconnectResponder {
         }
         self.entries.push_back(Entry {
             attempt,
+            origin: from,
             peer,
             client_nonce,
             reply: reply.clone(),
@@ -361,13 +368,14 @@ impl ReconnectResponder {
     fn on_proof(
         &mut self,
         attempt: u32,
+        from: SocketAddr,
         proof: &Proof,
         store: &PeerStore,
     ) -> Result<ReconnectOutput, NetError> {
         let Some(index) = self
             .entries
             .iter()
-            .position(|entry| entry.attempt == attempt)
+            .position(|entry| entry.attempt == attempt && entry.origin == from)
         else {
             return Ok(ReconnectOutput::default());
         };
@@ -476,7 +484,7 @@ pub fn reconnect_as_host(
             continue;
         };
 
-        let output = match responder.handle(&buf[..len], &store.read()) {
+        let output = match responder.handle(&buf[..len], from, &store.read()) {
             Ok(output) => output,
             Err(NetError::Protocol(_)) => continue,
             Err(error) => return Err(error),
@@ -508,6 +516,8 @@ mod tests {
         TransportOptions, pair_as_client, pair_as_host, peers::PEER_SECRET_LEN,
     };
 
+    const ORIGIN: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)), 4000);
+    const INTRUDER: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)), 4000);
     const LOOPBACK: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
     fn secret(byte: u8) -> PeerSecret {
@@ -536,7 +546,7 @@ mod tests {
         store: &PeerStore,
     ) -> Vec<u8> {
         responder
-            .handle(&start(initiator), store)
+            .handle(&start(initiator), ORIGIN, store)
             .unwrap()
             .reply
             .unwrap()
@@ -553,7 +563,7 @@ mod tests {
             Ok(ReconnectStep::Pending)
         ));
 
-        let output = responder.handle(&start(initiator), store).unwrap();
+        let output = responder.handle(&start(initiator), ORIGIN, store).unwrap();
         let accepted = output.accepted.unwrap();
         let Ok(ReconnectStep::Complete(client)) = initiator.handle(&output.reply.unwrap()) else {
             panic!("client did not complete");
@@ -708,7 +718,7 @@ mod tests {
         let mut proof = start(&initiator);
         let last = proof.len() - 1;
         proof[last] ^= 1;
-        let output = responder.handle(&proof, &store).unwrap();
+        let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert_eq!(
             rejection_of(&output.reply.unwrap()),
@@ -733,10 +743,47 @@ mod tests {
         }
         .to_datagram()
         .unwrap();
-        responder.handle(&forged, &store).unwrap();
-        let output = responder.handle(&start(&initiator), &store).unwrap();
+        responder.handle(&forged, ORIGIN, &store).unwrap();
+        let output = responder
+            .handle(&start(&initiator), ORIGIN, &store)
+            .unwrap();
 
         assert!(output.accepted.is_some());
+    }
+
+    #[test]
+    fn a_proof_from_another_address_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+        let mut responder = ReconnectResponder::new();
+        let challenge = challenge_for(&initiator, &mut responder, &store);
+        initiator.handle(&challenge).unwrap();
+
+        let proof = start(&initiator);
+        let replayed = responder.handle(&proof, INTRUDER, &store).unwrap();
+        let genuine = responder.handle(&proof, ORIGIN, &store).unwrap();
+
+        assert!(replayed.reply.is_none());
+        assert!(replayed.accepted.is_none());
+        assert!(genuine.accepted.is_some());
+    }
+
+    #[test]
+    fn a_retransmitted_hello_from_another_address_gets_no_challenge() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let initiator = ReconnectInitiator::new(&laptop).unwrap();
+        let mut responder = ReconnectResponder::new();
+
+        challenge_for(&initiator, &mut responder, &store);
+        let echoed = responder
+            .handle(&start(&initiator), INTRUDER, &store)
+            .unwrap();
+
+        assert!(echoed.reply.is_none());
     }
 
     #[test]
@@ -764,7 +811,9 @@ mod tests {
         initiator.handle(&challenge).unwrap();
 
         store.forget(&laptop.id()).unwrap();
-        let output = responder.handle(&start(&initiator), &store).unwrap();
+        let output = responder
+            .handle(&start(&initiator), ORIGIN, &store)
+            .unwrap();
 
         assert_eq!(
             rejection_of(&output.reply.unwrap()),
@@ -800,8 +849,8 @@ mod tests {
         initiator.handle(&challenge).unwrap();
         let proof = start(&initiator);
 
-        let first = responder.handle(&proof, &store).unwrap();
-        let second = responder.handle(&proof, &store).unwrap();
+        let first = responder.handle(&proof, ORIGIN, &store).unwrap();
+        let second = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert!(first.accepted.is_some());
         assert!(second.accepted.is_none());
@@ -822,7 +871,7 @@ mod tests {
         let attacker = ReconnectInitiator::new(&laptop).unwrap();
         let mut fresh_responder = ReconnectResponder::new();
         challenge_for(&attacker, &mut fresh_responder, &store);
-        let output = fresh_responder.handle(&captured, &store).unwrap();
+        let output = fresh_responder.handle(&captured, ORIGIN, &store).unwrap();
 
         assert!(output.reply.is_none());
         assert!(output.accepted.is_none());
@@ -884,7 +933,7 @@ mod tests {
             .unwrap();
 
         assert!(matches!(
-            responder.handle(&pairing, &store),
+            responder.handle(&pairing, ORIGIN, &store),
             Err(NetError::Protocol(_))
         ));
     }

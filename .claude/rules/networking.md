@@ -179,6 +179,10 @@ paths:
   is spent the host answers `Rejected(Locked)` and `pair_as_host` returns `PairingLocked`; a
   completed pairing consumes the PIN. The PIN has `network.pairing_pin_digits` digits and
   `Pin::generate` draws it from the OS random source without modulo bias.
+- `PairingResponder::handle` takes the datagram's source address and binds each attempt to the
+  address its `Start` came from: a `Confirm` or a retransmitted `Start` from any other address is
+  ignored, so a replay of the unsealed final message from elsewhere cannot make the host install
+  keys for the wrong peer.
 - `PairingInitiator`/`PairingResponder` are sans-IO; `pair_as_client`/`pair_as_host` drive them over
   a blocking `Transport` with retransmits every `network.control_retransmit_ms` until
   `network.pairing_timeout_ms`, and the host lingers a few retransmit intervals after success to
@@ -205,8 +209,8 @@ paths:
   `ReconnectResponder` for the session's `PeerId`. A `Hello` for any other peer, known or not, is
   `Busy`; a `Hello` for the session's peer runs the full mutual challenge-response against the
   `PeerStore`, from whichever address it arrives (a restarted client has a new port, a roaming
-  one a new IP). The address of a `Hello` is recorded per attempt and a `Proof` is honoured only
-  from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
+  one a new IP). `ReconnectResponder` records the address of a `Hello` per attempt and honours a
+  `Proof` only from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
   address alone is never trusted. Only the final `Accepted` yields keys, and only then does the
   host act (`host.md`). A forged proof is `Rejected(Authentication)` and leaves the session as it
   was. Takeover stays within one address family, since the packetizers are sized for it.
@@ -243,7 +247,8 @@ paths:
   secret and freshness from both sides, a reflected message never verifies, and session keys are
   never reused across reconnects. The client checks the host proof before it sends its own.
 - The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps the last 16
-  attempts (retransmitted `Hello`/`Proof` are answered from cache), re-checks the store when the
+  attempts, each bound to the address of its `Hello` (retransmitted `Hello`/`Proof` from that
+  address are answered from cache, from any other address ignored), re-checks the store when the
   `Proof` arrives, and keeps an attempt alive after a bad `Proof` so a forged one cannot spoil the
   genuine client's attempt. An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
   falls back to PIN pairing.
