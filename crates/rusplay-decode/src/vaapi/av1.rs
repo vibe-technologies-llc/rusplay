@@ -10,7 +10,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb,
+    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb, obu,
     signal::{self, HdrTracker},
     vaapi::{
         Stream, StreamFormat, ffi,
@@ -51,7 +51,7 @@ pub(super) struct Av1Decoder {
 impl Av1Decoder {
     pub(super) fn new() -> Self {
         Self {
-            parser: Parser::default(),
+            parser: obu::low_overhead_parser(),
             stream: None,
             sequence: None,
             slots: Default::default(),
@@ -64,6 +64,8 @@ impl Av1Decoder {
         display: &Rc<Display>,
         frame: &EncodedFrame,
     ) -> Result<Option<DecodedFrame>, DecodeError> {
+        obu::check_framing(&frame.data)?;
+
         let mut data = frame.data.as_slice();
         let mut pending: Option<Pending> = None;
         let mut output = None;

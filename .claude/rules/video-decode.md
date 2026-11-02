@@ -143,6 +143,11 @@ paths:
   - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
     and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
     `StreamFormat`), since held frames keep their surfaces busy.
+- AV1 packets are checked in `src/obu.rs` before `cros-codecs` sees them, because its OBU reader
+  panics on a missing size field, a set reserved bit or a size past the packet. Every OBU must
+  carry a size field that fits the packet, else `Malformed { unit: Obu }`. The parser is also
+  primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
+  colour reader both go through it.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
   header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs

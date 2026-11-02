@@ -12,6 +12,7 @@ use rusplay_core::{Codec, SignalledColor};
 use crate::{
     BitstreamUnit, DecodeError,
     annexb::{malformed, next_nalu},
+    obu,
     signal::{self, HdrTracker},
 };
 
@@ -40,7 +41,7 @@ impl ColorReader {
             Codec::H264 => Parsers::H264(Box::default()),
             Codec::Hevc => Parsers::Hevc(Box::default()),
             Codec::Av1 => Parsers::Av1 {
-                parser: Box::default(),
+                parser: Box::new(obu::low_overhead_parser()),
                 sequence: None,
             },
         };
@@ -204,6 +205,8 @@ fn read_av1(
     mut data: &[u8],
 ) -> Result<Picture, DecodeError> {
     const CODEC: Codec = Codec::Av1;
+    obu::check_framing(data)?;
+
     let mut picture: Picture = None;
 
     while !data.is_empty() {
