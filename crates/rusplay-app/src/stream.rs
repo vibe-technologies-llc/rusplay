@@ -19,7 +19,7 @@ use crate::{
     hosts::{HostEntry, HostId},
     notice::{Notice, error_chain},
     session::{self, SessionError},
-    stats::{FrameTimings, StatsSampler, StreamRates, TimingSink},
+    stats::{FrameTimings, JsonReporter, StatsSampler, StreamRates, TimingSink},
     theme,
     widgets::controls::{ButtonStyle, Tone, button, status_dot},
 };
@@ -103,6 +103,7 @@ pub struct StreamView {
     pointer: Option<(PointerMode, ActivePointer)>,
     show_stats: bool,
     sampler: StatsSampler,
+    json_reporter: Option<JsonReporter>,
     rates: Option<StreamRates>,
     focus_handle: FocusHandle,
     tasks: Vec<Task<()>>,
@@ -125,6 +126,7 @@ impl StreamView {
         let sink = TimingSink::new(stream_window.sink(), Arc::clone(&timings));
         let address = host.address;
         let input = config.input;
+        let json_reporter = JsonReporter::new(&config.network, Instant::now());
 
         let connecting = cx.background_spawn(async move {
             session::connect(config, address, &credentials, gpu, sink)
@@ -148,6 +150,7 @@ impl StreamView {
             pointer: None,
             show_stats: true,
             sampler: StatsSampler::new(timings),
+            json_reporter,
             rates: None,
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
@@ -347,6 +350,9 @@ impl StreamView {
         }
 
         let stats = self.live.borrow().stream.as_ref().map(ClientStream::stats);
+        if let (Some(reporter), Some(stats)) = (&mut self.json_reporter, &stats) {
+            reporter.report_if_due(Instant::now(), stats);
+        }
         if let Some(rates) = stats
             .as_ref()
             .and_then(|stats| self.sampler.sample(Instant::now(), stats))
@@ -361,6 +367,11 @@ impl StreamView {
     fn finish(&mut self, cx: &mut Context<Self>) {
         if self.phase == Phase::Ended {
             return;
+        }
+
+        let last = self.live.borrow().stream.as_ref().map(ClientStream::stats);
+        if let (Some(_), Some(stats)) = (&self.json_reporter, &last) {
+            JsonReporter::report_final(stats);
         }
 
         let result = self.live.borrow_mut().stop();

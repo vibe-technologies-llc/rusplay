@@ -237,6 +237,13 @@ paths:
   surface only once the GPU has read it. CPU frames (software and NVDEC) keep their upload buffer, created on the first
   one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
   source size and upscaled, and requires identical output.
+- `stats_json.rs` turns a `ClientStats` into one JSON line, `stats_json_line(phase, unix_ms, &stats)`,
+  in the same shape as the host's (`{"event":"client_stats","phase":"interval"|"final","unix_ms":..,`
+  then every counter under its field name). The microsecond values are suffixed `_us` (`rtt_us`,
+  `clock_offset_us`, `capture_to_receive_us`, `capture_to_decode_us`, `capture_to_present_us`) and
+  are `null` until measured, as is `bitrate_target_kbps`. A test compares the emitted keys with the
+  `Debug` output of `ClientStats`, so a new counter that is not added fails it. The library never
+  prints: the app emits the lines (`ui.md`).
 - `ClientStats` is a snapshot of relaxed atomic counters shared by the stages. `rtt` is the control
   channel's smoothed round trip, republished by the receive stage on every wake.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback

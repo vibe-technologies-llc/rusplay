@@ -4,40 +4,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_host::{HostError, HostStats, HostStream, NegotiatedFormat};
+use rusplay_host::{
+    HostError, HostStats, HostStream, NegotiatedFormat, StatsPhase, StatsSchedule, unix_millis_now,
+};
 
-use crate::stats_json::{self, Phase};
+use crate::stats_json;
 
 const POLL: Duration = Duration::from_millis(100);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Schedule {
-    interval: Option<Duration>,
-    next: Instant,
-}
-
-impl Schedule {
-    fn new(interval_ms: u32, now: Instant) -> Self {
-        let interval = (interval_ms > 0).then(|| Duration::from_millis(u64::from(interval_ms)));
-
-        Self {
-            interval,
-            next: now + interval.unwrap_or_default(),
-        }
-    }
-
-    fn take_due(&mut self, now: Instant) -> bool {
-        let Some(interval) = self.interval else {
-            return false;
-        };
-        if now < self.next {
-            return false;
-        }
-
-        self.next = now + interval;
-        true
-    }
-}
 
 pub fn summary(stats: &HostStats) -> String {
     let mut line = String::new();
@@ -94,15 +67,12 @@ fn format_line(format: NegotiatedFormat) -> String {
     }
 }
 
-fn emit_json(phase: Phase, stats: &HostStats) {
-    println!(
-        "{}",
-        stats_json::line(phase, stats_json::now_unix_ms(), stats)
-    );
+fn emit_json(phase: StatsPhase, stats: &HostStats) {
+    println!("{}", stats_json::line(phase, unix_millis_now(), stats));
 }
 
 pub fn wait_logging(stream: HostStream, interval_ms: u32, json: bool) -> Result<(), HostError> {
-    let mut schedule = Schedule::new(interval_ms, Instant::now());
+    let mut schedule = StatsSchedule::new(interval_ms, Instant::now());
     let mut format_reported = false;
 
     while !stream.is_finished() {
@@ -115,7 +85,7 @@ pub fn wait_logging(stream: HostStream, interval_ms: u32, json: bool) -> Result<
             let stats = stream.stats();
             eprintln!("rusplay-hostd: stats {}", summary(&stats));
             if json {
-                emit_json(Phase::Interval, &stats);
+                emit_json(StatsPhase::Interval, &stats);
             }
         }
     }
@@ -124,7 +94,7 @@ pub fn wait_logging(stream: HostStream, interval_ms: u32, json: bool) -> Result<
     let result = stream.wait();
     eprintln!("rusplay-hostd: session summary {}", summary(&last));
     if json {
-        emit_json(Phase::Final, &last);
+        emit_json(StatsPhase::Final, &last);
     }
 
     result
@@ -153,25 +123,6 @@ mod tests {
             fell_back,
             "streaming h264 4:2:0 10-bit instead of the configured h264 4:2:0 8-bit, which the encoder or client lacks"
         );
-    }
-
-    #[test]
-    fn zero_interval_never_comes_due() {
-        let start = Instant::now();
-        let mut schedule = Schedule::new(0, start);
-
-        assert!(!schedule.take_due(start + Duration::from_secs(3_600)));
-    }
-
-    #[test]
-    fn interval_comes_due_once_per_period() {
-        let start = Instant::now();
-        let mut schedule = Schedule::new(1_000, start);
-
-        assert!(!schedule.take_due(start + Duration::from_millis(999)));
-        assert!(schedule.take_due(start + Duration::from_millis(1_000)));
-        assert!(!schedule.take_due(start + Duration::from_millis(1_500)));
-        assert!(schedule.take_due(start + Duration::from_millis(2_000)));
     }
 
     #[test]

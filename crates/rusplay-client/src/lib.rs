@@ -16,12 +16,14 @@ mod session;
 mod sink;
 mod slot;
 mod stats;
+mod stats_json;
 #[cfg(test)]
 mod testing;
 #[cfg(feature = "window")]
 mod window;
 
 pub use rusplay_audio::{AudioInput, AudioOutput, AudioOutputStats};
+pub use rusplay_core::{StatsPhase, StatsSchedule, unix_millis_now};
 #[cfg(feature = "window")]
 pub use rusplay_input::capture::{ActivePointer, ClientAction};
 pub use rusplay_net::{
@@ -48,4 +50,5 @@ pub use crate::{
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},
     stats::ClientStats,
+    stats_json::stats_json_line,
 };

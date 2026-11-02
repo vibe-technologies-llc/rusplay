@@ -87,7 +87,9 @@ paths:
   `HostStats` counter under its field name, `rtt_us` for the round trip and `null` for a
   value not measured yet. The human lines stay on stderr, so stdout carries only JSON. A test
   compares the emitted keys with the `Debug` output of `HostStats`, so a new counter that is
-  not added to the line fails it.
+  not added to the line fails it. The line builder (`JsonLine`), `StatsPhase`, `unix_millis_now`
+  and the interval `StatsSchedule` live in `rusplay-core` (`stats_report.rs`) and reach the daemon
+  through `rusplay-host`'s re-exports, shared with the client's lines (`client.md`).
 - A useful daemon today is built with
   `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the

@@ -22,7 +22,6 @@
 
 # Headless host
 - [M] `hostd-control-socket`: a minimal Unix control socket for `rusplay-hostd` under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) so a running daemon can answer `status`, issue a fresh PIN on demand and `forget` a client without the stderr line or a restart. The PIN file (`peers.write_pin_file`) and `rusplay-hostd pin` already cover reading the PIN unattended
-- [S] `stats-machine-readable-client`: emit the client's session statistics (`ClientStats`, with `capture_to_present`) as JSON lines the way `rusplay-hostd` does with `network.stats_json` (`rusplay-hostd/src/stats_json.rs`), behind the same option, so a pair of runs can be compared without scraping stderr
 
 # Input
 - [XL] `input-gamepad-sensors`: carry gyro, accelerometer and touchpad from DualSense, DS4 and Switch Pro pads, which are skipped today because only nodes with `BTN_SOUTH`/`ABS_X`/`ABS_Y` are accepted, and the host pad is a 360 pad with rumble only. Split before starting: a selectable `/dev/uhid` DualSense/DS4 personality next to the 360 one, pairing sibling evdev nodes on the client, sensor and touch events in the wire model and snapshot, and LED and lightbar feedback as control messages

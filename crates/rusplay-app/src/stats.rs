@@ -6,7 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_client::{ClientStats, ColorVolume, FrameSink, PresentedFrame};
+use rusplay_client::{
+    ClientStats, ColorVolume, FrameSink, PresentedFrame, StatsPhase, StatsSchedule,
+    stats_json_line, unix_millis_now,
+};
+use rusplay_config::NetworkConfig;
 
 const SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
@@ -194,6 +198,33 @@ impl StreamRates {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct JsonReporter {
+    schedule: StatsSchedule,
+}
+
+impl JsonReporter {
+    pub fn new(network: &NetworkConfig, now: Instant) -> Option<Self> {
+        network.stats_json.then(|| Self {
+            schedule: StatsSchedule::new(network.stats_log_interval_ms, now),
+        })
+    }
+
+    pub fn report_if_due(&mut self, now: Instant, stats: &ClientStats) {
+        if self.schedule.take_due(now) {
+            Self::emit(StatsPhase::Interval, stats);
+        }
+    }
+
+    pub fn report_final(stats: &ClientStats) {
+        Self::emit(StatsPhase::Final, stats);
+    }
+
+    fn emit(phase: StatsPhase, stats: &ClientStats) {
+        println!("{}", stats_json_line(phase, unix_millis_now(), stats));
+    }
+}
+
 #[derive(Debug)]
 pub struct StatsSampler {
     timings: Arc<FrameTimings>,
@@ -248,6 +279,24 @@ fn millis(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_json_reporter_exists_only_with_the_option_and_follows_the_interval() {
+        let start = Instant::now();
+        let off = NetworkConfig::default();
+        let on = NetworkConfig {
+            stats_json: true,
+            stats_log_interval_ms: 1_000,
+            ..NetworkConfig::default()
+        };
+
+        let reporter = JsonReporter::new(&on, start).unwrap();
+
+        assert!(JsonReporter::new(&off, start).is_none());
+        let mut schedule = reporter.schedule;
+        assert!(!schedule.take_due(start + Duration::from_millis(999)));
+        assert!(schedule.take_due(start + Duration::from_millis(1_000)));
+    }
 
     fn reading(at: Instant) -> Reading {
         Reading {
