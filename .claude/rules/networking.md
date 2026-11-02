@@ -88,8 +88,9 @@ paths:
   tag, depth bits): the host's configured format, so `is_fallback` tells the client when the
   stream is a negotiated fallback (format negotiation, below). Variable length, at most 77 bytes
   with its tag (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
-  through `Chromaticities::new`, luminance through `Luminance::from_units`), each failure its own
-  `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
+  through `Chromaticities::new`, luminance through `Luminance::from_units`, each resolution axis in
+  `1..=StreamDescription::MAX_DIMENSION` (16384), reference white and peak in `1..=10000` nits and
+  mastering minimum below maximum), each failure its own `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
 - `ControlMessage::Hello { version, formats }` (tag 0, 7 bytes): the u16 protocol version, then
   a big-endian u32 `FormatSet` (`rusplay-core`), one bit per `CodecFormat` at
   `codec * 9 + chroma * 3 + depth` (codec H.264, HEVC, AV1; chroma 4:2:0, 4:2:2, 4:4:4; depth 8,
