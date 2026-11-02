@@ -32,6 +32,7 @@ use crate::{
 const CONVERT_ROW_ALIGNMENT: u32 = 4;
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CONSECUTIVE_IMPORT_FAILURES: u32 = 60;
+const GPU_FENCE_POLL_ALLOWANCE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamFormat {
@@ -176,6 +177,7 @@ pub(crate) struct GpuPipeline {
     input: Option<Frame>,
     bitrate_kbps: Option<u32>,
     import_failures: u32,
+    poll_timeout: Option<Duration>,
     notices: PipelineNotices,
 }
 
@@ -268,6 +270,7 @@ impl GpuPipeline {
             input: None,
             bitrate_kbps: None,
             import_failures: 0,
+            poll_timeout: None,
             notices: PipelineNotices::default(),
         }
     }
@@ -522,9 +525,24 @@ impl GpuPipeline {
             );
         }
         let submission = self.gpu.queue.submit([encoder.finish()]);
-        drop(source.fence.take());
+        self.poll_timeout = source.fence.take().map(|_| {
+            Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms))
+                + GPU_FENCE_POLL_ALLOWANCE
+        });
 
         Ok(submission)
+    }
+
+    fn poll_gpu(&self, submission: Option<wgpu::SubmissionIndex>) -> Result<(), HostError> {
+        let timeout = self.poll_timeout;
+        self.gpu
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: submission,
+                timeout,
+            })
+            .map(drop)
+            .map_err(|error| poll_failure(error, timeout))
     }
 
     fn hand_off(
@@ -543,13 +561,7 @@ impl GpuPipeline {
 
         let resolution = converter.settings().resolution;
         let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
-        self.gpu
-            .device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            })
-            .map_err(HostError::GpuPoll)?;
+        self.poll_gpu(Some(submission))?;
         self.input = Some(frame);
 
         Ok(())
@@ -572,7 +584,7 @@ impl GpuPipeline {
                 self.handoff = HandoffState::Proven(handoff);
                 Ok(encoded)
             }
-            (Err(_), HandoffState::Trying(_)) => {
+            (Err(error), HandoffState::Trying(_)) if !is_fence_timeout(&error) => {
                 self.handoff = HandoffState::Off;
                 self.notices.handoff_disabled += 1;
                 self.input = None;
@@ -599,10 +611,7 @@ impl GpuPipeline {
             .map_async(wgpu::MapMode::Read, .., move |result| {
                 done.send(result).ok();
             });
-        self.gpu
-            .device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(HostError::GpuPoll)?;
+        self.poll_gpu(None)?;
         if let Ok(result) = mapped.recv() {
             result.map_err(HostError::GpuReadback)?;
         }
@@ -727,6 +736,17 @@ impl VideoPipeline for GpuPipeline {
             color: video.color,
         })
     }
+}
+
+fn poll_failure(error: wgpu::PollError, timeout: Option<Duration>) -> HostError {
+    match (error, timeout) {
+        (wgpu::PollError::Timeout, Some(timeout)) => HostError::GpuFenceTimeout(timeout),
+        (error, _) => HostError::GpuPoll(error),
+    }
+}
+
+const fn is_fence_timeout(error: &HostError) -> bool {
+    matches!(error, HostError::GpuFenceTimeout(_))
 }
 
 fn rejects_dmabuf(error: &HostError) -> bool {

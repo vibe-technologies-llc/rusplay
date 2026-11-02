@@ -187,8 +187,12 @@ paths:
     on the producer. Without a waiter, or when staging fails (a kernel without
     `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`), it falls back to `rusplay_scale::wait_for_writes` for up to
     `capture.dmabuf_fence_timeout_ms` (default 100, 0 only checks); a timeout reads the buffer
-    as it is rather than dropping the frame, so a producer whose fences never signal still
-    streams, as it did before the wait existed. The GPU wait has no timeout.
+    as it is rather than dropping the frame, so on this path a producer whose fences never signal
+    still streams. A staged GPU wait cannot be abandoned that way, so the device poll that follows
+    the submission (hand-off wait or readback) is bounded by `capture.dmabuf_fence_timeout_ms` plus
+    a fixed 500 ms allowance for the GPU work; a producer whose fence never signals ends the
+    session with `GpuFenceTimeout` (never retried as a hand-off failure). Polls with no staged fence
+    are not bounded.
   - The frame, and so its PipeWire buffer lease, is held until the readback or hand-off wait has
     seen the GPU finish, and then as the feed's retained frame; the encode stage drops the previous retained
     frame before encoding the next, so a session holds at most three capture buffers.

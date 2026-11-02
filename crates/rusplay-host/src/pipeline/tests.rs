@@ -396,6 +396,21 @@ fn a_transient_import_error_drops_the_frame_without_leaving_dmabuf() {
 }
 
 #[test]
+fn a_poll_that_times_out_with_a_staged_fence_is_a_fence_timeout() {
+    let timeout = Some(Duration::from_millis(600));
+
+    let fenced = poll_failure(wgpu::PollError::Timeout, timeout);
+    let unfenced = poll_failure(wgpu::PollError::Timeout, None);
+
+    assert!(matches!(
+        fenced,
+        HostError::GpuFenceTimeout(waited) if Some(waited) == timeout
+    ));
+    assert!(is_fence_timeout(&fenced));
+    assert!(matches!(unfenced, HostError::GpuPoll(_)));
+}
+
+#[test]
 fn only_a_format_or_modifier_rejection_asks_for_shared_memory() {
     assert!(rejects_dmabuf(&HostError::Scale(
         ScaleError::DmaBufModifierUnsupported {

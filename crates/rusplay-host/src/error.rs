@@ -65,6 +65,8 @@ pub enum HostError {
     GpuDevice(#[source] wgpu::RequestDeviceError),
     #[error("waiting for the gpu to finish the frame failed")]
     GpuPoll(#[source] wgpu::PollError),
+    #[error("a dma-buf producer's fence was still unsignalled after {0:?}")]
+    GpuFenceTimeout(Duration),
     #[error("reading the converted frame back from the gpu failed")]
     GpuReadback(#[source] wgpu::BufferAsyncError),
     #[error("the mapped readback buffer could not be viewed")]
