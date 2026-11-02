@@ -12,7 +12,8 @@ use parking_lot::RwLock;
 use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{CodecFormat, FormatSet};
 use rusplay_net::{
-    ControlEvent, NetError, PeerStore, RecvBatch, SessionTakeover, Transport, busy_reply,
+    ControlEvent, NetError, PeerStore, ReconnectTiming, RecvBatch, SessionTakeover, Transport,
+    busy_reply,
 };
 use rusplay_protocol::{
     ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
@@ -114,21 +115,25 @@ pub(crate) struct ControlStage {
 }
 
 impl ControlStage {
-    pub(crate) fn new(network: &NetworkConfig, hints: HintPolicy, links: ControlLinks) -> Self {
+    pub(crate) fn new(
+        network: &NetworkConfig,
+        hints: HintPolicy,
+        links: ControlLinks,
+    ) -> Result<Self, HostError> {
         let now = Instant::now();
         let timing = ControlTiming::from(network);
 
-        Self {
+        Ok(Self {
             timing,
             hints,
-            takeover: SessionTakeover::new(links.peer),
+            takeover: SessionTakeover::new(links.peer, ReconnectTiming::from(network))?,
             links,
             streaming: false,
             unanswered_hello: None,
             started: now,
             last_heard: now,
             next_keepalive: now + timing.keepalive_interval,
-        }
+        })
     }
 
     pub(crate) fn run(mut self) -> Result<(), HostError> {

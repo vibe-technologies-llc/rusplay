@@ -29,7 +29,7 @@ pub fn busy_reply(datagram: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_protocol::{ClientName, PeerId};
+    use rusplay_protocol::ClientName;
 
     use super::*;
 
@@ -58,8 +58,8 @@ mod tests {
     fn a_reconnect_hello_is_refused_with_busy_under_its_attempt() {
         let hello = ReconnectMessage::Hello {
             attempt: 9,
-            peer: PeerId([3; PeerId::LEN]),
             nonce: [4; ReconnectMessage::NONCE_LEN],
+            blind: [3; ReconnectMessage::BLIND_LEN],
         }
         .to_datagram()
         .unwrap();
@@ -92,6 +92,9 @@ mod tests {
             .unwrap(),
             ReconnectMessage::Proof {
                 attempt: 1,
+                nonce: [2; ReconnectMessage::NONCE_LEN],
+                blind: [2; ReconnectMessage::BLIND_LEN],
+                cookie: [2; ReconnectMessage::COOKIE_LEN],
                 proof: [2; ReconnectMessage::PROOF_LEN],
             }
             .to_datagram()
@@ -122,8 +125,8 @@ mod tests {
             .unwrap(),
             ReconnectMessage::Hello {
                 attempt: 9,
-                peer: PeerId([3; PeerId::LEN]),
                 nonce: [4; ReconnectMessage::NONCE_LEN],
+                blind: [3; ReconnectMessage::BLIND_LEN],
             }
             .to_datagram()
             .unwrap(),
