@@ -147,6 +147,9 @@ fn open_software(
     })
 }
 
+#[cfg(all(test, feature = "vaapi"))]
+mod hardware;
+
 #[cfg(test)]
 mod tests {
     use super::*;

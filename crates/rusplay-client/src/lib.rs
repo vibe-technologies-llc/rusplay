@@ -6,6 +6,8 @@ mod cursor;
 mod decode;
 mod display;
 mod error;
+#[cfg(test)]
+mod hardware;
 mod host_book;
 mod input;
 mod microphone;

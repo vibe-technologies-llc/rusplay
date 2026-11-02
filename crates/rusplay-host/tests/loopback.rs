@@ -1,3 +1,6 @@
+#[path = "../src/hardware.rs"]
+mod hardware;
+
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -187,8 +190,11 @@ fn client_config() -> Config {
 }
 
 fn supported(config: &Config) -> bool {
-    rusplay_encode::capabilities(&config.video.encoder)
-        .is_ok_and(|caps| caps.supports(config.video.codec, config.video.pixel_format))
+    hardware::encoder_supports_configured_format(config)
+}
+
+fn open_gpu() -> Option<Gpu> {
+    hardware::require(Gpu::open().ok(), "a wgpu device")
 }
 
 fn bind_host(config: Config, dir: &TempDir, input: &RecordedInput) -> Arc<HostSession> {
@@ -263,7 +269,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     if !supported(&config) {
         return;
     }
-    let Ok(gpu) = Gpu::open() else {
+    let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
@@ -458,8 +464,13 @@ fn client_gpu(gpu: &Gpu) -> rusplay_client::Gpu {
 }
 
 fn encodes_anything(config: &Config) -> bool {
-    rusplay_encode::capabilities(&config.video.encoder)
-        .is_ok_and(|capabilities| !capabilities.format_set().is_empty())
+    let encodes = rusplay_encode::capabilities(&config.video.encoder)
+        .is_ok_and(|capabilities| !capabilities.format_set().is_empty());
+    if !encodes {
+        hardware::unsupported("an encoder with any format");
+    }
+
+    encodes
 }
 
 #[test]
@@ -487,7 +498,7 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
     if !encodes_fallback {
         return;
     }
-    let Ok(gpu) = Gpu::open() else {
+    let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
@@ -525,7 +536,7 @@ fn a_host_and_client_without_a_shared_format_both_refuse() {
     if !encodes_anything(&config) {
         return;
     }
-    let Ok(gpu) = Gpu::open() else {
+    let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();

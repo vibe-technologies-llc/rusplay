@@ -8,6 +8,8 @@ mod error;
 mod export;
 mod fault;
 mod gpu;
+#[cfg(test)]
+mod hardware;
 mod kernel;
 mod linearise;
 mod polar;

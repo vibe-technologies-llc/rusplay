@@ -2,27 +2,33 @@ use std::sync::OnceLock;
 
 use half::f16;
 
-use crate::Gpu;
+use crate::{Gpu, hardware};
 
 const RGBA16F_BYTES: u32 = 8;
 
 pub(crate) fn gpu() -> Option<Gpu> {
     static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
 
-    GPU.get_or_init(|| {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..wgpu::RequestAdapterOptions::default()
-        }))
-        .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
+    hardware::require(
+        GPU.get_or_init(|| {
+            let instance =
+                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    ..wgpu::RequestAdapterOptions::default()
+                }))
                 .ok()?;
+            let (device, queue) = pollster::block_on(
+                adapter.request_device(&rusplay_scale::device_descriptor(&adapter)),
+            )
+            .ok()?;
 
-        Some(Gpu::new(device, queue))
-    })
-    .clone()
+            Some(Gpu::new(device, queue))
+        })
+        .clone(),
+        "a wgpu adapter and device",
+    )
 }
 
 pub(crate) fn quantized(value: f32) -> f32 {

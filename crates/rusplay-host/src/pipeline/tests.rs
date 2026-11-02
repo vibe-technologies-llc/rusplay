@@ -7,6 +7,7 @@ use rusplay_core::{BitDepth, ChromaSubsampling, ColorPrimaries, TransferFunction
 use rusplay_scale::{GpuFault, ScaleError, udmabuf};
 
 use super::*;
+use crate::hardware;
 
 const SIZE: Resolution = Resolution::new(16, 8);
 const TEN_BIT_MAX: f64 = 1023.0;
@@ -23,16 +24,23 @@ fn config(color: ColorSpace, depth: BitDepth) -> Config {
     config
 }
 
+fn open_gpu() -> Option<Gpu> {
+    hardware::require(Gpu::open().ok(), "a wgpu device")
+}
+
 fn pipeline(config: Config) -> Option<GpuPipeline> {
-    let gpu = Gpu::open().ok()?;
+    let gpu = open_gpu()?;
 
     Some(GpuPipeline::new(gpu, config, None))
 }
 
 fn dmabuf_pipeline(config: Config) -> Option<GpuPipeline> {
     let pipeline = pipeline(config)?;
-    DmaBufImporter::new(&pipeline.gpu.device).ok()?;
-    udmabuf::create(&[0])?;
+    hardware::require(
+        DmaBufImporter::new(&pipeline.gpu.device).ok(),
+        "dma-buf import",
+    )?;
+    hardware::require(udmabuf::create(&[0]), "udmabuf")?;
 
     Some(pipeline)
 }
@@ -346,7 +354,7 @@ fn swizzled_dmabuf_formats_read_their_channel_order() {
 
 #[test]
 fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
-    let Ok(gpu) = Gpu::open() else {
+    let Some(gpu) = open_gpu() else {
         return;
     };
     let fallback = ShmFallback::default();
@@ -376,7 +384,7 @@ fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
 
 #[test]
 fn a_transient_import_error_drops_the_frame_without_leaving_dmabuf() {
-    let Ok(gpu) = Gpu::open() else {
+    let Some(gpu) = open_gpu() else {
         return;
     };
     let fallback = ShmFallback::default();

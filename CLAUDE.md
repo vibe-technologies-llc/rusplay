@@ -58,10 +58,17 @@ commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input
 | Format | `rust-formatter` (never `cargo fmt`/`rustfmt`) |
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
+| Hardware test run | `RUSPLAY_REQUIRE_HW=1 cargo test --workspace --all-features` |
 | Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
 | App with decoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software` |
+
+Tests that need a GPU, a VAAPI render node or an NVIDIA driver skip when it is missing, writing
+`skipped <test>: <reason>` straight to stderr so `cargo test` shows it despite output capture. With
+`RUSPLAY_REQUIRE_HW=1` a missing device fails the test instead; a device that exists but lacks a
+codec, chroma or bit depth still skips visibly. The skip logic is `src/hardware.rs` in each crate
+with such tests, included by path from that crate's integration tests.
 
 Profiles: dev builds at `opt-level = 1`. Release uses thin LTO, one codegen unit, stripped
 symbols and `panic = "abort"`. `profiling` is release with debug info, no stripping and unwinding

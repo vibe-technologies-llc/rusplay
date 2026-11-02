@@ -4,3 +4,7 @@
 
 # Networking
 - [M] `net-reconnect-blinded-peer-id`: the `PeerId` is cleartext in every reconnect `Hello` (`rusplay-protocol/src/reconnect.rs`), so a passive observer can track a device, and a flood of `Hello`s from many spoofed source addresses can still fill the 64-entry attempt table of `ReconnectResponder` (shared by `SessionTakeover`) and evict the genuine attempt. Replace the id with a per-attempt blinded one (HMAC of the client nonce under the secret, tried against each store record) or make the host's challenge stateless; either changes the `Hello` encoding and bumps `ProtocolVersion::CURRENT`
+
+# GPU
+- [M] `host-handoff-odd-size-edge`: at 402x226 the VAAPI AV1 hand-off (`encoder_gpu_handoff`) and the readback path encode different pictures: rav1d decodes the two streams to different samples, the first differences sit in the last two columns of the 402 wide luma (x 400 and 401) and spread through intra prediction, so the GPU path pads or crops the right edge of an odd-width frame differently from the readback (640x360 matches exactly). The test `handed_off_frames_of_an_odd_size_decode_like_read_back_frames` in `rusplay-host/src/pipeline/tests/handoff.rs` fails on this machine (Mesa radv, AMD VAAPI) and is ignored until the edge handling is aligned
+
