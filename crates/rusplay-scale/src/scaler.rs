@@ -225,14 +225,14 @@ impl SeparablePlan {
 
         let horizontal = PassTables::new(
             device,
-            &TapTable::build(kernel, source.0, target.0),
+            &TapTable::for_axis(kernel, source.0, target.0),
             Axis::Horizontal,
             source,
             intermediate_size,
         );
         let vertical = PassTables::new(
             device,
-            &TapTable::build(kernel, source.1, target.1),
+            &TapTable::for_axis(kernel, source.1, target.1),
             Axis::Vertical,
             intermediate_size,
             target,
@@ -443,8 +443,8 @@ mod tests {
 
     fn expected(image: &Image, settings: &ScaleSettings) -> Image {
         let kernel = Kernel::new(settings.filter);
-        let horizontal = TapTable::build(kernel, settings.source.width, settings.target.width);
-        let vertical = TapTable::build(kernel, settings.source.height, settings.target.height);
+        let horizontal = TapTable::for_axis(kernel, settings.source.width, settings.target.width);
+        let vertical = TapTable::for_axis(kernel, settings.source.height, settings.target.height);
 
         resample_separable(
             &resample_separable(
@@ -591,6 +591,24 @@ mod tests {
         )
         .unwrap();
         let image = Image::pattern(33, 21, 3);
+
+        assert!(scale(gpu, &mut scaler, &image).max_difference(&image) <= 1.0 / 1024.0);
+    }
+
+    #[test]
+    fn a_non_interpolating_kernel_leaves_an_unchanged_axis_untouched() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+
+        let pipelines = ScalePipelines::new(&gpu.device);
+        let mut scaler = Scaler::new(
+            &pipelines,
+            &gpu.device,
+            settings(ScaleFilter::Mitchell, (33, 21), (33, 21)),
+        )
+        .unwrap();
+        let image = Image::pattern(33, 21, 5);
 
         assert!(scale(gpu, &mut scaler, &image).max_difference(&image) <= 1.0 / 1024.0);
     }

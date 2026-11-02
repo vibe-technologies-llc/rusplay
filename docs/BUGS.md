@@ -41,7 +41,6 @@
 - [S] `host-hdr-upscale-sigmoid`: the host's `scale_settings` turns sigmoid on whenever `scaling.upscale.sigmoid` is set (`rusplay-host/src/route.rs:116-129`), and upscaling forces the linear route where PQ/HLG run up to `peak / white`; `shape_input` clamps to 0..1 before the logit (`rusplay-scale/src/shaping.wgsl:19`, `sigmoid.rs:126`), so an HDR capture upscaled on the host has every highlight above reference white flattened before encoding. The client already gates on `!display.is_hdr()` (`rusplay-client/src/present.rs:185`); gate the host on the source transfer, and consider making `Scaler` refuse sigmoid for HDR input
 
 # Scaling
-- [S] `scale-identity-axis-kernel`: `Scaler` builds both passes with `TapTable::build(kernel, n, n')` even when an axis keeps its length (`rusplay-scale/src/scaler.rs:226-239`), so Mitchell and the Robidoux cubics blur an axis that is not resized and the pass is wasted; interpolating kernels are exact there, so the defaults are unaffected. Use `TapTable::identity` (or skip the pass) on an unchanged axis, as the conversion path already does
 
 # Configuration
 - [S] `config-upscale-chroma-filter-polar`: `ScalingConfig::validate` (`rusplay-config/src/scaling.rs:19-35`) accepts an EWA filter for `scaling.upscale.chroma_filter`, the app offers the whole list (`rusplay-app/src/settings/schema.rs:1261`), and `RgbConverter` then fails every frame with `UpsampleChromaFilterNotSeparable` (`rusplay-scale/src/unpack.rs:61-65`). Reject polar filters there with their own `ConfigError` and limit the app's choices

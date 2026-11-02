@@ -20,7 +20,9 @@ paths:
   Lanczos Sharp, Ginseng, Hann, Robidoux, Robidoux Sharp. Kernel definitions follow mpv/libplacebo,
   so results can be compared against them.
 - Separable filters run as two passes (horizontal, then vertical) through an `rgba16float`
-  intermediate. Polar filters run as a single 2D pass (`polar.wgsl`): every source texel whose
+  intermediate. An axis whose length does not change gets
+  `TapTable::identity` (`TapTable::for_axis`), so a non-interpolating kernel such as Mitchell
+  never blurs an axis that is not resized. Polar filters run as a single 2D pass (`polar.wgsl`): every source texel whose
   distance from the sample centre, divided per axis by the stretch `max(ratio, 1)`, is below
   the kernel radius contributes, weighted by the radial kernel and normalised by the weight
   sum. The footprint is a circle of the kernel radius when upscaling, widened by the downscale

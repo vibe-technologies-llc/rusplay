@@ -46,6 +46,14 @@ impl TapTable {
 }
 
 impl TapTable {
+    pub fn for_axis(kernel: Kernel, source_len: u32, target_len: u32) -> Self {
+        if source_len == target_len {
+            Self::identity(source_len)
+        } else {
+            Self::build(kernel, source_len, target_len)
+        }
+    }
+
     pub fn identity(len: u32) -> Self {
         let positions: Vec<i32> = (0..len).map(|index| saturate(i64::from(index))).collect();
 
@@ -75,6 +83,32 @@ mod tests {
         assert_eq!(table.firsts.len(), 1920);
         assert_eq!(table.anchors.len(), 1920);
         assert_eq!(table.weights.len(), 1920 * table.taps_per_pixel as usize);
+    }
+
+    #[test]
+    fn an_unchanged_axis_is_the_identity_for_every_filter() {
+        for filter in [
+            ScaleFilter::Bilinear,
+            ScaleFilter::Mitchell,
+            ScaleFilter::CatmullRom,
+            ScaleFilter::Lanczos3,
+        ] {
+            assert_eq!(
+                TapTable::for_axis(Kernel::new(filter), 37, 37),
+                TapTable::identity(37)
+            );
+        }
+    }
+
+    #[test]
+    fn a_resized_axis_is_built_from_the_kernel() {
+        let kernel = Kernel::new(ScaleFilter::Mitchell);
+
+        assert_eq!(
+            TapTable::for_axis(kernel, 64, 32),
+            TapTable::build(kernel, 64, 32)
+        );
+        assert_ne!(TapTable::for_axis(kernel, 64, 63), TapTable::identity(64));
     }
 
     #[test]
