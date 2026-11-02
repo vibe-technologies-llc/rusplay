@@ -9,6 +9,7 @@ Headless Rusplay host
 Usage: rusplay-hostd [OPTIONS]
        rusplay-hostd [OPTIONS] peers list
        rusplay-hostd [OPTIONS] peers forget <ID|NAME>
+       rusplay-hostd [OPTIONS] pin
        rusplay-hostd config default
        rusplay-hostd [OPTIONS] config check [PATH]
 
@@ -19,6 +20,8 @@ Commands:
                        least 4 characters) or by its exact name. A running daemon notices on
                        the next pairing or reconnect attempt; a client already streaming
                        stays until it leaves.
+  pin                  Print the pairing PIN of the running daemon's open window, read from
+                       the PIN file (peers.write_pin_file); exits 1 when no window is open
   config default       Print the built-in default configuration as TOML
   config check [PATH]  Load and validate PATH (or the --config path, or the discovered file)
                        and print the first problem with its causes; exits 1 when invalid
@@ -82,6 +85,9 @@ pub enum Command {
         config: Option<PathBuf>,
         action: ConfigAction,
     },
+    Pin {
+        config: Option<PathBuf>,
+    },
     Help,
     Version,
 }
@@ -116,6 +122,12 @@ where
     };
     if command == "config" {
         return parse_config(config, words);
+    }
+    if command == "pin" {
+        return match words.next() {
+            Some(extra) => Err(CliError::UnexpectedArgument(extra)),
+            None => Ok(Command::Pin { config }),
+        };
     }
     if command != "peers" {
         return Err(CliError::UnknownCommand(command));
@@ -169,6 +181,20 @@ mod tests {
 
     fn parse_strs(args: &[&str]) -> Result<Command, CliError> {
         parse(args.iter().copied())
+    }
+
+    #[test]
+    fn pin_takes_no_arguments_but_the_config_option() {
+        assert_eq!(
+            parse_strs(&["-c", "a.toml", "pin"]).unwrap(),
+            Command::Pin {
+                config: Some(PathBuf::from("a.toml"))
+            }
+        );
+        assert!(matches!(
+            parse_strs(&["pin", "now"]),
+            Err(CliError::UnexpectedArgument(_))
+        ));
     }
 
     #[test]

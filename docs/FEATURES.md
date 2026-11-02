@@ -27,7 +27,7 @@
 - [S] `scale-chroma-siting-config`: chroma siting is hard-coded `ChromaSiting::Left` on both ends (`rusplay-host/src/pipeline.rs:900`, `rusplay-client/src/present.rs:386`), so a stream sited otherwise (AV1 centred chroma, a foreign encoder) is resampled half a sample off. Add `scaling.chroma_siting` (default `left`) for the host and have the client prefer the chroma location the decoder reports from the bitstream
 
 # Headless host
-- [M] `hostd-unattended-pairing`: run `rusplay-hostd` as a service. Today a fresh PIN goes to stderr for each pairing window and there is no control socket (`hostd.md`), which is the last step that needs a terminal: the portal grant already survives restarts through `capture.restore_token_file`. Spike a PIN file under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) against a minimal Unix control socket, then ship a systemd user unit
+- [M] `hostd-control-socket`: a minimal Unix control socket for `rusplay-hostd` under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) so a running daemon can answer `status`, issue a fresh PIN on demand and `forget` a client without the stderr line or a restart. The PIN file (`peers.write_pin_file`) and `rusplay-hostd pin` already cover reading the PIN unattended
 - [S] `stats-machine-readable-client`: emit the client's session statistics (`ClientStats`, with `capture_to_present`) as JSON lines the way `rusplay-hostd` does with `network.stats_json` (`rusplay-hostd/src/stats_json.rs`), behind the same option, so a pair of runs can be compared without scraping stderr
 
 # Input

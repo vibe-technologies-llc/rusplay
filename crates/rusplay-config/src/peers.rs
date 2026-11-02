@@ -14,6 +14,8 @@ pub struct PeersConfig {
     pub client_file: Option<PathBuf>,
     pub host_name: Option<String>,
     pub client_name: Option<String>,
+    pub write_pin_file: bool,
+    pub pin_file: Option<PathBuf>,
 }
 
 impl PeersConfig {
@@ -32,6 +34,14 @@ impl PeersConfig {
             .is_some_and(|path| path.as_os_str().is_empty())
         {
             return Err(ConfigError::EmptyClientPeersFile);
+        }
+
+        if self
+            .pin_file
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(ConfigError::EmptyPinFile);
         }
 
         match self.host_name.as_deref() {
@@ -83,6 +93,18 @@ mod tests {
             Err(ConfigError::HostNameTooLong { bytes: 65 })
         ));
         assert!(named(&"n".repeat(64)).validate().is_ok());
+    }
+
+    #[test]
+    fn the_pin_file_is_off_by_default_and_an_empty_path_is_rejected() {
+        let empty = PeersConfig {
+            pin_file: Some(PathBuf::new()),
+            ..PeersConfig::default()
+        };
+
+        assert!(!PeersConfig::default().write_pin_file);
+        assert_eq!(PeersConfig::default().pin_file, None);
+        assert!(matches!(empty.validate(), Err(ConfigError::EmptyPinFile)));
     }
 
     fn client_named(name: &str) -> PeersConfig {

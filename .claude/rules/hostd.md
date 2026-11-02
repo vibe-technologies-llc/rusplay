@@ -6,7 +6,7 @@ paths:
 # Headless host binary
 
 - Arguments are parsed with `lexopt` in `cli.rs`: `-c`/`--config <PATH>`, `-h`/`--help`,
-  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>` and
+  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>`, `pin` and
   `config default` / `config check [PATH]` (below); any other positional word is
   `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
@@ -62,6 +62,17 @@ paths:
   reconnect, and `serve(..)` streams until the client leaves. An accept timeout or a
   locked PIN just issues a new PIN; an error for which `HostError::is_session_failure` holds is
   printed and the loop goes on; any other error ends the daemon.
+- `pin_file.rs` is the unattended pairing path. With `peers.write_pin_file` (default off) the
+  daemon writes each window's PIN to `peers.pin_file`, else `$XDG_RUNTIME_DIR/rusplay/pin` (an
+  unset or relative `XDG_RUNTIME_DIR` with no `peers.pin_file` is `NoRuntimeDirectory` at start),
+  next to the stderr line. The directory is created mode 0700 and the file written mode 0600 to
+  a `.tmp` sibling and renamed, so a reader never sees a partial PIN; the file is removed as soon
+  as `accept` returns (paired, timed out, locked) and on exit, and a failed write is printed
+  and does not stop the window. `rusplay-hostd pin` prints that file's PIN (`NoWindowOpen`
+  when it is absent). `dist/systemd/rusplay-hostd.service` is a user unit
+  (`PartOf=graphical-session.target`, `Restart=on-failure`) expecting the binary at
+  `/usr/bin/rusplay-hostd`; the portal grant already survives restarts through
+  `capture.restore_token_file`. There is still no control socket (`hostd-control-socket`).
 - `stats.rs` drives a session to its end: `wait_logging` polls `HostStream::is_finished` every
   100 ms, prints a one-line `HostStats` summary (RTT, frame, keyframe, datagram, loss, audio,
   cursor and input counters) to stderr every `network.stats_log_interval_ms` (default 10000, `0`

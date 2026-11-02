@@ -1057,6 +1057,21 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Section::Network,
+        "Peers",
+        "peers.write_pin_file",
+        "Write the pairing PIN to a file",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
+        "Peers",
+        "peers.pin_file",
+        "Pairing PIN file",
+        Kind::Text,
+    )
+    .optional(),
+    field(
         Section::Input,
         "Forwarding",
         "input.keyboard",

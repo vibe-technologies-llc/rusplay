@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod discovery;
 mod peers;
+mod pin_file;
 mod responder;
 mod stats;
 mod stats_json;
@@ -24,6 +25,7 @@ use crate::{
     cli::{CliError, Command, ConfigAction, HELP, PeersAction, VERSION},
     discovery::{ConfigSource, Environment},
     peers::{PeersError, render_list, resolve},
+    pin_file::{PinFile, PinFileError},
     responder::{Responder, ResponderError},
 };
 
@@ -42,6 +44,8 @@ enum HostdError {
     Discovery(#[from] ResponderError),
     #[error(transparent)]
     Peers(#[from] PeersError),
+    #[error(transparent)]
+    PinFile(#[from] PinFileError),
 }
 
 fn main() -> ExitCode {
@@ -72,6 +76,7 @@ fn run() -> Result<(), HostdError> {
         Command::Run { config } => serve(load_config(config)?),
         Command::Peers { config, action } => manage_peers(&load_config(config)?, &action),
         Command::Config { config, action } => manage_config(config, action),
+        Command::Pin { config } => show_pin(&load_config(config)?),
     }
 }
 
@@ -83,6 +88,14 @@ fn manage_config(path: Option<PathBuf>, action: ConfigAction) -> Result<(), Host
             println!("{}", config::check(&source)?);
         }
     }
+
+    Ok(())
+}
+
+fn show_pin(config: &Config) -> Result<(), HostdError> {
+    let runtime_dir = pin_file::runtime_dir_from_process();
+    let path = pin_file::resolve(&config.peers, runtime_dir.as_deref())?;
+    println!("{}", pin_file::read(&path)?);
 
     Ok(())
 }
@@ -122,6 +135,16 @@ fn warn_if_exposed(store: &PeerStore) {
 fn serve(config: Config) -> Result<(), HostdError> {
     let peers = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
     warn_if_exposed(&peers);
+    let pin_file = PinFile::open(
+        &config.peers,
+        pin_file::runtime_dir_from_process().as_deref(),
+    )?;
+    if let Some(file) = &pin_file {
+        eprintln!(
+            "rusplay-hostd: writing the pairing pin to {}",
+            file.path().display()
+        );
+    }
     let gpu = Gpu::open()?;
     let portal = open_portal(&config, &gpu)?;
     let feed = portal.feed;
@@ -139,7 +162,7 @@ fn serve(config: Config) -> Result<(), HostdError> {
     )?;
 
     loop {
-        match serve_next(&host, &gpu, &feed) {
+        match serve_next(&host, &gpu, &feed, pin_file.as_ref()) {
             Ok(()) => {}
             Err(error) if error.is_session_failure() => report(&error),
             Err(error) => return Err(error.into()),
@@ -147,16 +170,30 @@ fn serve(config: Config) -> Result<(), HostdError> {
     }
 }
 
-fn serve_next(host: &HostSession, gpu: &Gpu, feed: &Arc<CaptureFeed>) -> Result<(), HostError> {
+fn serve_next(
+    host: &HostSession,
+    gpu: &Gpu,
+    feed: &Arc<CaptureFeed>,
+    pin_file: Option<&PinFile>,
+) -> Result<(), HostError> {
     let network = &host.config().network;
     let pin = Pin::generate(network.pairing_pin_digits)?;
+    if let Some(file) = pin_file
+        && let Err(error) = file.publish(pin.as_str())
+    {
+        report(&error);
+    }
     eprintln!(
         "rusplay-hostd: pairing pin {} for the next {} s",
         pin.as_str(),
         network.pairing_timeout_ms / MILLIS_PER_SECOND
     );
 
-    let client = match host.accept(Some(pin)) {
+    let accepted = host.accept(Some(pin));
+    if let Some(file) = pin_file {
+        file.clear();
+    }
+    let client = match accepted {
         Ok(client) => client,
         Err(HostError::AcceptTimeout(_)) => return Ok(()),
         Err(HostError::Net(NetError::PairingLocked)) => {
