@@ -185,6 +185,7 @@ impl StreamWindow {
             options,
             configured: None,
             destination: None,
+            mapped: false,
             frame: None,
             cursor: None,
         };
@@ -483,6 +484,7 @@ struct Presenter {
     cursor_layer: CursorLayer,
     configured: Option<Resolution>,
     destination: Option<(u32, u32)>,
+    mapped: bool,
     frame: Option<PresentedFrame>,
     cursor: Option<LatestCursor>,
 }
@@ -536,7 +538,14 @@ impl Presenter {
     }
 
     fn draw(&mut self, layout: Option<WindowLayout>) -> Result<(), ClientError> {
-        let (Some(layout), Some(frame)) = (layout, self.frame.as_ref()) else {
+        let Some(layout) = layout else {
+            if self.mapped {
+                self.child.unmap();
+                self.mapped = false;
+            }
+            return Ok(());
+        };
+        let Some(frame) = self.frame.as_ref() else {
             return Ok(());
         };
         if frame.resolution() != layout.pixels {
@@ -620,6 +629,7 @@ impl Presenter {
 
         self.gpu.queue.submit([encoder.finish()]);
         self.gpu.queue.present(texture);
+        self.mapped = true;
 
         Ok(())
     }

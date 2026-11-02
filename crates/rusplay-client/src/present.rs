@@ -25,7 +25,7 @@ use crate::{
     ClientError, FrameColor, FrameSink, Gpu, PresentedFrame,
     decode::DecodedVideo,
     present::mapping::{ColorRoute, FusedColor},
-    slot::Slot,
+    slot::{Slot, Taken},
     stats::Counters,
 };
 
@@ -60,10 +60,12 @@ pub(crate) fn run(
     let mut stage = PresentStage::new(gpu, options);
 
     let result = loop {
-        let Some(video) = links.input.take() else {
-            break Ok(());
+        let step = match links.input.take_or_nudge() {
+            Taken::Value(video) => stage.present(video, &mut links),
+            Taken::Nudged => stage.retarget(&mut links),
+            Taken::Closed => break Ok(()),
         };
-        if let Err(error) = stage.present(video, &mut links) {
+        if let Err(error) = step {
             break Err(error);
         }
     };
@@ -83,10 +85,15 @@ enum UnpackInput {
     Planes(DmaBufTexture),
 }
 
+struct ScratchTexture {
+    texture: Arc<wgpu::Texture>,
+    view: wgpu::TextureView,
+}
+
 #[derive(Default)]
 struct Scratch {
     resolution: Option<Resolution>,
-    views: Vec<wgpu::TextureView>,
+    textures: Vec<ScratchTexture>,
 }
 
 impl Scratch {
@@ -95,19 +102,47 @@ impl Scratch {
         device: &wgpu::Device,
         resolution: Resolution,
         count: usize,
-    ) -> &[wgpu::TextureView] {
+    ) -> &[ScratchTexture] {
         if self.resolution != Some(resolution) {
             self.resolution = Some(resolution);
-            self.views.clear();
+            self.textures.clear();
         }
-        while self.views.len() < count {
-            self.views.push(
-                create_texture(device, "rusplay-client-scratch", resolution)
-                    .create_view(&wgpu::TextureViewDescriptor::default()),
-            );
+        while self.textures.len() < count {
+            let texture = Arc::new(create_texture(device, "rusplay-client-scratch", resolution));
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.textures.push(ScratchTexture { texture, view });
         }
 
-        &self.views
+        &self.textures
+    }
+}
+
+struct Retained {
+    texture: Arc<wgpu::Texture>,
+    presented: Resolution,
+    sigmoid: bool,
+    frame: u32,
+    keyframe: bool,
+    source: Resolution,
+    color: FrameColor,
+    captured: Timestamp,
+    received_at: Instant,
+    decoded_at: Instant,
+}
+
+impl Retained {
+    fn frame(&self, submitted_at: Instant, texture: Arc<wgpu::Texture>) -> PresentedFrame {
+        PresentedFrame {
+            frame: self.frame,
+            keyframe: self.keyframe,
+            source: self.source,
+            color: self.color,
+            captured: self.captured,
+            received_at: self.received_at,
+            decoded_at: self.decoded_at,
+            submitted_at,
+            texture,
+        }
     }
 }
 
@@ -121,6 +156,7 @@ struct PresentStage {
     color: ColorStage,
     scaler: Option<Scaler>,
     outputs: OutputPool,
+    retained: Option<Retained>,
 }
 
 impl PresentStage {
@@ -138,7 +174,62 @@ impl PresentStage {
             color,
             scaler: None,
             outputs: OutputPool::default(),
+            retained: None,
         }
+    }
+
+    fn retarget(&mut self, links: &mut PresentLinks) -> Result<(), ClientError> {
+        let Some(retained) = &mut self.retained else {
+            return Ok(());
+        };
+        let target = links.target.lock().unwrap_or(retained.source);
+        if target == retained.presented {
+            return Ok(());
+        }
+
+        let device = &self.gpu.device;
+        let Some(output) = self.outputs.acquire(device, target) else {
+            links.counters.frames_unpresented.increment();
+            return Ok(());
+        };
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rusplay-client-retarget"),
+        });
+        if target == retained.source {
+            encoder.copy_texture_to_texture(
+                retained.texture.as_image_copy(),
+                output.as_image_copy(),
+                wgpu::Extent3d {
+                    width: target.width,
+                    height: target.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        } else {
+            let settings = scale_settings(
+                &self.options.scaling,
+                retained.source,
+                target,
+                retained.sigmoid,
+            );
+            let source_view = retained
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+            ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
+                device,
+                &mut encoder,
+                &source_view,
+                &output_view,
+            );
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        retained.presented = target;
+
+        links.sink.present(retained.frame(Instant::now(), output));
+
+        Ok(())
     }
 
     fn present(
@@ -191,6 +282,9 @@ impl PresentStage {
         let scratch = self
             .scratch
             .ensure(device, source, (passes - 1).min(SCRATCH_TEXTURES));
+        let unscaled = scale
+            .is_some()
+            .then(|| Arc::clone(&scratch[(passes - 2) % SCRATCH_TEXTURES].texture));
         let chain = Chain {
             scratch,
             output: &output_view,
@@ -227,35 +321,37 @@ impl PresentStage {
         if let Some(lease) = lease {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
-        let color = route.output;
-
-        let submitted_at = Instant::now();
-        links.counters.frames_presented.increment();
-        if let Some(latency) = links
-            .counters
-            .clock
-            .since_capture(video.captured_micros, submitted_at)
-        {
-            links.counters.capture_to_present.record(latency);
-        }
-        links.sink.present(PresentedFrame {
+        let retained = Retained {
+            texture: unscaled.unwrap_or_else(|| Arc::clone(&output)),
+            presented: target,
+            sigmoid: !display.is_hdr(),
             frame: video.number,
             keyframe: video.keyframe,
             source,
-            color,
+            color: route.output,
             captured: Timestamp::from_micros(video.captured_micros),
             received_at: video.received_at,
             decoded_at: video.decoded_at,
-            submitted_at,
-            texture: output,
-        });
+        };
+
+        let submitted_at = Instant::now();
+        record_presented(&links.counters, video.captured_micros, submitted_at);
+        links.sink.present(retained.frame(submitted_at, output));
+        self.retained = Some(retained);
 
         Ok(())
     }
 }
 
+fn record_presented(counters: &Counters, captured_micros: u64, submitted_at: Instant) {
+    counters.frames_presented.increment();
+    if let Some(latency) = counters.clock.since_capture(captured_micros, submitted_at) {
+        counters.capture_to_present.record(latency);
+    }
+}
+
 struct Chain<'a> {
-    scratch: &'a [wgpu::TextureView],
+    scratch: &'a [ScratchTexture],
     output: &'a wgpu::TextureView,
     passes: usize,
 }
@@ -265,12 +361,12 @@ impl Chain<'_> {
         if pass + 1 == self.passes {
             self.output
         } else {
-            &self.scratch[pass % SCRATCH_TEXTURES]
+            &self.scratch[pass % SCRATCH_TEXTURES].view
         }
     }
 
     fn source(&self, pass: usize) -> &wgpu::TextureView {
-        &self.scratch[(pass - 1) % SCRATCH_TEXTURES]
+        &self.scratch[(pass - 1) % SCRATCH_TEXTURES].view
     }
 }
 
@@ -578,7 +674,8 @@ fn create_texture(device: &wgpu::Device, label: &str, resolution: Resolution) ->
         format: OUTPUT_FORMAT,
         usage: wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }

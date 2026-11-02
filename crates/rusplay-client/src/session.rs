@@ -141,13 +141,14 @@ impl ClientSession {
             stop: Arc::new(AtomicBool::new(false)),
             counters: Arc::new(Counters::default()),
             target: Arc::new(Mutex::new(None)),
+            decoded: Arc::new(Slot::new()),
             format: Arc::new(Mutex::new(None)),
             cursor: LatestCursor::new(),
             input: InputHandle::new(input_sender),
             gamepads_done: Arc::new(AtomicBool::new(true)),
             paired,
         };
-        let decoded = Arc::new(Slot::new());
+        let decoded = Arc::clone(&stream.decoded);
         let output = open_audio(&self.config.audio)?;
 
         stream.spawn_present(&self.config, gpu, sink, &decoded)?;
@@ -255,6 +256,7 @@ pub struct ClientStream {
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
     target: SharedTarget,
+    decoded: Arc<Slot<decode::DecodedVideo>>,
     format: SharedFormat,
     cursor: LatestCursor,
     input: InputHandle,
@@ -268,7 +270,14 @@ impl ClientStream {
     }
 
     pub fn set_target(&self, target: Option<Resolution>) {
-        *self.target.lock() = target;
+        let mut current = self.target.lock();
+        if *current == target {
+            return;
+        }
+
+        *current = target;
+        drop(current);
+        self.decoded.nudge();
     }
 
     pub fn target(&self) -> Option<Resolution> {
