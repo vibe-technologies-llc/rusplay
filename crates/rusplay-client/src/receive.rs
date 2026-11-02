@@ -81,6 +81,21 @@ impl Resync {
             .is_some_and(|keyframe| keyframe.wrapping_sub(frame).cast_signed() >= 0)
     }
 
+    fn advance_to(&mut self, frame: u32) -> u32 {
+        let Some(last) = self.last_frame else {
+            self.last_frame = Some(frame);
+            return 0;
+        };
+
+        let distance = frame.wrapping_sub(last);
+        if distance.cast_signed() <= 0 {
+            return 0;
+        }
+
+        self.last_frame = Some(frame);
+        distance - 1
+    }
+
     fn retry_due(&self, now: Instant, interval: Duration) -> bool {
         self.awaiting_keyframe
             && self
@@ -388,7 +403,8 @@ impl ReceiveStage {
                     }
                 }
                 ReassemblyEvent::FrameLost { frame } => {
-                    counters.frames_lost.increment();
+                    let unseen = self.resync.advance_to(frame);
+                    counters.frames_lost.add(1 + u64::from(unseen));
                     self.congested(now);
                     if !self.resync.predates_last_keyframe(frame) {
                         self.request_keyframe(frame, now)?;
@@ -409,12 +425,8 @@ impl ReceiveStage {
     }
 
     fn forward(&mut self, frame: ReassembledFrame, now: Instant) -> Result<Flow, ClientError> {
-        let skipped = self
-            .resync
-            .last_frame
-            .map_or(0, |last| frame.frame.wrapping_sub(last).wrapping_sub(1));
-        self.resync.last_frame = Some(frame.frame);
-        if skipped > 0 && skipped.cast_signed() > 0 {
+        let skipped = self.resync.advance_to(frame.frame);
+        if skipped > 0 {
             self.links.counters.frames_lost.add(u64::from(skipped));
             self.congested(now);
             if !frame.keyframe {
@@ -1004,6 +1016,67 @@ mod tests {
         assert_eq!(hint, Some(ControlMessage::BitrateHint { kbps: 60_000 }));
         assert_eq!(stats.bitrate_hints_sent, 1);
         assert_eq!(stats.bitrate_target_kbps, Some(60_000));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_frame_missing_a_fragment_is_counted_lost_exactly_once() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(0, 64, 0))
+                .unwrap(),
+        );
+        rig.next_video();
+
+        let mut fragments = packetizer
+            .packetize(1, false, &video_frame(0, 4_000, 1))
+            .unwrap();
+        fragments.remove(1);
+        rig.send(&fragments);
+        rig.send(
+            &packetizer
+                .packetize(2, true, &video_frame(0, 64, 2))
+                .unwrap(),
+        );
+        rig.next_video();
+
+        assert_eq!(rig.counters.snapshot().frames_lost, 1);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn frames_that_never_arrived_are_added_to_the_loss_of_a_partial_one() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(0, 64, 0))
+                .unwrap(),
+        );
+        rig.next_video();
+
+        packetizer
+            .packetize(1, false, &video_frame(0, 64, 1))
+            .unwrap();
+        let mut fragments = packetizer
+            .packetize(2, false, &video_frame(0, 4_000, 2))
+            .unwrap();
+        fragments.remove(1);
+        rig.send(&fragments);
+        rig.send(
+            &packetizer
+                .packetize(3, true, &video_frame(0, 64, 3))
+                .unwrap(),
+        );
+        rig.next_video();
+
+        assert_eq!(rig.counters.snapshot().frames_lost, 2);
         assert!(rig.finish().is_ok());
     }
 

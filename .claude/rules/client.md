@@ -52,6 +52,10 @@ paths:
   `network.keyframe_request_interval_ms` until a keyframe arrives, and every non-keyframe until
   then is skipped (counted in `frames_skipped`). A decode error on a keyframe is fatal. Nothing
   arriving for `network.peer_timeout_ms` ends the stream with `HostSilent`.
+- `frames_lost` counts each frame once: a `FrameLost` and a completed frame both advance
+  `last_frame` (`Resync::advance_to`), and only the frame numbers that never produced a packet
+  between `last_frame` and the new frame are added on top, so a frame FEC could not recover is
+  not counted again by the gap check on the next completed frame.
 - Adaptive bitrate (`bitrate.rs`, on unless `network.adaptive_bitrate` is off): the receive stage
   owns a `BitrateController`, a pure state machine driven by explicit instants and the control
   channel's smoothed RTT, unit tested without I/O. Its target starts at the client's
