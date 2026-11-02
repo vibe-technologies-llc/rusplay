@@ -261,11 +261,15 @@ paths:
   peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
   secret and freshness from both sides, a reflected message never verifies, and session keys are
   never reused across reconnects. The client checks the host proof before it sends its own.
-- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps the last 16
+- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps up to 64
   attempts, each bound to the address of its `Hello` (retransmitted `Hello`/`Proof` from that
   address are answered from cache, from any other address ignored), re-checks the store when the
   `Proof` arrives, and keeps an attempt alive after a bad `Proof` so a forged one cannot spoil the
-  genuine client's attempt. An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
+  genuine client's attempt. A source IP may hold at most 4 attempts and evicts its own oldest
+  (answered first) when it starts another; when the whole table is full an answered attempt goes
+  first, then the oldest attempt of the source holding the most, so one flooding host cannot push
+  another's attempt out. Floods from many spoofed addresses can still do it (the `PeerId` is
+  cleartext in the `Hello`). An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
   falls back to PIN pairing.
 - `reconnect_as_client`/`reconnect_as_host` mirror the pairing drivers, bounded by
   `network.reconnect_timeout_ms`; the host lingers after success to repeat `Accepted`.

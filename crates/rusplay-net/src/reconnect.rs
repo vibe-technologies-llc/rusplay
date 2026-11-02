@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     fmt,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
@@ -22,7 +22,8 @@ use crate::{
 
 const LINGER_RETRANSMITS: u32 = 3;
 const RECEIVE_BUFFER_LEN: usize = 2048;
-const MAX_TRACKED_ATTEMPTS: usize = 16;
+const MAX_TRACKED_ATTEMPTS: usize = 64;
+const MAX_ATTEMPTS_PER_SOURCE: usize = 4;
 
 type Nonce = [u8; ReconnectMessage::NONCE_LEN];
 type Proof = [u8; ReconnectMessage::PROOF_LEN];
@@ -347,9 +348,7 @@ impl ReconnectResponder {
         }
         .to_datagram()?;
 
-        if self.entries.len() >= MAX_TRACKED_ATTEMPTS {
-            self.entries.pop_front();
-        }
+        self.make_room(from.ip());
         self.entries.push_back(Entry {
             attempt,
             origin: from,
@@ -363,6 +362,60 @@ impl ReconnectResponder {
         });
 
         Ok(reply_with(reply))
+    }
+
+    fn make_room(&mut self, source: IpAddr) {
+        let own: Vec<usize> = (0..self.entries.len())
+            .filter(|index| self.entries[*index].origin.ip() == source)
+            .collect();
+
+        let victim = if own.len() >= MAX_ATTEMPTS_PER_SOURCE {
+            self.answered_or_oldest(&own)
+        } else if self.entries.len() >= MAX_TRACKED_ATTEMPTS {
+            let everyone: Vec<usize> = (0..self.entries.len()).collect();
+            self.first_answered(&everyone)
+                .or_else(|| self.oldest_of_busiest_source())
+        } else {
+            None
+        };
+
+        if let Some(index) = victim {
+            self.entries.remove(index);
+        }
+    }
+
+    fn first_answered(&self, candidates: &[usize]) -> Option<usize> {
+        candidates
+            .iter()
+            .copied()
+            .find(|index| matches!(self.entries[*index].state, EntryState::Accepted))
+    }
+
+    fn answered_or_oldest(&self, candidates: &[usize]) -> Option<usize> {
+        self.first_answered(candidates)
+            .or_else(|| candidates.first().copied())
+    }
+
+    fn oldest_of_busiest_source(&self) -> Option<usize> {
+        let mut busiest: Option<(IpAddr, usize)> = None;
+
+        for entry in &self.entries {
+            let source = entry.origin.ip();
+            let tracked = self
+                .entries
+                .iter()
+                .filter(|other| other.origin.ip() == source)
+                .count();
+
+            if busiest.is_none_or(|(_, most)| tracked > most) {
+                busiest = Some((source, tracked));
+            }
+        }
+
+        let (source, _) = busiest?;
+        self.entries
+            .iter()
+            .position(|entry| entry.origin.ip() == source)
     }
 
     fn on_proof(
@@ -751,6 +804,100 @@ mod tests {
         assert!(output.accepted.is_some());
     }
 
+    fn hello_from(
+        responder: &mut ReconnectResponder,
+        store: &PeerStore,
+        record: &PeerRecord,
+        source: SocketAddr,
+    ) -> ReconnectInitiator {
+        let initiator = ReconnectInitiator::new(record).unwrap();
+        responder.handle(&start(&initiator), source, store).unwrap();
+        initiator
+    }
+
+    fn source(index: u8) -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 1, index)), 4000)
+    }
+
+    #[test]
+    fn one_source_cannot_push_another_sources_attempt_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut responder = ReconnectResponder::new();
+        let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
+        let challenge = challenge_for(&genuine, &mut responder, &store);
+        genuine.handle(&challenge).unwrap();
+
+        for _ in 0..200 {
+            hello_from(&mut responder, &store, &laptop, INTRUDER);
+        }
+        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
+
+        assert!(output.accepted.is_some());
+        assert_eq!(responder.tracked_attempts(), 1 + MAX_ATTEMPTS_PER_SOURCE);
+    }
+
+    #[test]
+    fn answered_attempts_are_evicted_before_live_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut responder = ReconnectResponder::new();
+        let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
+        let challenge = challenge_for(&genuine, &mut responder, &store);
+        genuine.handle(&challenge).unwrap();
+
+        let mut finished = ReconnectInitiator::new(&laptop).unwrap();
+        let reply = responder
+            .handle(&start(&finished), source(200), &store)
+            .unwrap()
+            .reply
+            .unwrap();
+        finished.handle(&reply).unwrap();
+        responder
+            .handle(&start(&finished), source(200), &store)
+            .unwrap();
+
+        for index in 0..(MAX_TRACKED_ATTEMPTS - 2) {
+            let index = u8::try_from(index).unwrap();
+            hello_from(&mut responder, &store, &laptop, source(index));
+        }
+        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+
+        hello_from(&mut responder, &store, &laptop, source(250));
+        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
+
+        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+        assert!(output.accepted.is_some());
+    }
+
+    #[test]
+    fn the_busiest_source_gives_way_when_the_table_is_full() {
+        let directory = tempfile::tempdir().unwrap();
+        let laptop = record("laptop", 1);
+        let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+        let mut responder = ReconnectResponder::new();
+        let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
+        let challenge = challenge_for(&genuine, &mut responder, &store);
+        genuine.handle(&challenge).unwrap();
+
+        for _ in 0..MAX_ATTEMPTS_PER_SOURCE {
+            hello_from(&mut responder, &store, &laptop, INTRUDER);
+        }
+        for index in 0..(MAX_TRACKED_ATTEMPTS - 1 - MAX_ATTEMPTS_PER_SOURCE) {
+            let index = u8::try_from(index).unwrap();
+            hello_from(&mut responder, &store, &laptop, source(index));
+        }
+        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+
+        hello_from(&mut responder, &store, &laptop, source(250));
+        let output = responder.handle(&start(&genuine), ORIGIN, &store).unwrap();
+
+        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+        assert!(output.accepted.is_some());
+    }
+
     #[test]
     fn a_proof_from_another_address_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
@@ -878,18 +1025,21 @@ mod tests {
     }
 
     #[test]
-    fn tracked_attempts_are_bounded() {
+    fn tracked_attempts_are_bounded_overall_and_per_source() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
-        let mut responder = ReconnectResponder::new();
+        let mut many_sources = ReconnectResponder::new();
+        let mut one_source = ReconnectResponder::new();
 
-        for _ in 0..MAX_TRACKED_ATTEMPTS * 2 {
-            let initiator = ReconnectInitiator::new(&laptop).unwrap();
-            challenge_for(&initiator, &mut responder, &store);
+        for index in 0..MAX_TRACKED_ATTEMPTS * 2 {
+            let index = u8::try_from(index).unwrap();
+            hello_from(&mut many_sources, &store, &laptop, source(index));
+            hello_from(&mut one_source, &store, &laptop, ORIGIN);
         }
 
-        assert_eq!(responder.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+        assert_eq!(many_sources.tracked_attempts(), MAX_TRACKED_ATTEMPTS);
+        assert_eq!(one_source.tracked_attempts(), MAX_ATTEMPTS_PER_SOURCE);
     }
 
     #[test]
