@@ -67,6 +67,13 @@ paths:
   cursor and input counters) to stderr every `network.stats_log_interval_ms` (default 10000, `0`
   turns the periodic line off) and always prints a final `session summary` line, read just before
   `wait` joins the stages, even when the session ends in an error.
+  With `network.stats_json` (default off) every periodic line and the final one are also
+  written to stdout as one JSON object per line (`stats_json.rs`, written by hand, no
+  `serde_json`): `{"event":"stats","phase":"interval"|"final","unix_ms":..,` then every
+  `HostStats` counter under its field name, `rtt_us` for the round trip and `null` for a
+  value not measured yet. The human lines stay on stderr, so stdout carries only JSON. A test
+  compares the emitted keys with the `Debug` output of `HostStats`, so a new counter that is
+  not added to the line fails it.
 - A useful daemon today is built with
   `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the

@@ -28,7 +28,7 @@
 
 # Headless host
 - [M] `hostd-unattended-pairing`: run `rusplay-hostd` as a service. Today a fresh PIN goes to stderr for each pairing window and there is no control socket (`hostd.md`), which is the last step that needs a terminal: the portal grant already survives restarts through `capture.restore_token_file`. Spike a PIN file under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) against a minimal Unix control socket, then ship a systemd user unit
-- [M] `stats-machine-readable`: emit session statistics as JSON lines (`HostStats` in `rusplay-hostd/src/stats.rs:99-108` and `ClientStats` with `capture_to_present`) behind a config option, so encoder, FEC and pacing settings can be compared and regressions tracked without scraping stderr. Decide whether to add `serde_json` or write the lines by hand
+- [S] `stats-machine-readable-client`: emit the client's session statistics (`ClientStats`, with `capture_to_present`) as JSON lines the way `rusplay-hostd` does with `network.stats_json` (`rusplay-hostd/src/stats_json.rs`), behind the same option, so a pair of runs can be compared without scraping stderr
 
 # Input
 - [XL] `input-gamepad-sensors`: carry gyro, accelerometer and touchpad from DualSense, DS4 and Switch Pro pads, which are skipped today because only nodes with `BTN_SOUTH`/`ABS_X`/`ABS_Y` are accepted, and the host pad is a 360 pad with rumble only. Split before starting: a selectable `/dev/uhid` DualSense/DS4 personality next to the 360 one, pairing sibling evdev nodes on the client, sensor and touch events in the wire model and snapshot, and LED and lightbar feedback as control messages

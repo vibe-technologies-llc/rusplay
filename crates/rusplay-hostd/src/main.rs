@@ -4,6 +4,7 @@ mod discovery;
 mod peers;
 mod responder;
 mod stats;
+mod stats_json;
 
 use std::{
     env,
@@ -171,7 +172,7 @@ fn serve_next(host: &HostSession, gpu: &Gpu, feed: &Arc<CaptureFeed>) -> Result<
     }
 
     let stream = host.serve(&client, gpu.clone(), feed)?;
-    stats::wait_logging(stream, network.stats_log_interval_ms)?;
+    stats::wait_logging(stream, network.stats_log_interval_ms, network.stats_json)?;
     eprintln!("rusplay-hostd: {address} left");
     Ok(())
 }

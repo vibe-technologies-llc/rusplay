@@ -46,6 +46,7 @@ pub struct NetworkConfig {
     pub keyframe_request_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
     pub stats_log_interval_ms: u32,
+    pub stats_json: bool,
     pub adaptive_bitrate: bool,
     pub adaptive_bitrate_floor_kbps: u32,
     pub adaptive_bitrate_step_kbps: u32,
@@ -87,6 +88,7 @@ impl Default for NetworkConfig {
             keyframe_request_interval_ms: 100,
             cursor_image_repeat_ms: 1_000,
             stats_log_interval_ms: 10_000,
+            stats_json: false,
             adaptive_bitrate: true,
             adaptive_bitrate_floor_kbps: 10_000,
             adaptive_bitrate_step_kbps: 2_000,
@@ -312,6 +314,14 @@ mod tests {
 
         assert_eq!(NetworkConfig::default().stats_log_interval_ms, 10_000);
         assert!(silent.validate().is_ok());
+    }
+
+    #[test]
+    fn json_statistics_are_off_by_default_and_parse_from_toml() {
+        let parsed: NetworkConfig = toml::from_str("stats_json = true").unwrap();
+
+        assert!(!NetworkConfig::default().stats_json);
+        assert!(parsed.stats_json);
     }
 
     #[test]

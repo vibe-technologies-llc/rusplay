@@ -6,6 +6,8 @@ use std::{
 
 use rusplay_host::{HostError, HostStats, HostStream, NegotiatedFormat};
 
+use crate::stats_json::{self, Phase};
+
 const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,7 +94,14 @@ fn format_line(format: NegotiatedFormat) -> String {
     }
 }
 
-pub fn wait_logging(stream: HostStream, interval_ms: u32) -> Result<(), HostError> {
+fn emit_json(phase: Phase, stats: &HostStats) {
+    println!(
+        "{}",
+        stats_json::line(phase, stats_json::now_unix_ms(), stats)
+    );
+}
+
+pub fn wait_logging(stream: HostStream, interval_ms: u32, json: bool) -> Result<(), HostError> {
     let mut schedule = Schedule::new(interval_ms, Instant::now());
     let mut format_reported = false;
 
@@ -103,13 +112,20 @@ pub fn wait_logging(stream: HostStream, interval_ms: u32) -> Result<(), HostErro
             eprintln!("rusplay-hostd: {}", format_line(format));
         }
         if schedule.take_due(Instant::now()) {
-            eprintln!("rusplay-hostd: stats {}", summary(&stream.stats()));
+            let stats = stream.stats();
+            eprintln!("rusplay-hostd: stats {}", summary(&stats));
+            if json {
+                emit_json(Phase::Interval, &stats);
+            }
         }
     }
 
     let last = stream.stats();
     let result = stream.wait();
     eprintln!("rusplay-hostd: session summary {}", summary(&last));
+    if json {
+        emit_json(Phase::Final, &last);
+    }
 
     result
 }

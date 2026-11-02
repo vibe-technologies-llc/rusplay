@@ -956,6 +956,13 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Session",
+        "network.stats_json",
+        "JSON statistics on stdout",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate",
         "Adaptive bitrate",
