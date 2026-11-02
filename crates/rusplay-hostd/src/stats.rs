@@ -48,7 +48,7 @@ pub fn summary(stats: &HostStats) -> String {
         line,
         "rtt {rtt}, frames captured {} encoded {} sent {} dropped {} repeated {}, \
          keyframes {} requested {}, datagrams {}, reported lost {}, undeliverable {}, \
-         malformed {} rejected {}, audio {} overruns {}, microphone {} lost {} underruns {}, cursor {}, input packets {} events {}, \
+         malformed {} rejected {}, audio {} overruns {}, microphone {} lost {} underruns {}, cursor {}, input packets {} events {} dropped {}, \
          rumble {}",
         stats.frames_captured,
         stats.frames_encoded,
@@ -70,6 +70,7 @@ pub fn summary(stats: &HostStats) -> String {
         stats.cursor_messages_sent,
         stats.input_packets,
         stats.input_events,
+        stats.input_packets_dropped,
         stats.rumble_sent,
     )
     .ok();

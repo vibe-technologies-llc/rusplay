@@ -3,7 +3,7 @@ use std::{
     ops::RangeInclusive,
     sync::{
         Arc,
-        mpsc::{Sender, SyncSender, TrySendError},
+        mpsc::{SyncSender, TrySendError},
     },
     time::{Duration, Instant},
 };
@@ -21,6 +21,7 @@ use rusplay_protocol::{
 use crate::{
     HostError,
     accept::{Replay, refresh_peers},
+    input::InputDatagram,
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
@@ -95,7 +96,7 @@ pub(crate) struct ControlLinks {
     pub peer: PeerId,
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
-    pub input: Option<Sender<Vec<u8>>>,
+    pub input: Option<SyncSender<InputDatagram>>,
     pub microphone: Option<SyncSender<Vec<u8>>>,
     pub configured: CodecFormat,
 }
@@ -342,11 +343,7 @@ impl ControlStage {
                 true
             }
             Ok(StreamKind::Input) => {
-                if self.streaming
-                    && let Some(input) = &self.links.input
-                {
-                    input.send(datagram.to_vec()).ok();
-                }
+                self.forward_input(datagram);
                 true
             }
             Ok(StreamKind::Microphone) => {
@@ -365,6 +362,23 @@ impl ControlStage {
             self.links.shared.counters.malformed_datagrams.increment();
         }
         Ok(())
+    }
+
+    fn forward_input(&self, datagram: &[u8]) {
+        if !self.streaming {
+            return;
+        }
+        let Some(input) = &self.links.input else {
+            return;
+        };
+
+        let forwarded = InputDatagram {
+            epoch: self.links.shared.client.epoch(),
+            bytes: datagram.to_vec(),
+        };
+        if let Err(TrySendError::Full(_)) = input.try_send(forwarded) {
+            self.links.shared.counters.input_packets_dropped.increment();
+        }
     }
 
     fn forward_microphone(&self, datagram: &[u8]) {

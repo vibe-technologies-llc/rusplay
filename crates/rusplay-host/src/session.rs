@@ -32,6 +32,7 @@ use crate::{
 
 const FEC_BLOCK_DATA_SHARDS: u8 = 32;
 const SEND_QUEUE_FRAMES: usize = 2;
+const INPUT_QUEUE_DATAGRAMS: usize = 256;
 const PERCENT: u32 = 100;
 
 pub struct HostSession {
@@ -161,7 +162,7 @@ impl HostSession {
             Arc::clone(&self.transport),
             Arc::clone(&shared.client),
         ));
-        let (input_sender, input_datagrams) = mpsc::channel();
+        let (input_sender, input_datagrams) = mpsc::sync_channel(INPUT_QUEUE_DATAGRAMS);
         let hints = HintPolicy::from_config(&self.config);
         if hints != HintPolicy::Ignore {
             shared

@@ -28,8 +28,9 @@ paths:
     the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
     and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage
     resends the latest `StreamFormat` before `Shared::start`, so the description precedes the forced
-    keyframe. The input stage resets its `InputSequence` and the cursor stage resends the image
-    when the epoch changes. `HostStats::sessions_taken_over` counts them. The old client is simply
+    keyframe. When the epoch changes the input stage lifts everything the old client held
+    (`release_all`), starts a fresh `HeldInput` and `InputSequence`, and the cursor stage resends
+    the image. `HostStats::sessions_taken_over` counts them. The old client is simply
     dropped: its datagrams no longer unseal. The host has no `Reassembler` of its own to reset;
     the new client's is fresh.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
@@ -272,10 +273,16 @@ paths:
   session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
   `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
   holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
-  a request channel, servicing it every 50 ms while no session uses it so the compositor's pings
+  a request channel (each call waits at most `INJECT_TIMEOUT`, 250 ms, then fails with
+  `SinkClosed`, and a late reply is told apart by its request id), servicing it every 50 ms while no session uses it so the compositor's pings
   are answered between clients. The injector thread ends when the feed drops.
   - `rusplay-host-input` (only with a feed) receives the datagrams the control stage forwards
-    once the `Hello` is answered (earlier ones are dropped), reads them with `InputPacket::read`
+    once the `Hello` is answered (earlier ones are dropped) over a bounded `sync_channel` of
+    `INPUT_QUEUE_DATAGRAMS` (256) filled with `try_send` (a full channel counts
+    `input_packets_dropped`, so a stalled compositor never queues input to replay late as a
+    burst). Each datagram carries the `ClientLink` epoch it was forwarded under and the stage drops
+    one from an earlier epoch (`input_packets_stale`) so a takeover never lets the old client's
+    datagrams raise the new sequence. It reads them with `InputPacket::read`
     and `InputSequence::admit` (a fresh sequence per session), decodes each record with
     `InputRecord::decode` and injects it; an event goes straight to the target, a state record
     is turned into the events that bring the host to the client's held state

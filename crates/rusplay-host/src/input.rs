@@ -17,6 +17,7 @@ use crate::{HostError, Stage, outbox::ControlOutbox, shared::Shared};
 
 const SERVICE_INTERVAL: Duration = Duration::from_millis(4);
 const IDLE_SERVICE_INTERVAL: Duration = Duration::from_millis(50);
+const INJECT_TIMEOUT: Duration = Duration::from_millis(250);
 const INJECTOR_THREAD: &str = "rusplay-host-injector";
 
 pub trait InputTarget {
@@ -62,7 +63,11 @@ impl InputFeed {
             })?;
 
         match ready.recv() {
-            Ok(Ok(())) => Ok(Self::new(RemoteTarget { requests, replies })),
+            Ok(Ok(())) => Ok(Self::new(RemoteTarget {
+                requests,
+                replies,
+                next_id: 0,
+            })),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(HostError::StagePanicked {
                 stage: Stage::Input,
@@ -89,17 +94,28 @@ enum Reply {
 }
 
 struct RemoteTarget {
-    requests: Sender<Request>,
-    replies: Receiver<Reply>,
+    requests: Sender<(u64, Request)>,
+    replies: Receiver<(u64, Reply)>,
+    next_id: u64,
 }
 
 impl RemoteTarget {
-    fn call(&self, request: Request) -> Result<Reply, InputError> {
+    fn call(&mut self, request: Request) -> Result<Reply, InputError> {
+        self.next_id += 1;
+        let id = self.next_id;
         self.requests
-            .send(request)
+            .send((id, request))
             .map_err(|_| InputError::SinkClosed)?;
 
-        self.replies.recv().map_err(|_| InputError::SinkClosed)
+        let deadline = Instant::now() + INJECT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.replies.recv_timeout(remaining) {
+                Ok((answered, reply)) if answered == id => return Ok(reply),
+                Ok(_) => {}
+                Err(_) => return Err(InputError::SinkClosed),
+            }
+        }
     }
 }
 
@@ -127,20 +143,22 @@ impl InputTarget for RemoteTarget {
 
 fn serve_requests(
     mut target: impl InputTarget,
-    requests: &Receiver<Request>,
-    replies: &Sender<Reply>,
+    requests: &Receiver<(u64, Request)>,
+    replies: &Sender<(u64, Reply)>,
 ) {
     let mut idle = Vec::new();
 
     loop {
         match requests.recv_timeout(IDLE_SERVICE_INTERVAL) {
-            Ok(Request::Inject(event)) => {
-                replies.send(Reply::Injected(target.inject(event))).ok();
+            Ok((id, Request::Inject(event))) => {
+                replies
+                    .send((id, Reply::Injected(target.inject(event))))
+                    .ok();
             }
-            Ok(Request::Service) => {
+            Ok((id, Request::Service)) => {
                 let mut rumble = Vec::new();
                 let result = target.service(&mut rumble);
-                replies.send(Reply::Serviced { rumble, result }).ok();
+                replies.send((id, Reply::Serviced { rumble, result })).ok();
             }
             Err(RecvTimeoutError::Timeout) => {
                 idle.clear();
@@ -157,10 +175,16 @@ impl fmt::Debug for InputFeed {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct InputDatagram {
+    pub epoch: u32,
+    pub bytes: Vec<u8>,
+}
+
 pub(crate) struct InputLinks {
     pub shared: Arc<Shared>,
     pub feed: Arc<InputFeed>,
-    pub datagrams: Receiver<Vec<u8>>,
+    pub datagrams: Receiver<InputDatagram>,
     pub outbox: Arc<ControlOutbox>,
 }
 
@@ -202,15 +226,16 @@ impl<'a> InputStage<'a> {
     fn serve(
         &mut self,
         target: &mut dyn InputTarget,
-        datagrams: &Receiver<Vec<u8>>,
+        datagrams: &Receiver<InputDatagram>,
     ) -> Result<(), HostError> {
         while !self.shared.stopped() {
+            self.follow_client(target);
+
             match datagrams.recv_timeout(SERVICE_INTERVAL) {
                 Ok(datagram) => {
-                    self.follow_client();
-                    self.apply_datagram(target, &datagram);
+                    self.admit(target, &datagram);
                     while let Ok(next) = datagrams.try_recv() {
-                        self.apply_datagram(target, &next);
+                        self.admit(target, &next);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -223,11 +248,25 @@ impl<'a> InputStage<'a> {
         Ok(())
     }
 
-    fn follow_client(&mut self) {
+    fn follow_client(&mut self, target: &mut dyn InputTarget) {
         let epoch = self.shared.client.epoch();
-        if epoch != self.epoch {
-            self.epoch = epoch;
-            self.sequence.reset();
+        if epoch == self.epoch {
+            return;
+        }
+
+        self.release_all(target);
+        self.held = HeldInput::new();
+        self.sequence.reset();
+        self.epoch = epoch;
+    }
+
+    fn admit(&mut self, target: &mut dyn InputTarget, datagram: &InputDatagram) {
+        self.follow_client(target);
+
+        if datagram.epoch == self.epoch {
+            self.apply_datagram(target, &datagram.bytes);
+        } else {
+            self.shared.counters.input_packets_stale.increment();
         }
     }
 
@@ -496,6 +535,36 @@ mod tests {
         assert_eq!(commands, vec![rumble]);
     }
 
+    struct StallsOnce {
+        stalled: bool,
+    }
+
+    impl InputTarget for StallsOnce {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            if !self.stalled {
+                self.stalled = true;
+                thread::sleep(INJECT_TIMEOUT + Duration::from_millis(100));
+            }
+            Ok(())
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_stalled_injector_times_out_and_its_late_reply_is_not_mistaken_for_the_next() {
+        let feed = InputFeed::spawn(|| Ok(StallsOnce { stalled: false })).unwrap();
+        let mut target = feed.target();
+
+        let stalled = target.inject(key(30, true));
+        let recovered = target.inject(key(30, false));
+
+        assert!(matches!(stalled, Err(InputError::SinkClosed)));
+        assert!(recovered.is_ok());
+    }
+
     #[test]
     fn a_target_that_fails_to_build_reports_why() {
         let built = InputFeed::spawn(|| -> Result<Recorder, HostError> {
@@ -590,11 +659,70 @@ mod tests {
         rig.shared
             .client
             .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
-        stage.follow_client();
+        stage.follow_client(&mut target);
+        target.events.clear();
         stage.apply_datagram(&mut target, &datagram(0, &[event(key(2, true))], &[]));
 
-        assert_eq!(target.events, vec![key(1, true), key(2, true)]);
+        assert_eq!(target.events, vec![key(2, true)]);
         assert_eq!(rig.stats().input_packets_stale, 0);
+    }
+
+    #[test]
+    fn a_takeover_lifts_what_the_old_client_held() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let pad = InputEvent::Gamepad {
+            slot: 1,
+            event: GamepadEvent::Connected,
+        };
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(0, &[event(key(30, true)), event(pad)], &[]),
+        );
+        target.events.clear();
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        stage.follow_client(&mut target);
+        let lifted = target.events.len();
+        stage.apply_datagram(&mut target, &datagram(0, &snapshot_of(&[]), &[]));
+
+        assert_eq!(lifted, 2);
+        assert!(target.events.contains(&key(30, false)));
+        assert_eq!(target.events.len(), 2);
+        assert!(stage.held.is_idle());
+    }
+
+    #[test]
+    fn datagrams_forwarded_for_the_old_client_are_dropped_after_a_takeover() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let old_epoch = rig.shared.client.epoch();
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        let new_epoch = rig.shared.client.epoch();
+
+        stage.admit(
+            &mut target,
+            &InputDatagram {
+                epoch: old_epoch,
+                bytes: datagram(900, &[event(key(1, true))], &[]),
+            },
+        );
+        stage.admit(
+            &mut target,
+            &InputDatagram {
+                epoch: new_epoch,
+                bytes: datagram(0, &[event(key(2, true))], &[]),
+            },
+        );
+
+        assert_eq!(target.events, vec![key(2, true)]);
+        assert_eq!(rig.stats().input_packets_stale, 1);
     }
 
     #[test]
