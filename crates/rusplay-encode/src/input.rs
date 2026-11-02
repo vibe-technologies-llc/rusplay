@@ -1,5 +1,6 @@
-use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
-use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, DrmFourcc, Frame, FrameBuffer, PixelFormat, Resolution,
+};
 
 use crate::{Backend, EncodeError};
 
@@ -165,9 +166,9 @@ impl<'a> YuvFrame<'a> {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
-    use rusplay_capture::{Frame, FrameBuffer};
     use rusplay_core::{
-        BitDepth, ChromaSubsampling, ColorSpace, PixelFormat, Resolution, Timestamp,
+        BitDepth, ChromaSubsampling, ColorSpace, Frame, FrameBuffer, PixelFormat, Resolution,
+        Timestamp,
     };
 
     use super::{bytes_per_sample, chroma_shifts, fourcc_for};
@@ -237,8 +238,7 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_capture::FrameBuffer;
-    use rusplay_core::Timestamp;
+    use rusplay_core::{FrameBuffer, Timestamp};
 
     use super::{fixtures::*, *};
 

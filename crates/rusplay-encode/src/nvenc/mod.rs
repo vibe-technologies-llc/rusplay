@@ -18,9 +18,11 @@ use std::{
     rc::Rc,
 };
 
-use rusplay_capture::{Frame, FrameBuffer, Plane};
 use rusplay_config::{NvencConfig, VideoConfig};
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, EncodedFrame, Frame, FrameBuffer, PixelFormat, Plane,
+    Resolution,
+};
 
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,

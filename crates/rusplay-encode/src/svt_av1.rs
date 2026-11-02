@@ -6,11 +6,10 @@ use std::{
     slice,
 };
 
-use rusplay_capture::Frame;
 use rusplay_config::{SvtAv1Config, VideoConfig};
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, EncodedFrame,
-    FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp, TransferFunction,
+    Frame, FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp, TransferFunction,
 };
 
 use crate::{

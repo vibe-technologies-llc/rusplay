@@ -18,11 +18,10 @@ use std::{
     rc::Rc,
 };
 
-use rusplay_capture::{Frame, FrameBuffer, Plane};
 use rusplay_config::{RateControl, VaapiConfig, VideoConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, FrameRate, PixelFormat,
-    Resolution,
+    BitDepth, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer, FrameRate,
+    PixelFormat, Plane, Resolution,
 };
 
 use crate::{

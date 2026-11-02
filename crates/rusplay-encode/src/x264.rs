@@ -5,11 +5,10 @@ use std::{
     slice,
 };
 
-use rusplay_capture::Frame;
 use rusplay_config::{VideoConfig, X264Config, X264Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, FrameRate, HdrLevels,
-    PixelFormat, Resolution, Timestamp,
+    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame, FrameRate,
+    HdrLevels, PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{

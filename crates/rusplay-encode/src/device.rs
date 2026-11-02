@@ -1,5 +1,4 @@
-use rusplay_capture::{DrmFourcc, Plane};
-use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
+use rusplay_core::{BitDepth, ChromaSubsampling, DrmFourcc, PixelFormat, Plane, Resolution};
 
 use crate::{Backend, EncodeError};
 

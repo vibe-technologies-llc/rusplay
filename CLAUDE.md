@@ -11,7 +11,7 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 
 | Crate | Role |
 |---|---|
-| `rusplay-core` | Shared value types: resolution, frame rate, codecs, chroma, colour, scale filters, timestamps |
+| `rusplay-core` | Shared value types: resolution, frame rate, codecs, chroma, colour, scale filters, timestamps, the `Frame` buffer types (`rusplay-capture` re-exports them) |
 | `rusplay-config` | The serde/TOML configuration tree, its defaults and validation |
 | `rusplay-protocol` | Versioned wire format, no I/O |
 | `rusplay-net` | Raw UDP transport, pacing, FEC, reliable control channel |

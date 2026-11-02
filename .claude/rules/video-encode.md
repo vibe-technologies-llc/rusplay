@@ -306,7 +306,7 @@ paths:
 
 ## CPU input contract
 
-Software encoders take a `rusplay_capture::Frame` whose buffer is `FrameBuffer::Shm`. A
+Software encoders take a `rusplay_core::Frame` whose buffer is `FrameBuffer::Shm`. A
 `FrameBuffer::DmaBuf` or `OpaqueFd` is `CpuFrameRequired`. The planar layout is fixed by the configured
 `video.pixel_format`, and `format` must match it exactly or the frame is `FrameFormatMismatch`
 (never converted):

@@ -1,6 +1,5 @@
 mod cursor;
 mod error;
-mod frame;
 mod handoff;
 mod lease;
 mod modifier;
@@ -8,6 +7,8 @@ mod modifier;
 mod pipewire;
 mod portal;
 mod token;
+
+pub use rusplay_core::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
 
 #[cfg(feature = "pipewire")]
 pub use crate::pipewire::{PipeWireCapture, StreamOptions, default_formats};
@@ -17,9 +18,8 @@ pub use crate::{
         CursorTracker, CursorUpdate,
     },
     error::CaptureError,
-    frame::{DrmFourcc, Frame, FrameBuffer, Plane},
     handoff::{Publisher, Received, Subscriber, latest},
-    lease::{BufferLease, ShmFallback},
+    lease::ShmFallback,
     modifier::{
         DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
         choose_modifier, modifiers_for,

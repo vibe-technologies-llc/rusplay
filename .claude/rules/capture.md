@@ -86,6 +86,8 @@ paths:
   modifiers it can import (`rusplay_scale::DmaBufImporter::modifiers`). The default is
   `DEFAULT_MODIFIERS`: `DRM_FORMAT_MOD_INVALID` (implicit, preferred) then
   `DRM_FORMAT_MOD_LINEAR`; Vulkan cannot import the implicit modifier.
+- `Frame`, `FrameBuffer`, `Plane`, `DrmFourcc` and `BufferLease` live in `rusplay-core` (`frame.rs`) so
+  `rusplay-encode` needs no edge to capture; `rusplay-capture` re-exports them.
 - A DMA-BUF `Frame` owns a duplicate of the plane fd (`FrameBuffer::DmaBuf { fd, modifier,
   planes, lease }`, one `Plane { offset, stride }` per `spa_data`, e.g. AMD DCC metadata planes).
   Every plane must live in the same buffer (compared by device and inode), otherwise

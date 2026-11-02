@@ -1,7 +1,6 @@
-use rusplay_capture::DrmFourcc;
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, MatrixCoefficients, PixelFormat,
-    TransferFunction,
+    BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, DrmFourcc, MatrixCoefficients,
+    PixelFormat, TransferFunction,
 };
 
 use crate::{

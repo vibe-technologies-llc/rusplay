@@ -5,10 +5,9 @@ use std::{
     slice,
 };
 
-use rusplay_capture::Frame;
 use rusplay_config::{VideoConfig, X265Config, X265Tune};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, FrameRate,
+    BitDepth, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame, FrameRate,
     PixelFormat, Resolution, Timestamp,
 };
 

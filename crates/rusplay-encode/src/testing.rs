@@ -1,9 +1,9 @@
 use std::{fs::File, os::fd::OwnedFd};
 
-use rusplay_capture::{BufferLease, DrmFourcc, Frame, FrameBuffer};
 use rusplay_config::{EncoderParams, VideoConfig, VideoEncoderConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorSpace, PixelFormat, Resolution, Timestamp,
+    BitDepth, BufferLease, ChromaSubsampling, Codec, ColorSpace, DrmFourcc, Frame, FrameBuffer,
+    PixelFormat, Resolution, Timestamp,
 };
 
 use crate::{

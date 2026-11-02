@@ -38,9 +38,8 @@ mod x265;
 #[cfg(any(feature = "x264", feature = "x265"))]
 mod x26x;
 
-use rusplay_capture::Frame;
 use rusplay_config::VideoConfig;
-use rusplay_core::EncodedFrame;
+use rusplay_core::{EncodedFrame, Frame};
 
 pub use crate::{
     backend::Backend,

@@ -1,6 +1,7 @@
 mod audio;
 mod color;
 mod format;
+mod frame;
 mod media;
 mod scale;
 mod time;
@@ -14,6 +15,7 @@ pub use color::{
     bradford_adaptation, pq_from_nits, pq_to_nits,
 };
 pub use format::{CodecFormat, FormatSet};
+pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
 pub use media::EncodedFrame;
 pub use scale::{ChromaSiting, ScaleFilter};
 pub use time::Timestamp;

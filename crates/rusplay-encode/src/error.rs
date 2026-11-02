@@ -1,8 +1,7 @@
 use std::{fmt, io, path::PathBuf};
 
-use rusplay_capture::DrmFourcc;
 use rusplay_config::RateControl;
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorPrimaries, Resolution};
+use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorPrimaries, DrmFourcc, Resolution};
 use thiserror::Error;
 
 use crate::{Backend, input::fourcc_text};
