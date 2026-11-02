@@ -23,6 +23,7 @@ pub struct VideoConfig {
     pub encoder: VideoEncoderConfig,
     pub encoder_gpu_handoff: bool,
     pub decoder: VideoDecoderConfig,
+    pub vbv_frames: u8,
     pub decode_queue_frames: u8,
     pub present_mode: PresentMode,
     pub present_frame_latency: u8,
@@ -40,6 +41,7 @@ impl Default for VideoConfig {
             encoder: VideoEncoderConfig::default(),
             encoder_gpu_handoff: true,
             decoder: VideoDecoderConfig::default(),
+            vbv_frames: 2,
             decode_queue_frames: 3,
             present_mode: PresentMode::default(),
             present_frame_latency: 1,
@@ -84,6 +86,10 @@ impl VideoConfig {
                 min_nits: mastering.min_nits.nits(),
                 max_nits: mastering.max_nits.nits(),
             });
+        }
+
+        if self.vbv_frames == 0 {
+            return Err(ConfigError::ZeroVbvFrames);
         }
 
         if self.decode_queue_frames == 0 {

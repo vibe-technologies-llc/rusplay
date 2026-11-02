@@ -327,6 +327,14 @@ pub static FIELDS: &[Field] = &[
     .unit("kbps"),
     field(
         Section::Video,
+        "Stream",
+        "video.vbv_frames",
+        "Rate buffer",
+        U8,
+    )
+    .unit("frames"),
+    field(
+        Section::Video,
         "Pixel format",
         "video.pixel_format.chroma",
         "Chroma subsampling",

@@ -594,6 +594,7 @@ impl NvencEncoder {
             format: video.pixel_format,
             color: video.color,
             frame_rate: video.frame_rate,
+            vbv_frames: video.vbv_frames,
             resolution: video.resolution,
             bitrate_kbps: video.bitrate_kbps,
             rate_control: nvenc.rate_control,

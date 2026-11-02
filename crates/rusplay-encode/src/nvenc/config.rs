@@ -27,6 +27,7 @@ pub(super) struct Settings {
     pub format: PixelFormat,
     pub color: ColorSpace,
     pub frame_rate: FrameRate,
+    pub vbv_frames: u8,
     pub resolution: Option<Resolution>,
     pub bitrate_kbps: u32,
     pub rate_control: RateControl,
@@ -167,7 +168,7 @@ impl Settings {
             mode,
             average_bits: self.bitrate_kbps.saturating_mul(1000),
             max_bits: peak.saturating_mul(1000),
-            vbv_bits: vbv_buffer_kbit(peak, self.frame_rate).saturating_mul(1000),
+            vbv_bits: vbv_buffer_kbit(peak, self.frame_rate, self.vbv_frames).saturating_mul(1000),
             qp: None,
         }
     }
@@ -441,6 +442,7 @@ mod tests {
             format,
             color: ColorSpace::default(),
             frame_rate: FrameRate::new(60, 1),
+            vbv_frames: 2,
             resolution: None,
             bitrate_kbps: 20_000,
             rate_control: RateControl::Cbr,

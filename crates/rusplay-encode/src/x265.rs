@@ -265,6 +265,7 @@ struct Settings {
     pixel_format: PixelFormat,
     color: ColorSpace,
     frame_rate: FrameRate,
+    vbv_frames: u8,
     bitrate_kbps: u32,
 }
 
@@ -275,6 +276,7 @@ impl Settings {
             pixel_format: video.pixel_format,
             color: video.color,
             frame_rate: video.frame_rate,
+            vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };
 
@@ -306,7 +308,8 @@ impl Settings {
             param.parse(key, value)?;
         }
         let bitrate = self.bitrate_kbps.to_string();
-        let buffer = vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate).to_string();
+        let buffer =
+            vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate, self.vbv_frames).to_string();
         param.parse("vbv-maxrate", &bitrate)?;
         param.parse("vbv-bufsize", &buffer)?;
 
@@ -374,6 +377,7 @@ struct Session {
     colour_space: c_int,
     bit_depth: c_int,
     frame_rate: FrameRate,
+    vbv_frames: u8,
 }
 
 unsafe impl Send for Session {}
@@ -409,6 +413,7 @@ impl Session {
             colour_space: colour_space_id(settings.pixel_format.chroma),
             bit_depth: c_int::from(settings.pixel_format.depth.bits()),
             frame_rate: settings.frame_rate,
+            vbv_frames: settings.vbv_frames,
         })
     }
 
@@ -503,7 +508,7 @@ impl Session {
         let buffer = if buffer > 0 {
             scale(buffer)
         } else {
-            vbv_buffer_kbit(kbps, self.frame_rate).to_string()
+            vbv_buffer_kbit(kbps, self.frame_rate, self.vbv_frames).to_string()
         };
 
         self.param.parse("bitrate", &kbps.to_string())?;

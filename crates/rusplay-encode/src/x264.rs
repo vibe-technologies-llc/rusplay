@@ -119,6 +119,7 @@ struct Settings {
     pixel_format: PixelFormat,
     color: ColorSpace,
     frame_rate: FrameRate,
+    vbv_frames: u8,
     bitrate_kbps: u32,
 }
 
@@ -136,6 +137,7 @@ impl Settings {
             pixel_format: video.pixel_format,
             color: video.color,
             frame_rate: video.frame_rate,
+            vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };
 
@@ -188,7 +190,8 @@ impl Settings {
             parse(&mut param, key, value)?;
         }
         let bitrate = self.bitrate_kbps.to_string();
-        let buffer = vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate).to_string();
+        let buffer =
+            vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate, self.vbv_frames).to_string();
         parse(&mut param, "bitrate", &bitrate)?;
         parse(&mut param, "vbv-maxrate", &bitrate)?;
         parse(&mut param, "vbv-bufsize", &buffer)?;
@@ -292,6 +295,7 @@ struct Session {
     resolution: Resolution,
     image_csp: c_int,
     frame_rate: FrameRate,
+    vbv_frames: u8,
     ledger: TimestampLedger,
 }
 
@@ -325,6 +329,7 @@ impl Session {
             resolution,
             image_csp: colour_space_id(settings.pixel_format.chroma) | high_depth,
             frame_rate: settings.frame_rate,
+            vbv_frames: settings.vbv_frames,
             ledger: TimestampLedger::default(),
         })
     }
@@ -411,7 +416,8 @@ impl Session {
         let buffer = if param.rc.i_vbv_buffer_size > 0 {
             scale(param.rc.i_vbv_buffer_size)
         } else {
-            c_int::try_from(vbv_buffer_kbit(kbps, self.frame_rate)).unwrap_or(c_int::MAX)
+            c_int::try_from(vbv_buffer_kbit(kbps, self.frame_rate, self.vbv_frames))
+                .unwrap_or(c_int::MAX)
         };
         let maximum = if param.rc.i_vbv_max_bitrate > 0 {
             scale(param.rc.i_vbv_max_bitrate)

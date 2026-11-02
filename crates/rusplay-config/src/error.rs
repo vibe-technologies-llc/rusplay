@@ -128,6 +128,8 @@ pub enum ConfigError {
     ZeroBitrateHintMin,
     #[error("bitrate hint minimum {min_kbps} kbps is above its maximum {max_kbps} kbps")]
     BitrateHintRangeInverted { min_kbps: u32, max_kbps: u32 },
+    #[error("vbv buffer must hold at least one frame")]
+    ZeroVbvFrames,
     #[error("decode queue must hold at least one frame")]
     ZeroDecodeQueue,
     #[error("present frame latency {0} is outside 1..=3")]
@@ -226,6 +228,7 @@ impl ConfigError {
             Self::ZeroBitrateHintMin | Self::BitrateHintRangeInverted { .. } => {
                 Some("network.bitrate_hint_min_kbps")
             }
+            Self::ZeroVbvFrames => Some("video.vbv_frames"),
             Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
             Self::PresentFrameLatencyOutOfRange(_) => Some("video.present_frame_latency"),
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
