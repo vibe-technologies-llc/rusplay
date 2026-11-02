@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use pipewire::{
@@ -21,7 +21,7 @@ use crate::{
         NegotiatedFormat, PipewireThread, StartupSender, format_pod_bytes, negotiated_format,
         node_latency,
     },
-    ring::{RingWriter, sample_ring},
+    ring::{RingWriter, playback_ring_rate, ring_milliseconds, sample_ring},
 };
 
 const BYTES_PER_SAMPLE: usize = size_of::<f32>();
@@ -45,25 +45,37 @@ struct PlaybackCounters {
 struct Playout {
     consumer: Consumer<f32>,
     channels: usize,
-    target_frames: usize,
+    jitter_ms: u32,
+    target_frames: AtomicUsize,
     playing: bool,
     counters: Arc<PlaybackCounters>,
+}
+
+fn frames_for(rate: u32, milliseconds: u32) -> usize {
+    rate as usize * milliseconds as usize / 1000
 }
 
 impl Playout {
     fn new(
         consumer: Consumer<f32>,
         channels: usize,
-        target_frames: usize,
+        jitter_ms: u32,
+        rate: u32,
         counters: Arc<PlaybackCounters>,
     ) -> Self {
         Self {
             consumer,
             channels,
-            target_frames,
+            jitter_ms,
+            target_frames: AtomicUsize::new(frames_for(rate, jitter_ms)),
             playing: false,
             counters,
         }
+    }
+
+    fn retarget(&self, rate: u32) {
+        self.target_frames
+            .store(frames_for(rate, self.jitter_ms), Ordering::Relaxed);
     }
 
     fn render(&mut self, out: &mut [u8]) -> usize {
@@ -71,7 +83,7 @@ impl Playout {
         let wanted = out.len() / frame_bytes;
         let mut available = self.consumer.slots() / self.channels;
 
-        let floor = self.target_frames.max(wanted);
+        let floor = self.target_frames.load(Ordering::Relaxed).max(wanted);
 
         if !self.playing && available >= floor {
             self.playing = true;
@@ -165,6 +177,8 @@ fn run_playback(
             let Some(format) = negotiated_format(id, param) else {
                 return;
             };
+            state.playout.retarget(format.rate);
+
             let Some(startup) = state.startup.take() else {
                 return;
             };
@@ -272,12 +286,21 @@ impl AudioPlayback {
             target,
         };
         let channels = usize::from(config.channels.channel_count());
-        let target_frames = settings.rate as usize * config.jitter_buffer_ms as usize / 1000;
 
-        let (writer, consumer) = sample_ring(settings.rate, channels);
+        let (writer, consumer) = sample_ring(
+            playback_ring_rate(settings.rate),
+            channels,
+            ring_milliseconds(config.jitter_buffer_ms),
+        );
         let counters = Arc::new(PlaybackCounters::default());
 
-        let playout = Playout::new(consumer, channels, target_frames, Arc::clone(&counters));
+        let playout = Playout::new(
+            consumer,
+            channels,
+            config.jitter_buffer_ms,
+            settings.rate,
+            Arc::clone(&counters),
+        );
         let fixed_format = match target {
             PlaybackTarget::Device => None,
             PlaybackTarget::VirtualSource => Some(NegotiatedFormat {
@@ -380,10 +403,14 @@ mod tests {
         counters: Arc<PlaybackCounters>,
     }
 
-    fn fixture(target_frames: usize) -> Fixture {
-        let (writer, consumer) = sample_ring(48_000, CHANNELS);
+    fn fixture(jitter_ms: u32) -> Fixture {
+        let (writer, consumer) = sample_ring(
+            playback_ring_rate(48_000),
+            CHANNELS,
+            ring_milliseconds(jitter_ms),
+        );
         let counters = Arc::new(PlaybackCounters::default());
-        let playout = Playout::new(consumer, CHANNELS, target_frames, Arc::clone(&counters));
+        let playout = Playout::new(consumer, CHANNELS, jitter_ms, 48_000, Arc::clone(&counters));
         Fixture {
             writer,
             playout,
@@ -415,7 +442,7 @@ mod tests {
 
     #[test]
     fn silence_plays_until_the_target_is_buffered() {
-        let mut fixture = fixture(480);
+        let mut fixture = fixture(10);
         let mut out = vec![9; 240 * FRAME_BYTES];
 
         fixture.writer.write(&ramp(300, 0));
@@ -427,7 +454,7 @@ mod tests {
 
     #[test]
     fn playback_starts_in_order_once_the_target_is_reached() {
-        let mut fixture = fixture(480);
+        let mut fixture = fixture(10);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
         fixture.writer.write(&ramp(600, 0));
@@ -442,7 +469,7 @@ mod tests {
 
     #[test]
     fn an_underrun_pads_with_silence_and_rebuffers() {
-        let mut fixture = fixture(240);
+        let mut fixture = fixture(5);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
         fixture.writer.write(&ramp(300, 0));
@@ -462,7 +489,7 @@ mod tests {
 
     #[test]
     fn a_buffer_that_grows_past_the_ceiling_is_trimmed_to_the_target() {
-        let mut fixture = fixture(240);
+        let mut fixture = fixture(5);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
         fixture.writer.write(&ramp(240, 0));
@@ -473,6 +500,48 @@ mod tests {
 
         assert_eq!(trims(&fixture), 1);
         assert_eq!(fixture.writer.buffered_frames(), 0);
+    }
+
+    #[test]
+    fn the_largest_jitter_buffer_fits_the_ring_and_plays() {
+        let mut fixture = fixture(500);
+        let mut out = vec![0; 240 * FRAME_BYTES];
+
+        let dropped = fixture.writer.write(&ramp(24_000, 0));
+        fixture.playout.render(&mut out);
+
+        assert_eq!(dropped, 0);
+        assert_eq!(samples(&out), ramp(240, 0));
+    }
+
+    #[test]
+    fn the_largest_jitter_buffer_still_trims_drift() {
+        let mut fixture = fixture(500);
+        let mut out = vec![0; 240 * FRAME_BYTES];
+        fixture.writer.write(&ramp(24_000, 0));
+        fixture.playout.render(&mut out);
+
+        let dropped = fixture.writer.write(&vec![0.5; 25_000 * CHANNELS]);
+        fixture.playout.render(&mut out);
+
+        assert_eq!(dropped, 0);
+        assert_eq!(trims(&fixture), 1);
+        assert_eq!(fixture.writer.buffered_frames(), 24_000 - 240);
+    }
+
+    #[test]
+    fn the_target_follows_the_negotiated_rate() {
+        let mut fixture = fixture(100);
+        let mut out = vec![0; 240 * FRAME_BYTES];
+        fixture.playout.retarget(96_000);
+
+        fixture.writer.write(&ramp(6_000, 0));
+        fixture.playout.render(&mut out);
+        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+
+        fixture.writer.write(&ramp(4_000, 6_000));
+        fixture.playout.render(&mut out);
+        assert_eq!(samples(&out), ramp(240, 0));
     }
 
     #[test]

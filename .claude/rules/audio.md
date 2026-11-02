@@ -35,8 +35,9 @@ paths:
   follows the default source, the microphone. It asks for 32-bit float at the configured rate
   and channel layout, with explicit channel positions (`channel_positions`) and `node.latency`
   set to one codec frame. The `process` callback only converts bytes to `f32` and pushes whole
-  frames into an `rtrb` ring (250 ms); a full ring drops the newest frames and counts them in
-  `overruns`. It never blocks: the consumer is woken with a `try_lock` and `Thread::unpark`.
+  frames into an `rtrb` ring (250 ms), converting the mapped bytes straight into the ring's
+  write chunk (`RingWriter::write_le_bytes`) so the realtime thread never allocates; a full ring
+  drops the newest frames and counts them in `overruns`. It never blocks: the consumer is woken with a `try_lock` and `Thread::unpark`.
   The consumer side (`SampleSource`) drains the ring, runs `PcmResampler` when the negotiated
   rate differs from the configured one, and hands out exact codec frames through
   `read_frame`/`try_read_frame`. Startup waits for the first negotiated format and fails with a
@@ -48,7 +49,10 @@ paths:
   `playback` loopback test.
 - Playback (`AudioPlayback`, feature `pipewire`) mirrors capture: a PipeWire output stream on its
   own thread whose `process` callback (`Playout::render`) reads an `rtrb` ring and never blocks or
-  allocates. `submit` writes decoded frames into the ring, through `PcmResampler` if the stream
+  allocates. The ring holds `max(250 ms, 3 * jitter_buffer_ms)` at 192 kHz, because it is built
+  before the device rate is known and must fit twice the jitter floor at any device rate;
+  `Playout::retarget` recomputes the floor in native-rate frames when the stream negotiates its
+  format. `submit` writes decoded frames into the ring, through `PcmResampler` if the stream
   negotiated another rate, and counts frames dropped when the ring is full as `overflows`.
 - `AudioPlayback::start_to(config, PlaybackTarget::VirtualSource)` publishes the stream as a
   PipeWire `Audio/Source` node (`media.class`, `node.name = rusplay-microphone`) instead of

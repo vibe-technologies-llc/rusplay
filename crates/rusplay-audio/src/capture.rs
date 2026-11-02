@@ -24,11 +24,8 @@ use rusplay_core::ChannelLayout;
 use crate::{
     AudioError, AudioInput, PcmResampler,
     pw_common::{PipewireThread, StartupSender, format_pod_bytes, negotiated_format, node_latency},
-    ring::{RingWriter, sample_ring},
+    ring::{MIN_RING_MILLISECONDS, RingWriter, sample_ring},
 };
-
-const SCRATCH_SAMPLES: usize = 16 * 1024;
-const BYTES_PER_SAMPLE: usize = size_of::<f32>();
 
 type SharedWaiter = Arc<Mutex<Option<Thread>>>;
 
@@ -90,7 +87,6 @@ struct CaptureCallbacks {
     writer: RingWriter,
     overruns: Arc<AtomicU64>,
     waiter: SharedWaiter,
-    scratch: Vec<f32>,
     startup: Option<StartupSender>,
     channels: usize,
 }
@@ -111,7 +107,7 @@ struct CaptureSettings {
 
 fn run_capture(
     settings: &CaptureSettings,
-    mut callbacks: CaptureCallbacks,
+    callbacks: CaptureCallbacks,
     quit: pipewire::channel::Receiver<()>,
 ) -> Result<(), AudioError> {
     pipewire::init();
@@ -141,8 +137,6 @@ fn run_capture(
     );
 
     let stream = StreamBox::new(&core, "rusplay-capture", props)?;
-
-    callbacks.scratch = Vec::with_capacity(SCRATCH_SAMPLES);
 
     let _listener = stream
         .add_local_listener_with_user_data(callbacks)
@@ -189,13 +183,7 @@ fn run_capture(
                 return;
             };
 
-            state.scratch.clear();
-            let (samples, _) = payload.as_chunks::<BYTES_PER_SAMPLE>();
-            state
-                .scratch
-                .extend(samples.iter().map(|bytes| f32::from_le_bytes(*bytes)));
-
-            let dropped = state.writer.write(&state.scratch);
+            let dropped = state.writer.write_le_bytes(payload);
             if dropped > 0 {
                 state.overruns.fetch_add(dropped as u64, Ordering::Relaxed);
             }
@@ -249,7 +237,7 @@ impl AudioCapture {
         };
         let channels = usize::from(config.channels.channel_count());
 
-        let (writer, consumer) = sample_ring(settings.rate, channels);
+        let (writer, consumer) = sample_ring(settings.rate, channels, MIN_RING_MILLISECONDS);
         let overruns = Arc::new(AtomicU64::new(0));
         let waiter: SharedWaiter = Arc::new(Mutex::new(None));
 
@@ -257,7 +245,6 @@ impl AudioCapture {
             writer,
             overruns: Arc::clone(&overruns),
             waiter: Arc::clone(&waiter),
-            scratch: Vec::new(),
             startup: None,
             channels,
         };
@@ -336,7 +323,7 @@ mod tests {
         target_rate: u32,
         channels: usize,
     ) -> (RingWriter, SampleSource) {
-        let (writer, consumer) = sample_ring(native_rate, channels);
+        let (writer, consumer) = sample_ring(native_rate, channels, MIN_RING_MILLISECONDS);
         let resampler =
             PcmResampler::new(native_rate, target_rate, u8::try_from(channels).unwrap()).unwrap();
         (writer, SampleSource::new(consumer, resampler, channels))
@@ -371,7 +358,7 @@ mod tests {
     #[test]
     fn a_full_ring_reports_whole_frames_dropped() {
         let (mut writer, _source) = source_for(48_000, 48_000, 2);
-        let capacity = frames_per_ring(48_000) * 2;
+        let capacity = frames_per_ring(48_000, MIN_RING_MILLISECONDS) * 2;
         let flood = vec![0.1; capacity + 7];
 
         let dropped = writer.write(&flood);
@@ -382,7 +369,7 @@ mod tests {
     #[test]
     fn writes_never_split_a_frame() {
         let (mut writer, _source) = source_for(48_000, 48_000, 6);
-        let capacity = frames_per_ring(48_000) * 6;
+        let capacity = frames_per_ring(48_000, MIN_RING_MILLISECONDS) * 6;
         let flood = vec![0.1; capacity + 5];
 
         let dropped = writer.write(&flood);
