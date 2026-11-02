@@ -40,14 +40,15 @@ paths:
 | Module | Role |
 |---|---|
 | `cli` | `lexopt` argument parsing for `rusplay` (`Launch`), pure and unit tested |
-| `app` | Root view: page content, status bar, global focus and quit actions |
+| `app` | Root view: titlebar (brand, page tabs, window controls), page content, status bar, global focus and quit actions |
+| `chrome` | Client-side window decorations: the resize frame, resize-edge hit testing and the minimize/maximize/close controls |
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
 | `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
 | `stats` | `TimingSink` (wraps the window's sink and records `PresentedFrame` timings), `StatsSampler` and `StreamRates`; no gpui types |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
-| `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls |
-| `theme` | The colour palette, one function per colour |
+| `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls (buttons, tabs, cards, badges, status dots, dropdown parts) |
+| `theme` | The palette, one function per colour, plus the brand gradient and the shadows |
 
 - Arguments (`cli.rs`): `--connect <NAME|ADDRESS>` looks the host up in the host book
   (`HostList::find`: a case-insensitive unique name first, then an address, with the configured
@@ -57,6 +58,14 @@ paths:
   app stays open on the Hosts page. `--exit-on-disconnect` quits on any `StreamEvent::Ended` (a
   failed connect included, whose message goes to stderr) and when the stream view cannot be
   opened. A usage error exits with status 2.
+- The window asks for client-side decorations (`WindowDecorations::Client`) and draws its own
+  titlebar: brand on the left, the page tabs in the middle (hidden while a stream exists), window
+  controls on the right. Dragging the bar moves the window (`start_window_move` on the first mouse
+  move after a press, so clicks still reach the tabs, which `occlude` the bar), a double click
+  maximizes and a right click opens the compositor's window menu. `chrome::frame` pads the root by
+  `RESIZE_INSET` on every untiled side, starts a resize from that band and rounds the corners
+  while the window floats. A compositor that insists on server-side decorations gets the same bar
+  without controls or dragging.
 - Views never write to the status bar directly: they emit `NoticeRaised` and the root subscribes.
 - The client config is `client.toml` under `$XDG_CONFIG_HOME/rusplay/`, or `$HOME/.config/rusplay/`
   when the XDG file does not exist, resolved by `ConfigEnvironment` in `rusplay-config` (the same
@@ -124,8 +133,8 @@ paths:
   client hotkeys (`input.md`) are the way to act on the client from there.
 - Fullscreen: the header's `Fullscreen` button, `F11` while not engaged (root action
   `ToggleFullscreen`) and the fullscreen hotkey all call gpui's `Window::toggle_fullscreen`. The
-  stream view omits its header and the root omits the status bar while the window is fullscreen
-  and a stream exists, so notices are invisible then; the stats toggle and the disconnect hotkey
+  stream view omits its header and the root omits the titlebar and status bar while the window is
+  fullscreen and a stream exists, so notices are invisible then; the stats toggle and the disconnect hotkey
   are the controls that remain. A fullscreen switch changes no focus: engagement lives in the
   capture's `CaptureCore`, the pointer lock and shortcuts inhibitor are bound to the surface, and
   the layout follows through the canvas prepaint's `set_region`. Engagement is dropped only if the

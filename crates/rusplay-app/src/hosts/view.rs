@@ -1,4 +1,6 @@
-use gpui::{Context, Entity, EventEmitter, Subscription, Task, Window, div, prelude::*, px};
+use gpui::{
+    Context, Entity, EventEmitter, FontWeight, Subscription, Task, Window, div, prelude::*, px,
+};
 use rusplay_client::{Credentials, DiscoveredHost, HostBook, PeerRecord, Pin};
 use rusplay_config::{Config, ConfigEnvironment, HostProfile};
 
@@ -11,10 +13,15 @@ use crate::{
     session::{self, SessionError},
     theme,
     widgets::{
-        controls::{ButtonStyle, button, option_button, section_title},
+        controls::{ButtonStyle, Tone, badge, button, card, card_heading, option_button},
         text_field::{TextField, TextFieldEvent},
     },
 };
+
+const SIDE_PANEL_WIDTH: f32 = 330.0;
+const AVATAR_SIZE: f32 = 36.0;
+const AVAILABILITY_DOT: f32 = 6.0;
+const PROFILE_LABEL_WIDTH: f32 = 130.0;
 
 #[derive(Debug, Clone)]
 pub struct ConnectRequested {
@@ -305,49 +312,81 @@ impl HostsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let selected = self.hosts.selected_index() == Some(index);
-        let background = if selected {
-            theme::surface_raised()
-        } else {
-            theme::surface()
-        };
-        let border = if selected {
-            theme::accent()
-        } else {
-            theme::border()
+        let origin = match host.origin {
+            HostOrigin::Added => badge("Saved", Tone::Neutral),
+            HostOrigin::Discovered => badge("Discovered", Tone::Accent),
         };
 
         div()
             .id(("host", index))
             .flex()
             .items_center()
-            .justify_between()
             .gap_3()
-            .px_3()
-            .py_2()
-            .rounded_md()
+            .p_3()
+            .rounded_lg()
             .border_1()
-            .border_color(border)
-            .bg(background)
             .cursor_pointer()
-            .hover(|style| style.bg(theme::surface_hover()))
+            .map(|this| {
+                if selected {
+                    this.border_color(theme::accent())
+                        .bg(theme::surface_raised())
+                        .shadow(theme::glow())
+                } else {
+                    this.border_color(theme::border())
+                        .bg(theme::surface())
+                        .hover(|style| {
+                            style
+                                .bg(theme::surface_raised())
+                                .border_color(theme::border_strong())
+                        })
+                }
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.hosts.select(index);
                 cx.notify();
             }))
+            .child(avatar(&host.name, selected))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .child(div().text_color(theme::text()).child(host.name.clone()))
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(theme::text())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(host.name.clone()),
+                            )
+                            .children(host.peer.is_some().then(|| badge("Paired", Tone::Success)))
+                            .child(origin),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
                             .text_xs()
                             .text_color(theme::text_muted())
-                            .child(format!("{} - {}", host.address, availability(host))),
+                            .child(
+                                div()
+                                    .size(px(AVAILABILITY_DOT))
+                                    .rounded_full()
+                                    .bg(availability_color(host)),
+                            )
+                            .child(format!("{} \u{00b7} {}", host.address, availability(host))),
                     ),
             )
             .child(
-                button(("remove-host", index), "Remove", ButtonStyle::Quiet, true).on_click(
+                button(("remove-host", index), "Remove", ButtonStyle::Danger, true).on_click(
                     cx.listener(move |this, _, _, cx| {
                         this.hosts.remove(index);
                         this.persist(cx);
@@ -366,31 +405,33 @@ impl HostsView {
             .collect();
         let overridden = !host.profile.is_empty();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(section_title(format!("Client settings for {}", host.name)))
+        card()
             .child(
                 div()
-                    .text_xs()
-                    .text_color(theme::text_muted())
-                    .child("Global follows client.toml; a choice overrides it for this host only."),
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap_4()
+                    .child(card_heading(
+                        format!("Client settings for {}", host.name),
+                        Some(
+                            "Global follows client.toml; a choice overrides it for this host only."
+                                .into(),
+                        ),
+                    ))
+                    .child(
+                        button(
+                            "clear-profile",
+                            "Reset all to global",
+                            ButtonStyle::Quiet,
+                            overridden,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_selected_profile(HostProfile::default(), cx);
+                        })),
+                    ),
             )
-            .children(rows)
-            .child(
-                div().child(
-                    button(
-                        "clear-profile",
-                        "Reset all to global",
-                        ButtonStyle::Quiet,
-                        overridden,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.set_selected_profile(HostProfile::default(), cx);
-                    })),
-                ),
-            )
+            .child(div().flex().flex_col().children(rows))
     }
 
     fn render_profile_row(
@@ -398,9 +439,9 @@ impl HostsView {
         row: ProfileRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let source_color = match row.source {
-            Source::Override => theme::accent(),
-            Source::Global => theme::text_muted(),
+        let source_tone = match row.source {
+            Source::Override => Tone::Accent,
+            Source::Global => Tone::Neutral,
         };
         let choices: Vec<_> = row
             .choices
@@ -422,76 +463,59 @@ impl HostsView {
         div()
             .flex()
             .items_center()
-            .gap_3()
+            .gap_4()
+            .py_2p5()
+            .border_t_1()
+            .border_color(theme::border())
             .child(
                 div()
-                    .w(px(130.0))
+                    .w(px(PROFILE_LABEL_WIDTH))
+                    .flex_none()
                     .text_sm()
                     .text_color(theme::text())
                     .child(row.label),
             )
-            .child(div().flex().gap_1().children(choices))
-            .child(div().text_xs().text_color(source_color).child(format!(
-                "{} ({})",
-                row.effective,
-                row.source.label()
-            )))
-    }
-
-    fn render_selected_actions(
-        can_connect: bool,
-        paired: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
             .child(
                 div()
-                    .text_sm()
-                    .text_color(theme::text_muted())
-                    .child("Selected host, using the fields above:"),
+                    .flex()
+                    .flex_wrap()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .children(choices),
             )
-            .child(
-                button("rename-host", "Rename", ButtonStyle::Secondary, can_connect)
-                    .on_click(cx.listener(|this, _, _, cx| this.rename_selected(cx))),
-            )
-            .child(
-                button(
-                    "change-address",
-                    "Change address",
-                    ButtonStyle::Secondary,
-                    can_connect,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.change_selected_address(cx))),
-            )
-            .child(
-                button(
-                    "forget-pairing",
-                    "Forget pairing",
-                    ButtonStyle::Quiet,
-                    paired,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.forget_selected_pairing(cx))),
-            )
+            .child(badge(
+                format!("{} \u{00b7} {}", row.effective, row.source.label()),
+                source_tone,
+            ))
     }
-}
 
-impl Render for HostsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let entries: Vec<_> = self.hosts.entries().to_vec();
-        let selected = self.hosts.selected();
-        let profile_panel = selected.cloned().map(|host| self.render_profile(&host, cx));
-        let can_connect = selected.is_some();
-        let paired = selected.is_some_and(|host| host.peer.is_some());
-        let scanning = self.scan.is_some();
 
-        let list = if entries.is_empty() {
+        let body = if entries.is_empty() {
             div()
-                .py_6()
-                .text_color(theme::text_muted())
-                .child("No hosts found. Refresh to scan the network again, or add one by address below.")
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .py_10()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme::border())
+                .bg(theme::inset())
+                .child(
+                    div()
+                        .text_color(theme::text())
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("No hosts yet"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text_muted())
+                        .child("Refresh to scan the network again, or add one by address."),
+                )
                 .into_any_element()
         } else {
             let mut rows = Vec::with_capacity(entries.len());
@@ -507,68 +531,264 @@ impl Render for HostsView {
                 .into_any_element()
         };
 
+        card()
+            .child(card_heading(
+                "Your hosts",
+                Some("Saved hosts and the ones announcing themselves on the network.".into()),
+            ))
+            .child(body)
+    }
+
+    fn render_connect(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let selected = self.hosts.selected();
+        let can_connect = selected.is_some();
+        let paired = selected.is_some_and(|host| host.peer.is_some());
+
+        let heading = match selected {
+            Some(host) => card_heading(host.name.clone(), Some(host.address.to_string().into())),
+            None => card_heading("Connect", Some("Select a host from the list.".into())),
+        };
+
+        let credentials = if paired {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(badge("Paired", Tone::Success))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text_muted())
+                        .child("Connects with the remembered pairing"),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .child(field_label("PIN"))
+                .child(self.pin_input.clone())
+                .into_any_element()
+        };
+
+        card()
+            .child(heading)
+            .child(credentials)
+            .child(
+                div().pt_4().child(
+                    button("connect", "Connect", ButtonStyle::Primary, can_connect)
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
+                ),
+            )
+            .children(paired.then(|| {
+                div().pt_2().child(
+                    button(
+                        "forget-pairing",
+                        "Forget pairing",
+                        ButtonStyle::Danger,
+                        true,
+                    )
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| this.forget_selected_pairing(cx))),
+                )
+            }))
+    }
+
+    fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let can_edit = self.hosts.selected().is_some();
+
+        card()
+            .child(card_heading(
+                "Add or edit a host",
+                Some("Add a new host, or apply the name or address to the selected one.".into()),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(field_label("Name"))
+                            .child(self.name_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1p5()
+                            .child(field_label("Address"))
+                            .child(self.address_input.clone()),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .pt_4()
+                    .child(
+                        button("add-host", "Add", ButtonStyle::Secondary, true)
+                            .on_click(cx.listener(|this, _, _, cx| this.add_host(cx))),
+                    )
+                    .child(
+                        button("rename-host", "Rename", ButtonStyle::Quiet, can_edit)
+                            .on_click(cx.listener(|this, _, _, cx| this.rename_selected(cx))),
+                    )
+                    .child(
+                        button(
+                            "change-address",
+                            "Change address",
+                            ButtonStyle::Quiet,
+                            can_edit,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.change_selected_address(cx))),
+                    ),
+            )
+    }
+}
+
+impl Render for HostsView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let profile_panel = self
+            .hosts
+            .selected()
+            .cloned()
+            .map(|host| self.render_profile(&host, cx));
+        let scanning = self.scan.is_some();
+        let count = self.hosts.entries().len();
+        let summary = match (count, scanning) {
+            (_, true) => "Scanning the network\u{2026}".to_owned(),
+            (0, false) => "No hosts".to_owned(),
+            (1, false) => "1 host".to_owned(),
+            (count, false) => format!("{count} hosts"),
+        };
+
         div()
             .id("hosts-page")
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_6()
             .size_full()
             .overflow_y_scroll()
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(div().text_xl().text_color(theme::text()).child("Hosts"))
+                    .flex_col()
+                    .gap_5()
+                    .p_6()
                     .child(
-                        button(
-                            "refresh-hosts",
-                            if scanning { "Scanning..." } else { "Refresh" },
-                            ButtonStyle::Secondary,
-                            !scanning,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    ),
-            )
-            .child(list)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().w(px(200.0)).child(self.name_input.clone()))
-                    .child(div().w(px(280.0)).child(self.address_input.clone()))
-                    .child(
-                        button("add-host", "Add", ButtonStyle::Secondary, true)
-                            .on_click(cx.listener(|this, _, _, cx| this.add_host(cx))),
-                    ),
-            )
-            .child(Self::render_selected_actions(can_connect, paired, cx))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(if paired {
                         div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .text_color(theme::text_muted())
-                            .child("Paired")
-                            .into_any_element()
-                    } else {
-                        div()
-                            .w(px(200.0))
-                            .child(self.pin_input.clone())
-                            .into_any_element()
-                    })
+                            .flex()
+                            .items_end()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_2xl()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme::text())
+                                            .child("Hosts"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme::text_muted())
+                                            .child(summary),
+                                    ),
+                            )
+                            .child(
+                                button(
+                                    "refresh-hosts",
+                                    if scanning {
+                                        "Scanning\u{2026}"
+                                    } else {
+                                        "Refresh"
+                                    },
+                                    ButtonStyle::Secondary,
+                                    !scanning,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                            ),
+                    )
                     .child(
-                        button("connect", "Connect", ButtonStyle::Primary, can_connect)
-                            .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap_5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_5()
+                                    .child(self.render_list(cx))
+                                    .children(profile_panel),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_none()
+                                    .w(px(SIDE_PANEL_WIDTH))
+                                    .gap_5()
+                                    .child(self.render_connect(cx))
+                                    .child(self.render_editor(cx)),
+                            ),
                     ),
             )
-            .children(profile_panel)
+    }
+}
+
+fn avatar(name: &str, selected: bool) -> impl IntoElement + use<> {
+    let initial = name
+        .chars()
+        .find(|character| character.is_alphanumeric())
+        .map_or_else(
+            || "?".to_owned(),
+            |character| character.to_uppercase().collect(),
+        );
+
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(AVATAR_SIZE))
+        .rounded_lg()
+        .font_weight(FontWeight::SEMIBOLD)
+        .map(|this| {
+            if selected {
+                this.bg(theme::brand()).text_color(theme::accent_text())
+            } else {
+                this.bg(theme::surface_hover())
+                    .text_color(theme::text_muted())
+            }
+        })
+        .child(initial)
+}
+
+fn field_label(label: &'static str) -> impl IntoElement + use<> {
+    div()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme::text_muted())
+        .child(label)
+}
+
+fn availability_color(host: &HostEntry) -> gpui::Rgba {
+    if host.online {
+        theme::success()
+    } else {
+        theme::text_subtle()
     }
 }
 

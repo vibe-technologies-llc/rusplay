@@ -4,8 +4,8 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, Context, Entity, EventEmitter, Subscription, Window, anchored, deferred,
-    div, point, prelude::*, px,
+    Anchor, AnyElement, Context, Entity, EventEmitter, FontWeight, Subscription, Window, anchored,
+    deferred, div, point, prelude::*, px,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigRole};
 
@@ -19,7 +19,10 @@ use crate::{
     },
     theme,
     widgets::{
-        controls::{ButtonStyle, button, option_button, section_title, toggle},
+        controls::{
+            ButtonStyle, Tone, badge, button, card, list_item, option_button, section_title,
+            select_trigger, tab, tab_strip, toggle,
+        },
         text_field::{TextField, TextFieldEvent},
     },
 };
@@ -28,7 +31,11 @@ const SEGMENTED_LIMIT: usize = 4;
 const LABEL_WIDTH: f32 = 200.0;
 const INPUT_WIDTH: f32 = 300.0;
 const PRIMARIES_INPUT_WIDTH: f32 = 440.0;
-const SIDEBAR_WIDTH: f32 = 190.0;
+const SIDEBAR_WIDTH: f32 = 200.0;
+const SIDEBAR_ITEM_HEIGHT: f32 = 32.0;
+const SIDEBAR_INDICATOR_WIDTH: f32 = 3.0;
+const SIDEBAR_INDICATOR_HEIGHT: f32 = 16.0;
+const LABEL_TOP: f32 = 7.0;
 const DROPDOWN_WIDTH: f32 = 230.0;
 const DROPDOWN_MAX_HEIGHT: f32 = 340.0;
 const DROPDOWN_OFFSET: f32 = 4.0;
@@ -382,31 +389,41 @@ impl SettingsView {
 
         for (position, section) in Section::ALL.into_iter().enumerate() {
             let selected = self.section == section;
-            let background = if selected {
-                theme::surface_raised()
-            } else {
-                theme::background()
-            };
 
             items.push(
                 div()
                     .id(("section", position))
-                    .px_3()
-                    .py_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .h(px(SIDEBAR_ITEM_HEIGHT))
+                    .pr_3()
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(background)
-                    .text_color(if selected {
-                        theme::text()
-                    } else {
-                        theme::text_muted()
+                    .text_sm()
+                    .map(|this| {
+                        if selected {
+                            this.bg(theme::accent_soft())
+                                .text_color(theme::accent_bright())
+                                .font_weight(FontWeight::MEDIUM)
+                        } else {
+                            this.text_color(theme::text_muted()).hover(|style| {
+                                style.bg(theme::surface_raised()).text_color(theme::text())
+                            })
+                        }
                     })
-                    .hover(|style| style.bg(theme::surface_hover()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;
                         this.open_choice = None;
                         cx.notify();
                     }))
+                    .child(
+                        div()
+                            .w(px(SIDEBAR_INDICATOR_WIDTH))
+                            .h(px(SIDEBAR_INDICATOR_HEIGHT))
+                            .rounded_full()
+                            .when(selected, |this| this.bg(theme::brand())),
+                    )
                     .child(section.title()),
             );
         }
@@ -420,13 +437,28 @@ impl SettingsView {
             .p_3()
             .border_r_1()
             .border_color(theme::border())
+            .bg(theme::chrome())
             .child(
                 div()
-                    .px_3()
-                    .pb_2()
-                    .text_xl()
-                    .text_color(theme::text())
-                    .child("Settings"),
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .px_2()
+                    .pt_2()
+                    .pb_4()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .child("Settings"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_subtle())
+                            .child("Every option, one place"),
+                    ),
             )
             .children(items)
     }
@@ -582,12 +614,12 @@ impl SettingsView {
             .occlude()
             .flex()
             .flex_col()
-            .gap_1()
+            .gap_0p5()
             .p_1()
-            .rounded_md()
+            .rounded_lg()
             .border_1()
-            .border_color(theme::border())
-            .bg(theme::surface())
+            .border_color(theme::border_strong())
+            .bg(theme::surface_raised())
             .shadow_lg()
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
                 if this.open_choice == Some(index) {
@@ -601,7 +633,7 @@ impl SettingsView {
                 } else {
                     option
                 };
-                option_button(
+                list_item(
                     ("dropdown-option", index * 100 + position),
                     label,
                     current == option,
@@ -612,7 +644,7 @@ impl SettingsView {
         div()
             .relative()
             .child(
-                option_button(("dropdown", index), format!("{shown}  \u{25be}"), false)
+                select_trigger(("dropdown", index), shown, open)
                     .min_w(px(DROPDOWN_WIDTH))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_choice = if this.open_choice == Some(index) {
@@ -649,13 +681,13 @@ impl SettingsView {
                         .items_center()
                         .gap_2()
                         .child(div().w(px(180.0)).child(pair.key.clone()))
-                        .child(div().text_color(theme::text_muted()).child("="))
+                        .child(div().text_color(theme::text_subtle()).child("="))
                         .child(div().w(px(220.0)).child(pair.value.clone()))
                         .child(
                             button(
                                 ("remove-pair", index * 1000 + position),
                                 "Remove",
-                                ButtonStyle::Quiet,
+                                ButtonStyle::Danger,
                                 true,
                             )
                             .on_click(cx.listener(
@@ -696,7 +728,7 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap_1()
-            .py_2()
+            .py_3()
             .child(
                 div()
                     .flex()
@@ -706,7 +738,7 @@ impl SettingsView {
                         div()
                             .w(px(LABEL_WIDTH))
                             .flex_none()
-                            .pt(px(6.0))
+                            .pt(px(LABEL_TOP))
                             .text_sm()
                             .text_color(theme::text())
                             .child(field.label),
@@ -715,9 +747,9 @@ impl SettingsView {
                     .when(!field.unit.is_empty(), |this| {
                         this.child(
                             div()
-                                .pt(px(6.0))
+                                .pt(px(LABEL_TOP))
                                 .text_sm()
-                                .text_color(theme::text_muted())
+                                .text_color(theme::text_subtle())
                                 .child(field.unit),
                         )
                     }),
@@ -750,26 +782,41 @@ impl SettingsView {
             };
 
             tabs.push(
-                option_button(("role", position), label, role == self.role)
+                tab(("role", position), label, role == self.role)
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_role(role, cx))),
             );
         }
 
         div()
             .flex()
+            .flex_none()
             .items_center()
-            .gap_2()
+            .justify_between()
+            .gap_3()
             .px_6()
             .py_3()
             .border_b_1()
             .border_color(theme::border())
             .child(
                 div()
-                    .pr_2()
-                    .text_color(theme::text_muted())
-                    .child("Editing"),
+                    .text_xl()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::text())
+                    .child(self.section.title()),
             )
-            .children(tabs)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_subtle())
+                            .child("Editing"),
+                    )
+                    .child(tab_strip(tabs)),
+            )
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -780,6 +827,7 @@ impl SettingsView {
 
         div()
             .flex()
+            .flex_none()
             .items_center()
             .justify_between()
             .gap_4()
@@ -787,27 +835,26 @@ impl SettingsView {
             .py_3()
             .border_t_1()
             .border_color(theme::border())
+            .bg(theme::chrome())
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .items_center()
+                    .gap_3()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
+                    .when(self.dirty, |this| {
+                        this.child(badge("Unsaved changes", Tone::Warning))
+                    })
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
-                            .text_color(theme::text_muted())
+                            .text_color(theme::text_subtle())
                             .child(location),
-                    )
-                    .when(self.dirty, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::accent())
-                                .child("Unsaved changes"),
-                        )
-                    }),
+                    ),
             )
             .child(
                 div()
@@ -829,17 +876,27 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = self.form.visible_fields(self.section);
-        let mut rows: Vec<AnyElement> = Vec::with_capacity(visible.len() * 2);
-        let mut group = "";
+        let mut groups: Vec<(&'static str, Vec<AnyElement>)> = Vec::new();
 
         for index in visible {
             let field = &FIELDS[index];
-            if field.group != group {
-                group = field.group;
-                rows.push(section_title(group).into_any_element());
+            let row = self.render_field(index, cx);
+            match groups.last_mut() {
+                Some((group, rows)) if *group == field.group => {
+                    rows.push(divider().into_any_element());
+                    rows.push(row);
+                }
+                _ => groups.push((field.group, vec![row])),
             }
-            rows.push(self.render_field(index, cx));
         }
+
+        let cards = groups.into_iter().map(|(group, rows)| {
+            div()
+                .flex()
+                .flex_col()
+                .child(section_title(group))
+                .child(card().py_1().children(rows))
+        });
 
         let sidebar = self.render_sidebar(cx);
         let footer = self.render_footer(cx);
@@ -860,9 +917,13 @@ impl Render for SettingsView {
                         .overflow_y_scroll()
                         .px_6()
                         .pb_6()
-                        .child(div().flex().flex_col().children(rows)),
+                        .child(div().flex().flex_col().gap_2().children(cards)),
                 )
                 .child(footer),
         )
     }
+}
+
+fn divider() -> impl IntoElement {
+    div().h(px(1.0)).bg(theme::border())
 }

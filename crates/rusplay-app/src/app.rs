@@ -1,11 +1,12 @@
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, KeyBinding, Subscription, Window,
-    actions, div, prelude::*, px,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton,
+    Subscription, Window, actions, div, prelude::*, px,
 };
 use rusplay_client::HostBook;
 use rusplay_config::{Config, ConfigEnvironment};
 
 use crate::{
+    chrome::{self, Frame},
     cli::Launch,
     hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
@@ -13,8 +14,13 @@ use crate::{
     settings::{FormModel, SettingsView},
     stream::{StreamEvent, StreamView},
     theme,
-    widgets::controls::option_button,
+    widgets::controls::{Tone, brand_mark, status_dot, tab, tab_strip},
 };
+
+const TITLEBAR_HEIGHT: f32 = 48.0;
+const STATUS_HEIGHT: f32 = 34.0;
+const BRAND_MARK_SIZE: f32 = 30.0;
+const KEY_HINTS: &str = "Tab to move \u{00b7} F11 fullscreen \u{00b7} Ctrl+Q quit";
 
 actions!(rusplay, [FocusNext, FocusPrevious, Quit, ToggleFullscreen]);
 
@@ -58,6 +64,7 @@ pub struct RusplayApp {
     hosts: Entity<HostsView>,
     settings: Option<Entity<SettingsView>>,
     notice: Option<Notice>,
+    titlebar_drag: bool,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -147,6 +154,7 @@ impl RusplayApp {
             hosts,
             settings,
             notice,
+            titlebar_drag: false,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
@@ -281,34 +289,113 @@ impl RusplayApp {
         }
     }
 
-    fn render_navigation(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut tabs = Vec::with_capacity(Page::ALL.len());
+    fn render_titlebar(
+        &self,
+        frame: Frame,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let tabs = self.stream.is_none().then(|| {
+            let mut tabs = Vec::with_capacity(Page::ALL.len());
+            for (position, page) in Page::ALL.into_iter().enumerate() {
+                tabs.push(
+                    tab(("page", position), page.title(), self.page == page).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.page = page;
+                            if page == Page::Hosts {
+                                this.hosts.update(cx, HostsView::refresh);
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+            }
+            div().occlude().child(tab_strip(tabs))
+        });
 
-        for (position, page) in Page::ALL.into_iter().enumerate() {
-            tabs.push(
-                option_button(("page", position), page.title(), self.page == page).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.page = page;
-                        if page == Page::Hosts {
-                            this.hosts.update(cx, HostsView::refresh);
-                        }
-                        cx.notify();
-                    }),
-                ),
+        let brand = div()
+            .flex()
+            .flex_1()
+            .flex_basis(px(0.0))
+            .items_center()
+            .gap_3()
+            .child(brand_mark(BRAND_MARK_SIZE))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::text())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Rusplay"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_subtle())
+                            .child("LAN remote play"),
+                    ),
             );
-        }
+
+        let controls = div()
+            .flex()
+            .flex_1()
+            .flex_basis(px(0.0))
+            .justify_end()
+            .when(frame.is_client(), |this| {
+                this.child(chrome::window_controls(
+                    window,
+                    cx.listener(|this, _, _, cx| {
+                        this.end_stream(cx);
+                        cx.quit();
+                    }),
+                ))
+            });
 
         div()
+            .id("titlebar")
             .flex()
+            .flex_none()
             .items_center()
-            .gap_2()
-            .px_4()
-            .py_2()
+            .gap_4()
+            .pl_4()
+            .pr_2()
+            .h(px(TITLEBAR_HEIGHT))
             .border_b_1()
             .border_color(theme::border())
-            .bg(theme::surface())
-            .child(div().pr_4().text_color(theme::text()).child("Rusplay"))
+            .bg(theme::chrome())
+            .when(frame.rounded(), |this| {
+                this.rounded_t(chrome::corner_radius())
+            })
+            .when(frame.is_client(), |this| {
+                this.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.titlebar_drag = true),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| this.titlebar_drag = false),
+                )
+                .on_mouse_move(cx.listener(|this, _, window, _| {
+                    if this.titlebar_drag {
+                        this.titlebar_drag = false;
+                        window.start_window_move();
+                    }
+                }))
+                .on_click(|event, window, _| {
+                    if event.click_count() == 2 {
+                        window.zoom_window();
+                    }
+                })
+                .on_mouse_down(MouseButton::Right, |event, window, _| {
+                    window.show_window_menu(event.position);
+                })
+            })
+            .child(brand)
             .children(tabs)
+            .child(controls)
     }
 
     fn render_page(&self) -> AnyElement {
@@ -323,24 +410,45 @@ impl RusplayApp {
         }
     }
 
-    fn render_status(&self) -> impl IntoElement + use<> {
-        let (color, text) = match &self.notice {
-            Some(Notice::Info(text)) => (theme::success(), text.clone()),
-            Some(Notice::Failure(text)) => (theme::danger(), text.clone()),
-            None => (theme::text_muted(), "Ready".to_owned()),
+    fn render_status(&self, frame: Frame) -> impl IntoElement + use<> {
+        let (tone, color, text) = match &self.notice {
+            Some(Notice::Info(text)) => (Tone::Success, theme::text(), text.clone()),
+            Some(Notice::Failure(text)) => (Tone::Danger, theme::danger(), text.clone()),
+            None => (Tone::Neutral, theme::text_muted(), "Ready".to_owned()),
         };
 
         div()
             .id("status")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_between()
+            .gap_4()
             .px_4()
-            .py_2()
-            .min_h(px(36.0))
+            .min_h(px(STATUS_HEIGHT))
             .border_t_1()
             .border_color(theme::border())
-            .bg(theme::surface())
+            .bg(theme::chrome())
+            .when(frame.rounded(), |this| {
+                this.rounded_b(chrome::corner_radius())
+            })
             .text_sm()
-            .text_color(color)
-            .child(text)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .child(status_dot(tone))
+                    .child(div().text_color(color).child(text)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(theme::text_subtle())
+                    .child(KEY_HINTS),
+            )
     }
 }
 
@@ -352,18 +460,15 @@ impl Focusable for RusplayApp {
 
 impl Render for RusplayApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame = Frame::of(window);
+        let immersive = window.is_fullscreen() && self.stream.is_some();
+
         let content = match &self.stream {
             Some(stream) => stream.view.clone().into_any_element(),
-            None => div()
-                .flex()
-                .flex_col()
-                .size_full()
-                .child(self.render_navigation(cx))
-                .child(div().flex_1().min_h_0().child(self.render_page()))
-                .into_any_element(),
+            None => self.render_page(),
         };
 
-        div()
+        let body = div()
             .id("root")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|_, _: &FocusNext, window, cx| window.focus_next(cx)))
@@ -382,12 +487,12 @@ impl Render for RusplayApp {
             }))
             .flex()
             .flex_col()
-            .size_full()
             .bg(theme::background())
             .text_color(theme::text())
+            .children((!immersive).then(|| self.render_titlebar(frame, window, cx)))
             .child(div().flex_1().min_h_0().child(content))
-            .children(
-                (!(window.is_fullscreen() && self.stream.is_some())).then(|| self.render_status()),
-            )
+            .children((!immersive).then(|| self.render_status(frame)));
+
+        chrome::frame(window, body)
     }
 }

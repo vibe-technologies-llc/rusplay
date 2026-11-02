@@ -6,8 +6,8 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, Focusable, Pixels, Subscription, Task, Window,
-    canvas, div, prelude::*,
+    Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Subscription, Task,
+    Window, canvas, div, prelude::*, px,
 };
 use rusplay_client::{
     ActivePointer, ClientAction, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord,
@@ -21,10 +21,11 @@ use crate::{
     session::{self, SessionError},
     stats::{FrameTimings, StatsSampler, StreamRates, TimingSink},
     theme,
-    widgets::controls::{ButtonStyle, button},
+    widgets::controls::{ButtonStyle, Tone, button, status_dot},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DIVIDER_HEIGHT: f32 = 18.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
@@ -376,6 +377,15 @@ impl StreamView {
         cx.emit(StreamEvent::Ended(notice));
     }
 
+    const fn tone(&self) -> Tone {
+        match self.phase {
+            Phase::Connecting => Tone::Warning,
+            Phase::Streaming if self.engaged => Tone::Accent,
+            Phase::Streaming => Tone::Success,
+            Phase::Abandoned | Phase::Ended => Tone::Neutral,
+        }
+    }
+
     fn status(&self) -> String {
         match self.phase {
             Phase::Connecting => format!("Connecting to {}", self.host.name),
@@ -437,46 +447,53 @@ impl Focusable for StreamView {
     }
 }
 
-impl Render for StreamView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let live = Rc::clone(&self.live);
-        let picture = canvas(
-            move |bounds, window, _| {
-                live.borrow_mut()
-                    .apply_layout(bounds, window.scale_factor());
-            },
-            |_, (), _, _| {},
-        )
-        .size_full();
-
-        let header = div()
+impl StreamView {
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
             .flex()
+            .flex_none()
             .items_center()
             .justify_between()
-            .gap_3()
+            .gap_4()
             .px_4()
-            .py_2()
+            .py_2p5()
             .border_b_1()
             .border_color(theme::border())
-            .bg(theme::surface())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_color(theme::text()).child(self.status()))
-                    .children(self.rates.filter(|_| self.show_stats).map(|rates| {
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_muted())
-                            .child(rates.summary())
-                    })),
-            )
+            .bg(theme::chrome())
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap_3()
+                    .min_w_0()
+                    .child(status_dot(self.tone()))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme::text())
+                                    .child(self.status()),
+                            )
+                            .children(self.rates.filter(|_| self.show_stats).map(|rates| {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text_muted())
+                                    .child(rates.summary())
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
                     .children(self.pointer.map(|(mode, active)| {
                         button(
                             "pointer-mode",
@@ -504,10 +521,33 @@ impl Render for StreamView {
                             .on_click(cx.listener(|_, _, window, _| window.toggle_fullscreen())),
                     )
                     .child(
-                        button("disconnect", "Disconnect", ButtonStyle::Secondary, true)
+                        div()
+                            .w(px(1.0))
+                            .h(px(DIVIDER_HEIGHT))
+                            .mx_1()
+                            .bg(theme::border()),
+                    )
+                    .child(
+                        button("disconnect", "Disconnect", ButtonStyle::Danger, true)
                             .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
                     ),
-            );
+            )
+    }
+}
+
+impl Render for StreamView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let live = Rc::clone(&self.live);
+        let picture = canvas(
+            move |bounds, window, _| {
+                live.borrow_mut()
+                    .apply_layout(bounds, window.scale_factor());
+            },
+            |_, (), _, _| {},
+        )
+        .size_full();
+
+        let header = self.render_header(cx);
 
         div()
             .id("stream")

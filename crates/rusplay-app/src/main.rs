@@ -1,4 +1,5 @@
 mod app;
+mod chrome;
 mod cli;
 mod hosts;
 mod notice;
@@ -11,7 +12,7 @@ mod widgets;
 
 use std::{env, process::ExitCode};
 
-use gpui::{App, Bounds, WindowBounds, WindowOptions, prelude::*, px, size};
+use gpui::{App, Bounds, WindowBounds, WindowDecorations, WindowOptions, prelude::*, px, size};
 use gpui_platform::application;
 use rusplay_config::ConfigEnvironment;
 
@@ -65,6 +66,7 @@ fn run(launch: Launch) {
                 ..gpui::TitlebarOptions::default()
             }),
             app_id: Some("rusplay".to_owned()),
+            window_decorations: Some(WindowDecorations::Client),
             ..WindowOptions::default()
         };
 
