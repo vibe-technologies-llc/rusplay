@@ -238,6 +238,10 @@ impl LibeiInjector {
     }
 
     fn pump(&mut self) -> Result<(), InputError> {
+        if self.closed {
+            return Err(InputError::SinkClosed);
+        }
+
         match self.context.read() {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {

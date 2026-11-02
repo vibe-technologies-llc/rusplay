@@ -50,8 +50,10 @@ mod shared {
         }
 
         fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
-            self.desktop.service()?;
-            self.gamepads.poll_rumble(rumble)
+            let desktop = self.desktop.service();
+            let gamepads = self.gamepads.poll_rumble(rumble);
+
+            desktop.and(gamepads)
         }
     }
 

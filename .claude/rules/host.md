@@ -297,6 +297,9 @@ paths:
     `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
     window drops the command (`rumble_dropped`), because the client caps every effect length. On
     the way out it releases whatever `HeldInput` says the client still held.
+    The portal's `InputTarget::service` always polls both halves, the libei connection and the
+    virtual pads' rumble, and returns the first error, so a compositor that dropped EIS never leaves
+    a pad's force-feedback upload undrained.
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input }`; the GPU is needed for the
     capture's importable modifiers, so the GPU is opened before the portal. With `input.accept_remote` it
     opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over

@@ -45,7 +45,8 @@ paths:
   devices, binds the capabilities `input.keyboard` and `input.pointer` allow, and sends. It
   answers pings through the `reis` event converter, so it must be called regularly or the server
   may drop the client; `service` runs that pass without an event, and the host calls it from its
-  input loop.
+  input loop. Once the compositor has closed the connection `pump` returns `SinkClosed` without
+  reading the socket again.
 - Devices start paused. `wait_ready` blocks until the compositor resumes one (the portal dialog
   may still be open). An event with no resumed device offering its capability returns
   `DeviceUnavailable`, and a device paused mid-session simply stops matching until resumed. A
