@@ -53,6 +53,10 @@ pub enum DecodeError {
         unit: BitstreamUnit,
         reason: String,
     },
+    #[error(
+        "{codec} crops {left} columns from the left and {top} rows from the top, which the decoder cannot carry to the client"
+    )]
+    CropOriginUnsupported { codec: Codec, left: u64, top: u64 },
     #[error("{codec} {unit} {id} is referenced before it was received")]
     MissingParameterSet {
         codec: Codec,

@@ -7,12 +7,14 @@ use cros_codecs::codec::{
     h265::parser::{SliceHeader, Sps as HevcSps},
 };
 use rusplay_config::VaapiDecoderConfig;
-use rusplay_core::{Codec, EncodedFrame, Timestamp};
+use rusplay_core::{Codec, EncodedFrame, Resolution, Timestamp};
 
 use crate::{
-    DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder, fixtures as common,
+    BitstreamUnit, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder, fixtures as common,
     vaapi::{
-        VaapiDecoder, h264, hevc,
+        VaapiDecoder,
+        crop::{CropOffsets, visible_resolution},
+        h264, hevc,
         reorder::Depth,
         tests::fields::{Field, FieldPicture, Mmco, Modification},
     },
@@ -786,4 +788,118 @@ fn field_b_pictures_build_both_lists_around_the_current_order_count() {
             (Field::intra(3), Field::intra(4)),
         ],
     );
+}
+
+fn cropped(coded: (u32, u32), crop: CropOffsets) -> Result<Resolution, DecodeError> {
+    visible_resolution(
+        Codec::H264,
+        BitstreamUnit::SequenceParameterSet,
+        Resolution::new(coded.0, coded.1),
+        crop,
+    )
+}
+
+#[test]
+fn a_right_and_bottom_crop_shrinks_the_visible_size() {
+    let crop = CropOffsets::scaled(0, 4, 0, 6, (2, 2));
+
+    assert_eq!(
+        cropped((1920, 1088), crop).unwrap(),
+        Resolution::new(1912, 1076)
+    );
+    assert_eq!(
+        cropped((256, 144), CropOffsets::default()).unwrap(),
+        Resolution::new(256, 144)
+    );
+}
+
+#[test]
+fn a_left_or_top_crop_is_unsupported_until_the_origin_is_carried() {
+    for crop in [
+        CropOffsets::scaled(1, 0, 0, 0, (2, 2)),
+        CropOffsets::scaled(0, 0, 3, 0, (2, 2)),
+    ] {
+        assert!(matches!(
+            cropped((256, 144), crop),
+            Err(DecodeError::CropOriginUnsupported {
+                codec: Codec::H264,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn a_crop_beyond_the_coded_size_is_malformed() {
+    let beyond = [
+        CropOffsets::scaled(0, 128, 0, 0, (2, 2)),
+        CropOffsets::scaled(0, 0, 0, 72, (2, 2)),
+        CropOffsets::scaled(0, u32::MAX, 0, 0, (4, 4)),
+    ];
+
+    for crop in beyond {
+        assert!(matches!(
+            cropped((256, 144), crop),
+            Err(DecodeError::Malformed {
+                unit: BitstreamUnit::SequenceParameterSet,
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
+fn h264_and_hevc_stream_formats_report_the_cropped_size() {
+    let mut h264_sps = sps(Profile::High, 0);
+    h264_sps.chroma_format_idc = 1;
+    h264_sps.frame_cropping_flag = true;
+    h264_sps.frame_crop_bottom_offset = 4;
+    h264_sps.frame_crop_right_offset = 8;
+
+    let format = h264::stream_format(&h264_sps).unwrap();
+
+    assert_eq!(format.coded, Resolution::new(1280, 720));
+    assert_eq!(format.visible, Resolution::new(1264, 712));
+
+    h264_sps.frame_crop_left_offset = 2;
+
+    assert!(matches!(
+        h264::stream_format(&h264_sps),
+        Err(DecodeError::CropOriginUnsupported { .. })
+    ));
+}
+
+#[test]
+fn hevc_stream_format_reports_the_conformance_window_size() {
+    let mut window = HevcSps {
+        chroma_format_idc: 1,
+        chroma_array_type: 1,
+        pic_width_in_luma_samples: 1920,
+        pic_height_in_luma_samples: 1088,
+        conformance_window_flag: true,
+        conf_win_bottom_offset: 4,
+        ..HevcSps::default()
+    };
+
+    let format = hevc::stream_format(&window).unwrap();
+
+    assert_eq!(format.visible, Resolution::new(1920, 1080));
+
+    window.conf_win_left_offset = 1;
+
+    assert!(matches!(
+        hevc::stream_format(&window),
+        Err(DecodeError::CropOriginUnsupported {
+            codec: Codec::Hevc,
+            ..
+        })
+    ));
+
+    window.conf_win_left_offset = 0;
+    window.conf_win_right_offset = u32::MAX;
+
+    assert!(matches!(
+        hevc::stream_format(&window),
+        Err(DecodeError::Malformed { .. })
+    ));
 }

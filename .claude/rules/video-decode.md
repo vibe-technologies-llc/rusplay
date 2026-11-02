@@ -157,12 +157,18 @@ paths:
   for the inter frames between them. The resolved `SignalledColor` lives on the `Stream` and is
   copied into every frame it outputs. A malformed SEI or metadata payload is ignored.
 - The stream format (VA profile, chroma, bit depth, coded size) is read from the SPS / sequence
-  header; a change rebuilds the `Session` and surface pool. An H.264 SPS above level
-  6.2's 139264 macroblocks or 1055 macroblocks in either dimension is `ResolutionUnsupported`,
-  checked before `cros-codecs` divides by the macroblock count. Picture order count arithmetic on
-  SPS and slice header values wraps (`wrapping_*`), so a crafted stream cannot panic a debug build. A profile or RT format the driver
+  header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
   `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
+- Hostile headers are rejected before `cros-codecs` computes on them. An H.264 SPS above level
+  6.2's 139264 macroblocks, or 1055 macroblocks in either dimension, is `ResolutionUnsupported`
+  (the DPB size divides by the macroblock count). Picture order count arithmetic on SPS and slice
+  header values wraps (`wrapping_*`), so a crafted stream cannot panic a debug build.
+- The display size is the coded size minus the right and bottom crop (H.264 frame cropping, HEVC
+  conformance window, computed in `src/vaapi/crop.rs` with checked arithmetic), and
+  `Stream::output_sized` clamps every report to the coded size, as the software path does for the
+  AV1 render size. A crop past the coded size is `Malformed`, and a left or top crop is
+  `CropOriginUnsupported` because a frame carries a size, not an origin.
 - Surfaces are driver-allocated (`vaCreateSurfaces` with the RT format and decoder/export usage
   hints), exported once with `vaExportSurfaceHandle` (`DRM_PRIME_2`, read-only, composed layers)
   into an `Arc<DmaBufImage>`, and pooled. A surface is free when only the pool holds its `Arc`:

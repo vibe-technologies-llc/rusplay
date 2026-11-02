@@ -11,7 +11,9 @@ use crate::{
     BitstreamUnit, DecodeError, DecodedFrame, annexb,
     signal::{self, HdrTracker},
     vaapi::{
-        Stream, StreamFormat, ffi,
+        Stream, StreamFormat,
+        crop::{CropOffsets, visible_resolution},
+        ffi,
         h264::dpb::{
             Decoded, Dpb, MAX_REFERENCE_FRAMES, OrderCount, Reference, ReferenceList, Structure,
             invalid_picture,
@@ -391,6 +393,27 @@ fn check_size(sps: &Sps) -> Result<(), DecodeError> {
     Ok(())
 }
 
+fn crop_offsets(sps: &Sps) -> CropOffsets {
+    if !sps.frame_cropping_flag {
+        return CropOffsets::default();
+    }
+
+    let field_factor = 2 - u32::from(sps.frame_mbs_only_flag);
+    let (unit_x, unit_y) = match (sps.chroma_format_idc, sps.separate_colour_plane_flag) {
+        (1, false) => (2, 2),
+        (2, false) => (2, 1),
+        _ => (1, 1),
+    };
+
+    CropOffsets::scaled(
+        sps.frame_crop_left_offset,
+        sps.frame_crop_right_offset,
+        sps.frame_crop_top_offset,
+        sps.frame_crop_bottom_offset,
+        (unit_x, unit_y * field_factor),
+    )
+}
+
 pub(super) fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
     check_size(sps)?;
 
@@ -427,14 +450,20 @@ pub(super) fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         _ => ffi::VAProfile_VAProfileNone,
     };
 
-    let visible = sps.visible_rectangle();
+    let coded = Resolution::new(sps.width(), sps.height());
+    let visible = visible_resolution(
+        CODEC,
+        BitstreamUnit::SequenceParameterSet,
+        coded,
+        crop_offsets(sps),
+    )?;
 
     Ok(StreamFormat {
         profile,
         profile_idc: sps.profile_idc,
         pixel_format: PixelFormat { chroma, depth },
-        coded: Resolution::new(sps.width(), sps.height()),
-        visible: Resolution::new(visible.max.x, visible.max.y),
+        coded,
+        visible,
         reference_frames: sps
             .max_dpb_frames()
             .max(usize::from(sps.max_num_ref_frames)),

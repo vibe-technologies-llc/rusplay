@@ -12,7 +12,9 @@ use crate::{
     Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb,
     signal::{self, HdrTracker},
     vaapi::{
-        Stream, StreamFormat, ffi,
+        Stream, StreamFormat,
+        crop::{CropOffsets, visible_resolution},
+        ffi,
         reorder::{Depth, Reorder},
         va::{Display, INVALID_SURFACE, PoolSurface, Profile},
     },
@@ -605,7 +607,27 @@ pub(super) fn profile_for(format: PixelFormat) -> Profile {
     }
 }
 
-fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
+fn crop_offsets(sps: &Sps) -> CropOffsets {
+    if !sps.conformance_window_flag {
+        return CropOffsets::default();
+    }
+
+    let unit = match sps.chroma_array_type {
+        1 => (2, 2),
+        2 => (2, 1),
+        _ => (1, 1),
+    };
+
+    CropOffsets::scaled(
+        sps.conf_win_left_offset,
+        sps.conf_win_right_offset,
+        sps.conf_win_top_offset,
+        sps.conf_win_bottom_offset,
+        unit,
+    )
+}
+
+pub(super) fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
     let chroma = match sps.chroma_format_idc {
         1 => ChromaSubsampling::Yuv420,
         2 => ChromaSubsampling::Yuv422,
@@ -633,7 +655,16 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
 
     let profile = profile_for(PixelFormat { chroma, depth });
 
-    let visible = sps.visible_rectangle();
+    let coded = Resolution::new(
+        u32::from(sps.pic_width_in_luma_samples),
+        u32::from(sps.pic_height_in_luma_samples),
+    );
+    let visible = visible_resolution(
+        CODEC,
+        BitstreamUnit::SequenceParameterSet,
+        coded,
+        crop_offsets(sps),
+    )?;
     let highest_layer = usize::from(sps.max_sub_layers_minus1);
     let buffering = sps
         .max_dec_pic_buffering_minus1
@@ -644,11 +675,8 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         profile,
         profile_idc: sps.profile_tier_level.general_profile_idc,
         pixel_format: PixelFormat { chroma, depth },
-        coded: Resolution::new(
-            u32::from(sps.pic_width_in_luma_samples),
-            u32::from(sps.pic_height_in_luma_samples),
-        ),
-        visible: Resolution::new(visible.max.x, visible.max.y),
+        coded,
+        visible,
         reference_frames: buffering
             .max(sps.max_dpb_size())
             .min(MAX_REFERENCE_FRAMES + 1),

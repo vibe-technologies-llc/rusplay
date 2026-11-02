@@ -1,5 +1,6 @@
 mod av1;
 mod capabilities;
+mod crop;
 mod ffi;
 mod h264;
 mod hevc;
@@ -243,6 +244,12 @@ impl Stream {
         resolution: Resolution,
     ) -> Result<DecodedFrame, DecodeError> {
         self.session.display().sync(surface.id)?;
+
+        let coded = self.format.coded;
+        let resolution = Resolution::new(
+            resolution.width.min(coded.width),
+            resolution.height.min(coded.height),
+        );
 
         Ok(DecodedFrame {
             resolution,
