@@ -249,6 +249,11 @@ paths:
   sequence, with the decoder's expected hold count and `flush` completing it). Regenerated
   fixtures need new hashes. Every VAAPI test returns early when the render node, the codec or the
   profile is missing.
+- The reference logic has device-free unit tests next to it: `src/vaapi/h264/dpb/tests.rs` (marking
+  by every MMCO, sliding window, initial and modified lists for frames and fields, the three
+  order count types), `src/vaapi/hevc/tests.rs` (order count unwrapping, the RPS helpers,
+  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing).
+  They build `PoolSurface::detached` surfaces, which carry an id and an empty image.
 - No available encoder writes field pictures (x264 only does MBAFF), so
   `src/vaapi/tests/fields.rs` is a tiny H.264 writer for PAFF streams: 128x64 frames of 16
   macroblocks per field, CAVLC, Main profile. Intra fields are I_PCM with a luma pattern and

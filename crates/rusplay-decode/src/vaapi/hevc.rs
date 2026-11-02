@@ -1130,3 +1130,6 @@ fn slice_range_extension(
 
     extension
 }
+
+#[cfg(test)]
+mod tests;

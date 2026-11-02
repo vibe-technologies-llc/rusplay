@@ -618,3 +618,6 @@ fn fill_film_grain(target: &mut ffi::VAFilmGrainStructAV1, header: &FrameHeaderO
     fields.set_overlap_flag(u32::from(grain.overlap_flag));
     fields.set_clip_to_restricted_range(u32::from(grain.clip_to_restricted_range));
 }
+
+#[cfg(test)]
+mod tests;

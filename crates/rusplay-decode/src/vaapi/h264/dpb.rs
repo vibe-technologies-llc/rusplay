@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use cros_codecs::codec::h264::parser::{
-    MaxLongTermFrameIdx, RefPicListModification, RefPicMarking, RefPicMarkingInner, Slice,
+    MaxLongTermFrameIdx, RefPicListModification, RefPicMarking, RefPicMarkingInner, SliceHeader,
     SliceType, Sps,
 };
 
@@ -311,12 +311,11 @@ impl Dpb {
     pub(super) fn order_count(
         &self,
         sps: &Sps,
-        slice: &Slice<'_>,
+        header: &SliceHeader,
         idr: bool,
         nal_ref_idc: u8,
         structure: Structure,
     ) -> OrderCount {
-        let header = &slice.header;
         let frame_num = u32::from(header.frame_num);
         let max_frame_num = sps.max_frame_num();
         let previous = self.previous;
@@ -421,14 +420,12 @@ impl Dpb {
 
     pub(super) fn reference_lists(
         &self,
-        slice: &Slice<'_>,
+        header: &SliceHeader,
         structure: Structure,
         poc: i32,
         frame_num: u32,
         max_frame_num: u32,
     ) -> [ReferenceList; 2] {
-        let header = &slice.header;
-
         let [initial0, initial1] = match header.slice_type {
             SliceType::P | SliceType::Sp => [self.initial_p_list(structure), Vec::new()],
             SliceType::B => self.initial_b_lists(structure, poc),
@@ -950,3 +947,6 @@ enum Marked {
     AllUnused,
     CurrentLongTerm(u32),
 }
+
+#[cfg(test)]
+mod tests;

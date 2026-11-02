@@ -256,7 +256,7 @@ impl H264Decoder {
 
         let order = self
             .dpb
-            .order_count(&sps, first, idr, nal_ref_idc, structure);
+            .order_count(&sps, &first.header, idr, nal_ref_idc, structure);
         let surface = match &partner {
             Some(open) => open.surface.clone(),
             None => stream.pool.acquire()?,
@@ -286,9 +286,13 @@ impl H264Decoder {
         ];
 
         for slice in slices {
-            let lists =
-                self.dpb
-                    .reference_lists(slice, structure, order.poc(), frame_num, max_frame_num);
+            let lists = self.dpb.reference_lists(
+                &slice.header,
+                structure,
+                order.poc(),
+                frame_num,
+                max_frame_num,
+            );
             let parameters = slice_parameters(slice, &sps, &pps, &lists, &self.dpb.references);
             buffers.push(
                 stream
