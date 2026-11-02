@@ -109,7 +109,7 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
         options.fec,
     )?;
 
-    let mut payload = Vec::new();
+    let mut header = Vec::with_capacity(VideoFrameHeader::SIZE);
     let mut cadence = FrameCadence::default();
 
     while !links.shared.stopped() {
@@ -119,7 +119,7 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
                 let pacing = options
                     .pacing
                     .map(|pacing| pacing.for_frame(cadence.smoothed));
-                send_frame(&mut packetizer, &mut payload, pacing, &outgoing, links)?;
+                send_frame(&mut packetizer, &mut header, pacing, &outgoing, links)?;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -131,18 +131,22 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
 fn send_frame(
     packetizer: &mut Packetizer,
-    payload: &mut Vec<u8>,
+    header: &mut Vec<u8>,
     pacing: Option<FramePacing>,
     outgoing: &Outgoing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
-    payload.clear();
+    header.clear();
     VideoFrameHeader {
         captured_micros: outgoing.captured_micros,
     }
-    .write(payload);
-    payload.extend_from_slice(&outgoing.frame.data);
-    let datagrams = packetizer.packetize(outgoing.number, outgoing.frame.keyframe, payload)?;
+    .write(header);
+    let datagrams = packetizer.packetize_prefixed(
+        outgoing.number,
+        outgoing.frame.keyframe,
+        header,
+        &outgoing.frame.data,
+    )?;
 
     match pacing {
         Some(pacing) => send_paced(&datagrams, pacing, links)?,

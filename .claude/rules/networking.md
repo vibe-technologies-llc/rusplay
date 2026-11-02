@@ -293,6 +293,12 @@ paths:
   total frame bytes) so a receiver can decode from parity alone, learn the fragment count
   (`ceil(frame_bytes / shard_len)`) and truncate a recovered tail fragment to its true length. The
   last data fragment is zero-padded to `shard_len` only for coding, never on the wire.
+- `packetize_prefixed(frame, keyframe, prefix, body)` packetizes `prefix || body` without joining
+  them: fragments and Reed-Solomon shards borrow from the two slices and only a shard that spans
+  the seam (the first) or needs padding (the last) is copied, and its output is byte for byte
+  that of `packetize` on the joined buffer (a test holds it). The host passes the 8-byte
+  `VideoFrameHeader` as the prefix, so a frame is never copied into a joined buffer.
+  `send_batch` reads the session cipher once per batch, not once per datagram.
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen

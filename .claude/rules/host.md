@@ -77,8 +77,8 @@ paths:
     description reaches the client ahead of the keyframe it describes. A full control window
     leaves the announcement pending and the control stage sends it on its next pass; an
     undeliverable announcement that is still the latest is sent again.
-  - `rusplay-host-send` prefixes each encoded frame with its `VideoFrameHeader` (one reused
-    scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
+  - `rusplay-host-send` passes each encoded frame's `VideoFrameHeader` to the packetizer as a
+    prefix (`packetize_prefixed`, one reused 8-byte buffer, the frame is not copied) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
     `network.pacing_window_percent` of the frame interval, the shorter of the configured

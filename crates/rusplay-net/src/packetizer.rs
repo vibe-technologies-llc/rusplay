@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, ProtocolVersion, StreamKind};
 
 use crate::{FecScheme, NetError};
@@ -59,6 +61,17 @@ impl Packetizer {
         keyframe: bool,
         data: &[u8],
     ) -> Result<Vec<Vec<u8>>, NetError> {
+        self.packetize_prefixed(frame, keyframe, &[], data)
+    }
+
+    pub fn packetize_prefixed(
+        &mut self,
+        frame: u32,
+        keyframe: bool,
+        prefix: &[u8],
+        body: &[u8],
+    ) -> Result<Vec<Vec<u8>>, NetError> {
+        let data = Payload { prefix, body };
         if data.is_empty() {
             return Err(NetError::EmptyFrame);
         }
@@ -88,7 +101,8 @@ impl Packetizer {
             .sum();
         let mut datagrams = Vec::with_capacity(usize::from(fragment_count) + parity_count);
 
-        for (index, chunk) in data.chunks(self.shard_len).enumerate() {
+        for index in 0..usize::from(fragment_count) {
+            let chunk = data.shard(index, self.shard_len);
             let flags = if index + 1 == usize::from(fragment_count) {
                 base_flags.with(PacketFlags::LAST_FRAGMENT)
             } else {
@@ -96,7 +110,7 @@ impl Packetizer {
             };
             let header = self.next_header(self.stream, flags, frame, index, fragment_count);
 
-            datagrams.push(build_datagram(&header, None, chunk)?);
+            datagrams.push(build_datagram(&header, None, &chunk)?);
         }
 
         let fec_packet_count =
@@ -108,10 +122,10 @@ impl Packetizer {
 
         for block in &blocks {
             let first = usize::from(block.first_fragment);
-            let shards: Vec<Vec<u8>> = (first..first + usize::from(block.data_shards))
-                .map(|index| self.padded_shard(data, index))
+            let shards: Vec<Cow<'_, [u8]>> = (first..first + usize::from(block.data_shards))
+                .map(|index| data.padded_shard(index, self.shard_len))
                 .collect();
-            let shard_refs: Vec<&[u8]> = shards.iter().map(Vec::as_slice).collect();
+            let shard_refs: Vec<&[u8]> = shards.iter().map(AsRef::as_ref).collect();
             let parity = block.encode(&shard_refs)?;
 
             for (parity_index, shard) in parity.iter().enumerate() {
@@ -139,14 +153,6 @@ impl Packetizer {
         Ok(datagrams)
     }
 
-    fn padded_shard(&self, data: &[u8], index: usize) -> Vec<u8> {
-        let start = index * self.shard_len;
-        let end = (start + self.shard_len).min(data.len());
-        let mut shard = data[start..end].to_vec();
-        shard.resize(self.shard_len, 0);
-        shard
-    }
-
     fn next_header(
         &mut self,
         stream: StreamKind,
@@ -170,6 +176,53 @@ impl Packetizer {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Payload<'a> {
+    prefix: &'a [u8],
+    body: &'a [u8],
+}
+
+impl<'a> Payload<'a> {
+    fn len(&self) -> usize {
+        self.prefix.len() + self.body.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn range(&self, start: usize, end: usize) -> Cow<'a, [u8]> {
+        let split = self.prefix.len();
+
+        if end <= split {
+            Cow::Borrowed(&self.prefix[start..end])
+        } else if start >= split {
+            Cow::Borrowed(&self.body[start - split..end - split])
+        } else {
+            let mut joined = Vec::with_capacity(end - start);
+            joined.extend_from_slice(&self.prefix[start..]);
+            joined.extend_from_slice(&self.body[..end - split]);
+            Cow::Owned(joined)
+        }
+    }
+
+    fn shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
+        let start = index * shard_len;
+        let end = (start + shard_len).min(self.len());
+
+        self.range(start, end)
+    }
+
+    fn padded_shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
+        let mut shard = self.shard(index, shard_len);
+        if shard.len() < shard_len {
+            shard.to_mut().resize(shard_len, 0);
+        }
+
+        shard
+    }
+}
+
 pub const fn shard_len_for(max_datagram: usize) -> usize {
     max_datagram.saturating_sub(PacketHeader::SIZE + FecHeader::SIZE) & !1
 }
@@ -184,13 +237,15 @@ fn build_datagram(
     } else {
         0
     };
-    let mut datagram = vec![0; PacketHeader::SIZE + fec_len + payload.len()];
+    let header_len = PacketHeader::SIZE + fec_len;
+    let mut datagram = Vec::with_capacity(header_len + payload.len());
+    datagram.resize(header_len, 0);
 
     header.write(&mut datagram)?;
     if let Some(fec_header) = fec_header {
         fec_header.write(&mut datagram[PacketHeader::SIZE..])?;
     }
-    datagram[PacketHeader::SIZE + fec_len..].copy_from_slice(payload);
+    datagram.extend_from_slice(payload);
 
     Ok(datagram)
 }
@@ -355,5 +410,41 @@ mod tests {
         assert_eq!(headers(&datagrams)[0].sequence, u32::MAX);
         assert_eq!(headers(&more)[0].sequence, 0);
         assert_eq!(packetizer.next_sequence(), 1);
+    }
+
+    #[test]
+    fn a_prefixed_frame_packetizes_exactly_like_the_joined_frame() {
+        let scheme = FecScheme::for_overhead(4, 50);
+
+        let sizes: [(usize, usize); 6] =
+            [(8, 1), (8, 66), (8, 500), (0, 200), (100, 300), (200, 5)];
+
+        for (prefix_len, body_len) in sizes {
+            let prefix: Vec<u8> = (0..prefix_len)
+                .map(|byte| u8::try_from(byte % 251).unwrap() ^ 0x5A)
+                .collect();
+            let body: Vec<u8> = (0..body_len)
+                .map(|byte| u8::try_from(byte * 7 % 251).unwrap())
+                .collect();
+            let joined = [prefix.clone(), body.clone()].concat();
+            let mut split = video(scheme);
+            let mut whole = video(scheme);
+
+            let from_parts = split.packetize_prefixed(3, true, &prefix, &body).unwrap();
+            let from_joined = whole.packetize(3, true, &joined).unwrap();
+
+            assert_eq!(
+                from_parts, from_joined,
+                "prefix {prefix_len} body {body_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_prefix_and_body_is_an_empty_frame() {
+        assert!(matches!(
+            video(FecScheme::None).packetize_prefixed(0, false, &[], &[]),
+            Err(NetError::EmptyFrame)
+        ));
     }
 }

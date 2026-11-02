@@ -12,7 +12,7 @@ use rustix::{
     net::{MMsgHdr, SendAncillaryBuffer, SendFlags, addr::SocketAddrArg, sendmmsg},
 };
 
-use crate::{NetError, Transport};
+use crate::{NetError, Transport, transport::seal_with};
 
 const MAX_MESSAGES_PER_CALL: usize = 1024;
 const MIN_READ_TIMEOUT: Duration = Duration::from_micros(1);
@@ -131,9 +131,10 @@ impl Transport {
             });
         }
 
+        let cipher = self.current_cipher();
         let sealed = datagrams
             .iter()
-            .map(|datagram| self.seal(datagram))
+            .map(|datagram| seal_with(cipher.as_deref(), datagram))
             .collect::<Result<Vec<_>, _>>()?;
         let address = peer.as_any();
         let mut sent = 0;
