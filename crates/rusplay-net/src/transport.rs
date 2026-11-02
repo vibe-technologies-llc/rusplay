@@ -68,6 +68,22 @@ pub struct Transport {
     read_timeout: Mutex<Option<Duration>>,
 }
 
+pub(crate) fn seal_with<'a>(
+    cipher: Option<&SessionCipher>,
+    datagram: &'a [u8],
+) -> Result<Cow<'a, [u8]>, NetError> {
+    let Some(cipher) = cipher else {
+        return Ok(Cow::Borrowed(datagram));
+    };
+
+    let header = PacketHeader::read(datagram)?;
+    if !requires_sealing(header.stream) {
+        return Ok(Cow::Borrowed(datagram));
+    }
+
+    cipher.seal(datagram).map(Cow::Owned)
+}
+
 impl Transport {
     pub fn bind(addr: SocketAddr, options: TransportOptions) -> Result<Self, NetError> {
         let socket = UdpSocket::bind(addr).map_err(|source| NetError::Bind { addr, source })?;
@@ -155,17 +171,12 @@ impl Transport {
         max_datagram_len(self.mtu, peer).saturating_sub(overhead)
     }
 
+    pub(crate) fn current_cipher(&self) -> Option<Arc<SessionCipher>> {
+        self.session.read().clone()
+    }
+
     pub(crate) fn seal<'a>(&self, datagram: &'a [u8]) -> Result<Cow<'a, [u8]>, NetError> {
-        let Some(cipher) = self.session.read().clone() else {
-            return Ok(Cow::Borrowed(datagram));
-        };
-
-        let header = PacketHeader::read(datagram)?;
-        if !requires_sealing(header.stream) {
-            return Ok(Cow::Borrowed(datagram));
-        }
-
-        cipher.seal(datagram).map(Cow::Owned)
+        seal_with(self.current_cipher().as_deref(), datagram)
     }
 
     pub(crate) fn unseal(&self, buf: &mut [u8], len: usize) -> Option<usize> {

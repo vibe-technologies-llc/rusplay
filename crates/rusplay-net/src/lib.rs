@@ -4,6 +4,7 @@ mod control;
 mod discovery;
 mod error;
 mod fec;
+mod host_id;
 mod pacer;
 mod packetizer;
 mod pairing;
@@ -21,6 +22,7 @@ pub use crate::{
     discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
     error::NetError,
     fec::{FecBlock, FecScheme},
+    host_id::load_or_create_host_id,
     pacer::Pacer,
     packetizer::{Packetizer, shard_len_for},
     pairing::{

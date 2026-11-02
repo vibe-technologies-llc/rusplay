@@ -28,7 +28,7 @@ pub use rusplay_net::{
     DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, MAX_PEER_NAME_BYTES, PeerRecord,
     PeerSecret, Pin,
 };
-pub use rusplay_protocol::{CursorImage, StreamDescription};
+pub use rusplay_protocol::{CursorImage, HostId, StreamDescription};
 pub use rusplay_scale::{ColorVolume, OutputLight};
 
 #[cfg(feature = "window")]

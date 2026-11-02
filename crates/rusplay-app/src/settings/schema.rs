@@ -82,6 +82,7 @@ const POSITIVE_U32: Kind = Kind::Integer {
     max: u32::MAX as i64,
 };
 
+const NICE: Kind = Kind::Integer { min: -20, max: 19 };
 const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
@@ -816,6 +817,29 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
+        "network.pacing_max_mbps",
+        "Pacing rate cap",
+        U32,
+    )
+    .unit("Mbps"),
+    field(
+        Section::Network,
+        "Transport",
+        "network.frame_thread_nice",
+        "Frame thread nice value",
+        NICE,
+    ),
+    field(
+        Section::Network,
+        "Transport",
+        "network.send_timer_slack_us",
+        "Send thread timer slack",
+        U32,
+    )
+    .unit("us"),
+    field(
+        Section::Network,
+        "Transport",
         "network.reassembly_timeout_ms",
         "Reassembly timeout",
         U16,
@@ -952,6 +976,13 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Session",
+        "network.stats_json",
+        "JSON statistics on stdout",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate",
         "Adaptive bitrate",
@@ -1042,6 +1073,21 @@ pub static FIELDS: &[Field] = &[
         "Peers",
         "peers.client_file",
         "Paired hosts file",
+        Kind::Text,
+    )
+    .optional(),
+    field(
+        Section::Network,
+        "Peers",
+        "peers.write_pin_file",
+        "Write the pairing PIN to a file",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
+        "Peers",
+        "peers.pin_file",
+        "Pairing PIN file",
         Kind::Text,
     )
     .optional(),

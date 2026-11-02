@@ -1,7 +1,11 @@
 use std::{
     fmt,
     net::SocketAddr,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -26,6 +30,7 @@ use crate::{
     negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
+    priority::ThreadTuning,
     send::{self, Pacing, SendLinks, SendOptions},
     shared::{Shared, StopOnDrop},
 };
@@ -41,6 +46,7 @@ pub struct HostSession {
     audio: Option<AudioSourceFactory>,
     microphone: Option<MicrophoneOutputFactory>,
     input: Option<Arc<InputFeed>>,
+    busy: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for HostSession {
@@ -53,6 +59,7 @@ impl fmt::Debug for HostSession {
             .field("audio", &self.audio.is_some())
             .field("microphone", &self.microphone.is_some())
             .field("input", &self.input.is_some())
+            .field("busy", &self.busy)
             .finish()
     }
 }
@@ -72,6 +79,7 @@ impl HostSession {
             audio: default_audio_source(),
             microphone: default_microphone_output(),
             input: None,
+            busy: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -111,6 +119,10 @@ impl HostSession {
 
     pub fn local_addr(&self) -> Result<SocketAddr, HostError> {
         Ok(self.transport.local_addr()?)
+    }
+
+    pub fn busy_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.busy)
     }
 
     pub fn peers(&self) -> &Arc<RwLock<PeerStore>> {
@@ -154,6 +166,8 @@ impl HostSession {
         let mut stream = HostStream {
             stages: Vec::new(),
             shared: Arc::clone(&shared),
+            tuning: ThreadTuning::from_config(network),
+            _busy: BusyGuard::raise(&self.busy),
         };
 
         let outbox = Arc::new(ControlOutbox::new(
@@ -273,6 +287,7 @@ fn send_options(config: &Config) -> SendOptions {
         .map(|frame_interval| Pacing {
             frame_interval,
             window_percent: network.pacing_window_percent,
+            max_kbps: network.pacing_max_kbps(),
         });
 
     SendOptions {
@@ -285,6 +300,24 @@ fn send_options(config: &Config) -> SendOptions {
 pub struct HostStream {
     stages: Vec<(Stage, JoinHandle<Result<(), HostError>>)>,
     shared: Arc<Shared>,
+    tuning: ThreadTuning,
+    _busy: BusyGuard,
+}
+
+#[derive(Debug)]
+struct BusyGuard(Arc<AtomicBool>);
+
+impl BusyGuard {
+    fn raise(flag: &Arc<AtomicBool>) -> Self {
+        flag.store(true, Ordering::Relaxed);
+        Self(Arc::clone(flag))
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 impl HostStream {
@@ -348,8 +381,10 @@ impl HostStream {
             builder = builder.stack_size(bytes);
         }
         let guard = StopOnDrop(Arc::clone(&self.shared));
+        let tuning = self.tuning;
         let spawned = builder.spawn(move || {
             let _guard = guard;
+            tuning.apply(stage);
             body()
         });
 

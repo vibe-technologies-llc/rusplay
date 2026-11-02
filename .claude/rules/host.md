@@ -45,6 +45,15 @@ paths:
   stream stops it. `HostError::is_session_failure` tells the
   failures that belong to one client (network, handshake, timeouts) from those that will fail
   every session (capture, GPU, encoder).
+  - `HostSession::busy_flag()` is an `Arc<AtomicBool>` that every `HostStream` raises when it
+    is created and lowers when it is dropped (`BusyGuard`), for the discovery responder
+    (`rusplay-hostd`) to announce; accepting and pairing alone do not raise it.
+  - The encode, send and control threads apply `ThreadTuning` (`src/priority.rs`) as the first
+    thing they do: `network.frame_thread_nice` (default -5, 0 leaves the thread alone) through
+    `setpriority`, which Linux applies to the calling thread, and, on the send thread only,
+    `network.send_timer_slack_us` (default 1, 0 leaves the kernel's) through
+    `PR_SET_TIMERSLACK`, so the pacer's short sleeps do not overshoot. A refused request (no
+    `RLIMIT_NICE` headroom) is silent and the thread runs at its default.
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
     session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels
@@ -68,14 +77,18 @@ paths:
     description reaches the client ahead of the keyframe it describes. A full control window
     leaves the announcement pending and the control stage sends it on its next pass; an
     undeliverable announcement that is still the latest is sent again.
-  - `rusplay-host-send` prefixes each encoded frame with its `VideoFrameHeader` (one reused
-    scratch buffer) and owns the video `Packetizer` (created after the keys are installed, FEC
+  - `rusplay-host-send` passes each encoded frame's `VideoFrameHeader` to the packetizer as a
+    prefix (`packetize_prefixed`, one reused 8-byte buffer, the frame is not copied) and owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_batch`. With `network.pacing` a frame is spread over
     `network.pacing_window_percent` of the frame interval, the shorter of the configured
     `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
     faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
-    frame never waits behind the previous one's pacing for long.
+    frame never waits behind the previous one's pacing for long. With `network.pacing_max_mbps`
+    above 0 the frame is instead sent at that rate when it fits inside the window (a frame
+    that would take longer at the cap still takes the whole window, so the window stays the
+    bound); 0 keeps the window-only behaviour and is the default until loss has been measured
+    on real links.
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
     encode stage has offered its encodable set, then answers with its own `Hello` carrying that

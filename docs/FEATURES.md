@@ -9,8 +9,8 @@
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
 
 # Networking
-- [S] `net-announce-busy`: add a busy flag to `Announce` so a client's host list can show a host that is mid-session before the user tries to connect; the discovery responder runs on its own thread, so `HostSession` has to expose its busy state to it; a protocol version bump
-- [S] `net-announce-host-id`: carry a stable host id (the id of a host key or a random id kept in the state directory) in `DiscoveryMessage::Announce`, with a protocol version bump, so the app matches a discovered host to its saved pairing across a rename or address change instead of by display name and address (`HostList::merge_discovered`)
+- [S] `app-host-list-busy`: show `DiscoveredHost::busy` in the app's host list (`HostList::merge_discovered` and its view) so a host that is mid-session reads as busy before the user tries to connect; the announce already carries the flag
+- [S] `app-host-list-match-id`: match a discovered host to its saved pairing by `DiscoveredHost::id` (the announce already carries it) instead of by display name and address in `HostList::merge_discovered`, and store the id with the saved host (`rusplay-client` host book) so a rename or an address change keeps the pairing
 
 # Client app
 - [S] `app-stream-stats-end-to-end`: add the capture-to-present figure to the stream header's statistics (`stats.rs` in `rusplay-app` shows client-side latency only, from `PresentedFrame`'s `received_at`, `decoded_at` and `submitted_at`), using `ClientStats::capture_to_present`, and a picture overlay, which has to be drawn in `compose.wgsl` or an extra subsurface since the stream subsurface sits above gpui's surface
@@ -25,8 +25,8 @@
 - [M] `decode-chroma-siting-signalled`: the client uses `scaling.chroma_siting` for every stream, so a stream sited otherwise (AV1 centred chroma, a foreign encoder) is resampled half a sample off unless both configs are changed by hand. Read the chroma sample position from the bitstream (rav1d's sequence header, H.264/HEVC VUI) into `SignalledColor`, prefer it over the config in `rusplay-client/src/present.rs`, and have the host signal the siting it converted with in `StreamDescription`
 
 # Headless host
-- [M] `hostd-unattended-pairing`: run `rusplay-hostd` as a service. Today a fresh PIN goes to stderr for each pairing window and there is no control socket (`hostd.md`), which is the last step that needs a terminal: the portal grant already survives restarts through `capture.restore_token_file`. Spike a PIN file under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) against a minimal Unix control socket, then ship a systemd user unit
-- [M] `stats-machine-readable`: emit session statistics as JSON lines (`HostStats` in `rusplay-hostd/src/stats.rs:99-108` and `ClientStats` with `capture_to_present`) behind a config option, so encoder, FEC and pacing settings can be compared and regressions tracked without scraping stderr. Decide whether to add `serde_json` or write the lines by hand
+- [M] `hostd-control-socket`: a minimal Unix control socket for `rusplay-hostd` under `$XDG_RUNTIME_DIR/rusplay/` (mode 0600) so a running daemon can answer `status`, issue a fresh PIN on demand and `forget` a client without the stderr line or a restart. The PIN file (`peers.write_pin_file`) and `rusplay-hostd pin` already cover reading the PIN unattended
+- [S] `stats-machine-readable-client`: emit the client's session statistics (`ClientStats`, with `capture_to_present`) as JSON lines the way `rusplay-hostd` does with `network.stats_json` (`rusplay-hostd/src/stats_json.rs`), behind the same option, so a pair of runs can be compared without scraping stderr
 
 # Input
 - [XL] `input-gamepad-sensors`: carry gyro, accelerometer and touchpad from DualSense, DS4 and Switch Pro pads, which are skipped today because only nodes with `BTN_SOUTH`/`ABS_X`/`ABS_Y` are accepted, and the host pad is a 360 pad with rumble only. Split before starting: a selectable `/dev/uhid` DualSense/DS4 personality next to the 360 one, pairing sibling evdev nodes on the client, sensor and touch events in the wire model and snapshot, and LED and lightbar feedback as control messages

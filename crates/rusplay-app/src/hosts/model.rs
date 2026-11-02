@@ -372,7 +372,7 @@ fn announced_name(host: &DiscoveredHost) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_client::PeerSecret;
+    use rusplay_client::{HostId, PeerSecret};
     use rusplay_config::PresentMode;
 
     use super::*;
@@ -478,6 +478,8 @@ mod tests {
         DiscoveredHost {
             address: address.parse().unwrap(),
             name: name.to_owned(),
+            busy: false,
+            id: HostId::NONE,
         }
     }
 

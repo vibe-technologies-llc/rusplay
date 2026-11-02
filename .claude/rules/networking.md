@@ -59,7 +59,9 @@ paths:
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets. The host spreads each frame over
   `network.pacing_window_percent` (default 50) of the interval, so pacing never delays a frame by
-  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst.
+  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst, and
+  `network.pacing_max_mbps` (default 0, off) paces a frame at that rate when it takes less than
+  the window.
 - Every video frame handed to the `Packetizer` starts with the 8-byte big-endian
   `VideoFrameHeader`: the capture time in microseconds on the host's stream clock (zero at session
   start, `rusplay-host`'s `StreamClock`). It is part of the frame, so the first fragment carries it
@@ -145,11 +147,19 @@ paths:
 ## Discovery
 
 - `StreamKind::Discovery` carries `DiscoveryMessage`: a `Query` with a random nonce and an
-  `Announce` echoing that nonce with the host's media port and a name of at most 64 UTF-8 bytes.
+  `Announce` echoing that nonce with the host's media port, a flags byte (bit 0 `busy`, any
+  other bit is `UnknownDiscoveryFlags`), the host's 16-byte `HostId` (all zero, `HostId::NONE`,
+  when the responder has none) and a name of at most 64 UTF-8 bytes.
   Announces are unauthenticated hints; pairing, not discovery, establishes trust.
 - `DiscoveryResponder` (host) listens on `network.discovery_port` on all IPv4 interfaces, joins
   `network.discovery_group`, and answers each query by unicast to its sender. `handle_next`
   serves one datagram with a timeout and is meant to run in a loop on its own thread.
+  `with_busy_flag` hands it a shared `AtomicBool` it reads for every reply, which
+  `DiscoveredHost::busy` reports on the client.
+  `with_host_id` sets the id, `DiscoveredHost::id` reports it. `load_or_create_host_id(path)`
+  reads a stable random id from a file or, when it does not exist, draws one from the OS random
+  source and writes it owner only (`write_owner_only`); a file that is not 32 hex digits, or is
+  all zero, is `HostIdCorrupt` and is never overwritten.
   `DiscoveryBrowser` (client) sends the query to the limited broadcast address and the group,
   repeats it three times over the scan window (`network.discovery_scan_ms`, default 1000), and
   returns the hosts whose announce echoed its nonce, deduplicated by address. Tests aim it at
@@ -288,6 +298,12 @@ paths:
   total frame bytes) so a receiver can decode from parity alone, learn the fragment count
   (`ceil(frame_bytes / shard_len)`) and truncate a recovered tail fragment to its true length. The
   last data fragment is zero-padded to `shard_len` only for coding, never on the wire.
+- `packetize_prefixed(frame, keyframe, prefix, body)` packetizes `prefix || body` without joining
+  them: fragments and Reed-Solomon shards borrow from the two slices and only a shard that spans
+  the seam (the first) or needs padding (the last) is copied, and its output is byte for byte
+  that of `packetize` on the joined buffer (a test holds it). The host passes the 8-byte
+  `VideoFrameHeader` as the prefix, so a frame is never copied into a joined buffer.
+  `send_batch` reads the session cipher once per batch, not once per datagram.
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen

@@ -111,6 +111,8 @@ pub enum ConfigError {
     ZeroKeyframeRequestInterval,
     #[error("pacing window {0}% is outside 1..=100%")]
     PacingWindowOutOfRange(u8),
+    #[error("frame thread nice value {0} is outside -20..=19")]
+    FrameThreadNiceOutOfRange(i8),
     #[error("keepalive interval must be greater than zero")]
     ZeroKeepaliveInterval,
     #[error(
@@ -142,6 +144,8 @@ pub enum ConfigError {
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
     EmptyClientPeersFile,
+    #[error("peers.pin_file is set to an empty path")]
+    EmptyPinFile,
     #[error("peers.host_name is set to an empty name")]
     EmptyHostName,
     #[error("peers.host_name is {bytes} bytes, above 64")]
@@ -222,6 +226,7 @@ impl ConfigError {
             Self::ZeroPeerTimeout => Some("network.peer_timeout_ms"),
             Self::ZeroKeyframeRequestInterval => Some("network.keyframe_request_interval_ms"),
             Self::PacingWindowOutOfRange(_) => Some("network.pacing_window_percent"),
+            Self::FrameThreadNiceOutOfRange(_) => Some("network.frame_thread_nice"),
             Self::ZeroKeepaliveInterval | Self::KeepaliveNotBelowPeerTimeout { .. } => {
                 Some("network.keepalive_interval_ms")
             }
@@ -245,6 +250,7 @@ impl ConfigError {
             Self::HotkeyChordShadowsRelease { .. } => Some("input.hotkey_chord"),
             Self::HotkeyKeyReused { field, .. } => Some(*field),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
+            Self::EmptyPinFile => Some("peers.pin_file"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
             Self::EmptyHostName | Self::HostNameTooLong { .. } => Some("peers.host_name"),
             Self::EmptyClientName

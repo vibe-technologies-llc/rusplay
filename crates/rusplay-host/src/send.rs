@@ -23,6 +23,7 @@ const CADENCE_SMOOTHING: u32 = 8;
 pub(crate) struct Pacing {
     pub frame_interval: Duration,
     pub window_percent: u8,
+    pub max_kbps: Option<u32>,
 }
 
 impl Pacing {
@@ -32,6 +33,27 @@ impl Pacing {
         });
 
         interval * u32::from(self.window_percent) / PERCENT
+    }
+
+    fn for_frame(self, measured: Option<Duration>) -> FramePacing {
+        FramePacing {
+            window: self.window(measured),
+            max_kbps: self.max_kbps,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FramePacing {
+    window: Duration,
+    max_kbps: Option<u32>,
+}
+
+impl FramePacing {
+    fn span(self, bytes: usize) -> Duration {
+        self.max_kbps.map_or(self.window, |kbps| {
+            Pacer::from_kbps(kbps).interval_for(bytes).min(self.window)
+        })
     }
 }
 
@@ -87,15 +109,17 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
         options.fec,
     )?;
 
-    let mut payload = Vec::new();
+    let mut header = Vec::with_capacity(VideoFrameHeader::SIZE);
     let mut cadence = FrameCadence::default();
 
     while !links.shared.stopped() {
         match links.queue.recv_timeout(IDLE_WAKE) {
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
-                let window = options.pacing.map(|pacing| pacing.window(cadence.smoothed));
-                send_frame(&mut packetizer, &mut payload, window, &outgoing, links)?;
+                let pacing = options
+                    .pacing
+                    .map(|pacing| pacing.for_frame(cadence.smoothed));
+                send_frame(&mut packetizer, &mut header, pacing, &outgoing, links)?;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -107,21 +131,25 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
 fn send_frame(
     packetizer: &mut Packetizer,
-    payload: &mut Vec<u8>,
-    window: Option<Duration>,
+    header: &mut Vec<u8>,
+    pacing: Option<FramePacing>,
     outgoing: &Outgoing,
     links: &SendLinks,
 ) -> Result<(), HostError> {
-    payload.clear();
+    header.clear();
     VideoFrameHeader {
         captured_micros: outgoing.captured_micros,
     }
-    .write(payload);
-    payload.extend_from_slice(&outgoing.frame.data);
-    let datagrams = packetizer.packetize(outgoing.number, outgoing.frame.keyframe, payload)?;
+    .write(header);
+    let datagrams = packetizer.packetize_prefixed(
+        outgoing.number,
+        outgoing.frame.keyframe,
+        header,
+        &outgoing.frame.data,
+    )?;
 
-    match window {
-        Some(window) => send_paced(&datagrams, window, links)?,
+    match pacing {
+        Some(pacing) => send_paced(&datagrams, pacing, links)?,
         None => send_all(&datagrams, links)?,
     }
 
@@ -135,9 +163,13 @@ fn send_frame(
     Ok(())
 }
 
-fn send_paced(datagrams: &[Vec<u8>], window: Duration, links: &SendLinks) -> Result<(), HostError> {
+fn send_paced(
+    datagrams: &[Vec<u8>],
+    pacing: FramePacing,
+    links: &SendLinks,
+) -> Result<(), HostError> {
     let total: usize = datagrams.iter().map(Vec::len).sum();
-    let plan = BurstPlan::new(datagrams.len(), total, window);
+    let plan = BurstPlan::new(datagrams.len(), total, pacing);
     let started = Instant::now();
     let mut sent_bytes = 0;
 
@@ -180,12 +212,13 @@ struct BurstPlan {
 }
 
 impl BurstPlan {
-    fn new(datagrams: usize, bytes: usize, window: Duration) -> Self {
-        let bursts = usize::try_from(window.as_nanos() / MIN_BURST_GAP.as_nanos())
+    fn new(datagrams: usize, bytes: usize, pacing: FramePacing) -> Self {
+        let span = pacing.span(bytes);
+        let bursts = usize::try_from(span.as_nanos() / MIN_BURST_GAP.as_nanos())
             .unwrap_or(usize::MAX)
             .clamp(1, datagrams.max(1));
-        let window_micros = window.as_micros().max(1);
-        let kbps = (bytes as u128 * BITS_PER_BYTE * MICROS_PER_MILLI).div_ceil(window_micros);
+        let span_micros = span.as_micros().max(1);
+        let kbps = (bytes as u128 * BITS_PER_BYTE * MICROS_PER_MILLI).div_ceil(span_micros);
 
         Self {
             datagrams_per_burst: datagrams.div_ceil(bursts).max(1),
@@ -201,8 +234,12 @@ mod tests {
     #[test]
     fn a_frame_is_spread_across_the_pacing_window() {
         let window = Duration::from_millis(8);
+        let pacing = FramePacing {
+            window,
+            max_kbps: None,
+        };
 
-        let plan = BurstPlan::new(100, 100_000, window);
+        let plan = BurstPlan::new(100, 100_000, pacing);
 
         assert_eq!(plan.datagrams_per_burst, 4);
         assert!(plan.pacer.interval_for(100_000) <= window);
@@ -237,6 +274,7 @@ mod tests {
         let pacing = Pacing {
             frame_interval: Duration::from_millis(16),
             window_percent: 50,
+            max_kbps: None,
         };
 
         assert_eq!(pacing.window(None), Duration::from_millis(8));
@@ -252,8 +290,52 @@ mod tests {
 
     #[test]
     fn a_small_frame_leaves_in_one_burst_per_datagram() {
-        let plan = BurstPlan::new(3, 3_000, Duration::from_millis(8));
+        let pacing = FramePacing {
+            window: Duration::from_millis(8),
+            max_kbps: None,
+        };
+
+        let plan = BurstPlan::new(3, 3_000, pacing);
 
         assert_eq!(plan.datagrams_per_burst, 1);
+    }
+
+    #[test]
+    fn a_rate_cap_shortens_a_frame_that_fits_inside_the_window() {
+        let pacing = FramePacing {
+            window: Duration::from_millis(8),
+            max_kbps: Some(1_000_000),
+        };
+
+        let plan = BurstPlan::new(100, 100_000, pacing);
+
+        assert_eq!(pacing.span(100_000), Duration::from_micros(800));
+        assert_eq!(plan.datagrams_per_burst, 34);
+        assert!(plan.pacer.interval_for(100_000) <= Duration::from_micros(801));
+    }
+
+    #[test]
+    fn the_window_still_bounds_a_frame_too_large_for_the_cap() {
+        let pacing = FramePacing {
+            window: Duration::from_millis(8),
+            max_kbps: Some(100_000),
+        };
+
+        assert_eq!(pacing.span(1_000_000), Duration::from_millis(8));
+        assert_eq!(pacing.span(10_000), Duration::from_micros(800));
+    }
+
+    #[test]
+    fn the_cap_travels_from_the_configuration_into_each_frame() {
+        let pacing = Pacing {
+            frame_interval: Duration::from_millis(16),
+            window_percent: 50,
+            max_kbps: Some(500_000),
+        };
+
+        let frame = pacing.for_frame(None);
+
+        assert_eq!(frame.window, Duration::from_millis(8));
+        assert_eq!(frame.max_kbps, Some(500_000));
     }
 }

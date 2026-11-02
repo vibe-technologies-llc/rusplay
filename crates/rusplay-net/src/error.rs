@@ -83,6 +83,12 @@ pub enum NetError {
     PeerStoreDirectory { path: PathBuf, source: io::Error },
     #[error("peer store {path} is corrupt at line {line}")]
     PeerStoreCorrupt { path: PathBuf, line: usize },
+    #[error("failed to read the host id file {path}")]
+    HostIdRead { path: PathBuf, source: io::Error },
+    #[error("failed to write the host id file {path}")]
+    HostIdWrite { path: PathBuf, source: io::Error },
+    #[error("host id file {path} does not hold a 32 digit hex id")]
+    HostIdCorrupt { path: PathBuf },
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]
     DatagramTooLarge { size: usize, mtu: u16 },
     #[error("reed-solomon coding failed")]

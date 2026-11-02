@@ -17,6 +17,7 @@ mod negotiate;
 mod outbox;
 mod pipeline;
 mod portal;
+mod priority;
 mod route;
 mod send;
 mod session;
@@ -29,8 +30,10 @@ mod upload;
 
 pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
 pub use rusplay_core::{CodecFormat, FormatSet};
-pub use rusplay_net::{DiscoveryResponder, NetError, PeerRecord, PeerStore, Pin};
-pub use rusplay_protocol::PeerId;
+pub use rusplay_net::{
+    DiscoveryResponder, NetError, PeerRecord, PeerStore, Pin, load_or_create_host_id,
+};
+pub use rusplay_protocol::{HostId, PeerId};
 
 pub use crate::{
     accept::{Admission, Client},

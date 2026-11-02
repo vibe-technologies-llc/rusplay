@@ -6,7 +6,7 @@ paths:
 # Headless host binary
 
 - Arguments are parsed with `lexopt` in `cli.rs`: `-c`/`--config <PATH>`, `-h`/`--help`,
-  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>` and
+  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>`, `pin` and
   `config default` / `config check [PATH]` (below); any other positional word is
   `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
@@ -41,7 +41,10 @@ paths:
   client's `DiscoveryBrowser` finds the host without an address. The name is `peers.host_name`
   when set, else the kernel hostname from `/proc/sys/kernel/hostname`, else `rusplay`, cut to 64
   bytes on a character boundary. It starts after the session binds, before the first PIN, and
-  stops when the daemon returns; a bind failure (the port is taken) ends the daemon with the
+  stops when the daemon returns; its announces carry the stable host id, `load_or_create_host_id` on a `host-id` file
+  next to the peer store file (so the id lives and moves with the pairings), and `HostSession::busy_flag`, raised while a
+  `HostStream` lives (from `serve` until the stream is dropped, not during pairing or accept),
+  so a client's host list can show the host as mid-session; a bind failure (the port is taken) ends the daemon with the
   cause, a later receive error is printed and retried after a second. `rusplay-net` is a
   dev-dependency only, for the browser in its test.
 - Cargo features are pure forwarding, none on by default so the default build stays pure Rust and
@@ -62,11 +65,29 @@ paths:
   reconnect, and `serve(..)` streams until the client leaves. An accept timeout or a
   locked PIN just issues a new PIN; an error for which `HostError::is_session_failure` holds is
   printed and the loop goes on; any other error ends the daemon.
+- `pin_file.rs` is the unattended pairing path. With `peers.write_pin_file` (default off) the
+  daemon writes each window's PIN to `peers.pin_file`, else `$XDG_RUNTIME_DIR/rusplay/pin` (an
+  unset or relative `XDG_RUNTIME_DIR` with no `peers.pin_file` is `NoRuntimeDirectory` at start),
+  next to the stderr line. The directory is created mode 0700 and the file written mode 0600 to
+  a `.tmp` sibling and renamed, so a reader never sees a partial PIN; the file is removed as soon
+  as `accept` returns (paired, timed out, locked) and on exit, and a failed write is printed
+  and does not stop the window. `rusplay-hostd pin` prints that file's PIN (`NoWindowOpen`
+  when it is absent). `dist/systemd/rusplay-hostd.service` is a user unit
+  (`PartOf=graphical-session.target`, `Restart=on-failure`) expecting the binary at
+  `/usr/bin/rusplay-hostd`; the portal grant already survives restarts through
+  `capture.restore_token_file`. There is still no control socket (`hostd-control-socket`).
 - `stats.rs` drives a session to its end: `wait_logging` polls `HostStream::is_finished` every
   100 ms, prints a one-line `HostStats` summary (RTT, frame, keyframe, datagram, loss, audio,
   cursor and input counters) to stderr every `network.stats_log_interval_ms` (default 10000, `0`
   turns the periodic line off) and always prints a final `session summary` line, read just before
   `wait` joins the stages, even when the session ends in an error.
+  With `network.stats_json` (default off) every periodic line and the final one are also
+  written to stdout as one JSON object per line (`stats_json.rs`, written by hand, no
+  `serde_json`): `{"event":"stats","phase":"interval"|"final","unix_ms":..,` then every
+  `HostStats` counter under its field name, `rtt_us` for the round trip and `null` for a
+  value not measured yet. The human lines stay on stderr, so stdout carries only JSON. A test
+  compares the emitted keys with the `Debug` output of `HostStats`, so a new counter that is
+  not added to the line fails it.
 - A useful daemon today is built with
   `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the

@@ -1,0 +1,14 @@
+[Unit]
+Description=Rusplay headless host
+Wants=pipewire.service
+After=graphical-session.target pipewire.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rusplay-hostd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

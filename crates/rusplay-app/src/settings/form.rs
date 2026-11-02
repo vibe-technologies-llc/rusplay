@@ -594,6 +594,7 @@ mod tests {
         base.peers.host_name = Some("living room".to_owned());
         base.peers.client_name = Some("desk".to_owned());
         base.peers.client_file = Some("/tmp/rusplay-hosts".into());
+        base.peers.pin_file = Some("/tmp/rusplay-pin".into());
         base.audio.flac.compression_level = 5;
         base.audio.opus.bitrate_kbps = 128;
         base.video.color.matrix = Some(MatrixCoefficients::Bt601);

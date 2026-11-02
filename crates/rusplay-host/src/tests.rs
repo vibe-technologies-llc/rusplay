@@ -998,6 +998,26 @@ fn stopping_the_host_says_goodbye_and_keeps_the_last_frame_for_the_next_client()
 }
 
 #[test]
+fn the_busy_flag_is_raised_for_the_life_of_a_stream() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let busy = fixture.host.busy_flag();
+    let serving = fixture.serve(Some(pin()), feed(2), fake_factory(&bitrate));
+
+    let before = busy.load(Ordering::Relaxed);
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let during = busy.load(Ordering::Relaxed);
+    stream.stop().unwrap();
+    let after = busy.load(Ordering::Relaxed);
+
+    assert!(!before);
+    assert!(during);
+    assert!(!after);
+}
+
+#[test]
 fn a_silent_client_times_out() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
