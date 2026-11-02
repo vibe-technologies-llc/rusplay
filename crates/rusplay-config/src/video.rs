@@ -374,25 +374,25 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    fn with_resolution(width: u32, height: u32) -> VideoConfig {
+        VideoConfig {
+            resolution: Some(Resolution::new(width, height)),
+            ..VideoConfig::default()
+        }
+    }
+
     #[test]
     fn stream_resolution_with_a_zero_side_is_rejected() {
-        let mut config = VideoConfig::default();
-
-        config.resolution = Some(Resolution::new(1920, 1080));
-        assert!(config.validate().is_ok());
-
-        config.resolution = Some(Resolution::new(0, 1080));
+        assert!(with_resolution(1920, 1080).validate().is_ok());
         assert!(matches!(
-            config.validate(),
+            with_resolution(0, 1080).validate(),
             Err(ConfigError::EmptyStreamResolution {
                 width: 0,
                 height: 1080
             })
         ));
-
-        config.resolution = Some(Resolution::new(1920, 0));
         assert!(matches!(
-            config.validate(),
+            with_resolution(1920, 0).validate(),
             Err(ConfigError::EmptyStreamResolution {
                 width: 1920,
                 height: 0
