@@ -1086,6 +1086,39 @@ fn hevc_parameter_sets_parse_back() {
 }
 
 #[test]
+fn hevc_slice_header_carries_only_the_poc_lsb() {
+    let format = yuv420(BitDepth::Eight);
+    let stream = HevcStream::new(HevcProfile::for_format(format), info(format, RESOLUTION));
+
+    for (order, lsb) in [
+        (1, 1),
+        (65_535, 65_535),
+        (65_536, 0),
+        (65_537, 1),
+        (131_075, 3),
+        (i32::MAX, 65_535),
+    ] {
+        let mut data = stream.vps();
+        data.extend(stream.sps());
+        data.extend(stream.pps());
+        data.extend(HevcStream::slice_header(false, order).bytes);
+        let mut parser = H265Parser::default();
+        let mut cursor = Cursor::new(data.as_slice());
+
+        let vps = H265Nalu::next(&mut cursor).unwrap();
+        parser.parse_vps(&vps).unwrap();
+        let sps = H265Nalu::next(&mut cursor).unwrap();
+        parser.parse_sps(&sps).unwrap();
+        let pps = H265Nalu::next(&mut cursor).unwrap();
+        parser.parse_pps(&pps).unwrap();
+        let slice = H265Nalu::next(&mut cursor).unwrap();
+        let slice = parser.parse_slice_header(slice).unwrap();
+
+        assert_eq!(slice.header.pic_order_cnt_lsb, lsb, "order {order}");
+    }
+}
+
+#[test]
 fn av1_headers_parse_back() {
     for (format, profile) in [
         (yuv420(BitDepth::Ten), Av1Profile::Main),

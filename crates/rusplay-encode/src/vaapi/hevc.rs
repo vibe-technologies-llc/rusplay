@@ -20,6 +20,7 @@ const LOG2_MIN_TB: u32 = 2;
 const LOG2_MAX_TB: u32 = 5;
 const MAX_TRANSFORM_HIERARCHY_DEPTH: u32 = 2;
 const LOG2_MAX_POC_LSB: u32 = 16;
+const POC_LSB_MASK: i32 = (1 << LOG2_MAX_POC_LSB) - 1;
 const MAX_MERGE_CANDIDATES: u8 = 5;
 const DEFAULT_QP: u8 = 26;
 const MAX_MV_LENGTH_LOG2: u32 = 15;
@@ -420,7 +421,10 @@ impl HevcStream {
             SLICE_TYPE_P
         }));
         if !keyframe {
-            rbsp.bits(u64::try_from(order).unwrap_or(0), LOG2_MAX_POC_LSB);
+            rbsp.bits(
+                u64::try_from(order & POC_LSB_MASK).unwrap_or(0),
+                LOG2_MAX_POC_LSB,
+            );
             rbsp.flag(true);
         }
         rbsp.flag(true);
@@ -576,7 +580,7 @@ impl HevcStream {
             self.reference = None;
         }
 
-        let order = i32::try_from(picture.index % (1 << LOG2_MAX_POC_LSB)).unwrap_or(0);
+        let order = i32::try_from(picture.index).unwrap_or(i32::MAX);
         let sequence = sequence_buffer(context, picture, || {
             self.sequence_parameters(picture.bits_per_second)
         })?;

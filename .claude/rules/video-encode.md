@@ -146,7 +146,9 @@ paths:
   periods in the sequence parameters are `0xffff`, since the picture type of every frame is set by
   Rusplay. H.264 uses POC type 2, a 16-bit `frame_num`, `max_num_reorder_frames` 0 and
   `max_dec_frame_buffering` 1; HEVC uses 64x64 CTBs, 8x8 minimum CBs, a single SPS short-term RPS
-  {-1} and no temporal MVP; AV1 uses 8-bit order hints, refreshes slot 0 from LAST
+  {-1} and no temporal MVP (the VA parameters carry the unwrapped picture order count since the
+  last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 16-bit
+  LSB; radeonsi decodes identically across the 65536th frame either way); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
   (`primary_ref_frame` 0) and one tile unless the size forces more. A temporal delimiter is
   prepended when the driver output lacks one, so every AV1 packet is a temporal unit.
 - Rate control: `Cbr` maps to `VA_RC_CBR`, `Vbr` to `VA_RC_VBR` with the maximum as
