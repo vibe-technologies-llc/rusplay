@@ -129,7 +129,7 @@ paths:
   (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
   line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
   underruns) appear only while non-zero. The figures are client side only: the end-to-end time
-  waits on `stream-capture-timestamps`.
+  waits on `app-stream-stats-end-to-end`.
 
 ## Settings
 
