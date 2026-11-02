@@ -1,16 +1,13 @@
-use std::{collections::VecDeque, net::SocketAddr};
+use std::net::SocketAddr;
 
 use rusplay_protocol::{PeerId, ReconnectMessage};
 
 use crate::{NetError, PeerStore, ReconnectOutput, ReconnectResponder, busy::busy_reply};
 
-const MAX_TRACKED_ORIGINS: usize = 16;
-
 #[derive(Debug)]
 pub struct SessionTakeover {
     peer: PeerId,
     responder: ReconnectResponder,
-    origins: VecDeque<(u32, SocketAddr)>,
 }
 
 impl SessionTakeover {
@@ -18,7 +15,6 @@ impl SessionTakeover {
         Self {
             peer,
             responder: ReconnectResponder::new(),
-            origins: VecDeque::new(),
         }
     }
 
@@ -33,36 +29,16 @@ impl SessionTakeover {
         store: &PeerStore,
     ) -> Result<ReconnectOutput, NetError> {
         match ReconnectMessage::from_datagram(datagram)? {
-            ReconnectMessage::Hello { attempt, peer, .. } if peer == self.peer => {
-                self.remember_origin(attempt, from);
-                self.responder.handle(datagram, store)
+            ReconnectMessage::Hello { peer, .. } if peer == self.peer => {
+                self.responder.handle(datagram, from, store)
             }
             ReconnectMessage::Hello { .. } => Ok(ReconnectOutput {
                 reply: busy_reply(datagram),
                 accepted: None,
             }),
-            ReconnectMessage::Proof { attempt, .. } if self.origin_of(attempt) == Some(from) => {
-                self.responder.handle(datagram, store)
-            }
+            ReconnectMessage::Proof { .. } => self.responder.handle(datagram, from, store),
             _ => Ok(ReconnectOutput::default()),
         }
-    }
-
-    fn remember_origin(&mut self, attempt: u32, from: SocketAddr) {
-        if self.origin_of(attempt).is_some() {
-            return;
-        }
-        if self.origins.len() >= MAX_TRACKED_ORIGINS {
-            self.origins.pop_front();
-        }
-        self.origins.push_back((attempt, from));
-    }
-
-    fn origin_of(&self, attempt: u32) -> Option<SocketAddr> {
-        self.origins
-            .iter()
-            .find(|(tracked, _)| *tracked == attempt)
-            .map(|(_, address)| *address)
     }
 }
 

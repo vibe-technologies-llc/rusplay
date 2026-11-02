@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rusplay_config::NetworkConfig;
 use rusplay_protocol::PacketHeader;
 use rustix::net::sockopt;
@@ -65,6 +65,7 @@ pub struct Transport {
     mtu: u16,
     session: RwLock<Option<Arc<SessionCipher>>>,
     rejected: AtomicU64,
+    read_timeout: Mutex<Option<Duration>>,
 }
 
 impl Transport {
@@ -93,6 +94,7 @@ impl Transport {
             mtu: options.mtu,
             session: RwLock::new(None),
             rejected: AtomicU64::new(0),
+            read_timeout: Mutex::new(None),
         })
     }
 
@@ -115,6 +117,20 @@ impl Transport {
 
     pub(crate) fn socket(&self) -> &UdpSocket {
         &self.socket
+    }
+
+    pub(crate) fn set_read_timeout_cached(&self, timeout: Duration) -> Result<(), NetError> {
+        let mut applied = self.read_timeout.lock();
+        if *applied == Some(timeout) {
+            return Ok(());
+        }
+
+        self.socket
+            .set_read_timeout(Some(timeout))
+            .map_err(NetError::ReadTimeout)?;
+        *applied = Some(timeout);
+
+        Ok(())
     }
 
     pub fn install_session(&self, keys: &SessionKeys) {
@@ -236,9 +252,7 @@ impl Transport {
                 return Ok(None);
             }
 
-            self.socket
-                .set_read_timeout(Some(remaining))
-                .map_err(NetError::ReadTimeout)?;
+            self.set_read_timeout_cached(remaining)?;
 
             match self.socket.recv_from(buf) {
                 Ok((len, from)) => {

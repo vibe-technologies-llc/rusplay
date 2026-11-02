@@ -28,6 +28,7 @@ pub struct StreamDescription {
 }
 
 impl StreamDescription {
+    pub const MAX_DIMENSION: u32 = 16_384;
     pub const MAX_ENCODED_LEN: usize = FIXED_LEN
         + CHROMATICITIES_LEN
         + MASTERING_FIXED_LEN
@@ -112,7 +113,7 @@ impl StreamDescription {
     pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, ProtocolError> {
         let generation = reader.u32()?;
         let codec = read_codec(reader.u8()?)?;
-        let resolution = Resolution::new(reader.u32()?, reader.u32()?);
+        let resolution = read_resolution(reader.u32()?, reader.u32()?)?;
         let format = PixelFormat {
             chroma: read_chroma(reader.u8()?)?,
             depth: read_depth(reader.u8()?)?,
@@ -129,6 +130,7 @@ impl StreamDescription {
         };
         let reference_white_nits = reader.u32()?;
         let peak_nits = reader.u32()?;
+        read_levels(reference_white_nits, peak_nits)?;
 
         let flags = reader.u8()?;
         if flags & !KNOWN_HDR_FLAGS != 0 {
@@ -137,11 +139,7 @@ impl StreamDescription {
         let mastering = if flags & HAS_MASTERING == 0 {
             None
         } else {
-            Some(MasteringDisplay {
-                primaries: read_primaries(reader)?,
-                max_nits: read_luminance(reader.u32()?)?,
-                min_nits: read_luminance(reader.u32()?)?,
-            })
+            Some(read_mastering(reader)?)
         };
         let content_light = if flags & HAS_CONTENT_LIGHT == 0 {
             None
@@ -282,6 +280,59 @@ fn read_matrix(code: u8) -> Result<Option<MatrixCoefficients>, ProtocolError> {
         .find(|matrix| matrix.h273_code() == code)
         .map(Some)
         .ok_or(ProtocolError::UnknownMatrixCoefficients(code))
+}
+
+fn read_resolution(width: u32, height: u32) -> Result<Resolution, ProtocolError> {
+    let axis = 1..=StreamDescription::MAX_DIMENSION;
+
+    if axis.contains(&width) && axis.contains(&height) {
+        Ok(Resolution::new(width, height))
+    } else {
+        Err(ProtocolError::ResolutionOutOfRange {
+            width,
+            height,
+            max: StreamDescription::MAX_DIMENSION,
+        })
+    }
+}
+
+fn read_levels(reference_white_nits: u32, peak_nits: u32) -> Result<(), ProtocolError> {
+    let levels = HdrLevels {
+        reference_white_nits,
+        peak_nits,
+        ..HdrLevels::default()
+    };
+
+    if !levels.reference_white_in_range() {
+        return Err(ProtocolError::ReferenceWhiteOutOfRange(
+            reference_white_nits,
+        ));
+    }
+    if !levels.peak_in_range() {
+        return Err(ProtocolError::PeakOutOfRange(peak_nits));
+    }
+
+    Ok(())
+}
+
+fn read_mastering(reader: &mut Reader<'_>) -> Result<MasteringDisplay, ProtocolError> {
+    let primaries = read_primaries(reader)?;
+    let max_units = reader.u32()?;
+    let min_units = reader.u32()?;
+    let mastering = MasteringDisplay {
+        primaries,
+        max_nits: read_luminance(max_units)?,
+        min_nits: read_luminance(min_units)?,
+    };
+
+    if mastering.is_ordered() {
+        Ok(mastering)
+    } else {
+        Err(ProtocolError::MasteringLuminanceInverted {
+            min_units,
+            max_units,
+        })
+    }
 }
 
 fn read_luminance(units: u32) -> Result<Luminance, ProtocolError> {
@@ -464,6 +515,88 @@ pub(crate) mod tests {
         );
         assert_eq!(corrupt(18, 2), Err(ProtocolError::UnknownColorRange(2)));
         assert_eq!(corrupt(27, 4), Err(ProtocolError::UnknownHdrFlags(4)));
+    }
+
+    #[test]
+    fn a_resolution_outside_the_bounds_is_rejected() {
+        let mut out = Vec::new();
+        sdr_description().write(&mut out);
+        let with = |width: u32, height: u32| {
+            let mut bytes = out.clone();
+            bytes[5..9].copy_from_slice(&width.to_be_bytes());
+            bytes[9..13].copy_from_slice(&height.to_be_bytes());
+            StreamDescription::read(&mut Reader::new(&bytes, 0))
+        };
+
+        for (width, height) in [
+            (0, 1080),
+            (1920, 0),
+            (u32::MAX, 1080),
+            (1920, StreamDescription::MAX_DIMENSION + 1),
+        ] {
+            assert_eq!(
+                with(width, height),
+                Err(ProtocolError::ResolutionOutOfRange {
+                    width,
+                    height,
+                    max: StreamDescription::MAX_DIMENSION,
+                })
+            );
+        }
+        assert!(
+            with(
+                StreamDescription::MAX_DIMENSION,
+                StreamDescription::MAX_DIMENSION
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn luminance_levels_outside_the_bounds_are_rejected() {
+        let mut out = Vec::new();
+        sdr_description().write(&mut out);
+        let with = |white: u32, peak: u32| {
+            let mut bytes = out.clone();
+            bytes[19..23].copy_from_slice(&white.to_be_bytes());
+            bytes[23..27].copy_from_slice(&peak.to_be_bytes());
+            StreamDescription::read(&mut Reader::new(&bytes, 0))
+        };
+
+        assert_eq!(
+            with(0, 1000),
+            Err(ProtocolError::ReferenceWhiteOutOfRange(0))
+        );
+        assert_eq!(
+            with(10_001, 1000),
+            Err(ProtocolError::ReferenceWhiteOutOfRange(10_001))
+        );
+        assert_eq!(with(203, 0), Err(ProtocolError::PeakOutOfRange(0)));
+        assert_eq!(
+            with(203, u32::MAX),
+            Err(ProtocolError::PeakOutOfRange(u32::MAX))
+        );
+        assert!(with(1, 10_000).is_ok());
+    }
+
+    #[test]
+    fn an_inverted_mastering_range_is_rejected() {
+        let mut description = hdr_description();
+        description.color.hdr.mastering = Some(MasteringDisplay {
+            primaries: ColorPrimaries::NAMED[0],
+            max_nits: Luminance::from_units(50).unwrap(),
+            min_nits: Luminance::from_units(4000).unwrap(),
+        });
+        let mut out = Vec::new();
+        description.write(&mut out);
+
+        assert_eq!(
+            StreamDescription::read(&mut Reader::new(&out, 0)),
+            Err(ProtocolError::MasteringLuminanceInverted {
+                min_units: 4000,
+                max_units: 50,
+            })
+        );
     }
 
     #[test]

@@ -36,6 +36,8 @@ pub enum ProtocolError {
     DiscoveryNameTooLong { len: usize, max: usize },
     #[error("host name is not valid utf-8")]
     InvalidDiscoveryName,
+    #[error("host name contains a control character")]
+    DiscoveryNameControlCharacter,
     #[error("client name of {len} bytes exceeds the limit of {max}")]
     ClientNameTooLong { len: usize, max: usize },
     #[error("client name is not valid utf-8")]
@@ -84,4 +86,14 @@ pub enum ProtocolError {
     UnknownFormatBits(u32),
     #[error("luminance of {0} units of 0.0001 cd/m² exceeds 10000 cd/m²")]
     LuminanceOutOfRange(u32),
+    #[error("stream resolution {width}x{height} is outside 1..={max} on an axis")]
+    ResolutionOutOfRange { width: u32, height: u32, max: u32 },
+    #[error("reference white of {0} nits is outside 1..=10000")]
+    ReferenceWhiteOutOfRange(u32),
+    #[error("peak luminance of {0} nits is outside 1..=10000")]
+    PeakOutOfRange(u32),
+    #[error(
+        "mastering display minimum of {min_units} is not below its maximum of {max_units} units of 0.0001 cd/m²"
+    )]
+    MasteringLuminanceInverted { min_units: u32, max_units: u32 },
 }

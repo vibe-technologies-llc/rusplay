@@ -61,6 +61,10 @@ pub enum ConfigError {
     AntiringingOutOfRange(f32),
     #[error("reassembly timeout must be greater than zero")]
     ZeroReassemblyTimeout,
+    #[error("reassembly pending frame limit must be greater than zero")]
+    ZeroReassemblyPendingFrames,
+    #[error("reassembly fragment limit must be greater than zero")]
+    ZeroReassemblyFragments,
     #[error("control retransmit timeout must be greater than zero")]
     ZeroControlRetransmit,
     #[error("discovery port must be greater than zero")]
@@ -195,6 +199,8 @@ impl ConfigError {
             Self::FecOverheadOutOfRange(_) => Some("network.fec_overhead_percent"),
             Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
             Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
+            Self::ZeroReassemblyPendingFrames => Some("network.reassembly_max_pending_frames"),
+            Self::ZeroReassemblyFragments => Some("network.reassembly_max_fragments"),
             Self::ZeroControlRetransmit => Some("network.control_retransmit_ms"),
             Self::ZeroDiscoveryPort => Some("network.discovery_port"),
             Self::ZeroDiscoveryScan => Some("network.discovery_scan_ms"),

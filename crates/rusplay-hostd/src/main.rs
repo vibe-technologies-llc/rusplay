@@ -80,6 +80,7 @@ fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {
 
 fn manage_peers(config: &Config, action: &PeersAction) -> Result<(), HostdError> {
     let mut store = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
+    warn_if_exposed(&store);
 
     match action {
         PeersAction::List => print!("{}", render_list(&store)),
@@ -94,8 +95,18 @@ fn manage_peers(config: &Config, action: &PeersAction) -> Result<(), HostdError>
     Ok(())
 }
 
+fn warn_if_exposed(store: &PeerStore) {
+    if let Some(exposure) = store.exposure() {
+        eprintln!(
+            "rusplay-hostd: warning: the peer store {} {exposure}",
+            store.path().display()
+        );
+    }
+}
+
 fn serve(config: Config) -> Result<(), HostdError> {
     let peers = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
+    warn_if_exposed(&peers);
     let gpu = Gpu::open()?;
     let portal = open_portal(&config, &gpu)?;
     let feed = portal.feed;

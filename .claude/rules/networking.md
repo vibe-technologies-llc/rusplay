@@ -51,7 +51,10 @@ paths:
   the socket buffer filled on a non-blocking socket, so the caller re-queues the tail).
   Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,
   `MSG_WAITFORONE`, returns as soon as one datagram is in; `recv_batch_timeout` sets
-  `SO_RCVTIMEO` first and returns 0 when nothing came). rustix has no `recvmmsg`, so that call
+  `SO_RCVTIMEO` first, only when it differs from the value the transport last applied
+  (`recv_from_timeout` shares that cache), and returns 0 when nothing came). The `RecvBatch` owns
+  the name, iovec and `mmsghdr` arrays and re-arms them in place on every call, so a receive
+  allocates nothing; it holds raw pointers while armed and is therefore not `Send`. rustix has no `recvmmsg`, so that call
   is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets. The host spreads each frame over
@@ -88,8 +91,9 @@ paths:
   tag, depth bits): the host's configured format, so `is_fallback` tells the client when the
   stream is a negotiated fallback (format negotiation, below). Variable length, at most 77 bytes
   with its tag (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
-  through `Chromaticities::new`, luminance through `Luminance::from_units`), each failure its own
-  `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
+  through `Chromaticities::new`, luminance through `Luminance::from_units`, each resolution axis in
+  `1..=StreamDescription::MAX_DIMENSION` (16384), reference white and peak in `1..=10000` nits and
+  mastering minimum below maximum), each failure its own `ProtocolError`. Delivery is unordered, so receivers keep only a newer generation.
 - `ControlMessage::Hello { version, formats }` (tag 0, 7 bytes): the u16 protocol version, then
   a big-endian u32 `FormatSet` (`rusplay-core`), one bit per `CodecFormat` at
   `codec * 9 + chroma * 3 + depth` (codec H.264, HEVC, AV1; chroma 4:2:0, 4:2:2, 4:4:4; depth 8,
@@ -172,13 +176,24 @@ paths:
 - The SPAKE2 secret feeds HKDF-SHA256 (salted with the attempt id) into two confirmation keys and
   two ChaCha20-Poly1305 session keys, one per direction. Each side proves it derived the same
   secret (HKDF-based tags over the label, attempt and both key shares, compared in constant time);
-  a wrong PIN fails on the client at `Reply` and on the host at `Confirm`.
+  a wrong PIN fails on the client at `Reply` and on the host at `Confirm`. A wrong `Confirm` is
+  answered `Rejected(WrongPin)` but leaves the attempt in place, as a bad reconnect `Proof` does,
+  because the attempt id travels in clear and one forged datagram must not end the genuine pairing
+  in flight; the confirmation is fixed by the client's key share, so repeating it grants no
+  further guess. The initiator and `reconnect_as_client` still end at once on a `Rejected` from the
+  host address: a rejection cannot be authenticated before keys exist, a spoofer who can forge one
+  could equally drop the traffic, and ignoring it would only delay `Busy` and `Locked` feedback
+  to the user until the timeout.
 - Online guessing is bounded by `network.pairing_max_attempts`: every fresh `Start` that gets a
   `Reply` costs one attempt, because the host's confirmation already lets a hostile client test one
   PIN. A retransmitted `Start` (same attempt id) is answered from cache for free. Once the budget
   is spent the host answers `Rejected(Locked)` and `pair_as_host` returns `PairingLocked`; a
   completed pairing consumes the PIN. The PIN has `network.pairing_pin_digits` digits and
   `Pin::generate` draws it from the OS random source without modulo bias.
+- `PairingResponder::handle` takes the datagram's source address and binds each attempt to the
+  address its `Start` came from: a `Confirm` or a retransmitted `Start` from any other address is
+  ignored, so a replay of the unsealed final message from elsewhere cannot make the host install
+  keys for the wrong peer.
 - `PairingInitiator`/`PairingResponder` are sans-IO; `pair_as_client`/`pair_as_host` drive them over
   a blocking `Transport` with retransmits every `network.control_retransmit_ms` until
   `network.pairing_timeout_ms`, and the host lingers a few retransmit intervals after success to
@@ -205,8 +220,8 @@ paths:
   `ReconnectResponder` for the session's `PeerId`. A `Hello` for any other peer, known or not, is
   `Busy`; a `Hello` for the session's peer runs the full mutual challenge-response against the
   `PeerStore`, from whichever address it arrives (a restarted client has a new port, a roaming
-  one a new IP). The address of a `Hello` is recorded per attempt and a `Proof` is honoured only
-  from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
+  one a new IP). `ReconnectResponder` records the address of a `Hello` per attempt and honours a
+  `Proof` only from that same address, so a sniffed proof replayed from elsewhere changes nothing; a source
   address alone is never trusted. Only the final `Accepted` yields keys, and only then does the
   host act (`host.md`). A forged proof is `Rejected(Authentication)` and leaves the session as it
   was. Takeover stays within one address family, since the packetizers are sized for it.
@@ -225,8 +240,12 @@ paths:
 - Files live in `$XDG_STATE_HOME/rusplay/` (fallback `~/.local/state/rusplay/`, relative values
   ignored): `paired-clients` for the host, `paired-hosts` for the client. `peers.host_file` and
   `peers.client_file` override them (`PeerStore::open_host`/`open_client`). The directory is
-  created `0700`; writes go to a freshly created `0600` staging file that is synced and renamed over
-  the store, so a crash leaves the old file and a stale permissive staging file is never reused.
+  created `0700`, and an existing default state directory owned by the user is tightened to
+  `0700` when the store opens (a directory named through `peers.host_file`/`peers.client_file` is
+  never touched). `load` zeroizes the text holding the hex secrets and
+  `PeerStore::exposure` reports a store file that is group or world readable or owned by another
+  user (`StoreExposure`), for the caller to warn on; `rusplay-hostd` prints it. Writes go to a
+  freshly created `0600` staging file that is synced and renamed over the store, so a crash leaves the old file and a stale permissive staging file is never reused.
   `remember` and `forget` persist before they change the in-memory list, so a failed write changes
   nothing. `forget` is the revocation API; the host shares the store as
   `RwLock<PeerStore>` so a forget applies to the next datagram. Another process can edit the
@@ -242,10 +261,15 @@ paths:
   peer id, attempt and both nonces, each under its own label, so a proof proves knowledge of the
   secret and freshness from both sides, a reflected message never verifies, and session keys are
   never reused across reconnects. The client checks the host proof before it sends its own.
-- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps the last 16
-  attempts (retransmitted `Hello`/`Proof` are answered from cache), re-checks the store when the
+- The secret is 256 bits, so reconnect has no attempt budget. `ReconnectResponder` keeps up to 64
+  attempts, each bound to the address of its `Hello` (retransmitted `Hello`/`Proof` from that
+  address are answered from cache, from any other address ignored), re-checks the store when the
   `Proof` arrives, and keeps an attempt alive after a bad `Proof` so a forged one cannot spoil the
-  genuine client's attempt. An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
+  genuine client's attempt. A source IP may hold at most 4 attempts and evicts its own oldest
+  (answered first) when it starts another; when the whole table is full an answered attempt goes
+  first, then the oldest attempt of the source holding the most, so one flooding host cannot push
+  another's attempt out. Floods from many spoofed addresses can still do it (the `PeerId` is
+  cleartext in the `Hello`). An unknown or forgotten id is `Rejected(UnknownPeer)`; the client then
   falls back to PIN pairing.
 - `reconnect_as_client`/`reconnect_as_host` mirror the pairing drivers, bounded by
   `network.reconnect_timeout_ms`; the host lingers after success to repeat `Accepted`.
@@ -267,7 +291,17 @@ paths:
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen
-  frame creates no state. Fragment count is capped by `ReassemblyLimits::max_fragments`.
+  frame creates no state. A pending frame owns one zero-initialised buffer of
+  `fragment_count * shard_len`, allocated once the count and shard length are known (the first
+  non-final data fragment or any parity packet); fragments are written at `index * shard_len` and
+  FEC decodes straight from those slots, so assembly truncates the buffer instead of copying. A
+  final fragment that arrives before the shard length is known waits in a side buffer until it is.
+  Fragment count is capped by `ReassemblyLimits::max_fragments`
+  (`network.reassembly_max_fragments`, default 65535, the most the wire format can number) and
+  the pending frames by `network.reassembly_max_pending_frames` (default 8). A sender that lowers
+  the fragment cap must give its `Packetizer` the same number through `with_max_fragments`, which
+  then returns `FrameTooLarge` above it, so a frame is refused at the sender rather than rejected
+  packet by packet at the receiver.
 - Latency first: when a frame completes, every older pending frame is reported
   `ReassemblyEvent::FrameLost` immediately and its late packets are dropped as stale. Pending
   frames are also lost when they exceed `max_pending_frames` or live longer than

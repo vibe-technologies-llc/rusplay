@@ -114,7 +114,7 @@ fn answer_pairing(
     datagram: &[u8],
     from: SocketAddr,
 ) -> Result<Option<Client>, HostError> {
-    let output = match responder.handle(datagram) {
+    let output = match responder.handle(datagram, from) {
         Ok(output) => output,
         Err(NetError::Protocol(_) | NetError::PairingKeyExchange(_)) => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -161,7 +161,7 @@ fn answer_reconnect(
     datagram: &[u8],
     from: SocketAddr,
 ) -> Result<Option<Client>, HostError> {
-    let output = match responder.handle(datagram, &peers.read()) {
+    let output = match responder.handle(datagram, from, &peers.read()) {
         Ok(output) => output,
         Err(NetError::Protocol(_)) => return Ok(None),
         Err(error) => return Err(error.into()),

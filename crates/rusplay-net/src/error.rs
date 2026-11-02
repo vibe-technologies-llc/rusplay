@@ -79,6 +79,8 @@ pub enum NetError {
     PeerStoreRead { path: PathBuf, source: io::Error },
     #[error("failed to write the peer store {path}")]
     PeerStoreWrite { path: PathBuf, source: io::Error },
+    #[error("failed to secure the peer store directory {path}")]
+    PeerStoreDirectory { path: PathBuf, source: io::Error },
     #[error("peer store {path} is corrupt at line {line}")]
     PeerStoreCorrupt { path: PathBuf, line: usize },
     #[error("datagram of {size} bytes exceeds the {mtu} byte mtu")]

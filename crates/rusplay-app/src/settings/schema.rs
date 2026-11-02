@@ -803,6 +803,20 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Network,
+        "Transport",
+        "network.reassembly_max_pending_frames",
+        "Reassembly pending frames",
+        U8,
+    ),
+    field(
+        Section::Network,
+        "Transport",
+        "network.reassembly_max_fragments",
+        "Reassembly fragment limit",
+        U16,
+    ),
+    field(
+        Section::Network,
         "Control",
         "network.control_retransmit_ms",
         "Retransmit interval",
