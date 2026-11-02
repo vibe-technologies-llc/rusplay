@@ -10,7 +10,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_config::ScalingConfig;
-use rusplay_core::{Resolution, Timestamp};
+use rusplay_core::{ChromaSiting, Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
     ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
@@ -238,18 +238,15 @@ impl PresentStage {
         let device = &self.gpu.device;
         let route = self.color.route(device, decoded, display)?;
 
-        let (layout, input) = match &video.decoded.buffer {
-            DecodedBuffer::Cpu(_) => (PlaneLayout::Planar, UnpackInput::Upload),
-            DecodedBuffer::DmaBuf(frame) => {
-                let importer = match &mut self.importer {
-                    Some(importer) => importer,
-                    None => self.importer.insert(DmaBufImporter::new(device)?),
-                };
-                let planes = importer.import(&describe(frame.image())?)?;
-                (PlaneLayout::SemiPlanar, UnpackInput::Planes(planes))
-            }
-        };
-        let settings = convert_settings(&self.options, source, decoded, route.unpack, layout);
+        let (layout, input) = unpack_input(&mut self.importer, device, &video.decoded.buffer)?;
+        let settings = convert_settings(
+            &self.options,
+            source,
+            decoded,
+            route.unpack,
+            layout,
+            video.siting,
+        );
         let unpacker = ensure_unpacker(&self.pipelines, device, &mut self.unpacker, settings)?;
 
         let lease = match &video.decoded.buffer {
@@ -336,6 +333,24 @@ impl PresentStage {
         self.retained = Some(retained);
 
         Ok(())
+    }
+}
+
+fn unpack_input(
+    importer: &mut Option<DmaBufImporter>,
+    device: &wgpu::Device,
+    buffer: &DecodedBuffer,
+) -> Result<(PlaneLayout, UnpackInput), ClientError> {
+    match buffer {
+        DecodedBuffer::Cpu(_) => Ok((PlaneLayout::Planar, UnpackInput::Upload)),
+        DecodedBuffer::DmaBuf(frame) => {
+            let importer = match importer {
+                Some(importer) => importer,
+                None => importer.insert(DmaBufImporter::new(device)?),
+            };
+            let planes = importer.import(&describe(frame.image())?)?;
+            Ok((PlaneLayout::SemiPlanar, UnpackInput::Planes(planes)))
+        }
     }
 }
 
@@ -465,6 +480,7 @@ fn convert_settings(
     color: FrameColor,
     output: OutputLight,
     layout: PlaneLayout,
+    signalled_siting: Option<ChromaSiting>,
 ) -> RgbConvertSettings {
     RgbConvertSettings {
         resolution,
@@ -475,7 +491,7 @@ fn convert_settings(
         transfer: color.space.transfer,
         output,
         chroma_filter: options.scaling.upscale.chroma_filter,
-        chroma_siting: options.scaling.chroma_siting,
+        chroma_siting: signalled_siting.unwrap_or(options.scaling.chroma_siting),
         row_alignment: UPLOAD_ROW_ALIGNMENT,
     }
 }
@@ -679,6 +695,62 @@ fn create_texture(device: &wgpu::Device, label: &str, resolution: Resolution) ->
     })
 }
 
+#[cfg(test)]
+mod siting_tests {
+    use rusplay_config::Config;
+    use rusplay_core::{BitDepth, ChromaSubsampling, ColorSpace, PixelFormat};
+
+    use super::*;
+
+    fn settings_for(configured: ChromaSiting, signalled: Option<ChromaSiting>) -> ChromaSiting {
+        let mut scaling = Config::default().scaling;
+        scaling.chroma_siting = configured;
+        let options = PresentOptions {
+            scaling,
+            mapping: MappingOptions::from(&Config::default().color),
+            display: ColorVolume::srgb_display(),
+        };
+        let color = FrameColor::of_stream(
+            ColorSpace::default(),
+            PixelFormat {
+                chroma: ChromaSubsampling::Yuv420,
+                depth: BitDepth::Eight,
+            },
+        );
+
+        convert_settings(
+            &options,
+            Resolution::new(64, 64),
+            color,
+            OutputLight::Encoded,
+            PlaneLayout::Planar,
+            signalled,
+        )
+        .chroma_siting
+    }
+
+    #[test]
+    fn the_signalled_siting_wins_over_the_configured_one() {
+        assert_eq!(
+            settings_for(ChromaSiting::Left, Some(ChromaSiting::Center)),
+            ChromaSiting::Center
+        );
+        assert_eq!(
+            settings_for(ChromaSiting::Center, Some(ChromaSiting::Left)),
+            ChromaSiting::Left
+        );
+    }
+
+    #[test]
+    fn an_unsignalled_stream_uses_the_configured_siting() {
+        assert_eq!(
+            settings_for(ChromaSiting::Center, None),
+            ChromaSiting::Center
+        );
+        assert_eq!(settings_for(ChromaSiting::Left, None), ChromaSiting::Left);
+    }
+}
+
 #[cfg(all(test, feature = "software", feature = "vaapi"))]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -811,11 +883,13 @@ mod tests {
             let Some(picture) = decoder.decode(&frame).unwrap() else {
                 continue;
             };
+            let siting = picture.color.chroma_siting;
             let video = DecodedVideo {
                 decoded: picture,
                 number,
                 keyframe: frame.keyframe,
                 color: config.video.color,
+                siting,
                 captured_micros: 0,
                 received_at: Instant::now(),
                 decoded_at: Instant::now(),

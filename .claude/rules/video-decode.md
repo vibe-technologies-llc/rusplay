@@ -149,7 +149,7 @@ paths:
   primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
   colour reader both go through it.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
-  header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
+  header when each picture is decoded, and so does the chroma siting (`SignalledColor::chroma_siting`: VUI `chroma_sample_loc_type_top_field`, AV1 `chroma_sample_position`, rav1d's `chr` in the software decoder); mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
   (emulation prevention removed) and AV1 metadata OBUs. `HdrTracker` keeps them per coded video
   sequence: an IDR (H.264), an IRAP (HEVC) or a key frame (AV1) replaces them with what its access

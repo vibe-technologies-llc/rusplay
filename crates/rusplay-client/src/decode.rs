@@ -8,7 +8,7 @@ use std::{
 };
 
 use rusplay_config::VideoDecoderConfig;
-use rusplay_core::{Codec, ColorSpace};
+use rusplay_core::{ChromaSiting, Codec, ColorSpace};
 use rusplay_decode::{DecodeError, DecodedFrame, VideoDecoder};
 
 use crate::{
@@ -26,6 +26,7 @@ pub(crate) struct DecodedVideo {
     pub number: u32,
     pub keyframe: bool,
     pub color: ColorSpace,
+    pub siting: Option<ChromaSiting>,
     pub captured_micros: u64,
     pub received_at: Instant,
     pub decoded_at: Instant,
@@ -118,6 +119,7 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
             Ok(Some(picture)) => {
                 links.counters.frames_decoded.increment();
                 let color = picture.color.over(video.stream.color);
+                let siting = picture.color.chroma_siting;
                 let decoded_at = Instant::now();
                 if let Some(latency) = links
                     .counters
@@ -131,6 +133,7 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
                     number: video.number,
                     keyframe: video.frame.keyframe,
                     color,
+                    siting,
                     captured_micros: video.captured_micros,
                     received_at: video.received_at,
                     decoded_at,

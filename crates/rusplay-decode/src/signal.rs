@@ -112,8 +112,12 @@ fn vui_color(
     full_range: bool,
     description_present: bool,
     codes: [u32; 3],
+    chroma_location: Option<u32>,
 ) -> SignalledColor {
     let mut color = SignalledColor::default();
+    if let Some(location) = chroma_location {
+        color = color.with_vui_chroma_location(location);
+    }
     if !signal_type_present {
         return color;
     }
@@ -139,6 +143,8 @@ pub(crate) fn h264_color(sps: &H264Sps) -> SignalledColor {
             u32::from(vui.transfer_characteristics),
             u32::from(vui.matrix_coefficients),
         ],
+        (sps.vui_parameters_present_flag && vui.chroma_loc_info_present_flag)
+            .then_some(u32::from(vui.chroma_sample_loc_type_top_field)),
     )
 }
 
@@ -154,12 +160,16 @@ pub(crate) fn hevc_color(sps: &HevcSps) -> SignalledColor {
             vui.transfer_characteristics,
             vui.matrix_coeffs,
         ],
+        (sps.vui_parameters_present_flag && vui.chroma_loc_info_present_flag)
+            .then_some(vui.chroma_sample_loc_type_top_field),
     )
 }
 
 pub(crate) fn av1_color(sequence: &SequenceHeaderObu) -> SignalledColor {
     let color = &sequence.color_config;
-    let signalled = SignalledColor::default().with_full_range(color.color_range);
+    let signalled = SignalledColor::default()
+        .with_full_range(color.color_range)
+        .with_av1_chroma_position(color.chroma_sample_position as u32);
     if !color.color_description_present_flag {
         return signalled;
     }
@@ -259,7 +269,7 @@ fn content_light_of(body: &[u8], len: usize) -> Option<ContentLightLevel> {
 #[cfg(test)]
 mod tests {
     use rusplay_core::{
-        ColorPrimaries, ColorRange, Luminance, MatrixCoefficients, TransferFunction,
+        ChromaSiting, ColorPrimaries, ColorRange, Luminance, MatrixCoefficients, TransferFunction,
     };
 
     use super::*;
@@ -352,9 +362,9 @@ mod tests {
 
     #[test]
     fn vui_without_a_colour_description_signals_only_the_range() {
-        let range_only = vui_color(true, false, false, [9, 16, 9]);
-        let described = vui_color(true, true, true, [9, 16, 9]);
-        let absent = vui_color(false, true, true, [9, 16, 9]);
+        let range_only = vui_color(true, false, false, [9, 16, 9], None);
+        let described = vui_color(true, true, true, [9, 16, 9], None);
+        let absent = vui_color(false, true, true, [9, 16, 9], None);
 
         assert_eq!(
             range_only,
@@ -368,5 +378,22 @@ mod tests {
         assert_eq!(described.matrix, Some(MatrixCoefficients::Bt2020Ncl));
         assert_eq!(described.range, Some(ColorRange::Full));
         assert_eq!(absent, SignalledColor::default());
+    }
+
+    #[test]
+    fn vui_chroma_location_is_signalled_without_a_signal_type() {
+        let centred = vui_color(false, false, false, [2, 2, 2], Some(1));
+        let left = vui_color(true, true, true, [9, 16, 9], Some(0));
+        let absent = vui_color(true, true, true, [9, 16, 9], None);
+
+        assert_eq!(
+            centred,
+            SignalledColor {
+                chroma_siting: Some(ChromaSiting::Center),
+                ..SignalledColor::default()
+            }
+        );
+        assert_eq!(left.chroma_siting, Some(ChromaSiting::Left));
+        assert_eq!(absent.chroma_siting, None);
     }
 }

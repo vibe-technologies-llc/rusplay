@@ -110,7 +110,7 @@ paths:
   between at most two scratch textures at the source resolution and the last one writes the
   output texture, so a frame that needs no colour pass and no scaling is unpacked straight into
   it. Each pooled output texture and scratch texture keeps its view beside it (`Image`,
-  `Retained::image`), so the stages' bind group caches hit every frame. Chroma siting is `scaling.chroma_siting` (default `Left`), which must match the host's: the stream does not signal it and the decoder does not report it yet.
+  `Retained::image`), so the stages' bind group caches hit every frame. Chroma siting is the one the decoder read from the bitstream (`DecodedVideo::siting`, from `SignalledColor::chroma_siting`) and `scaling.chroma_siting` (default `Left`) only when the stream signals none; the host does not write it into its own streams yet, so for those the config must match the host's.
 - The present stage keeps the last frame's pre-scale image (`Retained`: the scratch texture the
   scaler read, or the output texture itself when the frame was not scaled, no copy) with the
   frame's metadata. `ClientStream::set_target` with a changed target nudges the decoded `Slot`
