@@ -1,6 +1,8 @@
 #![cfg(feature = "vaapi")]
 
 mod common;
+#[path = "../src/hardware.rs"]
+mod hardware;
 
 use std::path::Path;
 
@@ -14,13 +16,16 @@ const REORDER_DELAY_LIMIT: usize = 3;
 
 fn open(codec: Codec) -> Option<VaapiDecoder> {
     let config = VaapiDecoderConfig::default();
-    if !Path::new(&config.device).exists() {
+    if !hardware::device_present(Path::new(&config.device)) {
         return None;
     }
 
     match VaapiDecoder::new(codec, &config) {
         Ok(decoder) => Some(decoder),
-        Err(DecodeError::CodecUnsupported { .. }) => None,
+        Err(error @ DecodeError::CodecUnsupported { .. }) => {
+            hardware::unsupported(&error);
+            None
+        }
         Err(error) => panic!("opening the {codec} vaapi decoder: {error}"),
     }
 }
@@ -43,8 +48,10 @@ fn decode_every_packet(
             Ok(Some(output)) => output,
             Ok(None) => panic!("no picture for the packet at {:?}", frame.timestamp),
             Err(
-                DecodeError::ChromaUnsupported { .. } | DecodeError::BitDepthUnsupported { .. },
+                error @ (DecodeError::ChromaUnsupported { .. }
+                | DecodeError::BitDepthUnsupported { .. }),
             ) => {
+                hardware::unsupported(&error);
                 return;
             }
             Err(error) => panic!("decoding the packet at {:?}: {error}", frame.timestamp),

@@ -9,12 +9,8 @@ mod error;
     feature = "vaapi",
     feature = "nvenc"
 ))]
-mod hdr;
-pub mod input;
-#[cfg(feature = "nvenc")]
-mod nvenc;
-#[cfg(any(feature = "vaapi", feature = "nvenc"))]
-mod obu;
+#[cfg(all(test, any(feature = "vaapi", feature = "nvenc")))]
+mod hardware;
 #[cfg(any(
     feature = "x264",
     feature = "x265",
@@ -22,6 +18,12 @@ mod obu;
     feature = "vaapi",
     feature = "nvenc"
 ))]
+mod hdr;
+pub mod input;
+#[cfg(feature = "nvenc")]
+mod nvenc;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+mod obu;
 mod rate;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod software;

@@ -7,6 +7,8 @@ mod dmabuf;
 mod error;
 mod export;
 mod gpu;
+#[cfg(test)]
+mod hardware;
 mod kernel;
 mod linearise;
 mod polar;

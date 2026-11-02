@@ -24,7 +24,7 @@ use rusplay_core::{
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
 use crate::{
-    EncodeError, VideoEncoder, capabilities,
+    EncodeError, VideoEncoder, capabilities, hardware,
     hdr::fixtures::{hdr10_color, signalled},
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
@@ -75,7 +75,7 @@ fn with_vaapi(config: VideoConfig, edit: impl FnOnce(&mut VaapiConfig)) -> Video
 }
 
 fn device_present() -> bool {
-    Path::new(&VaapiConfig::default().device).exists()
+    hardware::device_present(Path::new(&VaapiConfig::default().device))
 }
 
 fn try_open(config: &VideoConfig) -> Option<Box<dyn VideoEncoder>> {
@@ -86,11 +86,14 @@ fn try_open(config: &VideoConfig) -> Option<Box<dyn VideoEncoder>> {
     match open(config) {
         Ok(encoder) => Some(encoder),
         Err(
-            EncodeError::CodecUnsupported { .. }
+            error @ (EncodeError::CodecUnsupported { .. }
             | EncodeError::ChromaUnsupported { .. }
             | EncodeError::BitDepthUnsupported { .. }
-            | EncodeError::ResolutionUnsupported { .. },
-        ) => None,
+            | EncodeError::ResolutionUnsupported { .. }),
+        ) => {
+            hardware::unsupported(&error);
+            None
+        }
         Err(error) => panic!("opening the {} vaapi encoder: {error}", config.codec),
     }
 }
@@ -259,7 +262,10 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
 fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<Picture>> {
     let mut decoder = match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
         Ok(decoder) => decoder,
-        Err(rusplay_decode::DecodeError::CodecUnsupported { .. }) => return None,
+        Err(error @ rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
+            hardware::unsupported(&error);
+            return None;
+        }
         Err(error) => panic!("opening the {codec} vaapi decoder: {error}"),
     };
     let display = Display::open(&VaapiConfig::default().device).unwrap();
@@ -548,11 +554,17 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
         };
         let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, 3));
 
-        if let Ok(mut decoder) = VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
-            for packet in &packets {
-                let output = decoder.decode(packet).unwrap().unwrap();
-                assert_eq!(output.color, expected, "{codec} through vaapi");
+        match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
+            Ok(mut decoder) => {
+                for packet in &packets {
+                    let output = decoder.decode(packet).unwrap().unwrap();
+                    assert_eq!(output.color, expected, "{codec} through vaapi");
+                }
             }
+            Err(error @ rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
+                hardware::unsupported(&error);
+            }
+            Err(error) => panic!("opening the {codec} vaapi decoder: {error}"),
         }
         if codec == Codec::Av1 {
             let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig {

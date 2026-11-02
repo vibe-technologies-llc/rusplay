@@ -248,10 +248,12 @@ mod portal {
 
         #[test]
         fn the_gpu_never_offers_the_implicit_modifier() {
-            let Ok(gpu) = Gpu::open() else {
+            let Some(gpu) = crate::hardware::require(Gpu::open().ok(), "a wgpu device") else {
                 return;
             };
-            let Ok(importer) = DmaBufImporter::new(&gpu.device) else {
+            let Some(importer) =
+                crate::hardware::require(DmaBufImporter::new(&gpu.device).ok(), "dma-buf import")
+            else {
                 return;
             };
 

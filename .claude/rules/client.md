@@ -253,7 +253,7 @@ paths:
   rule and cursor messages. The test host also records `StreamKind::Microphone` datagrams, which
   the microphone tests reassemble. They connect with `connect_with_audio` (or
   `connect_with_devices` for a scripted microphone) and a capturing output, so they need no
-  PipeWire, and return early without a GPU adapter.
+  PipeWire, and skip visibly (`src/hardware.rs`; a failure under `RUSPLAY_REQUIRE_HW=1`) without a GPU adapter.
 - The loopback tests are written to hold on a loaded machine, without timeouts stretched to
   hide a race. The test host sends no `Goodbye`; a test waits until the last frame it sent is
   presented (`settle`) and then stops the client, so nothing is cut off mid-decode. The decode

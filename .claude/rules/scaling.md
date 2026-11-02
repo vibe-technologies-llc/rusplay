@@ -281,10 +281,10 @@ paths:
 - WGSL follows the style rules too: no comments. Naga rejects WGSL reserved words as names
   (`target` is one), so a shader that only fails at pipeline creation is caught by the GPU tests.
 - GPU tests run headless on the first high-performance adapter (`testing::gpu`, shared through a
-  `OnceLock`, created with `device_descriptor`) and return early when no adapter exists, so
-  GPU-less machines pass. DMA-BUF tests build `LINEAR` buffers from a sealed memfd through
+  `OnceLock`, created with `device_descriptor`) and skip visibly when no adapter exists (`src/hardware.rs`), so
+  GPU-less machines pass unless `RUSPLAY_REQUIRE_HW=1` is set. DMA-BUF tests build `LINEAR` buffers from a sealed memfd through
   `/dev/udmabuf` (`rusplay_scale::udmabuf::create`, public behind the `udmabuf` feature so the
-  host's tests can use it too) and also return early when it or the import feature is missing. Each pass is
+  host's tests can use it too) and also skip visibly when it or the import feature is missing. Each pass is
   compared with a CPU reference in `reference.rs` built from the same `TapTable`s and kernels,
   with clamp-to-edge addressing and `f16` rounding of every stored texel, to within a few
   `rgba16float` ulps (`4/1024`). Test images are quantised to `f16` before upload so the

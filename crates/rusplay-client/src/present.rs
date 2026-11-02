@@ -766,6 +766,10 @@ mod tests {
     const RGBA16F_BYTES: u32 = 8;
 
     fn gpu() -> Option<Gpu> {
+        crate::hardware::require(open_gpu(), "a wgpu device with dma-buf import")
+    }
+
+    fn open_gpu() -> Option<Gpu> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -850,7 +854,14 @@ mod tests {
         clip: &str,
         target: Option<Resolution>,
     ) -> Option<Vec<Vec<u8>>> {
-        let mut decoder = rusplay_decode::open(Codec::Av1, backend).ok()?;
+        let mut decoder = match rusplay_decode::open(Codec::Av1, backend) {
+            Ok(decoder) => decoder,
+            Err(rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
+                crate::hardware::unsupported("an av1 decoder");
+                return None;
+            }
+            Err(error) => panic!("opening the av1 decoder: {error}"),
+        };
         let config = Config::default();
         let presented = Arc::new(Mutex::new(Vec::new()));
         let sink = {
@@ -911,7 +922,11 @@ mod tests {
         let Some(gpu) = gpu() else {
             return;
         };
-        let vaapi = VideoDecoderConfig::Vaapi(VaapiDecoderConfig::default());
+        let vaapi_config = VaapiDecoderConfig::default();
+        if !crate::hardware::device_present(&vaapi_config.device) {
+            return;
+        }
+        let vaapi = VideoDecoderConfig::Vaapi(vaapi_config);
         let software = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
 
         for clip in ["av1-420-8bit.ivf", "av1-420-10bit.ivf"] {

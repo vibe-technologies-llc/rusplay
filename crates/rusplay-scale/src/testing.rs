@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use half::f16;
 
-use crate::{Scaler, scaler::resolution_pair};
+use crate::{Scaler, hardware, scaler::resolution_pair};
 
 pub(crate) const RGBA16F_BYTES: u32 = 8;
 pub(crate) const RGBA16F_TOLERANCE: f32 = 4.0 / 1024.0;
@@ -15,8 +15,11 @@ pub(crate) struct Gpu {
 pub(crate) fn gpu() -> Option<&'static Gpu> {
     static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
 
-    GPU.get_or_init(|| pollster::block_on(request_gpu()))
-        .as_ref()
+    hardware::require(
+        GPU.get_or_init(|| pollster::block_on(request_gpu()))
+            .as_ref(),
+        "a wgpu adapter and device",
+    )
 }
 
 async fn request_gpu() -> Option<Gpu> {

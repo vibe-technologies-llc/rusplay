@@ -10,7 +10,7 @@ use crate::{
     ChromaSiting, ColorConverter, ColorLut, ColorLutSettings, ColorMapSettings, ColorVolume,
     ConvertSettings, DEFAULT_LUT_SIZE, DEFAULT_ROW_ALIGNMENT, FrameLayout, InputLight,
     LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
-    ScalePipelines, YuvFrame,
+    ScalePipelines, YuvFrame, hardware,
     testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
     udmabuf::PAGE_BYTES,
 };
@@ -31,8 +31,10 @@ struct Fixture {
 
 fn fixture() -> Option<Fixture> {
     let gpu = testing::gpu()?;
-    let importer = DmaBufImporter::new(&gpu.device).ok()?;
-    udmabuf(&[0]).map(|_| Fixture { gpu, importer })
+    let importer = hardware::require(DmaBufImporter::new(&gpu.device).ok(), "dma-buf import")?;
+    hardware::require(udmabuf(&[0]), "udmabuf")?;
+
+    Some(Fixture { gpu, importer })
 }
 
 fn single_plane(fd: &OwnedFd, fourcc: u32, size: (u32, u32), stride: u64) -> DmaBuf<'_> {

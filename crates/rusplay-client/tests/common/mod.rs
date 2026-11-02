@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 
+#[path = "../../src/hardware.rs"]
+mod hardware;
+
 use std::{
     fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -54,8 +57,11 @@ pub const HOST_CLOCK_SKEW: Duration = Duration::from_secs(3_600);
 pub fn gpu() -> Option<Gpu> {
     static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
 
-    GPU.get_or_init(|| pollster::block_on(request_gpu()))
-        .clone()
+    hardware::require(
+        GPU.get_or_init(|| pollster::block_on(request_gpu()))
+            .clone(),
+        "a wgpu adapter and device",
+    )
 }
 
 async fn request_gpu() -> Option<Gpu> {

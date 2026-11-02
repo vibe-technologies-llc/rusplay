@@ -11,6 +11,7 @@ use rusplay_core::{Codec, EncodedFrame, Resolution, Timestamp};
 
 use crate::{
     BitstreamUnit, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder, fixtures as common,
+    hardware,
     vaapi::{
         VaapiDecoder,
         crop::{CropOffsets, visible_resolution},
@@ -144,15 +145,25 @@ fn fnv1a(planes: &[Vec<u8>]) -> u64 {
     })
 }
 
-fn assert_pixels(codec: Codec, frames: &[EncodedFrame], expected: &[u64], max_held: usize) {
+fn open_decoder(codec: Codec) -> Option<VaapiDecoder> {
     let config = VaapiDecoderConfig::default();
-    if !Path::new(&config.device).exists() {
-        return;
+    if !hardware::device_present(Path::new(&config.device)) {
+        return None;
     }
-    let mut decoder = match VaapiDecoder::new(codec, &config) {
-        Ok(decoder) => decoder,
-        Err(DecodeError::CodecUnsupported { .. }) => return,
+
+    match VaapiDecoder::new(codec, &config) {
+        Ok(decoder) => Some(decoder),
+        Err(error @ DecodeError::CodecUnsupported { .. }) => {
+            hardware::unsupported(&error);
+            None
+        }
         Err(error) => panic!("opening the {codec} vaapi decoder: {error}"),
+    }
+}
+
+fn assert_pixels(codec: Codec, frames: &[EncodedFrame], expected: &[u64], max_held: usize) {
+    let Some(mut decoder) = open_decoder(codec) else {
+        return;
     };
 
     let mut hashes = Vec::new();
@@ -165,8 +176,10 @@ fn assert_pixels(codec: Codec, frames: &[EncodedFrame], expected: &[u64], max_he
                 continue;
             }
             Err(
-                DecodeError::ChromaUnsupported { .. } | DecodeError::BitDepthUnsupported { .. },
+                error @ (DecodeError::ChromaUnsupported { .. }
+                | DecodeError::BitDepthUnsupported { .. }),
             ) => {
+                hardware::unsupported(&error);
                 return;
             }
             other => panic!("frame {index}: {other:?}"),
@@ -456,16 +469,9 @@ fn assert_reordered_field_stream(
     pictures: &[FieldPicture],
     expected: &[(Field, Field)],
 ) {
-    let config = VaapiDecoderConfig::default();
-    if !Path::new(&config.device).exists() {
-        return;
-    }
-
     for per_frame in [false, true] {
-        let mut decoder = match VaapiDecoder::new(Codec::H264, &config) {
-            Ok(decoder) => decoder,
-            Err(DecodeError::CodecUnsupported { .. }) => return,
-            Err(error) => panic!("opening the h264 vaapi decoder: {error}"),
+        let Some(mut decoder) = open_decoder(Codec::H264) else {
+            return;
         };
 
         let mut outputs = Vec::new();
@@ -708,11 +714,7 @@ fn field_marking_unmarks_a_long_term_field_after_a_non_reference_frame() {
 
 #[test]
 fn an_unpaired_field_is_output_as_its_own_frame() {
-    let config = VaapiDecoderConfig::default();
-    if !Path::new(&config.device).exists() {
-        return;
-    }
-    let Ok(mut decoder) = VaapiDecoder::new(Codec::H264, &config) else {
+    let Some(mut decoder) = open_decoder(Codec::H264) else {
         return;
     };
 

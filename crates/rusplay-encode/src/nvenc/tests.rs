@@ -61,8 +61,11 @@ fn nvenc_of(config: &VideoConfig) -> NvencConfig {
 }
 
 fn hardware() -> Option<Capabilities> {
-    Driver::load(SYSTEM_LIBRARIES).ok()?;
-    capabilities_with(&NvencConfig::default(), SYSTEM_LIBRARIES).ok()
+    let found = Driver::load(SYSTEM_LIBRARIES)
+        .ok()
+        .and_then(|_| capabilities_with(&NvencConfig::default(), SYSTEM_LIBRARIES).ok());
+
+    crate::hardware::require(found, "an nvidia driver with nvenc")
 }
 
 fn timestamp(index: u64) -> Timestamp {
@@ -265,11 +268,14 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
         let mut encoder = crate::open(&config).unwrap();
         let packets = encode_frames(encoder.as_mut(), format, 3);
 
-        if let Ok(mut decoder) = VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
-            for packet in &packets {
-                let output = decoder.decode(packet).unwrap().unwrap();
-                assert_eq!(output.color, expected, "{codec} through vaapi");
+        match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
+            Ok(mut decoder) => {
+                for packet in &packets {
+                    let output = decoder.decode(packet).unwrap().unwrap();
+                    assert_eq!(output.color, expected, "{codec} through vaapi");
+                }
             }
+            Err(error) => crate::hardware::unsupported(&error),
         }
         if codec == Codec::Av1 {
             let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig {
@@ -321,6 +327,7 @@ fn unspecified_resolution_follows_the_first_frame() {
     };
     let format = yuv420(BitDepth::Eight);
     let Some(codec) = found.codecs().into_iter().next() else {
+        crate::hardware::unsupported("an nvenc codec");
         return;
     };
 

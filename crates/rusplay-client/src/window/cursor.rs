@@ -288,6 +288,10 @@ mod tests {
     use crate::Gpu;
 
     fn gpu() -> Option<Gpu> {
+        crate::hardware::require(open_gpu(), "a wgpu adapter and device")
+    }
+
+    fn open_gpu() -> Option<Gpu> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))

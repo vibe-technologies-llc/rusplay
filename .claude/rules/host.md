@@ -346,12 +346,13 @@ paths:
   stripe downscale gives the linear-light or the gamma-light average as configured. DMA-BUF tests
   build udmabuf frames: imported `XR24` and `XR30` give the same codes as the same shared-memory
   frames, `XB24` and `BX24` read their channel order, and an unimportable frame requests the
-  shared-memory fallback (or fails without one). It returns early without a GPU adapter, and the
-  DMA-BUF tests also without `/dev/udmabuf` or the import feature. `src/pipeline/tests/handoff.rs`
-  encodes a moving pattern with VAAPI AV1 (8 and 10-bit, at 640x360 and 402x226) once through the
+  shared-memory fallback (or fails without one). It skips visibly (`src/hardware.rs`, a failure
+  under `RUSPLAY_REQUIRE_HW=1`) without a GPU adapter, and the DMA-BUF tests also without
+  `/dev/udmabuf` or the import feature. `src/pipeline/tests/handoff.rs`
+  encodes a moving pattern with VAAPI AV1 (8 and 10-bit, at 640x360, and at 402x226 in an ignored test tracked in `docs/BUGS.md`) once through the
   hand-off and once through the readback, decodes both with rav1d and requires identical samples
   (the hand-off must also have stayed on), checks that a failing encoder turns the hand-off off,
-  and holds the ignored 4K timing test; each returns early without the backend and format.
+  and holds the ignored 4K timing test; each skips visibly without the backend and format.
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
@@ -372,7 +373,7 @@ paths:
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
   amplitude and the final cursor position and image. Two more cover negotiation end to end:
   SVT-AV1 configured for 4:4:4 falls back to 4:2:0 and the client's description shows it, and
-  an x265 host against the AV1-only software client fails with `NoCommonFormat` on both ends. Each returns early without a GPU adapter or
+  an x265 host against the AV1-only software client fails with `NoCommonFormat` on both ends. Each skips visibly without a GPU adapter or
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins

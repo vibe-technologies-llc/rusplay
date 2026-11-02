@@ -9,6 +9,8 @@ mod encode;
 mod error;
 mod gpu;
 mod handoff;
+#[cfg(test)]
+mod hardware;
 mod input;
 mod link;
 mod mailbox;

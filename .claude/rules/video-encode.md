@@ -188,8 +188,8 @@ paths:
   hardware; on hardware the output is decoded with `rusplay-decode`'s `VaapiDecoder` (and rav1d for
   AV1, on one thread because of `decode-rav1d-cdef-overlap` in `docs/BUGS.md`), the decoded DMA-BUF is read back with `vaGetImage`, and every frame of a smooth moving
   pattern must reach 34 dB luma PSNR, at 400x216 and at 402x226 for cropping. DMA-BUF input comes
-  from exported VA surfaces. Every hardware test returns early when the render node, the codec or
-  the format is missing.
+  from exported VA surfaces. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
+  the format is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing.
 
 ## NVENC (`nvenc` feature)
 
@@ -290,7 +290,7 @@ paths:
   missing-library path (`LibraryNotFound` from both `open` and `capabilities`, and parameter and
   colour errors before any library loads). The hardware tests in `tests.rs` (capabilities against
   `open`, keyframes on start and request with the bitstream agreeing, every rate-control mode,
-  first-frame resolution, AV1 HDR10 through rav1d) return early without the driver; none has run
+  first-frame resolution, AV1 HDR10 through rav1d) skip visibly without the driver (a failure under `RUSPLAY_REQUIRE_HW=1`); none has run
   on NVIDIA hardware yet (`encode-nvenc-hardware` in `docs/FEATURES.md`).
 
 ## Device input

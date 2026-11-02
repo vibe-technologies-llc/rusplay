@@ -247,8 +247,9 @@ paths:
   `NV12`/`P010` planes with ffmpeg's decode of the same fixture (`ffmpeg -i <fixture> -f rawvideo
   -pix_fmt nv12|p010le -`, hashed per frame; the stress clips compare the full display-order
   sequence, with the decoder's expected hold count and `flush` completing it). Regenerated
-  fixtures need new hashes. Every VAAPI test returns early when the render node, the codec or the
-  profile is missing.
+  fixtures need new hashes. Every VAAPI test skips visibly (`src/hardware.rs`) when the codec or
+  the profile is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing; a
+  `VaapiDecoder::new` error other than `CodecUnsupported` fails the test.
 - The reference logic has device-free unit tests next to it: `src/vaapi/h264/dpb/tests.rs` (marking
   by every MMCO, sliding window, initial and modified lists for frames and fields, the three
   order count types), `src/vaapi/hevc/tests.rs` (order count unwrapping, the RPS helpers,
