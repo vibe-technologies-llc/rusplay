@@ -64,6 +64,57 @@ fn recorder() -> (
     (seen, sink)
 }
 
+const NICE_FIELD_AFTER_COMM: usize = 16;
+const TEST_NICE: i8 = 7;
+
+fn current_thread_nice() -> i32 {
+    let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+    let after_comm = &stat[stat.rfind(')').unwrap() + 1..];
+
+    after_comm
+        .split_whitespace()
+        .nth(NICE_FIELD_AFTER_COMM)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+#[test]
+fn the_stage_threads_take_the_configured_nice_value() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.network.frame_thread_nice = TEST_NICE;
+    let session = ClientSession::new(config);
+    let present_nice = Arc::new(Mutex::new(None));
+    let (seen, mut recording) = recorder();
+    let sink = {
+        let present_nice = Arc::clone(&present_nice);
+        move |frame: PresentedFrame| {
+            present_nice.lock().get_or_insert_with(current_thread_nice);
+            recording(frame);
+        }
+    };
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
+    let stats = settle(stream, &seen, common::DEFAULT_FRAMES - 1);
+
+    assert_eq!(*present_nice.lock(), Some(i32::from(TEST_NICE)));
+    assert_eq!(stats.thread_priority_failures, 0);
+}
+
 #[test]
 fn frames_arrive_decoded_at_the_source_resolution() {
     let Some(gpu) = common::gpu() else {

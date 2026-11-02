@@ -72,7 +72,7 @@ fn shm_frame(resolution: Resolution, index: u32) -> Frame {
         },
         timestamp: Timestamp::from_micros(u64::from(index) * 16_667),
         buffer: FrameBuffer::Shm {
-            data: pattern(resolution, index, stride),
+            data: pattern(resolution, index, stride).into(),
             stride,
         },
     }

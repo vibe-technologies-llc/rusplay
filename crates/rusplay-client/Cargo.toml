@@ -31,6 +31,7 @@ rusplay-core.workspace = true
 rusplay-decode.workspace = true
 rusplay-input = { workspace = true, features = ["gamepad"] }
 rusplay-net.workspace = true
+rusplay-priority.workspace = true
 rusplay-protocol.workspace = true
 rusplay-scale.workspace = true
 rustix = { workspace = true, features = ["event", "time"], optional = true }

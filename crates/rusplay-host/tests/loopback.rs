@@ -161,7 +161,10 @@ impl FrameSource for MovingBox {
                 ..ColorSpace::default()
             },
             timestamp: Timestamp::from_micros(u64::from(self.index) * 16_000),
-            buffer: FrameBuffer::Shm { data, stride },
+            buffer: FrameBuffer::Shm {
+                data: data.into(),
+                stride,
+            },
         }))
     }
 }

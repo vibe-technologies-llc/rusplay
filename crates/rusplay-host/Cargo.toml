@@ -26,9 +26,9 @@ rusplay-core.workspace = true
 rusplay-encode.workspace = true
 rusplay-input.workspace = true
 rusplay-net.workspace = true
+rusplay-priority.workspace = true
 rusplay-protocol.workspace = true
 rusplay-scale.workspace = true
-rustix = { workspace = true, features = ["process", "thread"] }
 thiserror.workspace = true
 wgpu.workspace = true
 

@@ -1,4 +1,8 @@
-use std::{fmt, os::fd::OwnedFd};
+use std::{
+    fmt, mem,
+    ops::{Deref, DerefMut},
+    os::fd::OwnedFd,
+};
 
 use crate::{ColorSpace, Resolution, Timestamp};
 
@@ -26,7 +30,7 @@ pub enum FrameBuffer {
         lease: BufferLease,
     },
     Shm {
-        data: Vec<u8>,
+        data: ShmBytes,
         stride: u32,
     },
     OpaqueFd {
@@ -48,6 +52,73 @@ pub struct Frame {
 }
 
 type Release = Box<dyn FnOnce() + Send>;
+type Recycle = Box<dyn FnOnce(Vec<u8>) + Send>;
+
+pub struct ShmBytes {
+    bytes: Vec<u8>,
+    recycle: Option<Recycle>,
+}
+
+impl ShmBytes {
+    pub fn recycled(bytes: Vec<u8>, recycle: impl FnOnce(Vec<u8>) + Send + 'static) -> Self {
+        Self {
+            bytes,
+            recycle: Some(Box::new(recycle)),
+        }
+    }
+
+    pub fn into_vec(mut self) -> Vec<u8> {
+        self.recycle = None;
+        mem::take(&mut self.bytes)
+    }
+}
+
+impl From<Vec<u8>> for ShmBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            recycle: None,
+        }
+    }
+}
+
+impl FromIterator<u8> for ShmBytes {
+    fn from_iter<I: IntoIterator<Item = u8>>(bytes: I) -> Self {
+        Self::from(bytes.into_iter().collect::<Vec<u8>>())
+    }
+}
+
+impl Deref for ShmBytes {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Vec<u8> {
+        &self.bytes
+    }
+}
+
+impl DerefMut for ShmBytes {
+    fn deref_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.bytes
+    }
+}
+
+impl Drop for ShmBytes {
+    fn drop(&mut self) {
+        if let Some(recycle) = self.recycle.take() {
+            recycle(mem::take(&mut self.bytes));
+        }
+    }
+}
+
+impl fmt::Debug for ShmBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ShmBytes")
+            .field("len", &self.bytes.len())
+            .field("recycled", &self.recycle.is_some())
+            .finish()
+    }
+}
 
 pub struct BufferLease {
     release: Option<Release>,
@@ -91,9 +162,32 @@ mod tests {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     };
 
     use super::*;
+
+    #[test]
+    fn dropped_bytes_go_back_to_their_pool_and_detached_bytes_do_not() {
+        let (returned, pool) = mpsc::channel();
+
+        let bytes = ShmBytes::recycled(vec![1, 2, 3], {
+            let returned = returned.clone();
+            move |bytes| returned.send(bytes).unwrap()
+        });
+        let before = pool.try_recv();
+        drop(bytes);
+        let after = pool.try_recv();
+
+        let kept = ShmBytes::recycled(vec![4, 5], move |bytes| returned.send(bytes).unwrap());
+        let detached = kept.into_vec();
+
+        assert!(before.is_err());
+        assert_eq!(after.unwrap(), vec![1, 2, 3]);
+        assert!(pool.try_recv().is_err());
+        assert_eq!(detached, vec![4, 5]);
+        assert_eq!(ShmBytes::from(vec![7]).len(), 1);
+    }
 
     #[test]
     fn a_lease_releases_its_buffer_once_when_dropped() {

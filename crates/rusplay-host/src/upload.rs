@@ -211,7 +211,7 @@ mod tests {
                         color: ColorSpace::default(),
                         timestamp: Timestamp::ZERO,
                         buffer: FrameBuffer::Shm {
-                            data: packed,
+                            data: packed.into(),
                             stride: u32::try_from(planes.luma_stride).unwrap(),
                         },
                     };

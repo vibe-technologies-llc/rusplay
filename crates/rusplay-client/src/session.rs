@@ -18,6 +18,7 @@ use rusplay_net::{
     PairingTiming, PeerRecord, PeerSecret, Pin, ReconnectTiming, Transport, TransportOptions,
     pair_as_client, reconnect_as_client,
 };
+use rusplay_priority::{ThreadRole, ThreadTuning};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{GpuFaults, check_extent};
 
@@ -169,6 +170,7 @@ impl ClientSession {
             stages: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
             counters: Arc::new(Counters::default()),
+            tuning: ThreadTuning::from_config(network),
             target: Arc::new(Mutex::new(None)),
             decoded: Arc::new(Slot::new()),
             format: Arc::new(Mutex::new(None)),
@@ -279,11 +281,20 @@ fn authenticate(
     }
 }
 
+const fn thread_role(stage: Stage) -> Option<ThreadRole> {
+    match stage {
+        Stage::Receive => Some(ThreadRole::TimerDriven),
+        Stage::Decode | Stage::Present => Some(ThreadRole::Frame),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct ClientStream {
     stages: Vec<(Stage, JoinHandle<Result<(), ClientError>>)>,
     stop: Arc<AtomicBool>,
     counters: Arc<Counters>,
+    tuning: ThreadTuning,
     target: SharedTarget,
     decoded: Arc<Slot<decode::DecodedVideo>>,
     format: SharedFormat,
@@ -370,8 +381,16 @@ impl ClientStream {
             None => builder,
         };
 
+        let tuning = self.tuning;
+        let counters = Arc::clone(&self.counters);
         let handle = builder
-            .spawn(body)
+            .spawn(move || {
+                if let Some(role) = thread_role(stage) {
+                    let failures = tuning.apply(role);
+                    counters.thread_priority_failures.add(failures.len() as u64);
+                }
+                body()
+            })
             .map_err(|source| ClientError::SpawnStage { stage, source })?;
         self.stages.push((stage, handle));
 

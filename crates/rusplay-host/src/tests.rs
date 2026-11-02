@@ -114,7 +114,7 @@ impl FrameSource for CountingSource {
             color: ColorSpace::default(),
             timestamp: Timestamp::from_micros(u64::from(self.produced) * 10_000),
             buffer: FrameBuffer::Shm {
-                data: vec![fill; (stride * resolution.height) as usize],
+                data: vec![fill; (stride * resolution.height) as usize].into(),
                 stride,
             },
         }))

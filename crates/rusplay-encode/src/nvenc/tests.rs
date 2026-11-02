@@ -429,7 +429,7 @@ fn opaque_fd_frames_of_another_format_are_refused() {
     let wrong = import_request(&frame, format).unwrap_err();
     frame.format = layout::dma_buf_fourcc(format);
     frame.buffer = FrameBuffer::Shm {
-        data: Vec::new(),
+        data: Vec::new().into(),
         stride: RESOLUTION.width,
     };
     let shm = import_request(&frame, format).unwrap_err();

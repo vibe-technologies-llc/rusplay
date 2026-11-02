@@ -5,10 +5,12 @@ mod lease;
 mod modifier;
 #[cfg(feature = "pipewire")]
 mod pipewire;
+#[cfg(feature = "pipewire")]
+mod pool;
 mod portal;
 mod token;
 
-pub use rusplay_core::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
+pub use rusplay_core::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane, ShmBytes};
 
 #[cfg(feature = "pipewire")]
 pub use crate::pipewire::{PipeWireCapture, StreamOptions, default_formats};

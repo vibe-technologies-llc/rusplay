@@ -51,6 +51,7 @@ use crate::{
     cursor::{CursorTracker, CursorUpdate},
     handoff::{Publisher, Received, Subscriber, latest},
     modifier::FormatModifiers,
+    pool::ShmPool,
 };
 
 const STREAM_NAME: &str = "rusplay-capture";
@@ -274,6 +275,7 @@ struct Worker {
     cursor_publisher: Publisher<CursorUpdate>,
     cursor: CursorTracker,
     held: Rc<RefCell<HeldBuffers>>,
+    shm_pool: ShmPool,
     failure: Failure,
     fallback: ShmFallback,
     control: channel::Sender<Command>,
@@ -474,6 +476,7 @@ impl Worker {
                 stride,
             },
             timestamp,
+            &self.shm_pool,
         )
         .map(Some)
     }
@@ -533,6 +536,7 @@ fn run_worker(
         cursor_publisher: setup.cursor_publisher,
         cursor: CursorTracker::default(),
         held: Rc::clone(&held),
+        shm_pool: ShmPool::default(),
         failure: setup.failure,
         fallback: setup.fallback,
         control: setup.control,

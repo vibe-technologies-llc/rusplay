@@ -214,7 +214,7 @@ pub(crate) mod fixtures {
             timestamp,
             color: ColorSpace::default(),
             buffer: FrameBuffer::Shm {
-                data,
+                data: data.into(),
                 stride: u32::try_from(width * sample).unwrap(),
             },
         }

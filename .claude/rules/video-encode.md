@@ -328,7 +328,7 @@ Software encoders take a `rusplay_core::Frame` whose buffer is `FrameBuffer::Shm
 - `YU12`, `YU16` and `YU24` are the DRM fourccs of the 8-bit planar formats. The 10/12-bit codes
   are a Rusplay convention (the kernel has no 3-plane 16-bit DRM formats): planar, little-endian
   16-bit samples, value in the low bits (10-bit maxes at 1023).
-- `Shm { data, stride }`: `stride` is the luma row pitch in bytes and must be at least
+- `Shm { data, stride }` (`data` is a `ShmBytes`, a `Vec<u8>` that may return to a pool on drop): `stride` is the luma row pitch in bytes and must be at least
   `width * bytes_per_sample`. The three planes follow each other in `data`, Y then U then V, each
   plane `rows * pitch` bytes. The chroma pitch is `ceil(stride / 2)` where chroma is
   horizontally subsampled (4:2:0, 4:2:2) and `stride` for 4:4:4. Chroma rows are `ceil(height / 2)`

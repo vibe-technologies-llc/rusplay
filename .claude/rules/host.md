@@ -50,12 +50,11 @@ paths:
   - `HostSession::busy_flag()` is an `Arc<AtomicBool>` that every `HostStream` raises when it
     is created and lowers when it is dropped (`BusyGuard`), for the discovery responder
     (`rusplay-hostd`) to announce; accepting and pairing alone do not raise it.
-  - The encode, send and control threads apply `ThreadTuning` (`src/priority.rs`) as the first
-    thing they do: `network.frame_thread_nice` (default -5, 0 leaves the thread alone) through
-    `setpriority`, which Linux applies to the calling thread, and, on the send thread only,
-    `network.send_timer_slack_us` (default 1, 0 leaves the kernel's) through
-    `PR_SET_TIMERSLACK`, so the pacer's short sleeps do not overshoot. A refused request (no
-    `RLIMIT_NICE` headroom) is silent and the thread runs at its default.
+  - The encode, send and control threads apply `rusplay_priority::ThreadTuning`
+    (`.claude/rules/priority.md`) as the first thing they do: encode and control as
+    `ThreadRole::Frame`, send as `ThreadRole::TimerDriven`, so only the send thread also lowers its
+    timer slack. A refused request leaves the thread at its default and is counted in
+    `HostStats::thread_priority_failures`.
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
     session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels

@@ -19,6 +19,7 @@ rusplay-encode.path = "crates/rusplay-encode"
 rusplay-host.path = "crates/rusplay-host"
 rusplay-input.path = "crates/rusplay-input"
 rusplay-net.path = "crates/rusplay-net"
+rusplay-priority.path = "crates/rusplay-priority"
 rusplay-protocol.path = "crates/rusplay-protocol"
 rusplay-scale.path = "crates/rusplay-scale"
 
@@ -70,6 +71,7 @@ wayland-backend = { version = "0.3.17", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
 wayland-protocols = { version = "0.32.13", default-features = false }
 wgpu = { version = "30.0.1", default-features = false }
+zbus = { version = "5.19.0", default-features = false }
 zeroize = { version = "1.9.1", default-features = false }
 
 [patch.crates-io]

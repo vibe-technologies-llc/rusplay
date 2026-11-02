@@ -19,7 +19,6 @@ mod negotiate;
 mod outbox;
 mod pipeline;
 mod portal;
-mod priority;
 mod route;
 mod send;
 mod session;

@@ -16,7 +16,7 @@ pub use color::{
     bradford_adaptation, pq_from_nits, pq_to_nits,
 };
 pub use format::{CodecFormat, FormatSet};
-pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
+pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane, ShmBytes};
 pub use media::{EncodedFrame, FrameBytes};
 pub use scale::{ChromaSiting, ScaleFilter};
 pub use stats_report::{JsonLine, StatsPhase, StatsSchedule, unix_millis_now};

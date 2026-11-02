@@ -57,6 +57,7 @@ pub fn line(phase: StatsPhase, unix_ms: u128, stats: &HostStats) -> String {
         .number("input_failures", stats.input_failures)
         .number("rumble_sent", stats.rumble_sent)
         .number("rumble_dropped", stats.rumble_dropped)
+        .number("thread_priority_failures", stats.thread_priority_failures)
         .optional("rtt_us", stats.rtt.map(|rtt| rtt.as_micros()))
         .finish()
 }

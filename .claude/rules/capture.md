@@ -67,7 +67,14 @@ paths:
   description passes through unconstrained. An unfixated colour choice in a negotiated format
   reads as its default. A 10-bit `xBGR_210LE` surface is HDR only when the producer says so.
 - Shared-memory frames are copied out of the mapped buffer (`MAP_BUFFERS`) as `stride × height`
-  bytes from the chunk offset, and the buffer is requeued at once. Buffers whose chunk is empty or
+  bytes from the chunk offset, and the buffer is requeued at once. The copy lands in a `ShmBytes`
+  (`rusplay-core`) taken from the worker's `ShmPool` (`src/pool.rs`), which keeps at most three
+  idle `Vec`s and gets each one back when the frame is dropped, so a 4K frame is a `memcpy`
+  into warm pages, not a fresh allocation and its page faults, and a superseded frame costs no
+  allocation either. The PipeWire buffer is not leased for the frame's life as a DMA-BUF's is: the
+  mapping belongs to libpipewire and is unmapped when the stream goes, which a frame can outlive,
+  so a borrowed view would dangle (a dup of the memfd mapped per frame would pay the same page
+  faults as the allocation). Buffers whose chunk is empty or
   flagged corrupted (cursor-only updates) produce no frame. Frame timestamps are microseconds
   since the stream started, taken on arrival.
 - Frames are DMA-BUF whenever the compositor offers them (`capture.prefer_dmabuf`), so they reach

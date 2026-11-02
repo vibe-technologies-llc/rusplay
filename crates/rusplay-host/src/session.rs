@@ -16,6 +16,7 @@ use rusplay_config::Config;
 use rusplay_net::{
     ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
 };
+use rusplay_priority::{ThreadRole, ThreadTuning};
 
 use crate::{
     CaptureFeed, Client, Gpu, HostError, HostStats, Stage,
@@ -30,7 +31,6 @@ use crate::{
     negotiate::{NegotiatedFormat, configured_format},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
-    priority::ThreadTuning,
     send::{self, Pacing, SendLinks, SendOptions},
     shared::{Shared, StopOnDrop},
 };
@@ -316,6 +316,14 @@ fn send_options(config: &Config) -> SendOptions {
     }
 }
 
+const fn thread_role(stage: Stage) -> Option<ThreadRole> {
+    match stage {
+        Stage::Encode | Stage::Control => Some(ThreadRole::Frame),
+        Stage::Send => Some(ThreadRole::TimerDriven),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub struct HostStream {
     stages: Vec<(Stage, JoinHandle<Result<(), HostError>>)>,
@@ -402,9 +410,16 @@ impl HostStream {
         }
         let guard = StopOnDrop(Arc::clone(&self.shared));
         let tuning = self.tuning;
+        let shared = Arc::clone(&self.shared);
         let spawned = builder.spawn(move || {
             let _guard = guard;
-            tuning.apply(stage);
+            if let Some(role) = thread_role(stage) {
+                let failures = tuning.apply(role);
+                shared
+                    .counters
+                    .thread_priority_failures
+                    .add(failures.len() as u64);
+            }
             body()
         });
 

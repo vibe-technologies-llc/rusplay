@@ -10,7 +10,7 @@ use rusplay_core::Timestamp;
 
 use crate::{
     BufferLease, CaptureError, Frame, FrameBuffer, Plane, modifier::DRM_FORMAT_MOD_INVALID,
-    pipewire::format::NegotiatedFormat,
+    pipewire::format::NegotiatedFormat, pool::ShmPool,
 };
 
 const BYTES_PER_PIXEL: u32 = 4;
@@ -104,6 +104,7 @@ pub(crate) fn shm_frame(
     format: NegotiatedFormat,
     plane: ShmPlane<'_>,
     timestamp: Timestamp,
+    pool: &ShmPool,
 ) -> Result<Frame, CaptureError> {
     let invalid_stride = CaptureError::InvalidStride {
         stride: plane.stride,
@@ -144,7 +145,7 @@ pub(crate) fn shm_frame(
         timestamp,
         color: format.color,
         buffer: FrameBuffer::Shm {
-            data: pixels.to_vec(),
+            data: pool.copy_of(pixels),
             stride,
         },
     })
@@ -290,6 +291,7 @@ mod tests {
                 stride: 12,
             },
             Timestamp::from_micros(5),
+            &ShmPool::default(),
         )
         .unwrap();
 
@@ -297,7 +299,7 @@ mod tests {
             panic!("expected a shared-memory frame");
         };
         assert_eq!(stride, 12);
-        assert_eq!(data, mapped[16..40]);
+        assert_eq!(data[..], mapped[16..40]);
         assert_eq!(frame.timestamp, Timestamp::from_micros(5));
         assert_eq!(frame.resolution, Resolution::new(2, 2));
     }
@@ -314,6 +316,7 @@ mod tests {
                 stride: 8,
             },
             Timestamp::ZERO,
+            &ShmPool::default(),
         );
 
         assert!(matches!(result, Err(CaptureError::InvalidStride { .. })));
@@ -331,6 +334,7 @@ mod tests {
                 stride: -4,
             },
             Timestamp::ZERO,
+            &ShmPool::default(),
         );
 
         assert!(matches!(result, Err(CaptureError::InvalidStride { .. })));
@@ -348,6 +352,7 @@ mod tests {
                 stride: 8,
             },
             Timestamp::ZERO,
+            &ShmPool::default(),
         );
 
         assert!(matches!(

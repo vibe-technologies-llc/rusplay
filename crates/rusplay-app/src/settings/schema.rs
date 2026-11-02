@@ -83,6 +83,7 @@ const POSITIVE_U32: Kind = Kind::Integer {
 };
 
 const NICE: Kind = Kind::Integer { min: -20, max: 19 };
+const RTKIT_PRIORITY: Kind = Kind::Integer { min: 0, max: 99 };
 const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 
 const CODECS: &[&str] = &["h264", "hevc", "av1"];
@@ -832,8 +833,15 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
+        "network.rtkit_priority",
+        "Realtime priority through rtkit",
+        RTKIT_PRIORITY,
+    ),
+    field(
+        Section::Network,
+        "Transport",
         "network.send_timer_slack_us",
-        "Send thread timer slack",
+        "Send and receive thread timer slack",
         U32,
     )
     .unit("us"),

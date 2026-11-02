@@ -113,6 +113,8 @@ pub enum ConfigError {
     PacingWindowOutOfRange(u8),
     #[error("frame thread nice value {0} is outside -20..=19")]
     FrameThreadNiceOutOfRange(i8),
+    #[error("rtkit priority {0} is outside 0..=99")]
+    RtkitPriorityOutOfRange(u8),
     #[error("keepalive interval must be greater than zero")]
     ZeroKeepaliveInterval,
     #[error(
@@ -229,6 +231,7 @@ impl ConfigError {
             Self::ZeroKeyframeRequestInterval => Some("network.keyframe_request_interval_ms"),
             Self::PacingWindowOutOfRange(_) => Some("network.pacing_window_percent"),
             Self::FrameThreadNiceOutOfRange(_) => Some("network.frame_thread_nice"),
+            Self::RtkitPriorityOutOfRange(_) => Some("network.rtkit_priority"),
             Self::ZeroKeepaliveInterval | Self::KeepaliveNotBelowPeerTimeout { .. } => {
                 Some("network.keepalive_interval_ms")
             }

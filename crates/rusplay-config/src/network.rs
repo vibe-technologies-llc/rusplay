@@ -12,6 +12,7 @@ const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
 const PACING_WINDOW_RANGE: RangeInclusive<u8> = 1..=100;
 const NICE_RANGE: RangeInclusive<i8> = -20..=19;
+const RTKIT_PRIORITY_MAX: u8 = 99;
 const KBPS_PER_MBPS: u32 = 1_000;
 const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
@@ -26,6 +27,7 @@ pub struct NetworkConfig {
     pub pacing_window_percent: u8,
     pub pacing_max_mbps: u32,
     pub frame_thread_nice: i8,
+    pub rtkit_priority: u8,
     pub send_timer_slack_us: u32,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
@@ -68,6 +70,7 @@ impl Default for NetworkConfig {
             pacing_window_percent: 50,
             pacing_max_mbps: 0,
             frame_thread_nice: -5,
+            rtkit_priority: 0,
             send_timer_slack_us: 1,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
@@ -123,6 +126,10 @@ impl NetworkConfig {
             return Err(ConfigError::FrameThreadNiceOutOfRange(
                 self.frame_thread_nice,
             ));
+        }
+
+        if self.rtkit_priority > RTKIT_PRIORITY_MAX {
+            return Err(ConfigError::RtkitPriorityOutOfRange(self.rtkit_priority));
         }
 
         if self.reassembly_timeout_ms == 0 {
@@ -372,6 +379,30 @@ mod tests {
 
             assert!(config.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn the_rtkit_priority_is_off_by_default_and_capped_at_the_scheduler_maximum() {
+        assert_eq!(NetworkConfig::default().rtkit_priority, 0);
+
+        for priority in [0, 1, 99] {
+            let config = NetworkConfig {
+                rtkit_priority: priority,
+                ..NetworkConfig::default()
+            };
+
+            assert!(config.validate().is_ok());
+        }
+
+        let config = NetworkConfig {
+            rtkit_priority: 100,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::RtkitPriorityOutOfRange(100))
+        ));
     }
 
     #[test]

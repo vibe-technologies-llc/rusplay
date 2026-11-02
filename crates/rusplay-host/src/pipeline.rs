@@ -634,7 +634,7 @@ impl GpuPipeline {
             color,
             timestamp,
             buffer: FrameBuffer::Shm {
-                data: Vec::new(),
+                data: Vec::new().into(),
                 stride,
             },
         });

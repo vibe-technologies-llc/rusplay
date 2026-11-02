@@ -4743,6 +4743,7 @@ dependencies = [
  "rusplay-decode",
  "rusplay-input",
  "rusplay-net",
+ "rusplay-priority",
  "rusplay-protocol",
  "rusplay-scale",
  "rustix",
@@ -4815,9 +4816,9 @@ dependencies = [
  "rusplay-encode",
  "rusplay-input",
  "rusplay-net",
+ "rusplay-priority",
  "rusplay-protocol",
  "rusplay-scale",
- "rustix",
  "tempfile",
  "thiserror 2.0.21",
  "wgpu 30.0.1",
@@ -4873,6 +4874,16 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "zeroize",
+]
+
+[[package]]
+name = "rusplay-priority"
+version = "0.1.0"
+dependencies = [
+ "rusplay-config",
+ "rustix",
+ "thiserror 2.0.21",
+ "zbus",
 ]
 
 [[package]]
