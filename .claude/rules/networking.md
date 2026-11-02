@@ -172,7 +172,14 @@ paths:
 - The SPAKE2 secret feeds HKDF-SHA256 (salted with the attempt id) into two confirmation keys and
   two ChaCha20-Poly1305 session keys, one per direction. Each side proves it derived the same
   secret (HKDF-based tags over the label, attempt and both key shares, compared in constant time);
-  a wrong PIN fails on the client at `Reply` and on the host at `Confirm`.
+  a wrong PIN fails on the client at `Reply` and on the host at `Confirm`. A wrong `Confirm` is
+  answered `Rejected(WrongPin)` but leaves the attempt in place, as a bad reconnect `Proof` does,
+  because the attempt id travels in clear and one forged datagram must not end the genuine pairing
+  in flight; the confirmation is fixed by the client's key share, so repeating it grants no
+  further guess. The initiator and `reconnect_as_client` still end at once on a `Rejected` from the
+  host address: a rejection cannot be authenticated before keys exist, a spoofer who can forge one
+  could equally drop the traffic, and ignoring it would only delay `Busy` and `Locked` feedback
+  to the user until the timeout.
 - Online guessing is bounded by `network.pairing_max_attempts`: every fresh `Start` that gets a
   `Reply` costs one attempt, because the host's confirmation already lets a hostile client test one
   PIN. A retransmitted `Start` (same attempt id) is answered from cache for free. Once the budget

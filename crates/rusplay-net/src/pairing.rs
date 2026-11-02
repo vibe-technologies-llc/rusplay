@@ -534,7 +534,6 @@ impl PairingResponder {
         };
 
         if !is_equal(&active.expected_confirm, confirm) {
-            self.active = None;
             return rejection(attempt, PairingRejection::WrongPin);
         }
 
@@ -783,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn wrong_confirmation_is_rejected_and_burns_the_attempt() {
+    fn wrong_confirmation_is_rejected_but_the_attempt_survives() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 1);
         let reply = responder
@@ -800,6 +799,7 @@ mod tests {
         .to_datagram()
         .unwrap();
         let output = responder.handle(&forged, ORIGIN).unwrap();
+        let genuine = responder.handle(&start(&initiator), ORIGIN).unwrap();
 
         let rejected = PairingMessage::from_datagram(&output.reply.unwrap()).unwrap();
         assert_eq!(
@@ -810,7 +810,7 @@ mod tests {
             }
         );
         assert!(output.paired.is_none());
-        assert!(responder.is_locked());
+        assert!(genuine.paired.is_some());
     }
 
     #[test]
