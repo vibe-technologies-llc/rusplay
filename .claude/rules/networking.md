@@ -51,7 +51,10 @@ paths:
   the socket buffer filled on a non-blocking socket, so the caller re-queues the tail).
   Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,
   `MSG_WAITFORONE`, returns as soon as one datagram is in; `recv_batch_timeout` sets
-  `SO_RCVTIMEO` first and returns 0 when nothing came). rustix has no `recvmmsg`, so that call
+  `SO_RCVTIMEO` first, only when it differs from the value the transport last applied
+  (`recv_from_timeout` shares that cache), and returns 0 when nothing came). The `RecvBatch` owns
+  the name, iovec and `mmsghdr` arrays and re-arms them in place on every call, so a receive
+  allocates nothing; it holds raw pointers while armed and is therefore not `Send`. rustix has no `recvmmsg`, so that call
   is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets. The host spreads each frame over

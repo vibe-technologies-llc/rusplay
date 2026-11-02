@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     io::{self, IoSlice},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6},
     os::fd::AsRawFd,
@@ -24,6 +25,69 @@ pub struct RecvBatch {
     lengths: Vec<usize>,
     sources: Vec<SocketAddr>,
     filled: usize,
+    call: ReceiveCall,
+}
+
+struct ReceiveCall {
+    names: Vec<[u8; SOCKADDR_LEN]>,
+    iovecs: Vec<libc::iovec>,
+    headers: Vec<libc::mmsghdr>,
+}
+
+impl fmt::Debug for ReceiveCall {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReceiveCall")
+            .field("slots", &self.names.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReceiveCall {
+    fn new(datagrams: usize) -> Self {
+        let empty_iovec = libc::iovec {
+            iov_base: ptr::null_mut(),
+            iov_len: 0,
+        };
+        let empty_header = libc::mmsghdr {
+            msg_hdr: libc::msghdr {
+                msg_name: ptr::null_mut(),
+                msg_namelen: 0,
+                msg_iov: ptr::null_mut(),
+                msg_iovlen: 0,
+                msg_control: ptr::null_mut(),
+                msg_controllen: 0,
+                msg_flags: 0,
+            },
+            msg_len: 0,
+        };
+
+        Self {
+            names: vec![[0; SOCKADDR_LEN]; datagrams],
+            iovecs: vec![empty_iovec; datagrams],
+            headers: vec![empty_header; datagrams],
+        }
+    }
+
+    fn arm(&mut self, buffers: &mut [Vec<u8>]) {
+        let slots = self
+            .names
+            .iter_mut()
+            .zip(self.iovecs.iter_mut())
+            .zip(self.headers.iter_mut())
+            .zip(buffers);
+
+        for (((name, iovec), header), buffer) in slots {
+            iovec.iov_base = buffer.as_mut_ptr().cast();
+            iovec.iov_len = buffer.len();
+            header.msg_hdr.msg_name = ptr::from_mut(name).cast();
+            header.msg_hdr.msg_namelen = SOCKADDR_LEN_C;
+            header.msg_hdr.msg_iov = ptr::from_mut(iovec);
+            header.msg_hdr.msg_iovlen = 1;
+            header.msg_hdr.msg_flags = 0;
+            header.msg_len = 0;
+        }
+    }
 }
 
 impl RecvBatch {
@@ -33,6 +97,7 @@ impl RecvBatch {
             lengths: vec![0; datagrams],
             sources: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0); datagrams],
             filled: 0,
+            call: ReceiveCall::new(datagrams),
         }
     }
 
@@ -110,9 +175,7 @@ impl Transport {
         batch: &mut RecvBatch,
         timeout: Duration,
     ) -> Result<usize, NetError> {
-        self.socket()
-            .set_read_timeout(Some(timeout.max(MIN_READ_TIMEOUT)))
-            .map_err(NetError::ReadTimeout)?;
+        self.set_read_timeout_cached(timeout.max(MIN_READ_TIMEOUT))?;
 
         self.recv_batch(batch)
     }
@@ -123,31 +186,8 @@ impl Transport {
             return Ok(0);
         }
 
-        let mut names = vec![[0u8; SOCKADDR_LEN]; batch.capacity()];
-        let mut iovecs: Vec<libc::iovec> = batch
-            .buffers
-            .iter_mut()
-            .map(|buffer| libc::iovec {
-                iov_base: buffer.as_mut_ptr().cast(),
-                iov_len: buffer.len(),
-            })
-            .collect();
-        let mut headers: Vec<libc::mmsghdr> = names
-            .iter_mut()
-            .zip(iovecs.iter_mut())
-            .map(|(name, iovec)| libc::mmsghdr {
-                msg_hdr: libc::msghdr {
-                    msg_name: ptr::from_mut(name).cast(),
-                    msg_namelen: SOCKADDR_LEN_C,
-                    msg_iov: ptr::from_mut(iovec),
-                    msg_iovlen: 1,
-                    msg_control: ptr::null_mut(),
-                    msg_controllen: 0,
-                    msg_flags: 0,
-                },
-                msg_len: 0,
-            })
-            .collect();
+        batch.call.arm(&mut batch.buffers);
+        let headers = &mut batch.call.headers;
         let count = libc::c_uint::try_from(headers.len()).unwrap_or(libc::c_uint::MAX);
 
         let received = unsafe {
@@ -170,14 +210,16 @@ impl Transport {
         }
 
         let received = usize::try_from(received).unwrap_or(0);
-        for (index, header) in headers.iter().take(received).enumerate() {
+        for index in 0..received {
+            let header = &batch.call.headers[index];
             let truncated = header.msg_hdr.msg_flags & libc::MSG_TRUNC != 0;
-            let source = parse_sockaddr(&names[index][..]);
+            let length_received = header.msg_len as usize;
+            let source = parse_sockaddr(&batch.call.names[index][..]);
 
             let length = match (truncated, source) {
                 (false, Some(source)) => {
                     batch.sources[index] = source;
-                    self.unseal(&mut batch.buffers[index], header.msg_len as usize)
+                    self.unseal(&mut batch.buffers[index], length_received)
                 }
                 _ => None,
             };
@@ -238,6 +280,50 @@ mod tests {
             .iter()
             .map(|(datagram, _)| datagram.to_vec())
             .collect()
+    }
+
+    #[test]
+    fn a_reused_batch_reports_the_source_of_every_call() {
+        let first = bind(LOOPBACK_V4);
+        let second = bind(LOOPBACK_V4);
+        let receiver = bind(LOOPBACK_V4);
+        let peer = receiver.local_addr().unwrap();
+        let mut batch = RecvBatch::new(4, 2048);
+        let timeout = Duration::from_millis(500);
+
+        first.send_batch(&datagrams(2), peer).unwrap();
+        receiver.recv_batch_timeout(&mut batch, timeout).unwrap();
+        let from_first: Vec<SocketAddr> = batch.iter().map(|(_, from)| from).collect();
+
+        second.send_batch(&datagrams(1), peer).unwrap();
+        receiver.recv_batch_timeout(&mut batch, timeout).unwrap();
+        let from_second: Vec<SocketAddr> = batch.iter().map(|(_, from)| from).collect();
+
+        let first_addr = first.local_addr().unwrap();
+        let second_addr = second.local_addr().unwrap();
+        assert_eq!(from_first, [first_addr; 2]);
+        assert_eq!(from_second, [second_addr]);
+    }
+
+    #[test]
+    fn an_unchanged_timeout_is_not_applied_again() {
+        let receiver = bind(LOOPBACK_V4);
+        let timeout = Duration::from_millis(30);
+
+        receiver.set_read_timeout_cached(timeout).unwrap();
+        receiver
+            .socket()
+            .set_read_timeout(Some(Duration::from_secs(60)))
+            .unwrap();
+        receiver.set_read_timeout_cached(timeout).unwrap();
+        let skipped = receiver.socket().read_timeout().unwrap();
+        receiver
+            .set_read_timeout_cached(Duration::from_millis(40))
+            .unwrap();
+        let changed = receiver.socket().read_timeout().unwrap();
+
+        assert_eq!(skipped, Some(Duration::from_secs(60)));
+        assert_eq!(changed, Some(Duration::from_millis(40)));
     }
 
     #[test]
