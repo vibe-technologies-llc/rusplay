@@ -21,7 +21,7 @@ use rusplay_protocol::{
 use crate::{
     HostError,
     accept::{Replay, refresh_peers},
-    input::InputDatagram,
+    datagrams::ForwardedDatagram,
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
@@ -96,8 +96,8 @@ pub(crate) struct ControlLinks {
     pub peer: PeerId,
     pub replay: Replay,
     pub outbox: Arc<ControlOutbox>,
-    pub input: Option<SyncSender<InputDatagram>>,
-    pub microphone: Option<SyncSender<Vec<u8>>>,
+    pub input: Option<SyncSender<ForwardedDatagram>>,
+    pub microphone: Option<SyncSender<ForwardedDatagram>>,
     pub configured: CodecFormat,
 }
 
@@ -372,7 +372,7 @@ impl ControlStage {
             return;
         };
 
-        let forwarded = InputDatagram {
+        let forwarded = ForwardedDatagram {
             epoch: self.links.shared.client.epoch(),
             bytes: datagram.to_vec(),
         };
@@ -389,7 +389,11 @@ impl ControlStage {
             return;
         };
 
-        if let Err(TrySendError::Full(_)) = microphone.try_send(datagram.to_vec()) {
+        let forwarded = ForwardedDatagram {
+            epoch: self.links.shared.client.epoch(),
+            bytes: datagram.to_vec(),
+        };
+        if let Err(TrySendError::Full(_)) = microphone.try_send(forwarded) {
             self.links
                 .shared
                 .counters

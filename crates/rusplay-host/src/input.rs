@@ -13,7 +13,9 @@ use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleComman
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
-use crate::{HostError, Stage, outbox::ControlOutbox, shared::Shared};
+use crate::{
+    HostError, Stage, datagrams::ForwardedDatagram, outbox::ControlOutbox, shared::Shared,
+};
 
 const SERVICE_INTERVAL: Duration = Duration::from_millis(4);
 const IDLE_SERVICE_INTERVAL: Duration = Duration::from_millis(50);
@@ -175,16 +177,10 @@ impl fmt::Debug for InputFeed {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct InputDatagram {
-    pub epoch: u32,
-    pub bytes: Vec<u8>,
-}
-
 pub(crate) struct InputLinks {
     pub shared: Arc<Shared>,
     pub feed: Arc<InputFeed>,
-    pub datagrams: Receiver<InputDatagram>,
+    pub datagrams: Receiver<ForwardedDatagram>,
     pub outbox: Arc<ControlOutbox>,
 }
 
@@ -226,7 +222,7 @@ impl<'a> InputStage<'a> {
     fn serve(
         &mut self,
         target: &mut dyn InputTarget,
-        datagrams: &Receiver<InputDatagram>,
+        datagrams: &Receiver<ForwardedDatagram>,
     ) -> Result<(), HostError> {
         while !self.shared.stopped() {
             self.follow_client(target);
@@ -260,7 +256,7 @@ impl<'a> InputStage<'a> {
         self.epoch = epoch;
     }
 
-    fn admit(&mut self, target: &mut dyn InputTarget, datagram: &InputDatagram) {
+    fn admit(&mut self, target: &mut dyn InputTarget, datagram: &ForwardedDatagram) {
         self.follow_client(target);
 
         if datagram.epoch == self.epoch {
@@ -708,14 +704,14 @@ mod tests {
 
         stage.admit(
             &mut target,
-            &InputDatagram {
+            &ForwardedDatagram {
                 epoch: old_epoch,
                 bytes: datagram(900, &[event(key(1, true))], &[]),
             },
         );
         stage.admit(
             &mut target,
-            &InputDatagram {
+            &ForwardedDatagram {
                 epoch: new_epoch,
                 bytes: datagram(0, &[event(key(2, true))], &[]),
             },

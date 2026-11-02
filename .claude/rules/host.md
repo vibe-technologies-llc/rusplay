@@ -31,8 +31,9 @@ paths:
     keyframe. When the epoch changes the input stage lifts everything the old client held
     (`release_all`), starts a fresh `HeldInput` and `InputSequence`, and the cursor stage resends
     the image. `HostStats::sessions_taken_over` counts them. The old client is simply
-    dropped: its datagrams no longer unseal. The host has no `Reassembler` of its own to reset;
-    the new client's is fresh.
+    dropped: its datagrams no longer unseal. The microphone stage, which numbers nothing itself but
+    follows the client's numbering, starts a fresh `Reassembler` and calls
+    `ConcealingPlayer::restart` when the epoch changes, since a new client numbers packets from 0.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
@@ -93,7 +94,8 @@ paths:
     quality.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
     the audio and cursor stages wait for. `StreamKind::Microphone` datagrams, and `Fec` datagrams
-    that protect it, are forwarded after `Hello` with `try_send` to the microphone stage's bounded
+    that protect it, are forwarded after `Hello` with `try_send` (tagged with the `ClientLink` epoch,
+    and the stage drops one from an earlier epoch) to the microphone stage's bounded
     channel (`audio.decode_queue_packets` datagrams; a full channel counts
     `microphone_packets_dropped`), so the control stage stays the only socket reader.
     Every `network.keepalive_interval_ms` it sends `Keepalive`, whose acknowledgement is the

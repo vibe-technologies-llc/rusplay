@@ -2,6 +2,12 @@ use std::{net::SocketAddr, thread};
 
 use rusplay_net::{NetError, Transport};
 
+#[derive(Debug)]
+pub(crate) struct ForwardedDatagram {
+    pub epoch: u32,
+    pub bytes: Vec<u8>,
+}
+
 pub(crate) fn send_all(
     transport: &Transport,
     client: SocketAddr,
