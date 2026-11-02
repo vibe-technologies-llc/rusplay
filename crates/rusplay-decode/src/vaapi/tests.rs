@@ -2,14 +2,17 @@ mod fields;
 
 use std::{path::Path, rc::Rc};
 
-use cros_codecs::codec::h264::parser::{Level, Profile, Sps, SpsBuilder};
+use cros_codecs::codec::{
+    h264::parser::{Level, Profile, Sps, SpsBuilder},
+    h265::parser::{SliceHeader, Sps as HevcSps},
+};
 use rusplay_config::VaapiDecoderConfig;
 use rusplay_core::{Codec, EncodedFrame, Timestamp};
 
 use crate::{
     DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder, fixtures as common,
     vaapi::{
-        VaapiDecoder, h264,
+        VaapiDecoder, h264, hevc,
         reorder::Depth,
         tests::fields::{Field, FieldPicture, Mmco, Modification},
     },
@@ -343,6 +346,19 @@ fn h264_rejects_a_picture_size_beyond_level_6_2_instead_of_dividing_by_zero() {
 }
 
 #[test]
+fn h264_rejects_a_single_column_picture_taller_than_any_level_allows() {
+    let mut tall = sps(Profile::High, 0);
+    tall.pic_width_in_mbs_minus1 = 0;
+    tall.pic_height_in_map_units_minus1 = u16::MAX;
+    tall.frame_mbs_only_flag = false;
+
+    assert!(matches!(
+        h264::stream_format(&tall),
+        Err(DecodeError::ResolutionUnsupported { .. })
+    ));
+}
+
+#[test]
 fn h264_accepts_the_largest_level_6_2_picture() {
     let mut largest = sps(Profile::High, 0);
     largest.chroma_format_idc = 1;
@@ -353,6 +369,32 @@ fn h264_accepts_the_largest_level_6_2_picture() {
 
     assert_eq!(format.coded.width, 8192);
     assert_eq!(format.coded.height, 4352);
+}
+
+#[test]
+fn hevc_order_count_arithmetic_wraps_on_extreme_values() {
+    const MAX_LSB: i32 = 65536;
+
+    for previous in [i32::MIN, -1, 0, i32::MAX] {
+        for lsb in [0, 1, 32768, 65535] {
+            hevc::following_order_count(previous, lsb, MAX_LSB);
+        }
+    }
+
+    let mut header = SliceHeader::default();
+    header.short_term_ref_pic_set.num_negative_pics = 1;
+    header.short_term_ref_pic_set.num_positive_pics = 1;
+    header.short_term_ref_pic_set.delta_poc_s0[0] = i32::MIN;
+    header.short_term_ref_pic_set.delta_poc_s1[0] = i32::MAX;
+    header.num_long_term_pics = 1;
+    header.delta_poc_msb_present_flag[0] = true;
+    header.delta_poc_msb_cycle_lt[0] = i32::MAX as u32;
+
+    for poc in [i32::MIN, 0, i32::MAX] {
+        let counts = hevc::reference_order_counts(&HevcSps::default(), &header, poc, MAX_LSB);
+
+        assert_eq!(counts.long_term_following.len(), 1);
+    }
 }
 
 #[test]

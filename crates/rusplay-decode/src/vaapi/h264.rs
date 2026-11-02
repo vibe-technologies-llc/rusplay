@@ -27,6 +27,7 @@ const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
 const MAX_MACROBLOCKS: u64 = 139_264;
 const MACROBLOCK_SIZE: u32 = 16;
+const MAX_MACROBLOCK_SPAN: u32 = 1055;
 const BASELINE_PROFILE_IDC: u8 = 66;
 const ZIGZAG_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 const ZIGZAG_8X8: [usize; 64] = [
@@ -66,10 +67,10 @@ impl OpenFrame {
 
     fn record(&mut self, structure: Structure, top: Option<i32>, bottom: Option<i32>, shift: i32) {
         if structure != Structure::Bottom {
-            self.pocs[0] = top.map(|count| count - shift);
+            self.pocs[0] = top.map(|count| count.wrapping_sub(shift));
         }
         if structure != Structure::Top {
-            self.pocs[1] = bottom.map(|count| count - shift);
+            self.pocs[1] = bottom.map(|count| count.wrapping_sub(shift));
         }
     }
 
@@ -374,9 +375,11 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
 
 fn check_size(sps: &Sps) -> Result<(), DecodeError> {
     let (width, height) = (sps.width(), sps.height());
-    let macroblocks = u64::from(width / MACROBLOCK_SIZE) * u64::from(height / MACROBLOCK_SIZE);
+    let (columns, rows) = (width / MACROBLOCK_SIZE, height / MACROBLOCK_SIZE);
+    let macroblocks = u64::from(columns) * u64::from(rows);
 
-    if macroblocks > MAX_MACROBLOCKS {
+    if macroblocks > MAX_MACROBLOCKS || columns > MAX_MACROBLOCK_SPAN || rows > MAX_MACROBLOCK_SPAN
+    {
         return Err(DecodeError::ResolutionUnsupported {
             backend: crate::Backend::Vaapi,
             codec: CODEC,
@@ -452,9 +455,8 @@ fn picture_parameters(
         CurrPic: current,
         ReferenceFrames: [invalid_picture(); MAX_REFERENCE_FRAMES],
         picture_width_in_mbs_minus1: sps.pic_width_in_mbs_minus1,
-        picture_height_in_mbs_minus1: ((sps.pic_height_in_map_units_minus1 + 1)
-            << u16::from(!sps.frame_mbs_only_flag))
-            - 1,
+        picture_height_in_mbs_minus1: u16::try_from(sps.height() / MACROBLOCK_SIZE - 1)
+            .unwrap_or(u16::MAX),
         bit_depth_luma_minus8: sps.bit_depth_luma_minus8,
         bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8,
         num_ref_frames: sps.max_num_ref_frames,
