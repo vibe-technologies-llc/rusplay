@@ -296,7 +296,9 @@ paths:
   resampled with `rusplay-scale`'s `Scaler` (the same upscale or downscale settings as the
   picture, via `present::scale_settings`) into a texture of `round(size * target / space)`,
   rebuilt only when the shape or the scale changes. Its origin is
-  `round((position - hotspot) * target / space)`, clipped by the picture.
+  `round((position - hotspot) * target / space)` (the subtraction saturates), clipped by the
+  picture. A shape whose image or scaled size exceeds the device's `max_texture_dimension_2d` is
+  not drawn and counts once per shape and size in `StreamWindow::cursors_skipped`.
 - Input: `capture_input(&ClientStream, &InputConfig)` attaches a `WaylandCapture` to the same
   `WaylandTarget` (the window's own surface) with `CaptureOptions::from(input)`, sending into
   `ClientStream::input()`, and sets its region from the current layout; every later `set_layout`

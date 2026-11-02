@@ -29,6 +29,7 @@ use crate::{
     ClientError, ClientStream, DisplayImage, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
     cursor::CursorWatcher,
     display::{query_display, resolve_target},
+    stats::Counter,
     window::{
         choice::{Admission, OutputChoice},
         compose::Composer,
@@ -54,6 +55,7 @@ struct Shared {
     pending: Mutex<Pending>,
     wake: Condvar,
     color_target: Mutex<ColorVolume>,
+    cursors_skipped: Arc<Counter>,
 }
 
 impl Shared {
@@ -62,6 +64,7 @@ impl Shared {
             pending: Mutex::new(Pending::default()),
             wake: Condvar::new(),
             color_target: Mutex::new(color_target),
+            cursors_skipped: Arc::new(Counter::default()),
         }
     }
 
@@ -167,7 +170,11 @@ impl StreamWindow {
         let shared = Arc::new(Shared::new(options.output.encoding.target));
         let presenter = Presenter {
             composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
-            cursor_layer: CursorLayer::new(&gpu.device, config.scaling),
+            cursor_layer: CursorLayer::new(
+                &gpu.device,
+                config.scaling,
+                Arc::clone(&shared.cursors_skipped),
+            ),
             gpu: gpu.clone(),
             surface,
             adapter,
@@ -327,6 +334,10 @@ impl StreamWindow {
         self.shared.update(|pending| pending.layout = layout);
 
         Ok(true)
+    }
+
+    pub fn cursors_skipped(&self) -> u64 {
+        self.shared.cursors_skipped.get()
     }
 
     pub fn is_finished(&self) -> bool {

@@ -6,7 +6,7 @@ use rusplay_core::Resolution;
 use rusplay_protocol::CursorImage;
 use rusplay_scale::{ScalePipelines, Scaler};
 
-use crate::{ClientError, CursorState, present, window::compose::CursorPlacement};
+use crate::{ClientError, CursorState, present, stats::Counter, window::compose::CursorPlacement};
 
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const LINEAR_TEXEL_BYTES: u32 = 8;
@@ -32,16 +32,44 @@ pub(crate) struct CursorLayer {
     scaler: Option<Scaler>,
     uploaded: Option<Uploaded>,
     scaled: Option<Scaled>,
+    oversized: Option<Oversized>,
+    skipped: Arc<Counter>,
+}
+
+#[derive(Debug)]
+struct Oversized {
+    image: Arc<CursorImage>,
+    size: Resolution,
 }
 
 impl CursorLayer {
-    pub(crate) fn new(device: &wgpu::Device, scaling: ScalingConfig) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        scaling: ScalingConfig,
+        skipped: Arc<Counter>,
+    ) -> Self {
         Self {
             pipelines: ScalePipelines::new(device),
             scaling,
             scaler: None,
             uploaded: None,
             scaled: None,
+            oversized: None,
+            skipped,
+        }
+    }
+
+    fn skip_oversized(&mut self, image: &Arc<CursorImage>, size: Resolution) {
+        let known = self
+            .oversized
+            .as_ref()
+            .is_some_and(|known| Arc::ptr_eq(&known.image, image) && known.size == size);
+        if !known {
+            self.skipped.increment();
+            self.oversized = Some(Oversized {
+                image: Arc::clone(image),
+                size,
+            });
         }
     }
 
@@ -65,15 +93,22 @@ impl CursorLayer {
             scaled_length(u32::from(image.width), space.width, target.width),
             scaled_length(u32::from(image.height), space.height, target.height),
         );
+        let limit = device.limits().max_texture_dimension_2d;
+        let source = Resolution::new(u32::from(image.width), u32::from(image.height));
+        if !fits(source, limit) || !fits(size, limit) {
+            self.skip_oversized(image, size);
+            return Ok(None);
+        }
+
         let placement = CursorPlacement {
             origin: [
                 scaled_offset(
-                    cursor.x - i32::from(image.hotspot_x),
+                    cursor.x.saturating_sub(i32::from(image.hotspot_x)),
                     space.width,
                     target.width,
                 ),
                 scaled_offset(
-                    cursor.y - i32::from(image.hotspot_y),
+                    cursor.y.saturating_sub(i32::from(image.hotspot_y)),
                     space.height,
                     target.height,
                 ),
@@ -229,6 +264,10 @@ fn srgb_to_linear(encoded: u8) -> f32 {
     }
 }
 
+const fn fits(size: Resolution, limit: u32) -> bool {
+    size.width <= limit && size.height <= limit
+}
+
 pub(crate) fn scaled_length(length: u32, from: u32, to: u32) -> u32 {
     let scaled = (u64::from(length) * u64::from(to) + u64::from(from) / 2) / u64::from(from);
 
@@ -281,7 +320,11 @@ mod tests {
         let Some(gpu) = gpu() else {
             return;
         };
-        let mut layer = CursorLayer::new(&gpu.device, ScalingConfig::default());
+        let mut layer = CursorLayer::new(
+            &gpu.device,
+            ScalingConfig::default(),
+            Arc::new(Counter::default()),
+        );
         let cursor = state(true);
 
         let mut encoder = gpu
@@ -320,7 +363,11 @@ mod tests {
         let Some(gpu) = gpu() else {
             return;
         };
-        let mut layer = CursorLayer::new(&gpu.device, ScalingConfig::default());
+        let mut layer = CursorLayer::new(
+            &gpu.device,
+            ScalingConfig::default(),
+            Arc::new(Counter::default()),
+        );
         let shapeless = CursorState {
             image: None,
             ..state(true)
@@ -376,5 +423,74 @@ mod tests {
         assert_eq!(scaled_length(24, 1280, 2560), 48);
         assert_eq!(scaled_offset(-4, 1920, 960), -2);
         assert_eq!(scaled_offset(1919, 1920, 1280), 1279);
+    }
+
+    #[test]
+    fn a_cursor_scaled_beyond_the_device_limit_is_skipped_and_counted_once() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let skipped = Arc::new(Counter::default());
+        let mut layer =
+            CursorLayer::new(&gpu.device, ScalingConfig::default(), Arc::clone(&skipped));
+        let cursor = CursorState {
+            space: Resolution::new(1, 1),
+            ..state(true)
+        };
+        let limit = gpu.device.limits().max_texture_dimension_2d;
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let mut prepare = |layer: &mut CursorLayer| {
+            layer
+                .prepare(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut encoder,
+                    &cursor,
+                    Resolution::new(limit, limit),
+                )
+                .unwrap()
+        };
+        let first = prepare(&mut layer);
+        let second = prepare(&mut layer);
+
+        assert!(first.is_none());
+        assert!(second.is_none());
+        assert_eq!(skipped.get(), 1);
+    }
+
+    #[test]
+    fn an_extreme_position_and_hotspot_do_not_overflow() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let mut layer = CursorLayer::new(
+            &gpu.device,
+            ScalingConfig::default(),
+            Arc::new(Counter::default()),
+        );
+        let cursor = CursorState {
+            x: i32::MIN,
+            y: i32::MIN,
+            ..state(true)
+        };
+
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let placed = layer
+            .prepare(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                &cursor,
+                Resolution::new(100, 100),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(placed.1.origin, [i32::MIN, i32::MIN]);
     }
 }
