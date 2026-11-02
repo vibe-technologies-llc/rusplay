@@ -36,6 +36,8 @@ pub enum ProtocolError {
     DiscoveryNameTooLong { len: usize, max: usize },
     #[error("host name is not valid utf-8")]
     InvalidDiscoveryName,
+    #[error("host name contains a control character")]
+    DiscoveryNameControlCharacter,
     #[error("client name of {len} bytes exceeds the limit of {max}")]
     ClientNameTooLong { len: usize, max: usize },
     #[error("client name is not valid utf-8")]

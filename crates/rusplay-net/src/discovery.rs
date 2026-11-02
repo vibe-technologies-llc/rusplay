@@ -1,12 +1,12 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use rusplay_config::NetworkConfig;
 use rusplay_protocol::DiscoveryMessage;
 
-use crate::NetError;
+use crate::{NetError, pairing::fill_random};
 
 const MULTICAST_TTL: u32 = 1;
 const SCAN_RESEND_DIVISIONS: u32 = 3;
@@ -155,7 +155,7 @@ impl DiscoveryBrowser {
     }
 
     pub fn scan(&self, timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
-        let nonce = fresh_nonce(&self.socket);
+        let nonce = fresh_nonce()?;
         let query = DiscoveryMessage::Query { nonce }.to_datagram()?;
         let start = Instant::now();
         let deadline = start + timeout;
@@ -232,18 +232,17 @@ fn is_timeout(error: &std::io::Error) -> bool {
     )
 }
 
-fn fresh_nonce(socket: &UdpSocket) -> u32 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.subsec_nanos());
-    let port = socket.local_addr().map_or(0, |addr| u32::from(addr.port()));
-
-    nanos ^ port.rotate_left(16)
+fn fresh_nonce() -> Result<u32, NetError> {
+    let mut bytes = [0; 4];
+    fill_random(&mut bytes)?;
+    Ok(u32::from_be_bytes(bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, thread};
+
+    use rusplay_protocol::ProtocolError;
 
     use super::*;
 
@@ -360,6 +359,24 @@ mod tests {
         assert!(matches!(
             DiscoveryResponder::bind(LOOPBACK, None, 1, &name),
             Err(NetError::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn nonces_are_drawn_from_the_random_source() {
+        let nonces: std::collections::HashSet<u32> =
+            (0..32).map(|_| fresh_nonce().unwrap()).collect();
+
+        assert!(nonces.len() > 30);
+    }
+
+    #[test]
+    fn host_name_with_a_control_character_is_refused_at_bind() {
+        assert!(matches!(
+            DiscoveryResponder::bind(LOOPBACK, None, 1, "host\u{7}name"),
+            Err(NetError::Protocol(
+                ProtocolError::DiscoveryNameControlCharacter
+            ))
         ));
     }
 

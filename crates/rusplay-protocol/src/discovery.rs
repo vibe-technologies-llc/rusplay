@@ -36,6 +36,10 @@ impl DiscoveryMessage {
                         max: Self::MAX_NAME_LEN,
                     })?;
 
+                if name.chars().any(char::is_control) {
+                    return Err(ProtocolError::DiscoveryNameControlCharacter);
+                }
+
                 payload.push(TAG_ANNOUNCE);
                 payload.extend_from_slice(&nonce.to_be_bytes());
                 payload.extend_from_slice(&port.to_be_bytes());
@@ -107,6 +111,10 @@ impl DiscoveryMessage {
         expect_exact(body, 7 + name_len)?;
         let name = String::from_utf8(body[7..].to_vec())
             .map_err(|_| ProtocolError::InvalidDiscoveryName)?;
+
+        if name.chars().any(char::is_control) {
+            return Err(ProtocolError::DiscoveryNameControlCharacter);
+        }
 
         Ok(Self::Announce { nonce, port, name })
     }
@@ -222,6 +230,25 @@ mod tests {
         assert_eq!(
             DiscoveryMessage::from_datagram(&datagram),
             Err(ProtocolError::InvalidDiscoveryName)
+        );
+    }
+
+    #[test]
+    fn names_with_control_characters_are_refused_both_ways() {
+        for name in ["a\nb", "\u{7f}", "tab\t", "\u{85}"] {
+            assert_eq!(
+                announce(name).to_datagram(),
+                Err(ProtocolError::DiscoveryNameControlCharacter)
+            );
+        }
+
+        let mut datagram = announce("ab").to_datagram().unwrap();
+        let len = datagram.len();
+        datagram[len - 1] = 0x07;
+
+        assert_eq!(
+            DiscoveryMessage::from_datagram(&datagram),
+            Err(ProtocolError::DiscoveryNameControlCharacter)
         );
     }
 
