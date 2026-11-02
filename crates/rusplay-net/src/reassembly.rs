@@ -16,7 +16,7 @@ impl Default for ReassemblyLimits {
     fn default() -> Self {
         Self {
             max_pending_frames: 8,
-            max_fragments: 8192,
+            max_fragments: u16::MAX,
             frame_timeout: Duration::from_millis(100),
         }
     }
@@ -25,8 +25,9 @@ impl Default for ReassemblyLimits {
 impl From<&NetworkConfig> for ReassemblyLimits {
     fn from(config: &NetworkConfig) -> Self {
         Self {
+            max_pending_frames: usize::from(config.reassembly_max_pending_frames),
+            max_fragments: config.reassembly_max_fragments,
             frame_timeout: Duration::from_millis(u64::from(config.reassembly_timeout_ms)),
-            ..Self::default()
         }
     }
 }
@@ -1213,15 +1214,32 @@ mod tests {
     }
 
     #[test]
-    fn limits_follow_the_configured_timeout() {
+    fn default_limits_accept_every_frame_the_packetizer_can_send() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::None);
+        let mut rx = reassembler(StreamKind::Video);
+        let fragments = 20_000;
+        let data = frame_data(SHARD_LEN * fragments, 0);
+
+        let datagrams = tx.packetize(0, true, &data).unwrap();
+        let events = feed(&mut rx, Instant::now(), &datagrams);
+
+        assert_eq!(datagrams.len(), fragments);
+        assert_eq!(frames(&events)[0].data, data);
+    }
+
+    #[test]
+    fn limits_follow_the_configuration() {
         let config = NetworkConfig {
             reassembly_timeout_ms: 40,
+            reassembly_max_pending_frames: 3,
+            reassembly_max_fragments: 500,
             ..NetworkConfig::default()
         };
 
-        assert_eq!(
-            ReassemblyLimits::from(&config).frame_timeout,
-            Duration::from_millis(40)
-        );
+        let limits = ReassemblyLimits::from(&config);
+
+        assert_eq!(limits.frame_timeout, Duration::from_millis(40));
+        assert_eq!(limits.max_pending_frames, 3);
+        assert_eq!(limits.max_fragments, 500);
     }
 }

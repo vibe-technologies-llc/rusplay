@@ -24,6 +24,8 @@ pub struct NetworkConfig {
     pub pacing_window_percent: u8,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
+    pub reassembly_max_pending_frames: u8,
+    pub reassembly_max_fragments: u16,
     pub control_retransmit_ms: u16,
     pub control_max_retransmits: u8,
     pub discovery_port: u16,
@@ -60,6 +62,8 @@ impl Default for NetworkConfig {
             pacing_window_percent: 50,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
+            reassembly_max_pending_frames: 8,
+            reassembly_max_fragments: u16::MAX,
             control_retransmit_ms: 50,
             control_max_retransmits: 8,
             discovery_port: 47_801,
@@ -107,6 +111,14 @@ impl NetworkConfig {
 
         if self.reassembly_timeout_ms == 0 {
             return Err(ConfigError::ZeroReassemblyTimeout);
+        }
+
+        if self.reassembly_max_pending_frames == 0 {
+            return Err(ConfigError::ZeroReassemblyPendingFrames);
+        }
+
+        if self.reassembly_max_fragments == 0 {
+            return Err(ConfigError::ZeroReassemblyFragments);
         }
 
         if self.control_retransmit_ms == 0 {
@@ -309,6 +321,32 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::ZeroReassemblyTimeout)
+        ));
+    }
+
+    #[test]
+    fn zero_reassembly_pending_frames_is_rejected() {
+        let config = NetworkConfig {
+            reassembly_max_pending_frames: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroReassemblyPendingFrames)
+        ));
+    }
+
+    #[test]
+    fn zero_reassembly_fragments_is_rejected() {
+        let config = NetworkConfig {
+            reassembly_max_fragments: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ZeroReassemblyFragments)
         ));
     }
 

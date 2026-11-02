@@ -279,7 +279,12 @@ paths:
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen
-  frame creates no state. Fragment count is capped by `ReassemblyLimits::max_fragments`.
+  frame creates no state. Fragment count is capped by `ReassemblyLimits::max_fragments`
+  (`network.reassembly_max_fragments`, default 65535, the most the wire format can number) and
+  the pending frames by `network.reassembly_max_pending_frames` (default 8). A sender that lowers
+  the fragment cap must give its `Packetizer` the same number through `with_max_fragments`, which
+  then returns `FrameTooLarge` above it, so a frame is refused at the sender rather than rejected
+  packet by packet at the receiver.
 - Latency first: when a frame completes, every older pending frame is reported
   `ReassemblyEvent::FrameLost` immediately and its late packets are dropped as stale. Pending
   frames are also lost when they exceed `max_pending_frames` or live longer than

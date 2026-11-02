@@ -6,6 +6,7 @@ use crate::{FecScheme, NetError};
 pub struct Packetizer {
     stream: StreamKind,
     shard_len: usize,
+    max_fragments: u16,
     scheme: FecScheme,
     next_sequence: u32,
 }
@@ -28,9 +29,16 @@ impl Packetizer {
         Ok(Self {
             stream,
             shard_len,
+            max_fragments: u16::MAX,
             scheme,
             next_sequence: 0,
         })
+    }
+
+    #[must_use]
+    pub const fn with_max_fragments(mut self, max_fragments: u16) -> Self {
+        self.max_fragments = max_fragments;
+        self
     }
 
     pub const fn shard_len(&self) -> usize {
@@ -42,7 +50,7 @@ impl Packetizer {
     }
 
     pub fn max_frame_bytes(&self) -> usize {
-        self.shard_len * usize::from(u16::MAX)
+        self.shard_len * usize::from(self.max_fragments)
     }
 
     pub fn packetize(
@@ -55,12 +63,13 @@ impl Packetizer {
             return Err(NetError::EmptyFrame);
         }
 
-        let fragment_count = u16::try_from(data.len().div_ceil(self.shard_len)).map_err(|_| {
-            NetError::FrameTooLarge {
+        let fragment_count = u16::try_from(data.len().div_ceil(self.shard_len))
+            .ok()
+            .filter(|count| *count <= self.max_fragments)
+            .ok_or_else(|| NetError::FrameTooLarge {
                 bytes: data.len(),
                 max_bytes: self.max_frame_bytes(),
-            }
-        })?;
+            })?;
         let frame_bytes = u32::try_from(data.len()).map_err(|_| NetError::FrameTooLarge {
             bytes: data.len(),
             max_bytes: self.max_frame_bytes(),
@@ -234,6 +243,23 @@ mod tests {
         assert!(matches!(
             video(FecScheme::None).packetize(0, false, &[]),
             Err(NetError::EmptyFrame)
+        ));
+    }
+
+    #[test]
+    fn the_configured_fragment_cap_bounds_the_frame_size() {
+        let mut packetizer = video(FecScheme::None).with_max_fragments(4);
+        let shard_len = packetizer.shard_len();
+
+        assert_eq!(packetizer.max_frame_bytes(), shard_len * 4);
+        assert!(
+            packetizer
+                .packetize(0, false, &vec![0; shard_len * 4])
+                .is_ok()
+        );
+        assert!(matches!(
+            packetizer.packetize(1, false, &vec![0; shard_len * 4 + 1]),
+            Err(NetError::FrameTooLarge { max_bytes, .. }) if max_bytes == shard_len * 4
         ));
     }
 
