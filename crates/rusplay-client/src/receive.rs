@@ -738,7 +738,7 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
-    use rusplay_core::{Codec, CodecFormat, ColorSpace, PixelFormat, Resolution};
+    use rusplay_core::{ChromaSiting, Codec, CodecFormat, ColorSpace, PixelFormat, Resolution};
     use rusplay_net::{FecScheme, Packetizer, TransportOptions};
     use rusplay_protocol::{ControlPacket, CursorImage};
 
@@ -945,6 +945,7 @@ mod tests {
             format: PixelFormat::default(),
             color: ColorSpace::default(),
             configured: CodecFormat::new(Codec::Hevc, PixelFormat::default()),
+            siting: ChromaSiting::Left,
         }
     }
 

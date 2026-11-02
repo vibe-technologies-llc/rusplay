@@ -8,8 +8,9 @@ use std::{
 
 use rusplay_config::{SvtAv1Config, VideoConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace, EncodedFrame,
-    Frame, FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp, TransferFunction,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace,
+    EncodedFrame, Frame, FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp,
+    TransferFunction,
 };
 
 use crate::{
@@ -235,6 +236,7 @@ struct Settings {
     config: SvtAv1Config,
     pixel_format: PixelFormat,
     color: ColorSpace,
+    siting: ChromaSiting,
     frame_rate: FrameRate,
     vbv_frames: u8,
     bitrate_kbps: u32,
@@ -245,7 +247,11 @@ pub(crate) fn supports(format: PixelFormat) -> bool {
 }
 
 impl Settings {
-    fn new(video: &VideoConfig, config: &SvtAv1Config) -> Result<Self, EncodeError> {
+    fn new(
+        video: &VideoConfig,
+        config: &SvtAv1Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
         let format = video.pixel_format;
 
         if format.chroma != ChromaSubsampling::Yuv420 {
@@ -265,6 +271,7 @@ impl Settings {
             config: config.clone(),
             pixel_format: format,
             color: video.color,
+            siting,
             frame_rate: video.frame_rate,
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
@@ -319,6 +326,7 @@ impl Settings {
         config.matrix_coefficients = matrix_id(self.color.matrix_coefficients());
         config.transfer_characteristics = transfer_id(self.color.transfer);
         config.color_range = range_id(self.color.range);
+        config.chroma_sample_position = self.siting.av1_chroma_position();
 
         let hdr = &self.color.hdr;
         if let Some(display) = &hdr.mastering {
@@ -490,9 +498,13 @@ pub struct SvtAv1Encoder {
 }
 
 impl SvtAv1Encoder {
-    pub fn new(video: &VideoConfig, config: &SvtAv1Config) -> Result<Self, EncodeError> {
+    pub fn new(
+        video: &VideoConfig,
+        config: &SvtAv1Config,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
         log::install(config.log_level);
-        let settings = Settings::new(video, config)?;
+        let settings = Settings::new(video, config, siting)?;
 
         let session = video
             .resolution
@@ -697,7 +709,7 @@ mod tests {
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, svt).unwrap();
+        let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 
         settings
@@ -738,12 +750,43 @@ mod tests {
     }
 
     #[test]
+    fn the_siting_reaches_the_chroma_sample_position() {
+        let config = config(
+            pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+            SvtAv1Config::default(),
+        );
+        let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
+            return;
+        };
+
+        for (siting, position) in [
+            (
+                ChromaSiting::Left,
+                sys::EbChromaSamplePosition_EB_CSP_VERTICAL,
+            ),
+            (
+                ChromaSiting::Center,
+                sys::EbChromaSamplePosition_EB_CSP_UNKNOWN,
+            ),
+        ] {
+            let settings = Settings::new(&config, svt, siting).unwrap();
+            let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
+
+            settings
+                .apply(&mut library, testing::TEST_RESOLUTION)
+                .unwrap();
+
+            assert_eq!(library.chroma_sample_position, position);
+        }
+    }
+
+    #[test]
     fn passthrough_parameters_reach_the_library() {
         let config = with_params(&[("film-grain", "7"), ("tile-rows", "1")]);
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, svt).unwrap();
+        let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 
         settings
@@ -760,7 +803,7 @@ mod tests {
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
-        let settings = Settings::new(&config, svt).unwrap();
+        let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 
         settings

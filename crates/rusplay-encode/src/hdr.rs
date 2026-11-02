@@ -153,9 +153,10 @@ fn av1_luminance(units: u32, fixed_point: u64) -> u32 {
 
 #[cfg(test)]
 pub(crate) mod fixtures {
+    use rusplay_config::{VideoConfig, VideoEncoderConfig};
     use rusplay_core::{
-        ColorPrimaries, ColorRange, ColorSpace, ContentLightLevel, HdrLevels, Luminance,
-        MasteringDisplay, MatrixCoefficients, SignalledColor, TransferFunction,
+        ChromaSiting, Codec, ColorPrimaries, ColorRange, ColorSpace, ContentLightLevel, HdrLevels,
+        Luminance, MasteringDisplay, MatrixCoefficients, SignalledColor, TransferFunction,
     };
 
     pub(crate) fn hdr10_color() -> ColorSpace {
@@ -179,6 +180,17 @@ pub(crate) mod fixtures {
         }
     }
 
+    pub(crate) fn expected_siting(
+        config: &VideoConfig,
+        siting: ChromaSiting,
+    ) -> Option<ChromaSiting> {
+        match (config.codec, &config.encoder, siting) {
+            (Codec::Av1, _, ChromaSiting::Center)
+            | (_, VideoEncoderConfig::X264(_), ChromaSiting::Left) => None,
+            _ => Some(siting),
+        }
+    }
+
     pub(crate) fn signalled(color: &ColorSpace) -> SignalledColor {
         SignalledColor {
             primaries: Some(color.primaries),
@@ -187,7 +199,7 @@ pub(crate) mod fixtures {
             range: Some(color.range),
             mastering: color.hdr.mastering,
             content_light: color.hdr.content_light,
-            chroma_siting: None,
+            chroma_siting: Some(ChromaSiting::Left),
         }
     }
 }

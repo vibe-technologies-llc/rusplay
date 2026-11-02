@@ -221,7 +221,9 @@ impl H264Stream {
             u64::from(matrix_coefficients(color.matrix_coefficients())),
             8,
         );
-        rbsp.flag(false);
+        rbsp.flag(true);
+        rbsp.ue(self.info.siting.vui_chroma_location());
+        rbsp.ue(self.info.siting.vui_chroma_location());
         rbsp.flag(true);
         rbsp.bits(u64::from(self.info.frame_rate.denominator), 32);
         rbsp.bits(u64::from(self.info.frame_rate.numerator) * 2, 32);

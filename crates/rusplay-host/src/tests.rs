@@ -15,7 +15,8 @@ use std::{
 use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
 use rusplay_config::{Config, NetworkConfig, RateControl, VaapiConfig, VideoEncoderConfig};
 use rusplay_core::{
-    Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution, Timestamp,
+    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
+    Timestamp,
 };
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
@@ -223,6 +224,7 @@ impl VideoPipeline for FakePipeline {
             resolution: self.stream.unwrap_or(resolution),
             format: self.format.format,
             color: ColorSpace::default(),
+            siting: ChromaSiting::Center,
         })
     }
 }
@@ -690,6 +692,7 @@ fn the_stream_format_is_announced_before_the_first_frame_and_again_on_a_resize()
     assert_eq!(before_first, 0);
     assert_eq!(first.codec, Codec::Av1);
     assert_eq!(first.resolution, FRAME_SIZE);
+    assert_eq!(first.siting, ChromaSiting::Center);
     assert_eq!(second.resolution, RESIZED);
     assert!(second.is_newer_than(&first));
     assert!(client.frames[3].keyframe);

@@ -20,8 +20,8 @@ use std::{
 
 use rusplay_config::{NvencConfig, VideoConfig};
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Codec, EncodedFrame, Frame, FrameBuffer, PixelFormat, Plane,
-    Resolution,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, EncodedFrame, Frame, FrameBuffer,
+    PixelFormat, Plane, Resolution,
 };
 
 use crate::{
@@ -573,13 +573,18 @@ pub struct NvencEncoder {
 unsafe impl Send for NvencEncoder {}
 
 impl NvencEncoder {
-    pub fn new(video: &VideoConfig, nvenc: &NvencConfig) -> Result<Self, EncodeError> {
-        Self::new_with(video, nvenc, SYSTEM_LIBRARIES)
+    pub fn new(
+        video: &VideoConfig,
+        nvenc: &NvencConfig,
+        siting: ChromaSiting,
+    ) -> Result<Self, EncodeError> {
+        Self::new_with(video, nvenc, siting, SYSTEM_LIBRARIES)
     }
 
     fn new_with(
         video: &VideoConfig,
         nvenc: &NvencConfig,
+        siting: ChromaSiting,
         libraries: LibraryNames,
     ) -> Result<Self, EncodeError> {
         let params = NvencParams::parse(&nvenc.params)?;
@@ -594,6 +599,7 @@ impl NvencEncoder {
             codec: video.codec,
             format: video.pixel_format,
             color: video.color,
+            siting,
             frame_rate: video.frame_rate,
             vbv_frames: video.vbv_frames,
             resolution: video.resolution,

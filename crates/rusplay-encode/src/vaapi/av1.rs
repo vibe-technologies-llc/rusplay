@@ -299,7 +299,7 @@ impl Av1Stream {
         );
         header.flag(full_range(color.range));
         if self.profile == Av1Profile::Main {
-            header.bits(0, 2);
+            header.bits(u64::from(self.info.siting.av1_chroma_position()), 2);
         }
         header.flag(false);
         header.flag(false);

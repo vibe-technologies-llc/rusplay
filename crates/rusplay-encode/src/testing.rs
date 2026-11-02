@@ -2,15 +2,15 @@ use std::{fs::File, os::fd::OwnedFd};
 
 use rusplay_config::{EncoderParams, VideoConfig, VideoEncoderConfig};
 use rusplay_core::{
-    BitDepth, BufferLease, ChromaSubsampling, Codec, ColorSpace, DrmFourcc, Frame, FrameBuffer,
-    PixelFormat, Resolution, Timestamp,
+    BitDepth, BufferLease, ChromaSiting, ChromaSubsampling, Codec, ColorSpace, DrmFourcc, Frame,
+    FrameBuffer, PixelFormat, Resolution, SignalledColor, Timestamp,
 };
 
 use crate::{
     EncodeError, VideoEncoder,
-    hdr::fixtures::{hdr10_color, signalled},
+    hdr::fixtures::{expected_siting, hdr10_color, signalled},
     input::{fixtures::yuv_frame, fourcc_for},
-    open,
+    open, open_sited,
 };
 
 pub const FRAME_INTERVAL_MICROS: u64 = 16_666;
@@ -195,16 +195,22 @@ pub fn check_colour_reaches_the_decoder(
         color: hdr10_color(),
         ..config.clone()
     };
-    let expected = signalled(&config.color);
-    let mut encoder = open(&config).unwrap();
 
-    for index in 0..3 {
-        let packet = encoder
-            .encode(&frame(config.pixel_format, index))
-            .unwrap()
-            .unwrap();
-        let picture = decoder.decode(&packet).unwrap().unwrap();
+    for siting in [ChromaSiting::Left, ChromaSiting::Center] {
+        let expected = SignalledColor {
+            chroma_siting: expected_siting(&config, siting),
+            ..signalled(&config.color)
+        };
+        let mut encoder = open_sited(&config, siting).unwrap();
 
-        assert_eq!(picture.color, expected, "frame {index}");
+        for index in 0..3 {
+            let packet = encoder
+                .encode(&frame(config.pixel_format, index))
+                .unwrap()
+                .unwrap();
+            let picture = decoder.decode(&packet).unwrap().unwrap();
+
+            assert_eq!(picture.color, expected, "{siting:?} frame {index}");
+        }
     }
 }

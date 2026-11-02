@@ -82,6 +82,8 @@ pub enum ProtocolError {
     UnknownMatrixCoefficients(u8),
     #[error("unknown colour range tag {0}")]
     UnknownColorRange(u8),
+    #[error("unknown chroma siting tag {0}")]
+    UnknownChromaSiting(u8),
     #[error("hdr flags {0:#04x} carry unknown bits")]
     UnknownHdrFlags(u8),
     #[error("format set {0:#010x} carries unknown bits")]

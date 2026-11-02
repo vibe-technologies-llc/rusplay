@@ -126,6 +126,7 @@ paths:
   `RateControlUnsupported`; a size outside `vaQuerySurfaceAttributes` and
   `VAConfigAttribMaxPicture*` is `ResolutionUnsupported` (radeonsi on RDNA 4: HEVC from 384x128,
   AV1 from 320x128, H.264 from 96x32).
+- Chroma siting reaches the encoders through `open_sited(config, siting)` (`open` is `open_sited` with `ChromaSiting::Left`, for capability probes and tests; the host always calls `open_sited` with `scaling.chroma_siting`). `ChromaSiting::vui_chroma_location` (0 left, 1 centre) goes into the VAAPI H.264/HEVC VUI `chroma_loc_info_present_flag` and both field types, NVENC `chroma_sample_location_*`, x265 `chromaloc` and x264 `i_chroma_loc`; `av1_chroma_position` (vertical for left, unknown for centre, which AV1 cannot express) goes into the VAAPI sequence header, NVENC `chromaSamplePosition` and SVT-AV1 `chroma_sample_position`. x264 only writes the location when it is non-zero, so a left-sited x264 stream leaves it unsignalled. Whatever the bitstream cannot say, `StreamDescription::siting` carries.
 - Colour codes in the VUI and AV1 `color_config` are the H.273 codes from `rusplay-core`
   (`ColorPrimaries::h273_code`, `TransferFunction::h273_code`, the resolved
   `MatrixCoefficients`); custom primaries have no code and fail at open with

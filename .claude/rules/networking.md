@@ -91,9 +91,12 @@ paths:
   primaries), range byte, reference white and peak as u32 nits, then a flags byte (bit 0
   mastering display, bit 1 content light; other bits are `UnknownHdrFlags`) and, when flagged,
   the mastering primaries in the same form plus max and min luminance as u32 0.0001 cd/m²
-  units, and MaxCLL/MaxFALL as u16, and last the `configured` `CodecFormat` (codec tag, chroma
+  units, and MaxCLL/MaxFALL as u16, then the `configured` `CodecFormat` (codec tag, chroma
   tag, depth bits): the host's configured format, so `is_fallback` tells the client when the
-  stream is a negotiated fallback (format negotiation, below). Variable length, at most 77 bytes
+  stream is a negotiated fallback (format negotiation, below), and last the chroma `siting` byte
+  (0 left, 1 centre, other values are `UnknownChromaSiting`): the `scaling.chroma_siting` the host
+  converted with, which the client uses when the bitstream cannot say (AV1 has no centred
+  horizontal position). Variable length, at most 78 bytes
   with its tag (`ControlMessage::MAX_ENCODED_LEN`). Decoding validates everything it reads (custom primaries
   through `Chromaticities::new`, luminance through `Luminance::from_units`, each resolution axis in
   `1..=StreamDescription::MAX_DIMENSION` (16384), reference white and peak in `1..=10000` nits and

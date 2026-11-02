@@ -17,9 +17,9 @@ use rusplay_config::{
     VideoEncoderConfig,
 };
 use rusplay_core::{
-    BitDepth, BufferLease, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace,
-    DrmFourcc, EncodedFrame, Frame, FrameBuffer, FrameRate, PixelFormat, Plane, Resolution,
-    Timestamp, TransferFunction,
+    BitDepth, BufferLease, ChromaSiting, ChromaSubsampling, Codec, ColorPrimaries, ColorRange,
+    ColorSpace, DrmFourcc, EncodedFrame, Frame, FrameBuffer, FrameRate, PixelFormat, Plane,
+    Resolution, Timestamp, TransferFunction,
 };
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
@@ -1026,6 +1026,7 @@ fn info(format: PixelFormat, resolution: Resolution) -> StreamInfo {
         frame_rate: FrameRate::new(60_000, 1_001),
         peak_kbps: 80_000,
         qp: None,
+        siting: ChromaSiting::default(),
     }
 }
 

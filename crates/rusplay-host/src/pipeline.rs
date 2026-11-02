@@ -10,7 +10,8 @@ use std::{
 use rusplay_capture::{Frame, FrameBuffer, Plane, ShmFallback};
 use rusplay_config::Config;
 use rusplay_core::{
-    Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution, Timestamp,
+    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
+    Timestamp,
 };
 use rusplay_encode::{VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
@@ -41,6 +42,7 @@ pub(crate) struct StreamFormat {
     pub resolution: Resolution,
     pub format: PixelFormat,
     pub color: ColorSpace,
+    pub siting: ChromaSiting,
 }
 
 impl StreamFormat {
@@ -56,6 +58,7 @@ impl StreamFormat {
             format: self.format,
             color: self.color,
             configured,
+            siting: self.siting,
         }
     }
 }
@@ -666,7 +669,10 @@ impl GpuPipeline {
         let encoder = match self.encoder.take() {
             Some(open) if open.resolution == input.resolution => open,
             _ => {
-                let mut encoder = rusplay_encode::open(&self.config.video)?;
+                let mut encoder = rusplay_encode::open_sited(
+                    &self.config.video,
+                    self.config.scaling.chroma_siting,
+                )?;
                 if let Some(kbps) = self.bitrate_kbps {
                     encoder.set_bitrate(kbps)?;
                 }
@@ -750,6 +756,7 @@ impl VideoPipeline for GpuPipeline {
             resolution: open.resolution,
             format: video.pixel_format,
             color: video.color,
+            siting: self.config.scaling.chroma_siting,
         })
     }
 }

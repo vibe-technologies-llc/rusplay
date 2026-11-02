@@ -9,8 +9,8 @@ use rusplay_config::{
     VideoEncoderConfig,
 };
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Chromaticities, Codec, ColorPrimaries, ColorSpace, DrmFourcc,
-    EncodedFrame, Frame, FrameBuffer, PixelFormat, Plane, Resolution, Timestamp,
+    BitDepth, ChromaSiting, ChromaSubsampling, Chromaticities, Codec, ColorPrimaries, ColorSpace,
+    DrmFourcc, EncodedFrame, Frame, FrameBuffer, PixelFormat, Plane, Resolution, Timestamp,
 };
 use rusplay_decode::{Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
@@ -121,7 +121,12 @@ fn is_keyframe(codec: Codec, data: &[u8]) -> Option<bool> {
 fn a_missing_driver_fails_open_with_the_library_name() {
     let config = video(Codec::Hevc, yuv420(BitDepth::Eight));
 
-    let Err(error) = NvencEncoder::new_with(&config, &nvenc_of(&config), MISSING) else {
+    let Err(error) = NvencEncoder::new_with(
+        &config,
+        &nvenc_of(&config),
+        ChromaSiting::default(),
+        MISSING,
+    ) else {
         panic!("an encoder opened without its driver");
     };
 
@@ -164,7 +169,8 @@ fn bad_parameters_and_colours_fail_before_the_driver_loads() {
     let mut nvenc = NvencConfig::default();
     nvenc.params.insert("aq-strength".into(), "99".into());
 
-    let Err(error) = NvencEncoder::new_with(&config, &nvenc, MISSING) else {
+    let Err(error) = NvencEncoder::new_with(&config, &nvenc, ChromaSiting::default(), MISSING)
+    else {
         panic!("a bad parameter opened");
     };
 
@@ -175,7 +181,12 @@ fn bad_parameters_and_colours_fail_before_the_driver_loads() {
         ..ColorSpace::default()
     };
 
-    let Err(error) = NvencEncoder::new_with(&config, &NvencConfig::default(), MISSING) else {
+    let Err(error) = NvencEncoder::new_with(
+        &config,
+        &NvencConfig::default(),
+        ChromaSiting::default(),
+        MISSING,
+    ) else {
         panic!("custom primaries opened");
     };
 

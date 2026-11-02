@@ -1,7 +1,7 @@
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, Chromaticities, Chromaticity, Codec, CodecFormat, ColorPrimaries,
-    ColorRange, ColorSpace, ContentLightLevel, HdrLevels, Luminance, MasteringDisplay,
-    MatrixCoefficients, PixelFormat, Resolution, TransferFunction,
+    BitDepth, ChromaSiting, ChromaSubsampling, Chromaticities, Chromaticity, Codec, CodecFormat,
+    ColorPrimaries, ColorRange, ColorSpace, ContentLightLevel, HdrLevels, Luminance,
+    MasteringDisplay, MatrixCoefficients, PixelFormat, Resolution, TransferFunction,
 };
 
 use crate::ProtocolError;
@@ -13,7 +13,8 @@ const HAS_CONTENT_LIGHT: u8 = 1 << 1;
 const KNOWN_HDR_FLAGS: u8 = HAS_MASTERING | HAS_CONTENT_LIGHT;
 const CHROMATICITIES_LEN: usize = 16;
 const CONFIGURED_LEN: usize = 3;
-const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + CONFIGURED_LEN;
+const SITING_LEN: usize = 1;
+const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + CONFIGURED_LEN + SITING_LEN;
 const MASTERING_FIXED_LEN: usize = 1 + 8;
 const CONTENT_LIGHT_LEN: usize = 4;
 
@@ -25,6 +26,7 @@ pub struct StreamDescription {
     pub format: PixelFormat,
     pub color: ColorSpace,
     pub configured: CodecFormat,
+    pub siting: ChromaSiting,
 }
 
 impl StreamDescription {
@@ -108,6 +110,7 @@ impl StreamDescription {
         out.push(codec_tag(self.configured.codec));
         out.push(chroma_tag(self.configured.format.chroma));
         out.push(self.configured.format.depth.bits());
+        out.push(siting_tag(self.siting));
     }
 
     pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Self, ProtocolError> {
@@ -158,12 +161,15 @@ impl StreamDescription {
             },
         );
 
+        let siting = read_siting(reader.u8()?)?;
+
         Ok(Self {
             generation,
             codec,
             resolution,
             format,
             configured,
+            siting,
             color: ColorSpace {
                 primaries,
                 transfer,
@@ -260,6 +266,21 @@ fn read_chroma(tag: u8) -> Result<ChromaSubsampling, ProtocolError> {
         1 => Ok(ChromaSubsampling::Yuv422),
         2 => Ok(ChromaSubsampling::Yuv444),
         unknown => Err(ProtocolError::UnknownChroma(unknown)),
+    }
+}
+
+const fn siting_tag(siting: ChromaSiting) -> u8 {
+    match siting {
+        ChromaSiting::Left => 0,
+        ChromaSiting::Center => 1,
+    }
+}
+
+fn read_siting(tag: u8) -> Result<ChromaSiting, ProtocolError> {
+    match tag {
+        0 => Ok(ChromaSiting::Left),
+        1 => Ok(ChromaSiting::Center),
+        unknown => Err(ProtocolError::UnknownChromaSiting(unknown)),
     }
 }
 
@@ -427,6 +448,7 @@ pub(crate) mod tests {
                     depth: BitDepth::Twelve,
                 },
             ),
+            siting: ChromaSiting::Center,
         }
     }
 
@@ -438,6 +460,7 @@ pub(crate) mod tests {
             format: PixelFormat::default(),
             color: ColorSpace::default(),
             configured: CodecFormat::new(Codec::Hevc, PixelFormat::default()),
+            siting: ChromaSiting::Left,
         }
     }
 
@@ -600,20 +623,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_configured_format_travels_last_and_is_validated() {
+    fn the_configured_format_precedes_the_siting_and_is_validated() {
         let mut out = Vec::new();
         sdr_description().write(&mut out);
-        let configured_at = out.len() - CONFIGURED_LEN;
+        let configured_at = out.len() - CONFIGURED_LEN - SITING_LEN;
         let corrupt = |offset: usize, value: u8| {
             let mut bytes = out.clone();
             bytes[configured_at + offset] = value;
             StreamDescription::read(&mut Reader::new(&bytes, 0))
         };
 
-        assert_eq!(out[configured_at..], [1, 1, 8]);
+        assert_eq!(out[configured_at..], [1, 1, 8, 0]);
         assert_eq!(corrupt(0, 5), Err(ProtocolError::UnknownCodec(5)));
         assert_eq!(corrupt(1, 5), Err(ProtocolError::UnknownChroma(5)));
         assert_eq!(corrupt(2, 9), Err(ProtocolError::UnknownBitDepth(9)));
+    }
+
+    #[test]
+    fn the_siting_travels_last_and_round_trips() {
+        for siting in [ChromaSiting::Left, ChromaSiting::Center] {
+            let description = StreamDescription {
+                siting,
+                ..sdr_description()
+            };
+            let mut out = Vec::new();
+            description.write(&mut out);
+
+            assert_eq!(round_trip(&description).siting, siting);
+            assert_eq!(out[out.len() - 1], siting_tag(siting));
+        }
+    }
+
+    #[test]
+    fn an_unknown_siting_tag_is_rejected() {
+        let mut out = Vec::new();
+        sdr_description().write(&mut out);
+        let last = out.len() - 1;
+        out[last] = 2;
+
+        assert_eq!(
+            StreamDescription::read(&mut Reader::new(&out, 0)),
+            Err(ProtocolError::UnknownChromaSiting(2))
+        );
     }
 
     #[test]
