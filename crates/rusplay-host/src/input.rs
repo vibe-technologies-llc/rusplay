@@ -9,7 +9,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand};
+use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
@@ -24,6 +24,11 @@ const INJECTOR_THREAD: &str = "rusplay-host-injector";
 
 pub trait InputTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError>;
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        results.extend(events.iter().map(|event| self.inject(*event)));
+    }
 
     fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError>;
 }
@@ -83,12 +88,12 @@ impl InputFeed {
 }
 
 enum Request {
-    Inject(InputEvent),
+    Inject(Vec<InputEvent>),
     Service,
 }
 
 enum Reply {
-    Injected(Result<(), InputError>),
+    Injected(Vec<Result<(), InputError>>),
     Serviced {
         rumble: Vec<RumbleCommand>,
         result: Result<(), InputError>,
@@ -123,9 +128,19 @@ impl RemoteTarget {
 
 impl InputTarget for RemoteTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
-        match self.call(Request::Inject(event))? {
-            Reply::Injected(result) => result,
-            Reply::Serviced { .. } => Err(InputError::SinkClosed),
+        let mut results = Vec::with_capacity(1);
+        self.inject_batch(&[event], &mut results);
+
+        results.pop().unwrap_or(Err(InputError::SinkClosed))
+    }
+
+    fn inject_batch(&mut self, events: &[InputEvent], results: &mut Vec<Result<(), InputError>>) {
+        results.clear();
+        match self.call(Request::Inject(events.to_vec())) {
+            Ok(Reply::Injected(injected)) => results.extend(injected),
+            Ok(Reply::Serviced { .. }) | Err(_) => {
+                results.extend(events.iter().map(|_| Err(InputError::SinkClosed)));
+            }
         }
     }
 
@@ -152,10 +167,10 @@ fn serve_requests(
 
     loop {
         match requests.recv_timeout(IDLE_SERVICE_INTERVAL) {
-            Ok((id, Request::Inject(event))) => {
-                replies
-                    .send((id, Reply::Injected(target.inject(event))))
-                    .ok();
+            Ok((id, Request::Inject(events))) => {
+                let mut results = Vec::with_capacity(events.len());
+                target.inject_batch(&events, &mut results);
+                replies.send((id, Reply::Injected(results))).ok();
             }
             Ok((id, Request::Service)) => {
                 let mut rumble = Vec::new();
@@ -202,7 +217,9 @@ struct InputStage<'a> {
     sequence: InputSequence,
     epoch: u32,
     held: HeldInput,
+    pending: Vec<InputEvent>,
     repairs: Vec<InputEvent>,
+    outcomes: Vec<Result<(), InputError>>,
     commands: Vec<RumbleCommand>,
 }
 
@@ -214,7 +231,9 @@ impl<'a> InputStage<'a> {
             sequence: InputSequence::new(),
             epoch: shared.client.epoch(),
             held: HeldInput::new(),
+            pending: Vec::new(),
             repairs: Vec::new(),
+            outcomes: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -285,47 +304,60 @@ impl<'a> InputStage<'a> {
     }
 
     fn apply_section(&mut self, target: &mut dyn InputTarget, records: InputRecords<'_>) {
+        let mut events = std::mem::take(&mut self.pending);
+        events.clear();
+
         for bytes in records {
             let decoded = bytes.ok().and_then(|bytes| InputRecord::decode(bytes).ok());
 
             match decoded {
-                Some(record) => self.apply(target, record),
+                Some(InputRecord::Event(event)) => events.push(event),
+                Some(InputRecord::State(state)) => {
+                    self.inject_all(target, &events);
+                    events.clear();
+                    self.reconcile(target, &state);
+                }
                 None => self.shared.counters.malformed_datagrams.increment(),
             }
         }
+
+        self.inject_all(target, &events);
+        events.clear();
+        self.pending = events;
     }
 
-    fn apply(&mut self, target: &mut dyn InputTarget, record: InputRecord) {
-        match record {
-            InputRecord::Event(event) => {
-                self.inject(target, event);
-            }
-            InputRecord::State(state) => {
-                self.shared.counters.input_state_records.increment();
+    fn reconcile(&mut self, target: &mut dyn InputTarget, state: &StateRecord) {
+        self.shared.counters.input_state_records.increment();
 
-                let mut events = std::mem::take(&mut self.repairs);
-                events.clear();
-                self.held.reconcile(&state, &mut events);
-                for event in events.drain(..) {
-                    if self.inject(target, event) {
-                        self.shared.counters.input_events_repaired.increment();
-                    }
-                }
-                self.repairs = events;
-            }
+        let mut events = std::mem::take(&mut self.repairs);
+        events.clear();
+        self.held.reconcile(state, &mut events);
+        let repaired = self.inject_all(target, &events);
+        self.shared
+            .counters
+            .input_events_repaired
+            .add(repaired as u64);
+        self.repairs = events;
+    }
+
+    fn inject_all(&mut self, target: &mut dyn InputTarget, events: &[InputEvent]) -> usize {
+        if events.is_empty() {
+            return 0;
         }
-    }
 
-    fn inject(&mut self, target: &mut dyn InputTarget, event: InputEvent) -> bool {
         let counters = &self.shared.counters;
-        let injected = target.inject(event).is_ok();
+        let mut injected = 0;
+        target.inject_batch(events, &mut self.outcomes);
 
-        if injected {
-            self.held.observe(&event);
-            counters.input_events.increment();
-        } else {
-            counters.input_failures.increment();
+        for (event, outcome) in events.iter().zip(&self.outcomes) {
+            if outcome.is_ok() {
+                self.held.observe(event);
+                counters.input_events.increment();
+                injected += 1;
+            }
         }
+        let failed = events.len() - injected;
+        counters.input_failures.add(failed as u64);
 
         injected
     }
@@ -365,11 +397,7 @@ impl<'a> InputStage<'a> {
         let mut events = Vec::new();
         self.held.release_all(&mut events);
 
-        for event in events {
-            if target.inject(event).is_ok() {
-                self.held.observe(&event);
-            }
-        }
+        self.inject_all(target, &events);
     }
 }
 
@@ -611,6 +639,124 @@ mod tests {
         );
         assert_eq!(rig.stats().input_events, 3);
         assert_eq!(rig.stats().input_packets, 2);
+    }
+
+    #[derive(Default)]
+    struct Batches {
+        sizes: Vec<usize>,
+        rejected: Vec<InputEvent>,
+    }
+
+    impl InputTarget for Batches {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            Ok(())
+        }
+
+        fn inject_batch(
+            &mut self,
+            events: &[InputEvent],
+            results: &mut Vec<Result<(), InputError>>,
+        ) {
+            self.sizes.push(events.len());
+            results.clear();
+            results.extend(events.iter().map(|event| {
+                if self.rejected.contains(event) {
+                    Err(InputError::SinkClosed)
+                } else {
+                    Ok(())
+                }
+            }));
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_events_of_a_datagram_reach_the_target_as_one_batch() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches::default();
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(
+                0,
+                &[
+                    event(key(1, true)),
+                    event(key(2, true)),
+                    event(key(3, true)),
+                ],
+                &[],
+            ),
+        );
+
+        assert_eq!(target.sizes, vec![3]);
+        assert_eq!(rig.stats().input_events, 3);
+    }
+
+    #[test]
+    fn a_state_record_sees_the_outcome_of_the_events_before_it() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches::default();
+        let mut records = vec![event(key(30, true))];
+        records.extend(snapshot_of(&[]));
+
+        stage.apply_datagram(&mut target, &datagram(0, &records, &[]));
+
+        assert_eq!(target.sizes, vec![1, 1]);
+        assert_eq!(rig.stats().input_events_repaired, 1);
+    }
+
+    #[test]
+    fn each_event_of_a_batch_keeps_its_own_outcome() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Batches {
+            rejected: vec![key(2, true)],
+            ..Batches::default()
+        };
+
+        stage.apply_datagram(
+            &mut target,
+            &datagram(0, &[event(key(1, true)), event(key(2, true))], &[]),
+        );
+        stage.release_all(&mut target);
+
+        assert_eq!(rig.stats().input_events, 2);
+        assert_eq!(rig.stats().input_failures, 1);
+        assert_eq!(target.sizes, vec![2, 1]);
+    }
+
+    struct RejectsOdd;
+
+    impl InputTarget for RejectsOdd {
+        fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
+            match event {
+                InputEvent::Key { keycode, .. } if keycode % 2 == 1 => Err(InputError::SinkClosed),
+                _ => Ok(()),
+            }
+        }
+
+        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_batch_through_the_injector_thread_returns_a_result_per_event() {
+        let feed = InputFeed::spawn(|| Ok(RejectsOdd)).unwrap();
+        let mut target = feed.target();
+        let mut results = Vec::new();
+
+        target.inject_batch(&[key(2, true), key(3, true), key(4, true)], &mut results);
+
+        assert_eq!(
+            results.iter().map(Result::is_ok).collect::<Vec<_>>(),
+            vec![true, false, true]
+        );
     }
 
     #[test]

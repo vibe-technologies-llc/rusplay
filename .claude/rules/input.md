@@ -54,6 +54,10 @@ paths:
 - Each device is put in emulating state lazily (`start_emulating` with an increasing sequence)
   and every injected event is followed by its own `frame` with a `CLOCK_MONOTONIC` microsecond
   timestamp. Emulation is stopped when the injector drops.
+  `InputSink::inject_batch` (default: `inject` per event, one result each) is overridden by
+  `LibeiInjector`, which drains the socket once and flushes once for the whole batch, and by
+  `SplitSink`, which routes each half's events to its own sink and returns the results in the
+  original order. Each event still gets its own `frame`.
 - Keys are sent as evdev keycodes, which are layout independent, so the host's own layout decides
   the symbols. The keymap the EIS server offers is read only for the lock masks below.
 - Lock sync (`input.sync_locks`, default on, needs `input.keyboard`): `inject(InputEvent::Locks)`

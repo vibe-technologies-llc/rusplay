@@ -288,7 +288,8 @@ paths:
   it. Tests that enable the microphone must replace it or they publish a real PipeWire node.
 - Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
   `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
-  `service(&mut Vec<RumbleCommand>)`) behind a mutex that the session's input stage holds for the
+  `inject_batch`, which defaults to `inject` per event, and `service(&mut Vec<RumbleCommand>)`)
+  behind a mutex that the session's input stage holds for the
   session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
   `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
   holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
@@ -303,9 +304,11 @@ paths:
     one from an earlier epoch (`input_packets_stale`) so a takeover never lets the old client's
     datagrams raise the new sequence. It reads them with `InputPacket::read`
     and `InputSequence::admit` (a fresh sequence per session), decodes each record with
-    `InputRecord::decode` and injects it; an event goes straight to the target, a state record
-    is turned into the events that bring the host to the client's held state
-    (`HeldInput::reconcile`, `input_events_repaired`) and those are injected. A failed injection
+    `InputRecord::decode` and injects the events of a section as one `inject_batch` (a single round
+    trip to the injector thread, one result per event, each recorded in `HeldInput` only on
+    success); a state record first flushes the events before it, then is turned into the events
+    that bring the host to the client's held state (`HeldInput::reconcile`,
+    `input_events_repaired`), which are injected as a batch too. A failed injection
     is not recorded as held, so the next snapshot tries again. A malformed datagram or record
     counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
     in `input_failures` without ending the session, since a paused device or a closed compositor
