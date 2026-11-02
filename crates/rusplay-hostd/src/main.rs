@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod discovery;
 mod peers;
 mod responder;
@@ -19,7 +20,7 @@ use rusplay_host::{
 use thiserror::Error;
 
 use crate::{
-    cli::{CliError, Command, HELP, PeersAction, VERSION},
+    cli::{CliError, Command, ConfigAction, HELP, PeersAction, VERSION},
     discovery::{ConfigSource, Environment},
     peers::{PeersError, render_list, resolve},
     responder::{Responder, ResponderError},
@@ -69,7 +70,20 @@ fn run() -> Result<(), HostdError> {
         }
         Command::Run { config } => serve(load_config(config)?),
         Command::Peers { config, action } => manage_peers(&load_config(config)?, &action),
+        Command::Config { config, action } => manage_config(config, action),
     }
+}
+
+fn manage_config(path: Option<PathBuf>, action: ConfigAction) -> Result<(), HostdError> {
+    match action {
+        ConfigAction::Default => print!("{}", config::default_toml()?),
+        ConfigAction::Check => {
+            let source = discovery::resolve(path, &Environment::from_process(), Path::is_file);
+            println!("{}", config::check(&source)?);
+        }
+    }
+
+    Ok(())
 }
 
 fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {

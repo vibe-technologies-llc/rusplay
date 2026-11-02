@@ -9,6 +9,8 @@ Headless Rusplay host
 Usage: rusplay-hostd [OPTIONS]
        rusplay-hostd [OPTIONS] peers list
        rusplay-hostd [OPTIONS] peers forget <ID|NAME>
+       rusplay-hostd config default
+       rusplay-hostd [OPTIONS] config check [PATH]
 
 Commands:
   peers list           Print the paired clients, one `<id> <name>` per line
@@ -17,6 +19,9 @@ Commands:
                        least 4 characters) or by its exact name. A running daemon notices on
                        the next pairing or reconnect attempt; a client already streaming
                        stays until it leaves.
+  config default       Print the built-in default configuration as TOML
+  config check [PATH]  Load and validate PATH (or the --config path, or the discovered file)
+                       and print the first problem with its causes; exits 1 when invalid
 
 Options:
   -c, --config <PATH>  Read the configuration from PATH
@@ -44,6 +49,10 @@ pub enum CliError {
     UnknownPeersAction(String),
     #[error("peers forget needs an id or a name")]
     ForgetTargetMissing,
+    #[error("config needs an action, default or check")]
+    ConfigActionMissing,
+    #[error("unknown config action {0:?}")]
+    UnknownConfigAction(String),
     #[error("unexpected argument {0:?}")]
     UnexpectedArgument(String),
 }
@@ -54,6 +63,12 @@ pub enum PeersAction {
     Forget { target: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigAction {
+    Default,
+    Check,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Run {
@@ -62,6 +77,10 @@ pub enum Command {
     Peers {
         config: Option<PathBuf>,
         action: PeersAction,
+    },
+    Config {
+        config: Option<PathBuf>,
+        action: ConfigAction,
     },
     Help,
     Version,
@@ -95,6 +114,9 @@ where
     let Some(command) = words.next() else {
         return Ok(Command::Run { config });
     };
+    if command == "config" {
+        return parse_config(config, words);
+    }
     if command != "peers" {
         return Err(CliError::UnknownCommand(command));
     }
@@ -112,6 +134,33 @@ where
     }
 
     Ok(Command::Peers { config, action })
+}
+
+fn parse_config(
+    config: Option<PathBuf>,
+    mut words: impl Iterator<Item = String>,
+) -> Result<Command, CliError> {
+    let action = match words.next().as_deref() {
+        None => return Err(CliError::ConfigActionMissing),
+        Some("default") => ConfigAction::Default,
+        Some("check") => ConfigAction::Check,
+        Some(other) => return Err(CliError::UnknownConfigAction(other.to_owned())),
+    };
+    let positional = match action {
+        ConfigAction::Check => words.next().map(PathBuf::from),
+        ConfigAction::Default => None,
+    };
+    if let Some(extra) = words.next() {
+        return Err(CliError::UnexpectedArgument(extra));
+    }
+    if config.is_some() && positional.is_some() {
+        return Err(CliError::ConfigRepeated);
+    }
+
+    Ok(Command::Config {
+        config: positional.or(config),
+        action,
+    })
 }
 
 #[cfg(test)]
@@ -233,6 +282,62 @@ mod tests {
         assert!(matches!(
             parse_strs(&["peers", "list", "extra"]),
             Err(CliError::UnexpectedArgument(word)) if word == "extra"
+        ));
+    }
+
+    #[test]
+    fn config_default_and_check_parse_with_a_path_either_way() {
+        assert_eq!(
+            parse_strs(&["config", "default"]).unwrap(),
+            Command::Config {
+                config: None,
+                action: ConfigAction::Default
+            }
+        );
+        assert_eq!(
+            parse_strs(&["config", "check"]).unwrap(),
+            Command::Config {
+                config: None,
+                action: ConfigAction::Check
+            }
+        );
+        assert_eq!(
+            parse_strs(&["config", "check", "a.toml"]).unwrap(),
+            Command::Config {
+                config: Some(PathBuf::from("a.toml")),
+                action: ConfigAction::Check
+            }
+        );
+        assert_eq!(
+            parse_strs(&["-c", "a.toml", "config", "check"]).unwrap(),
+            Command::Config {
+                config: Some(PathBuf::from("a.toml")),
+                action: ConfigAction::Check
+            }
+        );
+    }
+
+    #[test]
+    fn incomplete_or_ambiguous_config_commands_are_errors() {
+        assert!(matches!(
+            parse_strs(&["config"]),
+            Err(CliError::ConfigActionMissing)
+        ));
+        assert!(matches!(
+            parse_strs(&["config", "show"]),
+            Err(CliError::UnknownConfigAction(word)) if word == "show"
+        ));
+        assert!(matches!(
+            parse_strs(&["config", "default", "a.toml"]),
+            Err(CliError::UnexpectedArgument(word)) if word == "a.toml"
+        ));
+        assert!(matches!(
+            parse_strs(&["config", "check", "a.toml", "b.toml"]),
+            Err(CliError::UnexpectedArgument(word)) if word == "b.toml"
+        ));
+        assert!(matches!(
+            parse_strs(&["-c", "a.toml", "config", "check", "b.toml"]),
+            Err(CliError::ConfigRepeated)
         ));
     }
 
