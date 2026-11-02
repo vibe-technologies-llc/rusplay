@@ -1092,6 +1092,21 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Section::Network,
+        "Peers",
+        "peers.control_socket",
+        "Daemon control socket",
+        Kind::Flag,
+    ),
+    field(
+        Section::Network,
+        "Peers",
+        "peers.control_socket_path",
+        "Control socket path",
+        Kind::Text,
+    )
+    .optional(),
+    field(
         Section::Input,
         "Forwarding",
         "input.keyboard",

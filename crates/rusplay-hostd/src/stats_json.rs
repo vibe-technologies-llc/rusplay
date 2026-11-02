@@ -1,63 +1,9 @@
-use std::{
-    fmt::{Display, Write},
-    time::{SystemTime, UNIX_EPOCH},
-};
+use rusplay_host::{HostStats, JsonLine, StatsPhase};
 
-use rusplay_host::HostStats;
+const EVENT: &str = "stats";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase {
-    Interval,
-    Final,
-}
-
-impl Phase {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Interval => "interval",
-            Self::Final => "final",
-        }
-    }
-}
-
-struct Line(String);
-
-impl Line {
-    fn new(phase: Phase, unix_ms: u128) -> Self {
-        Self(format!(
-            r#"{{"event":"stats","phase":"{}","unix_ms":{unix_ms}"#,
-            phase.name()
-        ))
-    }
-
-    fn number(mut self, name: &str, value: impl Display) -> Self {
-        write!(self.0, ",\"{name}\":{value}").ok();
-        self
-    }
-
-    fn optional(mut self, name: &str, value: Option<impl Display>) -> Self {
-        match value {
-            Some(value) => write!(self.0, ",\"{name}\":{value}"),
-            None => write!(self.0, ",\"{name}\":null"),
-        }
-        .ok();
-        self
-    }
-
-    fn finish(mut self) -> String {
-        self.0.push('}');
-        self.0
-    }
-}
-
-pub fn now_unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_millis())
-}
-
-pub fn line(phase: Phase, unix_ms: u128, stats: &HostStats) -> String {
-    Line::new(phase, unix_ms)
+pub fn line(phase: StatsPhase, unix_ms: u128, stats: &HostStats) -> String {
+    JsonLine::new(EVENT, phase, unix_ms)
         .number("frames_captured", stats.frames_captured)
         .number("frames_superseded", stats.frames_superseded)
         .number("frames_encoded", stats.frames_encoded)
@@ -138,7 +84,7 @@ mod tests {
             ..HostStats::default()
         };
 
-        let line = line(Phase::Interval, 1_700_000_000_123, &stats);
+        let line = line(StatsPhase::Interval, 1_700_000_000_123, &stats);
 
         assert!(
             line.starts_with(r#"{"event":"stats","phase":"interval","unix_ms":1700000000123,"#)
@@ -152,7 +98,7 @@ mod tests {
 
     #[test]
     fn an_unmeasured_value_is_null() {
-        let line = line(Phase::Final, 0, &HostStats::default());
+        let line = line(StatsPhase::Final, 0, &HostStats::default());
 
         assert!(line.contains(r#""phase":"final""#));
         assert!(line.contains(r#""rtt_us":null"#));
@@ -161,7 +107,7 @@ mod tests {
 
     #[test]
     fn every_counter_of_the_snapshot_is_emitted() {
-        let line = line(Phase::Final, 0, &HostStats::default());
+        let line = line(StatsPhase::Final, 0, &HostStats::default());
         let emitted = keys(&line);
         let debug = format!("{:?}", HostStats::default());
         let counters: Vec<&str> = debug

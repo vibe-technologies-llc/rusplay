@@ -18,6 +18,7 @@ x265 = ["rusplay-host/x265"]
 
 [dependencies]
 lexopt.workspace = true
+parking_lot.workspace = true
 rusplay-config.workspace = true
 rusplay-host.workspace = true
 thiserror.workspace = true

@@ -1,5 +1,7 @@
 mod cli;
 mod config;
+mod control;
+mod control_server;
 mod discovery;
 mod peers;
 mod pin_file;
@@ -10,9 +12,11 @@ mod stats_json;
 use std::{
     env,
     error::Error,
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::Arc,
+    time::Duration,
 };
 
 use rusplay_config::{Config, ConfigEnvironment, ConfigError};
@@ -24,6 +28,8 @@ use thiserror::Error;
 
 use crate::{
     cli::{CliError, Command, ConfigAction, HELP, PeersAction, VERSION},
+    control::{ControlError, Request},
+    control_server::{ControlContext, ControlServer, PinWindow},
     discovery::ConfigSource,
     peers::{PeersError, render_list, resolve},
     pin_file::{PinFile, PinFileError},
@@ -48,6 +54,8 @@ enum HostdError {
     Peers(#[from] PeersError),
     #[error(transparent)]
     PinFile(#[from] PinFileError),
+    #[error(transparent)]
+    Control(#[from] ControlError),
 }
 
 fn main() -> ExitCode {
@@ -79,6 +87,7 @@ fn run() -> Result<(), HostdError> {
         Command::Peers { config, action } => manage_peers(&load_config(config)?, &action),
         Command::Config { config, action } => manage_config(config, action),
         Command::Pin { config } => show_pin(&load_config(config)?),
+        Command::Control { config, request } => send_request(&load_config(config)?, &request),
     }
 }
 
@@ -101,6 +110,50 @@ fn show_pin(config: &Config) -> Result<(), HostdError> {
     println!("{}", pin_file::read(&path)?);
 
     Ok(())
+}
+
+fn send_request(config: &Config, request: &Request) -> Result<(), HostdError> {
+    let runtime_dir = pin_file::runtime_dir_from_process();
+    let path = control::resolve(&config.peers, runtime_dir.as_deref())?;
+    print!("{}", control::send(&path, request)?);
+
+    Ok(())
+}
+
+fn start_control(
+    host: &HostSession,
+    address: SocketAddr,
+    window: &Arc<PinWindow>,
+) -> Option<ControlServer> {
+    let config = host.config();
+    if !config.peers.control_socket {
+        return None;
+    }
+
+    let runtime_dir = pin_file::runtime_dir_from_process();
+    let started = control::resolve(&config.peers, runtime_dir.as_deref()).and_then(|path| {
+        ControlServer::start(
+            &path,
+            ControlContext {
+                peers: Arc::clone(host.peers()),
+                address,
+                pin_digits: config.network.pairing_pin_digits,
+                window: Arc::clone(window),
+            },
+        )
+    });
+
+    match started {
+        Ok(server) => {
+            eprintln!("rusplay-hostd: control socket {}", server.path().display());
+            Some(server)
+        }
+        Err(error) => {
+            eprintln!("rusplay-hostd: running without a control socket");
+            report(&error);
+            None
+        }
+    }
 }
 
 fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {
@@ -159,6 +212,8 @@ fn serve(config: Config) -> Result<(), HostdError> {
     }
     let address = host.local_addr()?;
     eprintln!("rusplay-hostd: listening on {address}");
+    let window = Arc::new(PinWindow::new());
+    let _control = start_control(&host, address, &window);
     let _responder = Responder::start(
         &host.config().network,
         address.port(),
@@ -168,7 +223,7 @@ fn serve(config: Config) -> Result<(), HostdError> {
     )?;
 
     loop {
-        match serve_next(&host, &gpu, &feed, pin_file.as_ref()) {
+        match serve_next(&host, &gpu, &feed, pin_file.as_ref(), &window) {
             Ok(()) => {}
             Err(error) if error.is_session_failure() => report(&error),
             Err(error) => return Err(error.into()),
@@ -181,9 +236,13 @@ fn serve_next(
     gpu: &Gpu,
     feed: &Arc<CaptureFeed>,
     pin_file: Option<&PinFile>,
+    window: &PinWindow,
 ) -> Result<(), HostError> {
     let network = &host.config().network;
-    let pin = Pin::generate(network.pairing_pin_digits)?;
+    let pin = window.open(
+        Duration::from_millis(u64::from(network.pairing_timeout_ms)),
+        || Pin::generate(network.pairing_pin_digits),
+    )?;
     if let Some(file) = pin_file
         && let Err(error) = file.publish(pin.as_str())
     {
@@ -195,13 +254,13 @@ fn serve_next(
         network.pairing_timeout_ms / MILLIS_PER_SECOND
     );
 
-    let accepted = host.accept(Some(pin));
+    let accepted = host.accept_cancellable(Some(pin), window.cancel_flag());
     if let Some(file) = pin_file {
         file.clear();
     }
     let client = match accepted {
         Ok(client) => client,
-        Err(HostError::AcceptTimeout(_)) => return Ok(()),
+        Err(HostError::AcceptTimeout(_) | HostError::AcceptCancelled) => return Ok(()),
         Err(HostError::Net(NetError::PairingLocked)) => {
             eprintln!("rusplay-hostd: too many wrong pins, issuing a new one");
             return Ok(());
@@ -214,6 +273,7 @@ fn serve_next(
         Admission::Reconnected => eprintln!("rusplay-hostd: streaming to {address}"),
     }
 
+    window.stream(address);
     let stream = host.serve(&client, gpu.clone(), feed)?;
     stats::wait_logging(stream, network.stats_log_interval_ms, network.stats_json)?;
     eprintln!("rusplay-hostd: {address} left");

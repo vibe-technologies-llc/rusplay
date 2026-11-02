@@ -87,6 +87,8 @@ pub enum HostError {
     StagePanicked { stage: Stage },
     #[error("no client paired or reconnected within {0:?}")]
     AcceptTimeout(Duration),
+    #[error("the pairing window was cancelled")]
+    AcceptCancelled,
     #[error("failed to name the paired client at {address}")]
     PeerName {
         address: SocketAddr,
@@ -136,6 +138,7 @@ impl HostError {
             self,
             Self::Net(_)
                 | Self::AcceptTimeout(_)
+                | Self::AcceptCancelled
                 | Self::PeerName { .. }
                 | Self::VersionMismatch { .. }
                 | Self::HandshakeTimeout(_)

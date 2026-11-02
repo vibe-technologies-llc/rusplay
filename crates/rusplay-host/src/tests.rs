@@ -1130,6 +1130,27 @@ fn an_unknown_client_cannot_reconnect() {
 }
 
 #[test]
+fn raising_the_cancel_flag_ends_the_pairing_window_early() {
+    let mut config = host_config();
+    config.network.pairing_timeout_ms = 30_000;
+    let fixture = Fixture::new(config);
+    let host = Arc::clone(&fixture.host);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let accepting = {
+        let cancel = Arc::clone(&cancel);
+        thread::spawn(move || host.accept_cancellable(None, &cancel).map(|_| ()))
+    };
+
+    thread::sleep(Duration::from_millis(200));
+    let started = Instant::now();
+    cancel.store(true, Ordering::Release);
+    let result = accepting.join().unwrap();
+
+    assert!(matches!(result, Err(HostError::AcceptCancelled)));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
 fn a_second_client_is_told_the_host_is_busy_while_a_session_runs() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));

@@ -4828,6 +4828,7 @@ name = "rusplay-hostd"
 version = "0.1.0"
 dependencies = [
  "lexopt",
+ "parking_lot 0.13.0",
  "rusplay-config",
  "rusplay-host",
  "rusplay-net",

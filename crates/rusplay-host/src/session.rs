@@ -130,7 +130,27 @@ impl HostSession {
     }
 
     pub fn accept(&self, pin: Option<Pin>) -> Result<Client, HostError> {
-        accept(&self.transport, &self.peers, pin, &self.config.network)
+        accept(
+            &self.transport,
+            &self.peers,
+            pin,
+            &self.config.network,
+            None,
+        )
+    }
+
+    pub fn accept_cancellable(
+        &self,
+        pin: Option<Pin>,
+        cancel: &AtomicBool,
+    ) -> Result<Client, HostError> {
+        accept(
+            &self.transport,
+            &self.peers,
+            pin,
+            &self.config.network,
+            Some(cancel),
+        )
     }
 
     pub fn serve(

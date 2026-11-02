@@ -11,7 +11,9 @@ paths:
   attempt. Sessions run one at a time: `accept`, then `serve`, then `accept` again.
 - `accept(Option<Pin>)` drives `PairingResponder` (only when a PIN is given) and
   `ReconnectResponder` side by side on the same socket, by `StreamKind`, until one completes or
-  `network.pairing_timeout_ms` passes (`AcceptTimeout`). A spent PIN budget is
+  `network.pairing_timeout_ms` passes (`AcceptTimeout`). `accept_cancellable(Option<Pin>, &AtomicBool)` is the same loop, receiving in slices of at most
+  100 ms and returning `AcceptCancelled` as soon as the flag is raised, so a daemon can end a window early (the
+  hostd control socket's `new-pin`). A spent PIN budget is
   `Net(PairingLocked)`. A PIN pairing is remembered in the store under the name the client announced in
   `Start` (`client at <ip>` when it announced none) before the `Done` goes out. The session keys are installed before the final reply is sent, so the client's
   sealed `Hello` can never arrive first. Instead of `pair_as_host`'s linger, the session keeps

@@ -162,6 +162,11 @@ paths:
   line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
   underruns) appear only while non-zero. The figures are client side only: the end-to-end time
   waits on `app-stream-stats-end-to-end`.
+  With `network.stats_json` the same poll also writes the raw `ClientStats` to stdout as JSON
+  lines (`JsonReporter` in `stats.rs`, formatting in `rusplay-client`): one every
+  `network.stats_log_interval_ms` (`0` turns the periodic ones off) with `"phase":"interval"`, and
+  one with `"final"` read just before the session is stopped, so two runs can be compared without
+  scraping the UI. Beyond `--version`, nothing else in the app writes to stdout.
 
 ## Settings
 
