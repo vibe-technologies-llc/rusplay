@@ -221,7 +221,7 @@ impl Lineariser {
         settings.validate()?;
 
         if settings.channels.packing != self.settings.channels.packing {
-            self.sources = GroupCache::default();
+            self.sources.clear();
         }
         self.params = params_group(&self.pipelines, device, &settings);
         self.settings = settings;

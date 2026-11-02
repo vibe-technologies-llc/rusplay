@@ -13,9 +13,9 @@ use rusplay_config::ScalingConfig;
 use rusplay_core::{Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout, OutputLight,
-    PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
-    YuvFrame,
+    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
+    IMPORT_CACHE_ENTRIES, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
+    ScalePipelines, ScaleSettings, Scaler, Sigmoid, YuvFrame,
 };
 
 #[cfg(test)]
@@ -34,6 +34,7 @@ const OUTPUT_TEXTURES: usize = 4;
 const UPLOAD_ROW_ALIGNMENT: u32 = 4;
 const DECODED_PLANES: usize = 3;
 const SCRATCH_TEXTURES: usize = 2;
+const FRAME_VIEW_CAPACITY: usize = IMPORT_CACHE_ENTRIES;
 
 pub(crate) type SharedTarget = Arc<Mutex<Option<Resolution>>>;
 
@@ -85,7 +86,8 @@ enum UnpackInput {
     Planes(DmaBufTexture),
 }
 
-struct ScratchTexture {
+#[derive(Clone)]
+struct Image {
     texture: Arc<wgpu::Texture>,
     view: wgpu::TextureView,
 }
@@ -93,16 +95,11 @@ struct ScratchTexture {
 #[derive(Default)]
 struct Scratch {
     resolution: Option<Resolution>,
-    textures: Vec<ScratchTexture>,
+    textures: Vec<Image>,
 }
 
 impl Scratch {
-    fn ensure(
-        &mut self,
-        device: &wgpu::Device,
-        resolution: Resolution,
-        count: usize,
-    ) -> &[ScratchTexture] {
+    fn ensure(&mut self, device: &wgpu::Device, resolution: Resolution, count: usize) -> &[Image] {
         if self.resolution != Some(resolution) {
             self.resolution = Some(resolution);
             self.textures.clear();
@@ -110,7 +107,7 @@ impl Scratch {
         while self.textures.len() < count {
             let texture = Arc::new(create_texture(device, "rusplay-client-scratch", resolution));
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.textures.push(ScratchTexture { texture, view });
+            self.textures.push(Image { texture, view });
         }
 
         &self.textures
@@ -118,7 +115,7 @@ impl Scratch {
 }
 
 struct Retained {
-    texture: Arc<wgpu::Texture>,
+    image: Image,
     presented: Resolution,
     sigmoid: bool,
     frame: u32,
@@ -198,8 +195,8 @@ impl PresentStage {
         });
         if target == retained.source {
             encoder.copy_texture_to_texture(
-                retained.texture.as_image_copy(),
-                output.as_image_copy(),
+                retained.image.texture.as_image_copy(),
+                output.texture.as_image_copy(),
                 wgpu::Extent3d {
                     width: target.width,
                     height: target.height,
@@ -213,21 +210,19 @@ impl PresentStage {
                 target,
                 retained.sigmoid,
             );
-            let source_view = retained
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
             ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
                 device,
                 &mut encoder,
-                &source_view,
-                &output_view,
+                &retained.image.view,
+                &output.view,
             );
         }
         self.gpu.queue.submit([encoder.finish()]);
         retained.presented = target;
 
-        links.sink.present(retained.frame(Instant::now(), output));
+        links
+            .sink
+            .present(retained.frame(Instant::now(), output.texture));
 
         Ok(())
     }
@@ -271,7 +266,6 @@ impl PresentStage {
             links.counters.frames_unpresented.increment();
             return Ok(());
         };
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
         let scale = (target != source)
             .then(|| scale_settings(&self.options.scaling, source, target, !display.is_hdr()));
 
@@ -284,10 +278,10 @@ impl PresentStage {
             .ensure(device, source, (passes - 1).min(SCRATCH_TEXTURES));
         let unscaled = scale
             .is_some()
-            .then(|| Arc::clone(&scratch[(passes - 2) % SCRATCH_TEXTURES].texture));
+            .then(|| scratch[(passes - 2) % SCRATCH_TEXTURES].clone());
         let chain = Chain {
             scratch,
-            output: &output_view,
+            output: &output.view,
             passes,
         };
         let mut pass = 0;
@@ -314,7 +308,7 @@ impl PresentStage {
                 device,
                 &mut encoder,
                 chain.source(pass),
-                &output_view,
+                &output.view,
             );
         }
         self.gpu.queue.submit([encoder.finish()]);
@@ -322,7 +316,7 @@ impl PresentStage {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
         let retained = Retained {
-            texture: unscaled.unwrap_or_else(|| Arc::clone(&output)),
+            image: unscaled.unwrap_or_else(|| output.clone()),
             presented: target,
             sigmoid: !display.is_hdr(),
             frame: video.number,
@@ -336,7 +330,9 @@ impl PresentStage {
 
         let submitted_at = Instant::now();
         record_presented(&links.counters, video.captured_micros, submitted_at);
-        links.sink.present(retained.frame(submitted_at, output));
+        links
+            .sink
+            .present(retained.frame(submitted_at, output.texture));
         self.retained = Some(retained);
 
         Ok(())
@@ -351,7 +347,7 @@ fn record_presented(counters: &Counters, captured_micros: u64, submitted_at: Ins
 }
 
 struct Chain<'a> {
-    scratch: &'a [ScratchTexture],
+    scratch: &'a [Image],
     output: &'a wgpu::TextureView,
     passes: usize,
 }
@@ -497,10 +493,14 @@ fn ensure_unpacker<'a>(
             unpacker.upload = None;
             unpacker
         }
-        None => Unpacker {
-            converter: RgbConverter::new(pipelines, device, settings)?,
-            upload: None,
-        },
+        None => {
+            let mut converter = RgbConverter::new(pipelines, device, settings)?;
+            converter.set_frame_capacity(FRAME_VIEW_CAPACITY);
+            Unpacker {
+                converter,
+                upload: None,
+            }
+        }
     };
 
     Ok(slot.insert(unpacker))
@@ -512,12 +512,13 @@ fn ensure_scaler<'a>(
     slot: &'a mut Option<Scaler>,
     settings: ScaleSettings,
 ) -> Result<&'a mut Scaler, ClientError> {
-    let scaler = match slot.take() {
-        Some(mut scaler) => {
-            scaler.configure(device, settings)?;
-            scaler
-        }
-        None => Scaler::new(pipelines, device, settings)?,
+    let scaler = if let Some(mut scaler) = slot.take() {
+        scaler.configure(device, settings)?;
+        scaler
+    } else {
+        let mut scaler = Scaler::new(pipelines, device, settings)?;
+        scaler.set_frame_capacity(FRAME_VIEW_CAPACITY);
+        scaler
     };
 
     Ok(slot.insert(scaler))
@@ -628,32 +629,30 @@ fn check_planes(cpu: &CpuFrame, layout: &FrameLayout) -> Result<(), ClientError>
 #[derive(Default)]
 struct OutputPool {
     resolution: Option<Resolution>,
-    textures: Vec<Arc<wgpu::Texture>>,
+    images: Vec<Image>,
 }
 
 impl OutputPool {
-    fn acquire(
-        &mut self,
-        device: &wgpu::Device,
-        resolution: Resolution,
-    ) -> Option<Arc<wgpu::Texture>> {
+    fn acquire(&mut self, device: &wgpu::Device, resolution: Resolution) -> Option<Image> {
         if self.resolution != Some(resolution) {
             self.resolution = Some(resolution);
-            self.textures.clear();
+            self.images.clear();
         }
 
         if let Some(free) = self
-            .textures
+            .images
             .iter()
-            .find(|texture| Arc::strong_count(texture) == 1)
+            .find(|image| Arc::strong_count(&image.texture) == 1)
         {
-            return Some(Arc::clone(free));
+            return Some(free.clone());
         }
 
-        if self.textures.len() < OUTPUT_TEXTURES {
+        if self.images.len() < OUTPUT_TEXTURES {
             let texture = Arc::new(create_texture(device, "rusplay-client-output", resolution));
-            self.textures.push(Arc::clone(&texture));
-            return Some(texture);
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let image = Image { texture, view };
+            self.images.push(image.clone());
+            return Some(image);
         }
 
         None

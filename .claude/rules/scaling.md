@@ -82,7 +82,7 @@ paths:
   per-scaler `GroupCache` keyed by `TextureView`: a least-recently-used cache (a hit moves the
   entry to the back, so a view used every frame survives a stream of new ones) of
   `CACHED_FRAME_GROUPS` entries by default, resized by `set_frame_capacity` on `Scaler`,
-  `ColorConverter`, `RgbConverter` and `Lineariser` for a swapchain cycling more buffers. Sources are bound as non-filterable float textures, so any
+  `ColorConverter`, `RgbConverter`, `Lineariser` and `ColorMapper` for a swapchain cycling more buffers; reconfiguring keeps the capacity. The client sets `IMPORT_CACHE_ENTRIES` (the decoder surface pool bound) on every one it builds. Sources are bound as non-filterable float textures, so any
   float format can be the input; destinations are `rgba16float`.
 - RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
   before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's
