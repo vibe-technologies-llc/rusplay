@@ -143,6 +143,11 @@ paths:
   - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
     and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
     `StreamFormat`), since held frames keep their surfaces busy.
+- AV1 packets are checked in `src/obu.rs` before `cros-codecs` sees them, because its OBU reader
+  panics on a missing size field, a set reserved bit or a size past the packet. Every OBU must
+  carry a size field that fits the packet, else `Malformed { unit: Obu }`. The parser is also
+  primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
+  colour reader both go through it.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
   header when each picture is decoded; mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
@@ -155,6 +160,15 @@ paths:
   header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
   `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
+- Hostile headers are rejected before `cros-codecs` computes on them. An H.264 SPS above level
+  6.2's 139264 macroblocks, or 1055 macroblocks in either dimension, is `ResolutionUnsupported`
+  (the DPB size divides by the macroblock count). Picture order count arithmetic on SPS and slice
+  header values wraps (`wrapping_*`), so a crafted stream cannot panic a debug build.
+- The display size is the coded size minus the right and bottom crop (H.264 frame cropping, HEVC
+  conformance window, computed in `src/vaapi/crop.rs` with checked arithmetic), and
+  `Stream::output_sized` clamps every report to the coded size, as the software path does for the
+  AV1 render size. A crop past the coded size is `Malformed`, and a left or top crop is
+  `CropOriginUnsupported` because a frame carries a size, not an origin.
 - Surfaces are driver-allocated (`vaCreateSurfaces` with the RT format and decoder/export usage
   hints), exported once with `vaExportSurfaceHandle` (`DRM_PRIME_2`, read-only, composed layers)
   into an `Arc<DmaBufImage>`, and pooled. A surface is free when only the pool holds its `Arc`:

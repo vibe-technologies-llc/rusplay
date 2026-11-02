@@ -107,4 +107,13 @@ mod tests {
 
         assert_eq!(signalled, SignalledColor::default());
     }
+
+    #[test]
+    fn bt709_transfer_aliases_signal_bt709() {
+        for code in [6, 14, 15] {
+            let signalled = SignalledColor::default().with_h273_codes(1, code, 1);
+
+            assert_eq!(signalled.transfer, Some(TransferFunction::Bt709));
+        }
+    }
 }

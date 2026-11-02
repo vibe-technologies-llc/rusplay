@@ -20,7 +20,9 @@ paths:
   Lanczos Sharp, Ginseng, Hann, Robidoux, Robidoux Sharp. Kernel definitions follow mpv/libplacebo,
   so results can be compared against them.
 - Separable filters run as two passes (horizontal, then vertical) through an `rgba16float`
-  intermediate. Polar filters run as a single 2D pass (`polar.wgsl`): every source texel whose
+  intermediate. An axis whose length does not change gets
+  `TapTable::identity` (`TapTable::for_axis`), so a non-interpolating kernel such as Mitchell
+  never blurs an axis that is not resized. Polar filters run as a single 2D pass (`polar.wgsl`): every source texel whose
   distance from the sample centre, divided per axis by the stretch `max(ratio, 1)`, is below
   the kernel radius contributes, weighted by the radial kernel and normalised by the weight
   sum. The footprint is a circle of the kernel radius when upscaling, widened by the downscale
@@ -77,8 +79,10 @@ paths:
   is allocated on the per-frame path except a bind group for a frame view not seen recently.
 - Bind groups are split by lifetime: group 0 is the source texture, group 1 the storage
   destination, group 2 the pass's tables and params. Frame views get groups 0 and 1 from a small
-  per-scaler `GroupCache` keyed by `TextureView` (`CACHED_FRAME_GROUPS` entries), sized for a
-  capture or decode swapchain cycling a few buffers. Sources are bound as non-filterable float textures, so any
+  per-scaler `GroupCache` keyed by `TextureView`: a least-recently-used cache (a hit moves the
+  entry to the back, so a view used every frame survives a stream of new ones) of
+  `CACHED_FRAME_GROUPS` entries by default, resized by `set_frame_capacity` on `Scaler`,
+  `ColorConverter`, `RgbConverter` and `Lineariser` for a swapchain cycling more buffers. Sources are bound as non-filterable float textures, so any
   float format can be the input; destinations are `rgba16float`.
 - RGB to Y'CbCr is `ColorConverter` (`convert.rs`, `convert_*.wgsl`), the host's last GPU step
   before the encoder. Input is any float texture; with `InputLight::Linear` (the scaler's

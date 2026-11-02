@@ -11,7 +11,9 @@ use crate::{
     BitstreamUnit, DecodeError, DecodedFrame, annexb,
     signal::{self, HdrTracker},
     vaapi::{
-        Stream, StreamFormat, ffi,
+        Stream, StreamFormat,
+        crop::{CropOffsets, visible_resolution},
+        ffi,
         h264::dpb::{
             Decoded, Dpb, MAX_REFERENCE_FRAMES, OrderCount, Reference, ReferenceList, Structure,
             invalid_picture,
@@ -25,6 +27,9 @@ const CODEC: Codec = Codec::H264;
 const NAL_HEADER_LEN: usize = 1;
 const MAX_LIST_ENTRIES: usize = 32;
 const LEVEL_3_1: u8 = 31;
+const MAX_MACROBLOCKS: u64 = 139_264;
+const MACROBLOCK_SIZE: u32 = 16;
+const MAX_MACROBLOCK_SPAN: u32 = 1055;
 const BASELINE_PROFILE_IDC: u8 = 66;
 const ZIGZAG_4X4: [usize; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 const ZIGZAG_8X8: [usize; 64] = [
@@ -64,10 +69,10 @@ impl OpenFrame {
 
     fn record(&mut self, structure: Structure, top: Option<i32>, bottom: Option<i32>, shift: i32) {
         if structure != Structure::Bottom {
-            self.pocs[0] = top.map(|count| count - shift);
+            self.pocs[0] = top.map(|count| count.wrapping_sub(shift));
         }
         if structure != Structure::Top {
-            self.pocs[1] = bottom.map(|count| count - shift);
+            self.pocs[1] = bottom.map(|count| count.wrapping_sub(shift));
         }
     }
 
@@ -370,7 +375,48 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
     }
 }
 
-fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
+fn check_size(sps: &Sps) -> Result<(), DecodeError> {
+    let (width, height) = (sps.width(), sps.height());
+    let (columns, rows) = (width / MACROBLOCK_SIZE, height / MACROBLOCK_SIZE);
+    let macroblocks = u64::from(columns) * u64::from(rows);
+
+    if macroblocks > MAX_MACROBLOCKS || columns > MAX_MACROBLOCK_SPAN || rows > MAX_MACROBLOCK_SPAN
+    {
+        return Err(DecodeError::ResolutionUnsupported {
+            backend: crate::Backend::Vaapi,
+            codec: CODEC,
+            width,
+            height,
+        });
+    }
+
+    Ok(())
+}
+
+fn crop_offsets(sps: &Sps) -> CropOffsets {
+    if !sps.frame_cropping_flag {
+        return CropOffsets::default();
+    }
+
+    let field_factor = 2 - u32::from(sps.frame_mbs_only_flag);
+    let (unit_x, unit_y) = match (sps.chroma_format_idc, sps.separate_colour_plane_flag) {
+        (1, false) => (2, 2),
+        (2, false) => (2, 1),
+        _ => (1, 1),
+    };
+
+    CropOffsets::scaled(
+        sps.frame_crop_left_offset,
+        sps.frame_crop_right_offset,
+        sps.frame_crop_top_offset,
+        sps.frame_crop_bottom_offset,
+        (unit_x, unit_y * field_factor),
+    )
+}
+
+pub(super) fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
+    check_size(sps)?;
+
     let chroma = match sps.chroma_format_idc {
         1 => ChromaSubsampling::Yuv420,
         2 => ChromaSubsampling::Yuv422,
@@ -404,14 +450,20 @@ fn stream_format(sps: &Sps) -> Result<StreamFormat, DecodeError> {
         _ => ffi::VAProfile_VAProfileNone,
     };
 
-    let visible = sps.visible_rectangle();
+    let coded = Resolution::new(sps.width(), sps.height());
+    let visible = visible_resolution(
+        CODEC,
+        BitstreamUnit::SequenceParameterSet,
+        coded,
+        crop_offsets(sps),
+    )?;
 
     Ok(StreamFormat {
         profile,
         profile_idc: sps.profile_idc,
         pixel_format: PixelFormat { chroma, depth },
-        coded: Resolution::new(sps.width(), sps.height()),
-        visible: Resolution::new(visible.max.x, visible.max.y),
+        coded,
+        visible,
         reference_frames: sps
             .max_dpb_frames()
             .max(usize::from(sps.max_num_ref_frames)),
@@ -432,9 +484,8 @@ fn picture_parameters(
         CurrPic: current,
         ReferenceFrames: [invalid_picture(); MAX_REFERENCE_FRAMES],
         picture_width_in_mbs_minus1: sps.pic_width_in_mbs_minus1,
-        picture_height_in_mbs_minus1: ((sps.pic_height_in_map_units_minus1 + 1)
-            << u16::from(!sps.frame_mbs_only_flag))
-            - 1,
+        picture_height_in_mbs_minus1: u16::try_from(sps.height() / MACROBLOCK_SIZE - 1)
+            .unwrap_or(u16::MAX),
         bit_depth_luma_minus8: sps.bit_depth_luma_minus8,
         bit_depth_chroma_minus8: sps.bit_depth_chroma_minus8,
         num_ref_frames: sps.max_num_ref_frames,

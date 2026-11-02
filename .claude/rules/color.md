@@ -83,7 +83,8 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
   (`MasteringLuminanceInverted`).
 - `SignalledColor` is what a bitstream said: every field optional (primaries, transfer, matrix,
   range, mastering display, content light). `with_h273_codes` maps codes and leaves unknown or
-  unspecified (2) ones unset, `with_full_range` sets the range, and `over(ColorSpace)` replaces
+  unspecified (2) ones unset (transfer codes 6, 14 and 15 and matrix code 5 are the BT.709 and
+  BT.601 aliases), `with_full_range` sets the range, and `over(ColorSpace)` replaces
   exactly the fields that were signalled. `ColorPrimaries::from_chromaticities` names a known
   set when the chromaticities match it exactly and is `Custom` otherwise, which is how mastering
   display primaries read from SEI or AV1 metadata come back as `Bt2020` or `DisplayP3`.
@@ -110,7 +111,8 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
    of clipping. Per-channel clipping shifts hue (saturated greens go yellow), which is why it is
    never the default. Other modes: relative colorimetric (clip in linear target RGB), absolute
    colorimetric, saturation, desaturate, and an optional out-of-gamut highlight for calibration.
-   A source gamut that fits inside the target is a plain matrix, with no mapping step.
+   A source gamut that fits inside the target is a plain matrix, with no mapping step, unless a
+   tone stage is active in perceptual mode (see the path rules below).
 5. Scaling (`rusplay-scale`) runs on the converted, display-referred linear signal, so filters
    and anti-ringing see the values that will be shown and HDR highlights don't ring.
 6. Inverse EOTF of the target and quantisation to the swapchain depth with dithering (blue noise
@@ -138,8 +140,10 @@ It runs on the GPU in wgpu compute, between decode and present, in this order:
   groups for frame views not seen recently.
 - The path (`MappingPath`) is chosen on the CPU. A source whose relative matrix into the target
   has no negative coefficient fits inside it, and `perceptual`, `relative`, `desaturate` and
-  `highlight` all become `Matrix` (no clamp, no mapping). Otherwise: `perceptual` is
-  `Perceptual`; `relative` is `Clip` (Bradford matrix, clamp per channel in target RGB);
+  `highlight` all become `Matrix` (no clamp, no mapping), except that `perceptual` stays
+  `Perceptual` when a tone stage exists: tone mapping bounds only the ICtCp intensity, so a
+  saturated highlight keeps a channel above the target peak that a matrix would pass on to the
+  final per-channel clip, shifting its hue. Otherwise: `perceptual` is `Perceptual`; `relative` is `Clip` (Bradford matrix, clamp per channel in target RGB);
   `absolute` is `Clip` with the unadapted matrix, so the source white keeps its chromaticity;
   `saturation` is `Clip` with the identity, reinterpreting source RGB as target RGB;
   `desaturate` mixes each colour toward its target luminance (clamped to the peak) just enough to

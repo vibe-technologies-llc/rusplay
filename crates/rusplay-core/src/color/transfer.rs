@@ -9,6 +9,9 @@ const PQ_M2: f64 = 2523.0 / 4096.0 * 128.0;
 const PQ_C1: f64 = 3424.0 / 4096.0;
 const PQ_C2: f64 = 2413.0 / 4096.0 * 32.0;
 const PQ_C3: f64 = 2392.0 / 4096.0 * 32.0;
+const BT601_CODE: u8 = 6;
+const BT2020_10_BIT_CODE: u8 = 14;
+const BT2020_12_BIT_CODE: u8 = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -48,9 +51,12 @@ impl TransferFunction {
     }
 
     pub fn from_h273_code(code: u8) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|transfer| transfer.h273_code() == code)
+        match code {
+            BT601_CODE | BT2020_10_BIT_CODE | BT2020_12_BIT_CODE => Some(Self::Bt709),
+            _ => Self::ALL
+                .into_iter()
+                .find(|transfer| transfer.h273_code() == code),
+        }
     }
 }
 
@@ -106,6 +112,23 @@ mod tests {
                 TransferFunction::from_h273_code(transfer.h273_code()),
                 Some(transfer)
             );
+        }
+    }
+
+    #[test]
+    fn bt709_aliases_read_as_bt709() {
+        for code in [6, 14, 15] {
+            assert_eq!(
+                TransferFunction::from_h273_code(code),
+                Some(TransferFunction::Bt709)
+            );
+        }
+    }
+
+    #[test]
+    fn unspecified_and_reserved_codes_read_as_nothing() {
+        for code in [0, 2, 3, 5, 19, 255] {
+            assert_eq!(TransferFunction::from_h273_code(code), None);
         }
     }
 }

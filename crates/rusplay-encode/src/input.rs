@@ -107,12 +107,19 @@ impl<'a> YuvFrame<'a> {
         let chroma_rows = luma_rows.div_ceil(1 << shift_y);
         let chroma_stride = luma_stride.div_ceil(1 << shift_x);
 
-        let minimum = luma_width * sample;
-        if luma_stride < minimum {
-            return Err(EncodeError::FrameStrideTooSmall {
-                minimum,
-                actual: luma_stride,
-            });
+        for (minimum, actual) in [
+            (luma_width * sample, luma_stride),
+            (chroma_width * sample, chroma_stride),
+        ] {
+            if actual < minimum {
+                return Err(EncodeError::FrameStrideTooSmall { minimum, actual });
+            }
+            if actual % sample != 0 {
+                return Err(EncodeError::FrameStrideMisaligned {
+                    stride: actual,
+                    alignment: sample,
+                });
+            }
         }
 
         let luma_len = luma_stride * luma_rows;
@@ -303,6 +310,70 @@ mod tests {
         let error = YuvFrame::from_frame(&frame, Backend::X264, format).unwrap_err();
 
         assert!(matches!(error, EncodeError::FrameBufferTooShort { .. }));
+    }
+
+    #[test]
+    fn odd_width_at_minimum_stride_is_rejected_for_wide_samples() {
+        for chroma in [ChromaSubsampling::Yuv420, ChromaSubsampling::Yuv422] {
+            for depth in [BitDepth::Ten, BitDepth::Twelve] {
+                let format = PixelFormat { chroma, depth };
+                let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+                frame.resolution = Resolution::new(401, 4);
+                if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
+                    *stride = 802;
+                    data.resize(802 * 4 * 2, 0);
+                }
+
+                let error = YuvFrame::from_frame(&frame, Backend::X264, format).unwrap_err();
+
+                assert!(matches!(
+                    error,
+                    EncodeError::FrameStrideTooSmall {
+                        minimum: 402,
+                        actual: 401
+                    }
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn misaligned_chroma_stride_is_rejected_for_wide_samples() {
+        let format = PixelFormat {
+            chroma: ChromaSubsampling::Yuv420,
+            depth: BitDepth::Ten,
+        };
+        let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+        if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
+            *stride = 806;
+            data.resize(806 * 4 * 2, 0);
+        }
+
+        let error = YuvFrame::from_frame(&frame, Backend::X264, format).unwrap_err();
+
+        assert!(matches!(
+            error,
+            EncodeError::FrameStrideMisaligned {
+                stride: 403,
+                alignment: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn odd_width_at_minimum_stride_is_accepted_for_8_bit() {
+        let format = PixelFormat::default();
+        let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+        frame.resolution = Resolution::new(401, 4);
+        if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
+            *stride = 401;
+            data.resize(401 * 4 + 2 * 201 * 4, 0);
+        }
+
+        let view = YuvFrame::from_frame(&frame, Backend::X264, format).unwrap();
+
+        assert_eq!(view.planes[1].stride, 201);
+        assert_eq!(view.planes[1].width, 201);
     }
 
     #[test]

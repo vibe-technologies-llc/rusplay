@@ -11,6 +11,8 @@ mod metadata;
 #[cfg(feature = "nvdec")]
 mod nvdec;
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
+mod obu;
+#[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod signal;
 #[cfg(feature = "software")]
 mod software;

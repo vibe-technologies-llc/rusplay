@@ -246,6 +246,25 @@ pub struct ColorPlan {
     pub(crate) boundary_lightness: f64,
 }
 
+impl ToneStage {
+    fn plan(source: &ColorVolume, target: &ColorVolume, tone: &ToneMapping) -> Option<Self> {
+        let target_peak_nits = target.display_peak_nits();
+        let needs_tone_mapping = tone.dynamic_peak.is_some()
+            || source.peak_nits > target_peak_nits * (1.0 + PEAK_TOLERANCE);
+
+        (source.is_hdr() && needs_tone_mapping).then_some(Self {
+            curve: ToneCurve {
+                operator: tone.operator,
+                source_peak_nits: source.peak_nits.max(target_peak_nits),
+                source_black_nits: source.black_nits,
+                target_peak_nits,
+                target_black_nits: target.black_nits,
+            },
+            dynamic_peak: tone.dynamic_peak,
+        })
+    }
+}
+
 impl ColorPlan {
     pub fn new(settings: &ColorMapSettings) -> Result<Self, ScaleError> {
         let ColorMapSettings {
@@ -289,8 +308,12 @@ impl ColorPlan {
             .flatten()
             .all(|value| *value >= -CONTAINMENT_TOLERANCE);
 
+        let tone_stage = ToneStage::plan(source, target, tone);
+
         let (path, source_to_target) = match gamut.mode {
-            GamutMapMode::Perceptual if !contained => (MappingPath::Perceptual, relative),
+            GamutMapMode::Perceptual if !contained || tone_stage.is_some() => {
+                (MappingPath::Perceptual, relative)
+            }
             GamutMapMode::Relative if !contained => (MappingPath::Clip, relative),
             GamutMapMode::Desaturate if !contained => (MappingPath::Desaturate, relative),
             GamutMapMode::Highlight if !contained => (MappingPath::Highlight, relative),
@@ -309,19 +332,6 @@ impl ColorPlan {
         let lms_to_lab = space.lms_to_lab();
         let tone_xyz_to_lms = WorkingSpace::Ictcp.xyz_to_lms();
         let tone_lms_to_itp = WorkingSpace::Ictcp.lms_to_lab();
-        let target_peak_nits = target.display_peak_nits();
-        let needs_tone_mapping = tone.dynamic_peak.is_some()
-            || source.peak_nits > target_peak_nits * (1.0 + PEAK_TOLERANCE);
-        let tone = (source.is_hdr() && needs_tone_mapping).then_some(ToneStage {
-            curve: ToneCurve {
-                operator: tone.operator,
-                source_peak_nits: source.peak_nits.max(target_peak_nits),
-                source_black_nits: source.black_nits,
-                target_peak_nits,
-                target_black_nits: target.black_nits,
-            },
-            dynamic_peak: tone.dynamic_peak,
-        });
 
         let mut plan = Self {
             path,
@@ -339,7 +349,7 @@ impl ColorPlan {
             lms_to_lab,
             lab_to_lms: inverse(lms_to_lab)?,
             target_luma: target_gamut.rgb_to_xyz().rows()[1],
-            tone,
+            tone: tone_stage,
             source_white_nits: source_white,
             target_white_nits: target_white,
             tone_xyz_to_lms,

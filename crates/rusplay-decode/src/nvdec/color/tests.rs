@@ -95,3 +95,21 @@ fn a_slice_before_its_parameter_sets_is_reported() {
         })
     ));
 }
+
+#[test]
+fn av1_packets_with_broken_framing_fail_instead_of_panicking() {
+    let mut reader = ColorReader::new(Codec::Av1);
+
+    for packet in [
+        &[0x10u8, 0x00][..],
+        &[0x32, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x00],
+    ] {
+        assert!(matches!(
+            reader.read(packet),
+            Err(DecodeError::Malformed {
+                unit: BitstreamUnit::Obu,
+                ..
+            })
+        ));
+    }
+}

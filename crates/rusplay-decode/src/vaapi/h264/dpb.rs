@@ -348,18 +348,18 @@ impl Dpb {
                 let low = i32::from(header.pic_order_cnt_lsb);
 
                 let high = if low < previous_low && previous_low - low >= wrap / 2 {
-                    previous_high + wrap
+                    previous_high.wrapping_add(wrap)
                 } else if low > previous_low && low - previous_low > wrap / 2 {
-                    previous_high - wrap
+                    previous_high.wrapping_sub(wrap)
                 } else {
                     previous_high
                 };
 
-                let top = high + low;
+                let top = high.wrapping_add(low);
                 let bottom = if structure.is_field() {
                     top
                 } else {
-                    top + header.delta_pic_order_cnt_bottom
+                    top.wrapping_add(header.delta_pic_order_cnt_bottom)
                 };
                 OrderCount::of(structure, top, bottom, high, frame_num_offset)
             }
@@ -391,16 +391,14 @@ impl Dpb {
                     expected = expected.wrapping_add(sps.offset_for_non_ref_pic);
                 }
 
-                let top = expected + header.delta_pic_order_cnt[0];
+                let top = expected.wrapping_add(header.delta_pic_order_cnt[0]);
                 let bottom = match structure {
-                    Structure::Frame => {
-                        top + sps.offset_for_top_to_bottom_field + header.delta_pic_order_cnt[1]
-                    }
-                    _ => {
-                        expected
-                            + sps.offset_for_top_to_bottom_field
-                            + header.delta_pic_order_cnt[0]
-                    }
+                    Structure::Frame => top
+                        .wrapping_add(sps.offset_for_top_to_bottom_field)
+                        .wrapping_add(header.delta_pic_order_cnt[1]),
+                    _ => expected
+                        .wrapping_add(sps.offset_for_top_to_bottom_field)
+                        .wrapping_add(header.delta_pic_order_cnt[0]),
                 };
                 OrderCount::of(structure, top, bottom, 0, frame_num_offset)
             }
@@ -411,7 +409,7 @@ impl Dpb {
                 let count = if idr {
                     0
                 } else if nal_ref_idc == 0 {
-                    doubled - 1
+                    doubled.wrapping_sub(1)
                 } else {
                     doubled
                 };
@@ -710,7 +708,7 @@ impl Dpb {
             PreviousReference {
                 poc_msb: 0,
                 poc_lsb: match picture.structure {
-                    Structure::Frame => order.top.unwrap_or(0) - order.poc(),
+                    Structure::Frame => order.top.unwrap_or(0).wrapping_sub(order.poc()),
                     Structure::Top | Structure::Bottom => 0,
                 },
             }
@@ -782,7 +780,7 @@ impl Dpb {
             Marking::ShortTerm
         };
         let own = |count: Option<i32>, parity: usize| FieldState {
-            poc: count.map(|count| count - shift),
+            poc: count.map(|count| count.wrapping_sub(shift)),
             marking: if structure.parities().contains(&parity) {
                 marking
             } else {

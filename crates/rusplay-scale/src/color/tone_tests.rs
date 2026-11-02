@@ -444,3 +444,50 @@ fn frame_peak(bins: &[u32], fraction: f64) -> f64 {
     let peak = (bin + 1) as f64 / f64::from(HISTOGRAM_BINS);
     peak
 }
+
+#[test]
+fn tone_mapped_saturated_highlights_stay_inside_the_target_range() {
+    let source_white = ColorVolume::SDR_REFERENCE_WHITE_NITS;
+    let red_luminance_nits = 400.0;
+    let bt2020_red_luminance = 0.2627;
+    let red = red_luminance_nits / (source_white * bt2020_red_luminance);
+
+    let plan = ColorPlan::new(&tone_settings(
+        hdr(ColorPrimaries::Bt2020, 1000.0),
+        hdr(ColorPrimaries::Bt2020, 600.0),
+        ToneMapOperator::Bt2390,
+        None,
+    ))
+    .unwrap();
+
+    assert!(plan.tone().is_some());
+    assert_eq!(plan.path(), MappingPath::Perceptual);
+
+    for sample in [[red, 0.0, 0.0], [0.0, red, 0.0], [0.0, 0.0, red]] {
+        let mapped = reference::map(&plan, sample);
+
+        assert!(
+            mapped.iter().all(|value| *value <= plan.target_peak + 1e-6),
+            "{sample:?} mapped to {mapped:?}"
+        );
+    }
+}
+
+#[test]
+fn a_tone_stage_without_a_gamut_gap_keeps_the_other_modes_on_the_matrix() {
+    let plan = ColorPlan::new(&ColorMapSettings {
+        gamut: GamutMapping {
+            mode: GamutMapMode::Relative,
+            ..GamutMapping::default()
+        },
+        ..tone_settings(
+            hdr(ColorPrimaries::Bt2020, 1000.0),
+            hdr(ColorPrimaries::Bt2020, 600.0),
+            ToneMapOperator::Bt2390,
+            None,
+        )
+    })
+    .unwrap();
+
+    assert_eq!(plan.path(), MappingPath::Matrix);
+}
