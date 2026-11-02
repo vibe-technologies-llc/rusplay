@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 
-use rusplay_core::ScaleFilter;
+use rusplay_core::{ChromaSiting, ScaleFilter};
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
@@ -12,6 +12,7 @@ const SIGMOID_SLOPE_RANGE: RangeInclusive<f32> = 1.0..=20.0;
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScalingConfig {
+    pub chroma_siting: ChromaSiting,
     pub downscale: DownscaleConfig,
     pub upscale: UpscaleConfig,
 }
@@ -105,6 +106,15 @@ mod tests {
         assert!(defaults.sigmoid);
         assert!((defaults.sigmoid_center - 0.75).abs() < f32::EPSILON);
         assert!((defaults.sigmoid_slope - 6.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn chroma_siting_defaults_to_left_and_parses_kebab_case() {
+        let centred: ScalingConfig = toml::from_str("chroma_siting = \"center\"").unwrap();
+
+        assert_eq!(ScalingConfig::default().chroma_siting, ChromaSiting::Left);
+        assert_eq!(centred.chroma_siting, ChromaSiting::Center);
+        assert!(toml::from_str::<ScalingConfig>("chroma_siting = \"top\"").is_err());
     }
 
     #[test]

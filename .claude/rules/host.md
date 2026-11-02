@@ -200,7 +200,7 @@ paths:
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
-    `video.pixel_format`, `scaling.downscale.chroma_filter`, left siting) writes the `YuvFrame`
+    `video.pixel_format`, `scaling.downscale.chroma_filter`, `scaling.chroma_siting`) writes the `YuvFrame`
     into one of two targets (`Target` in `src/pipeline.rs`): exported memory handed to the encoder
     on the GPU, or a buffer read back to shared memory.
   - GPU hand-off (`src/handoff.rs`): with `video.encoder_gpu_handoff` on (default),

@@ -13,9 +13,9 @@ use rusplay_config::ScalingConfig;
 use rusplay_core::{Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ChromaSiting, ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
-    OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings,
-    Scaler, Sigmoid, YuvFrame,
+    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout, OutputLight,
+    PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, Sigmoid,
+    YuvFrame,
 };
 
 #[cfg(test)]
@@ -383,7 +383,7 @@ fn convert_settings(
         transfer: color.space.transfer,
         output,
         chroma_filter: options.scaling.upscale.chroma_filter,
-        chroma_siting: ChromaSiting::Left,
+        chroma_siting: options.scaling.chroma_siting,
         row_alignment: UPLOAD_ROW_ALIGNMENT,
     }
 }

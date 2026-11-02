@@ -159,6 +159,7 @@ const HOTKEY_KEYS: &[&str] = &[
     "t", "u", "v", "w", "x", "y", "z", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10",
     "f11", "f12",
 ];
+const CHROMA_SITINGS: &[&str] = &["left", "center"];
 const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
 const SCALE_FILTERS: &[&str] = &[
@@ -1245,6 +1246,13 @@ pub static FIELDS: &[Field] = &[
         Kind::Text,
     )
     .optional(),
+    field(
+        Section::Scaling,
+        "Chroma",
+        "scaling.chroma_siting",
+        "Chroma siting",
+        Kind::Choice(CHROMA_SITINGS),
+    ),
     field(
         Section::Scaling,
         "Downscale",

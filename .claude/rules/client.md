@@ -105,7 +105,7 @@ paths:
   only, sigmoid when enlarging either axis; the downscale filter otherwise). The passes ping-pong
   between at most two scratch textures at the source resolution and the last one writes the
   output texture, so a frame that needs no colour pass and no scaling is unpacked straight into
-  it. Chroma siting is `Left`, matching the host's `ColorConverter` default.
+  it. Chroma siting is `scaling.chroma_siting` (default `Left`), which must match the host's: the stream does not signal it and the decoder does not report it yet.
 - Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC`, pooled up
   to four per target size as `Arc<wgpu::Texture>`; a texture is reused once only the pool holds it,
   so the app may keep a `PresentedFrame` for as long as it displays it. If all four are held the

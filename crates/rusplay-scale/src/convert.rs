@@ -1,3 +1,4 @@
+pub use rusplay_core::ChromaSiting;
 use rusplay_core::{
     BitDepth, ChromaSubsampling, ColorRange, HdrLevels, MatrixCoefficients, PixelFormat,
     Resolution, ScaleFilter, TransferFunction,
@@ -34,13 +35,6 @@ pub enum PlaneLayout {
     Planar,
     PlanarHigh,
     SemiPlanar,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum ChromaSiting {
-    #[default]
-    Left,
-    Center,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
