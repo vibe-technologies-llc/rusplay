@@ -1,6 +1,8 @@
 use std::net::{IpAddr, SocketAddr};
 
-use rusplay_client::{DiscoveredHost, MAX_PEER_NAME_BYTES, PeerRecord, SavedHost};
+use rusplay_client::{
+    DiscoveredHost, HostId as AnnouncedHostId, MAX_PEER_NAME_BYTES, PeerRecord, SavedHost,
+};
 use rusplay_config::HostProfile;
 use thiserror::Error;
 
@@ -34,10 +36,12 @@ pub struct HostEntry {
     pub id: HostId,
     pub name: String,
     pub address: SocketAddr,
+    pub host_id: Option<AnnouncedHostId>,
     pub peer: Option<PeerRecord>,
     pub profile: HostProfile,
     pub origin: HostOrigin,
     pub online: bool,
+    pub busy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,10 +78,12 @@ impl HostList {
                 id: list.allocate_id(),
                 name: host.name.clone(),
                 address: host.address,
+                host_id: host.host_id,
                 peer: host.peer.clone(),
                 profile: host.profile.clone(),
                 origin: HostOrigin::Added,
                 online: false,
+                busy: false,
             })
             .collect();
 
@@ -91,6 +97,7 @@ impl HostList {
             .map(|entry| SavedHost {
                 name: entry.name.clone(),
                 address: entry.address,
+                host_id: entry.host_id,
                 peer: entry.peer.clone(),
                 profile: entry.profile.clone(),
             })
@@ -174,10 +181,12 @@ impl HostList {
             id,
             name,
             address,
+            host_id: None,
             peer: None,
             profile: HostProfile::default(),
             origin: HostOrigin::Added,
             online: false,
+            busy: false,
         });
         let index = self.entries.len() - 1;
         self.selected = Some(index);
@@ -214,8 +223,10 @@ impl HostList {
 
         let entry = &mut self.entries[index];
         entry.address = address;
+        entry.host_id = None;
         entry.origin = HostOrigin::Added;
         entry.online = false;
+        entry.busy = false;
         Ok(())
     }
 
@@ -252,28 +263,30 @@ impl HostList {
     pub fn merge_discovered(&mut self, found: &[DiscoveredHost]) {
         for entry in &mut self.entries {
             entry.online = false;
+            entry.busy = false;
         }
+
+        let selected = self.selected().map(|entry| entry.id);
 
         let mut unmatched = Vec::new();
         for host in found {
-            match self
-                .entries
-                .iter_mut()
-                .find(|entry| entry.address == host.address)
-            {
-                Some(entry) => {
-                    entry.online = true;
-                    if entry.origin == HostOrigin::Discovered {
-                        entry.name = announced_name(host);
-                    }
-                }
+            match announced_id(host).and_then(|id| self.position_by_host_id(id)) {
+                Some(index) => self.mark_seen(index, host, true),
                 None => unmatched.push(host),
             }
         }
 
+        let mut unplaced = Vec::new();
+        for host in unmatched {
+            match self.position_by_address(host) {
+                Some(index) => self.mark_seen(index, host, false),
+                None => unplaced.push(host),
+            }
+        }
+
         let mut new_hosts = Vec::new();
-        for host in &unmatched {
-            if self.move_saved_host(host, &unmatched) {
+        for host in &unplaced {
+            if self.move_saved_host(host, &unplaced) {
                 continue;
             }
             let id = self.allocate_id();
@@ -281,26 +294,64 @@ impl HostList {
                 id,
                 name: announced_name(host),
                 address: host.address,
+                host_id: announced_id(host),
                 peer: None,
                 profile: HostProfile::default(),
                 origin: HostOrigin::Discovered,
                 online: true,
+                busy: host.busy,
             });
         }
 
-        let selected_address = self.selected().map(|entry| entry.address);
         self.entries
             .retain(|entry| entry.online || entry.origin == HostOrigin::Added);
         self.entries.extend(new_hosts);
-        self.selected = selected_address.and_then(|address| {
-            self.entries
-                .iter()
-                .position(|entry| entry.address == address)
-        });
+        self.selected =
+            selected.and_then(|id| self.entries.iter().position(|entry| entry.id == id));
     }
 
-    fn move_saved_host(&mut self, host: &DiscoveredHost, unmatched: &[&DiscoveredHost]) -> bool {
-        let announced_once = unmatched
+    fn position_by_host_id(&self, id: AnnouncedHostId) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|entry| entry.host_id == Some(id))
+    }
+
+    fn position_by_address(&self, host: &DiscoveredHost) -> Option<usize> {
+        let announced = announced_id(host);
+
+        self.entries.iter().position(|entry| {
+            entry.address == host.address && (entry.host_id.is_none() || announced.is_none())
+        })
+    }
+
+    fn address_is_taken(&self, address: SocketAddr, except: usize) -> bool {
+        self.entries
+            .iter()
+            .enumerate()
+            .any(|(index, entry)| index != except && entry.address == address)
+    }
+
+    fn mark_seen(&mut self, index: usize, host: &DiscoveredHost, follow_address: bool) {
+        let moves = follow_address
+            && self.entries[index].address != host.address
+            && !self.address_is_taken(host.address, index);
+
+        let entry = &mut self.entries[index];
+        entry.online = true;
+        entry.busy = host.busy;
+        if entry.host_id.is_none() {
+            entry.host_id = announced_id(host);
+        }
+        if moves {
+            entry.address = host.address;
+        }
+        if entry.origin == HostOrigin::Discovered {
+            entry.name = announced_name(host);
+        }
+    }
+
+    fn move_saved_host(&mut self, host: &DiscoveredHost, unplaced: &[&DiscoveredHost]) -> bool {
+        let announced_once = unplaced
             .iter()
             .filter(|other| other.name == host.name)
             .count()
@@ -309,13 +360,26 @@ impl HostList {
             return false;
         }
 
-        let mut candidates = self.entries.iter_mut().filter(|entry| {
-            entry.origin == HostOrigin::Added && !entry.online && entry.name == host.name
-        });
-        match (candidates.next(), candidates.next()) {
-            (Some(entry), None) => {
+        let candidates: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.origin == HostOrigin::Added
+                    && !entry.online
+                    && entry.host_id.is_none()
+                    && entry.name == host.name
+            })
+            .map(|(index, _)| index)
+            .collect();
+
+        match candidates.as_slice() {
+            [index] if !self.address_is_taken(host.address, *index) => {
+                let entry = &mut self.entries[*index];
                 entry.address = host.address;
+                entry.host_id = announced_id(host);
                 entry.online = true;
+                entry.busy = host.busy;
                 true
             }
             _ => false,
@@ -357,6 +421,10 @@ fn display_name(name: &str, address: SocketAddr) -> Result<String, HostError> {
     Ok(trimmed.to_owned())
 }
 
+fn announced_id(host: &DiscoveredHost) -> Option<AnnouncedHostId> {
+    (!host.id.is_none()).then_some(host.id)
+}
+
 fn announced_name(host: &DiscoveredHost) -> String {
     let printable: String = host
         .name
@@ -372,7 +440,7 @@ fn announced_name(host: &DiscoveredHost) -> String {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_client::{HostId as AnnouncedHostId, PeerSecret};
+    use rusplay_client::PeerSecret;
     use rusplay_config::PresentMode;
 
     use super::*;
@@ -775,5 +843,237 @@ mod tests {
         );
 
         assert_eq!(hosts.saved_hosts().len(), 1);
+    }
+
+    fn identified(name: &str, address: &str, byte: u8) -> DiscoveredHost {
+        DiscoveredHost {
+            id: AnnouncedHostId([byte; AnnouncedHostId::LEN]),
+            ..found(name, address)
+        }
+    }
+
+    fn saved_with_id(name: &str, address: &str, byte: u8) -> SavedHost {
+        SavedHost {
+            name: name.to_owned(),
+            address: address.parse().unwrap(),
+            host_id: Some(AnnouncedHostId([byte; AnnouncedHostId::LEN])),
+            peer: None,
+            profile: HostProfile::default(),
+        }
+    }
+
+    #[test]
+    fn the_busy_flag_follows_the_latest_scan() {
+        let mut hosts = list();
+        hosts.add("saved", "10.0.0.1").unwrap();
+        let busy = DiscoveredHost {
+            busy: true,
+            ..found("saved", "10.0.0.1:47800")
+        };
+        let busy_new = DiscoveredHost {
+            busy: true,
+            ..found("desk", "10.0.0.2:47800")
+        };
+
+        hosts.merge_discovered(&[busy, busy_new]);
+        assert!(hosts.entries()[0].busy);
+        assert!(hosts.entries()[1].busy);
+
+        hosts.merge_discovered(&[found("saved", "10.0.0.1:47800")]);
+        assert!(!hosts.entries()[0].busy);
+        assert_eq!(hosts.entries().len(), 1);
+    }
+
+    #[test]
+    fn a_host_that_was_not_seen_is_not_busy() {
+        let mut hosts = list();
+        hosts.add("saved", "10.0.0.1").unwrap();
+        hosts.merge_discovered(&[DiscoveredHost {
+            busy: true,
+            ..found("saved", "10.0.0.1:47800")
+        }]);
+
+        hosts.merge_discovered(&[]);
+
+        assert!(!hosts.entries()[0].online);
+        assert!(!hosts.entries()[0].busy);
+    }
+
+    #[test]
+    fn a_saved_host_is_matched_by_id_after_a_rename_and_an_address_change() {
+        let mut hosts = HostList::from_saved(47_800, &[saved_with_id("Den", "10.0.0.2:47800", 7)]);
+
+        hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 7)]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(hosts.entries()[0].name, "Den");
+        assert_eq!(hosts.entries()[0].origin, HostOrigin::Added);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.9:47800".parse().unwrap()
+        );
+        assert!(hosts.entries()[0].online);
+    }
+
+    #[test]
+    fn saved_hosts_with_the_same_name_are_told_apart_by_id() {
+        let mut hosts = HostList::from_saved(
+            47_800,
+            &[
+                saved_with_id("desk", "10.0.0.2:47800", 1),
+                saved_with_id("desk", "10.0.0.3:47800", 2),
+            ],
+        );
+
+        hosts.merge_discovered(&[
+            identified("desk", "10.0.0.8:47800", 2),
+            identified("desk", "10.0.0.7:47800", 1),
+        ]);
+
+        assert_eq!(hosts.entries().len(), 2);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.7:47800".parse().unwrap()
+        );
+        assert_eq!(
+            hosts.entries()[1].address,
+            "10.0.0.8:47800".parse().unwrap()
+        );
+        assert!(hosts.entries().iter().all(|entry| entry.online));
+    }
+
+    #[test]
+    fn the_selection_follows_a_host_matched_by_id() {
+        let mut hosts = HostList::from_saved(47_800, &[saved_with_id("Den", "10.0.0.2:47800", 7)]);
+        hosts.select(0);
+
+        hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 7)]);
+
+        assert_eq!(
+            hosts.selected().unwrap().address,
+            "10.0.0.9:47800".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_saved_host_learns_the_id_announced_at_its_address() {
+        let mut hosts = list();
+        hosts.add("Den", "10.0.0.2").unwrap();
+        let before = hosts.saved_hosts();
+
+        hosts.merge_discovered(&[identified("desk", "10.0.0.2:47800", 7)]);
+
+        assert_eq!(
+            hosts.entries()[0].host_id,
+            Some(AnnouncedHostId([7; AnnouncedHostId::LEN]))
+        );
+        assert_ne!(hosts.saved_hosts(), before);
+        assert_eq!(hosts.saved_hosts()[0].host_id, hosts.entries()[0].host_id);
+    }
+
+    #[test]
+    fn a_saved_host_without_an_id_moves_by_name_and_learns_the_id() {
+        let mut hosts = list();
+        hosts.add("desk", "10.0.0.2").unwrap();
+
+        hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 7)]);
+
+        assert_eq!(hosts.entries().len(), 1);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.9:47800".parse().unwrap()
+        );
+        assert_eq!(
+            hosts.entries()[0].host_id,
+            Some(AnnouncedHostId([7; AnnouncedHostId::LEN]))
+        );
+    }
+
+    #[test]
+    fn a_saved_host_with_an_id_is_not_moved_by_name() {
+        let mut hosts = HostList::from_saved(47_800, &[saved_with_id("desk", "10.0.0.2:47800", 1)]);
+
+        hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 2)]);
+
+        assert_eq!(hosts.entries().len(), 2);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.2:47800".parse().unwrap()
+        );
+        assert!(!hosts.entries()[0].online);
+        assert_eq!(hosts.entries()[1].origin, HostOrigin::Discovered);
+    }
+
+    #[test]
+    fn another_host_at_a_saved_address_is_listed_apart() {
+        let mut hosts = HostList::from_saved(47_800, &[saved_with_id("desk", "10.0.0.2:47800", 1)]);
+
+        hosts.merge_discovered(&[identified("other", "10.0.0.2:47800", 2)]);
+
+        assert_eq!(hosts.entries().len(), 2);
+        assert!(!hosts.entries()[0].online);
+        assert_eq!(hosts.entries()[1].name, "other");
+        assert!(hosts.entries()[1].online);
+    }
+
+    #[test]
+    fn a_host_matched_by_id_does_not_take_an_address_another_entry_holds() {
+        let mut hosts = HostList::from_saved(
+            47_800,
+            &[
+                saved_with_id("a", "10.0.0.2:47800", 1),
+                saved_with_id("b", "10.0.0.3:47800", 2),
+            ],
+        );
+
+        hosts.merge_discovered(&[identified("a", "10.0.0.3:47800", 1)]);
+
+        assert_eq!(hosts.entries().len(), 2);
+        assert_eq!(
+            hosts.entries()[0].address,
+            "10.0.0.2:47800".parse().unwrap()
+        );
+        assert!(hosts.entries()[0].online);
+        assert!(!hosts.entries()[1].online);
+    }
+
+    #[test]
+    fn a_discovered_host_carries_its_announced_id() {
+        let mut hosts = list();
+
+        hosts.merge_discovered(&[
+            identified("desk", "10.0.0.2:47800", 7),
+            found("old", "10.0.0.3:47800"),
+        ]);
+
+        assert_eq!(
+            hosts.entries()[0].host_id,
+            Some(AnnouncedHostId([7; AnnouncedHostId::LEN]))
+        );
+        assert_eq!(hosts.entries()[1].host_id, None);
+    }
+
+    #[test]
+    fn editing_the_address_forgets_the_announced_id() {
+        let mut hosts = HostList::from_saved(47_800, &[saved_with_id("Den", "10.0.0.2:47800", 7)]);
+
+        hosts.set_address(0, "10.0.0.5").unwrap();
+
+        assert_eq!(hosts.entries()[0].host_id, None);
+    }
+
+    #[test]
+    fn saved_hosts_round_trip_their_id() {
+        let saved = vec![
+            saved_with_id("Den", "10.0.0.2:47800", 7),
+            SavedHost {
+                host_id: None,
+                ..saved_with_id("old", "10.0.0.3:47800", 1)
+            },
+        ];
+
+        let hosts = HostList::from_saved(47_800, &saved);
+
+        assert_eq!(hosts.saved_hosts(), saved);
     }
 }
