@@ -355,10 +355,14 @@ fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
     let mut without = GpuPipeline::new(gpu, Config::default(), None);
 
     let skipped = with_fallback.encode(&unimportable_frame(), true);
+    let again = with_fallback.encode(&unimportable_frame(), true);
     let failed = without.encode(&unimportable_frame(), true);
 
     assert!(matches!(skipped, Ok(None)));
+    assert!(matches!(again, Ok(None)));
     assert!(fallback.is_requested());
+    assert_eq!(with_fallback.take_notices().dmabuf_fallbacks, 1);
+    assert_eq!(with_fallback.take_notices(), PipelineNotices::default());
     assert!(with_fallback.encoder.is_none());
     assert!(matches!(
         failed,
@@ -368,6 +372,44 @@ fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
                 | ScaleError::DmaBufNeedsVulkan
         ))
     ));
+}
+
+#[test]
+fn a_transient_import_error_drops_the_frame_without_leaving_dmabuf() {
+    let Ok(gpu) = Gpu::open() else {
+        return;
+    };
+    let fallback = ShmFallback::default();
+    let mut pipeline = GpuPipeline::new(gpu, Config::default(), Some(fallback.clone()));
+    let transient = || HostError::Scale(ScaleError::DmaBufNoMemoryType);
+
+    let dropped = pipeline.import_failed(transient());
+    let notices = pipeline.take_notices();
+    let exhausted =
+        (1..CONSECUTIVE_IMPORT_FAILURES).find_map(|_| pipeline.import_failed(transient()).err());
+
+    assert!(matches!(dropped, Ok(None)));
+    assert!(!fallback.is_requested());
+    assert_eq!(notices.dmabuf_import_failures, 1);
+    assert_eq!(notices.dmabuf_fallbacks, 0);
+    assert!(exhausted.is_some());
+}
+
+#[test]
+fn only_a_format_or_modifier_rejection_asks_for_shared_memory() {
+    assert!(rejects_dmabuf(&HostError::Scale(
+        ScaleError::DmaBufModifierUnsupported {
+            fourcc: 0,
+            modifier: 0
+        }
+    )));
+    assert!(rejects_dmabuf(&HostError::CaptureFormatUnsupported {
+        fourcc: DrmFourcc::from_code(*b"XR24")
+    }));
+    assert!(!rejects_dmabuf(&HostError::Scale(
+        ScaleError::DmaBufNoMemoryType
+    )));
+    assert!(!rejects_dmabuf(&HostError::CaptureOpaqueFd));
 }
 
 #[test]

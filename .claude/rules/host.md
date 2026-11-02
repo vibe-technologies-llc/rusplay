@@ -170,7 +170,14 @@ paths:
   - A DMA-BUF frame that fails to import (importer unavailable, unsupported format or modifier)
     makes the pipeline call the feed's `ShmFallback::request` (`FrameSource::shm_fallback`, which
     `PipeWireCapture` forwards) and skip the frame, so PipeWire renegotiates to shared memory and
-    the session keeps going; a source without a fallback returns the import error.
+    the session keeps going; a source without a fallback returns the import error. Only a
+    rejection of the buffer itself (`rejects_dmabuf`: importer unavailable, unsupported format or
+    modifier, plane layout or extent) asks for it, once per stream (`dmabuf_fallbacks`), since
+    the capture keeps `prefer_dmabuf` off for good. Any other import error (importer creation,
+    memory import, fence syscalls) is taken as transient: the frame is dropped
+    (`dmabuf_import_failures`) and the next one retries DMA-BUF, until 60 failures in a row end the
+    session with the error. The encode stage reads these counts from `VideoPipeline::take_notices`
+    after every encode and `rusplay-hostd` prints them with the other stats.
   - Before the GPU reads a DMA-BUF the pipeline waits for its write fences (`gate_on_writes`).
     A buffer whose fences have already signalled (a zero-timeout `wait_for_writes`) is read
     straight away. Otherwise, with `capture.dmabuf_gpu_fence_wait` on (default) and a
@@ -237,8 +244,9 @@ paths:
     write), with `video.encoder_gpu_handoff` off, and when the device cannot export. The hand-off
     starts as `HandoffState::Trying`: an export, layout or encode failure before the first
     handed-off frame has encoded turns it `Off` for the pipeline, and that same frame is converted
-    again into the readback target and encoded from shared memory, so a driver that refuses the
-    import costs one extra conversion. Once a frame has encoded (`Proven`), errors end the session
+    again into the readback target and encoded from shared memory by a freshly reopened encoder (the
+    failed one may hold state from the discarded frame), so a driver that refuses the import costs
+    one extra conversion and one encoder reopen; `HostStats::handoff_disabled` counts it. Once a frame has encoded (`Proven`), errors end the session
     like any other encoder error.
   - Readback: the converter writes planar with 4-byte rows, the frame is copied into a `MAP_READ`
     buffer in the same submission, mapped, and its planes are repacked row by row into the reused

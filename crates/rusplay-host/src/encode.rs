@@ -14,8 +14,9 @@ use crate::{
     mailbox::{Delivery, Waited},
     negotiate::NegotiatedFormat,
     outbox::ControlOutbox,
-    pipeline::{StreamFormat, VideoPipeline},
+    pipeline::{PipelineNotices, StreamFormat, VideoPipeline},
     shared::Shared,
+    stats::Counters,
 };
 
 const IDLE_WAKE: Duration = Duration::from_millis(20);
@@ -77,6 +78,14 @@ fn open_negotiated(
     }
 }
 
+fn record_notices(notices: PipelineNotices, counters: &Counters) {
+    counters.dmabuf_fallbacks.add(notices.dmabuf_fallbacks);
+    counters
+        .dmabuf_import_failures
+        .add(notices.dmabuf_import_failures);
+    counters.handoff_disabled.add(notices.handoff_disabled);
+}
+
 #[derive(Debug, Default)]
 struct EncodeStage {
     next_number: u32,
@@ -131,14 +140,18 @@ impl EncodeStage {
                     captured_micros,
                 }) => {
                     drop(links.feed.take_retained());
-                    let encoded = pipeline.encode(&frame, self.force_keyframe)?;
+                    let encoded = pipeline.encode(&frame, self.force_keyframe);
+                    record_notices(pipeline.take_notices(), counters);
+                    let encoded = encoded?;
                     self.last_input = Some((frame.timestamp, Instant::now()));
                     links.feed.retain(frame);
                     (encoded, captured_micros)
                 }
                 None if self.force_keyframe => {
                     counters.frames_repeated.increment();
-                    let encoded = pipeline.repeat(self.repeat_timestamp(), true)?;
+                    let encoded = pipeline.repeat(self.repeat_timestamp(), true);
+                    record_notices(pipeline.take_notices(), counters);
+                    let encoded = encoded?;
                     (encoded, links.shared.clock.micros())
                 }
                 None => continue,
