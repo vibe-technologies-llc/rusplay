@@ -894,7 +894,7 @@ mod tests {
                 codec: Codec::Av1,
                 timestamp: Timestamp::ZERO,
                 keyframe: number == 0,
-                data,
+                data: data.into(),
             };
             let Some(picture) = decoder.decode(&frame).unwrap() else {
                 continue;

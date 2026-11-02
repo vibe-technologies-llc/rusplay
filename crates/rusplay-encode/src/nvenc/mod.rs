@@ -43,7 +43,6 @@ use crate::{
         },
         params::NvencParams,
     },
-    obu,
 };
 
 const BACKEND: Backend = Backend::Nvenc;
@@ -711,7 +710,7 @@ impl VideoEncoder for NvencEncoder {
                     },
                 );
                 device.encoder.encode(&mut params)?;
-                session.bitstream.read()?
+                session.bitstream.read(settings.codec == Codec::Av1)?
             }
             FrameBuffer::DmaBuf { .. } | FrameBuffer::OpaqueFd { .. } => {
                 let index = session.import(device, frame, settings.format)?;
@@ -733,7 +732,7 @@ impl VideoEncoder for NvencEncoder {
                     },
                 );
                 device.encoder.encode(&mut params)?;
-                let coded = session.bitstream.read()?;
+                let coded = session.bitstream.read(settings.codec == Codec::Av1)?;
                 drop(mapped);
                 coded
             }
@@ -745,16 +744,11 @@ impl VideoEncoder for NvencEncoder {
         if coded.data.is_empty() {
             return Ok(None);
         }
-        let data = match settings.codec {
-            Codec::Av1 => obu::delimited(coded.data),
-            Codec::H264 | Codec::Hevc => coded.data,
-        };
-
         Ok(Some(EncodedFrame {
             codec: settings.codec,
             timestamp: frame.timestamp,
             keyframe: keyframe || coded.picture_type == ffi::PIC_TYPE_IDR,
-            data,
+            data: coded.data.into(),
         }))
     }
 

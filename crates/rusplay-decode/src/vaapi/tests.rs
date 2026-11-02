@@ -450,7 +450,7 @@ fn field_packets(
             codec: Codec::H264,
             timestamp: Timestamp::from_micros(u64::try_from(index).unwrap() * 16_666),
             keyframe: index == 0,
-            data,
+            data: data.into(),
         })
         .collect()
 }

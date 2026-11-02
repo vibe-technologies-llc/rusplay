@@ -16,6 +16,8 @@ const TAG_LEN: usize = 16;
 const REPLAY_WINDOW: u64 = 64;
 
 pub const SEALED_OVERHEAD: usize = COUNTER_LEN + TAG_LEN;
+pub(crate) const SEALED_HEADROOM: usize = COUNTER_LEN;
+pub(crate) const SEALED_TAILROOM: usize = TAG_LEN;
 
 pub const fn requires_sealing(stream: StreamKind) -> bool {
     !matches!(
@@ -123,24 +125,45 @@ impl SessionCipher {
                     len: datagram.len(),
                     min: PacketHeader::SIZE,
                 })?;
-        let counter = self.send_counter.fetch_add(1, Ordering::Relaxed);
 
         let mut sealed = Vec::with_capacity(datagram.len() + SEALED_OVERHEAD);
         sealed.extend_from_slice(header);
-        sealed.extend_from_slice(&counter.to_be_bytes());
+        sealed.resize(PacketHeader::SIZE + COUNTER_LEN, 0);
         sealed.extend_from_slice(&datagram[PacketHeader::SIZE..]);
+        sealed.resize(sealed.len() + TAG_LEN, 0);
+        self.seal_in_place(&mut sealed)?;
+
+        Ok(sealed)
+    }
+
+    pub fn seal_in_place(&self, slot: &mut [u8]) -> Result<(), NetError> {
+        let min = PacketHeader::SIZE + SEALED_OVERHEAD;
+        if slot.len() < min {
+            return Err(NetError::SessionDatagramTooShort {
+                len: slot.len(),
+                min,
+            });
+        }
+
+        let counter = self.send_counter.fetch_add(1, Ordering::Relaxed);
+        let payload_start = PacketHeader::SIZE + COUNTER_LEN;
+        let tag_start = slot.len() - TAG_LEN;
+
+        let (head, rest) = slot.split_at_mut(payload_start);
+        let (payload, tag_room) = rest.split_at_mut(tag_start - payload_start);
+        head[PacketHeader::SIZE..].copy_from_slice(&counter.to_be_bytes());
 
         let tag = self
             .send
             .encrypt_inout_detached(
                 &nonce_for(counter),
-                header,
-                (&mut sealed[PacketHeader::SIZE + COUNTER_LEN..]).into(),
+                &head[..PacketHeader::SIZE],
+                payload.into(),
             )
             .map_err(NetError::SessionSeal)?;
-        sealed.extend_from_slice(&tag);
+        tag_room.copy_from_slice(&tag);
 
-        Ok(sealed)
+        Ok(())
     }
 
     pub fn open_in_place(&self, sealed: &mut [u8]) -> Result<usize, NetError> {

@@ -81,6 +81,6 @@ fn encoded(codec: Codec, index: usize, data: Vec<u8>) -> EncodedFrame {
         codec,
         timestamp: Timestamp::from_micros(u64::try_from(index).unwrap() * FRAME_INTERVAL_MICROS),
         keyframe: index == 0,
-        data,
+        data: data.into(),
     }
 }

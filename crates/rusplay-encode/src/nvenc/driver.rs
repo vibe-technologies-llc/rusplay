@@ -11,6 +11,7 @@ use rusplay_core::Resolution;
 use crate::{
     ApiVersion, Backend, CudaCall, CudaStatus, EncodeError, NvencCall, NvencStatus,
     nvenc::ffi::{self, Plain},
+    obu::AccessUnit,
 };
 
 const BACKEND: Backend = Backend::Nvenc;
@@ -539,7 +540,7 @@ impl Bitstream {
         self.buffer
     }
 
-    pub(super) fn read(&self) -> Result<Coded, EncodeError> {
+    pub(super) fn read(&self, delimit: bool) -> Result<Coded, EncodeError> {
         let mut params = ffi::LockBitstream::zeroed();
         params.version = ffi::LOCK_BITSTREAM_VER;
         params.output_bitstream = self.buffer;
@@ -549,13 +550,15 @@ impl Bitstream {
             (api.lock_bitstream)(self.encoder.handle, &raw mut params)
         })?;
 
-        let data = unsafe {
+        let bitstream = unsafe {
             std::slice::from_raw_parts(
                 params.bitstream_buffer_ptr.cast::<u8>(),
                 params.bitstream_size_in_bytes as usize,
             )
-        }
-        .to_vec();
+        };
+        let mut unit = AccessUnit::new(delimit && !bitstream.is_empty());
+        unit.push(bitstream);
+        let data = unit.finish();
         unsafe { (api.unlock_bitstream)(self.encoder.handle, self.buffer) };
 
         Ok(Coded {

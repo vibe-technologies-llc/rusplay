@@ -389,7 +389,7 @@ impl Session {
             codec: Codec::H264,
             timestamp: self.ledger.resolve(output.i_pts).unwrap_or(timestamp),
             keyframe: output.b_keyframe != 0,
-            data,
+            data: data.into(),
         }))
     }
 

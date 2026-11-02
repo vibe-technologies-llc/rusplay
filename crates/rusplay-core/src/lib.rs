@@ -16,7 +16,7 @@ pub use color::{
 };
 pub use format::{CodecFormat, FormatSet};
 pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane};
-pub use media::EncodedFrame;
+pub use media::{EncodedFrame, FrameBytes};
 pub use scale::{ChromaSiting, ScaleFilter};
 pub use time::Timestamp;
 pub use video::{BitDepth, ChromaSubsampling, Codec, FrameRate, PixelFormat, Resolution};

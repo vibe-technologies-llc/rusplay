@@ -183,7 +183,7 @@ impl FakePipeline {
             codec: self.format.codec,
             timestamp,
             keyframe,
-            data: vec![fill; FRAME_BYTES],
+            data: vec![fill; FRAME_BYTES].into(),
         }
     }
 }

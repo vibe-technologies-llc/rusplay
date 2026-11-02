@@ -27,7 +27,6 @@ use rusplay_core::{
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
     input::YuvFrame,
-    obu,
     rate::vbv_buffer_kbit,
     vaapi::{
         av1::{Av1Profile, Av1Stream},
@@ -937,12 +936,8 @@ impl VideoEncoder for VaapiEncoder {
 
         context.render(input, &buffers)?;
         device.display.sync(input)?;
-        let mut data = session.coded.read()?;
+        let data = session.coded.read(settings.codec == Codec::Av1)?;
         drop(buffers);
-
-        if settings.codec == Codec::Av1 {
-            data = obu::delimited(data);
-        }
 
         session.needs_keyframe = false;
         session.current ^= 1;
@@ -952,7 +947,7 @@ impl VideoEncoder for VaapiEncoder {
             codec: settings.codec,
             timestamp: frame.timestamp,
             keyframe,
-            data,
+            data: data.into(),
         }))
     }
 

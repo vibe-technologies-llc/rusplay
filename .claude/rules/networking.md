@@ -48,7 +48,9 @@ paths:
   `Transport::socket_buffers` reports the sizes actually in force for the caller to log or warn on.
 - Fragments of a frame leave in one `sendmmsg` call (`Transport::send_batch`, through rustix;
   the whole batch is refused up front if any datagram exceeds the budget, and a short count means
-  the socket buffer filled on a non-blocking socket, so the caller re-queues the tail).
+  the socket buffer filled on a non-blocking socket, so the caller re-queues the tail). The video
+  path uses `Transport::send_arena` instead, which takes a `DatagramArena` and an index range (see
+  Fragmentation).
   Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,
   `MSG_WAITFORONE`, returns as soon as one datagram is in; `recv_batch_timeout` sets
   `SO_RCVTIMEO` first, only when it differs from the value the transport last applied
@@ -304,6 +306,17 @@ paths:
   that of `packetize` on the joined buffer (a test holds it). The host passes the 8-byte
   `VideoFrameHeader` as the prefix, so a frame is never copied into a joined buffer.
   `send_batch` reads the session cipher once per batch, not once per datagram.
+- `packetize_into(&mut DatagramArena, frame, keyframe, prefix, body)` is the allocation-free path
+  (`packetize` and `packetize_prefixed` are wrappers that return plain `Vec`s from a throwaway
+  arena). It clears the arena and writes every datagram into one reused buffer, each slot laid
+  out as `PacketHeader`, 8 reserved counter bytes, body (`FecHeader` and payload for parity), 16
+  reserved tag bytes. `Transport::send_arena(arena, range, peer)` seals the range in place
+  (`SessionCipher::seal_in_place` fills the counter and tag, once per slot however often a range is
+  retried) and hands `sendmmsg` the slot as one iovec, or, when unsealed (no session, or a stream
+  that is not sealed), the header and body as two iovecs that skip the reserved gap. The wire bytes
+  are identical to `send_batch`'s. The arena's storage is never shrunk or re-zeroed between
+  frames, so a steady stream allocates nothing after the largest frame; the one copy left is the
+  encoder's bytes into the arena. `SessionCipher::seal` is the same code on a freshly built slot.
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen

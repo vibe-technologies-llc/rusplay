@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, ProtocolVersion, StreamKind};
 
-use crate::{FecScheme, NetError};
+use crate::{DatagramArena, FecScheme, NetError};
 
 #[derive(Debug, Clone)]
 pub struct Packetizer {
@@ -71,6 +71,21 @@ impl Packetizer {
         prefix: &[u8],
         body: &[u8],
     ) -> Result<Vec<Vec<u8>>, NetError> {
+        let mut arena = DatagramArena::new();
+        self.packetize_into(&mut arena, frame, keyframe, prefix, body)?;
+
+        Ok(arena.to_vecs())
+    }
+
+    pub fn packetize_into(
+        &mut self,
+        arena: &mut DatagramArena,
+        frame: u32,
+        keyframe: bool,
+        prefix: &[u8],
+        body: &[u8],
+    ) -> Result<(), NetError> {
+        arena.clear();
         let data = Payload { prefix, body };
         if data.is_empty() {
             return Err(NetError::EmptyFrame);
@@ -99,10 +114,8 @@ impl Packetizer {
             .iter()
             .map(|block| usize::from(block.parity_shards))
             .sum();
-        let mut datagrams = Vec::with_capacity(usize::from(fragment_count) + parity_count);
 
         for index in 0..usize::from(fragment_count) {
-            let chunk = data.shard(index, self.shard_len);
             let flags = if index + 1 == usize::from(fragment_count) {
                 base_flags.with(PacketFlags::LAST_FRAGMENT)
             } else {
@@ -110,7 +123,9 @@ impl Packetizer {
             };
             let header = self.next_header(self.stream, flags, frame, index, fragment_count);
 
-            datagrams.push(build_datagram(&header, None, &chunk)?);
+            let (start, end) = data.shard_bounds(index, self.shard_len);
+
+            data.copy_range(start, end, arena.push(&header, None, end - start)?);
         }
 
         let fec_packet_count =
@@ -145,12 +160,14 @@ impl Packetizer {
                     frame_bytes,
                 };
 
-                datagrams.push(build_datagram(&header, Some(&fec_header), shard)?);
+                arena
+                    .push(&header, Some(&fec_header), shard.len())?
+                    .copy_from_slice(shard);
                 fec_index += 1;
             }
         }
 
-        Ok(datagrams)
+        Ok(())
     }
 
     fn next_header(
@@ -206,9 +223,27 @@ impl<'a> Payload<'a> {
         }
     }
 
-    fn shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
+    fn shard_bounds(&self, index: usize, shard_len: usize) -> (usize, usize) {
         let start = index * shard_len;
-        let end = (start + shard_len).min(self.len());
+
+        (start, (start + shard_len).min(self.len()))
+    }
+
+    fn copy_range(&self, start: usize, end: usize, out: &mut [u8]) {
+        let split = self.prefix.len();
+
+        if start < split {
+            let prefix_end = end.min(split);
+            out[..prefix_end - start].copy_from_slice(&self.prefix[start..prefix_end]);
+        }
+        if end > split {
+            let body_start = start.max(split);
+            out[body_start - start..].copy_from_slice(&self.body[body_start - split..end - split]);
+        }
+    }
+
+    fn shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
+        let (start, end) = self.shard_bounds(index, shard_len);
 
         self.range(start, end)
     }
@@ -225,29 +260,6 @@ impl<'a> Payload<'a> {
 
 pub const fn shard_len_for(max_datagram: usize) -> usize {
     max_datagram.saturating_sub(PacketHeader::SIZE + FecHeader::SIZE) & !1
-}
-
-fn build_datagram(
-    header: &PacketHeader,
-    fec_header: Option<&FecHeader>,
-    payload: &[u8],
-) -> Result<Vec<u8>, NetError> {
-    let fec_len = if fec_header.is_some() {
-        FecHeader::SIZE
-    } else {
-        0
-    };
-    let header_len = PacketHeader::SIZE + fec_len;
-    let mut datagram = Vec::with_capacity(header_len + payload.len());
-    datagram.resize(header_len, 0);
-
-    header.write(&mut datagram)?;
-    if let Some(fec_header) = fec_header {
-        fec_header.write(&mut datagram[PacketHeader::SIZE..])?;
-    }
-    datagram.extend_from_slice(payload);
-
-    Ok(datagram)
 }
 
 #[cfg(test)]
@@ -446,5 +458,50 @@ mod tests {
             video(FecScheme::None).packetize_prefixed(0, false, &[], &[]),
             Err(NetError::EmptyFrame)
         ));
+    }
+
+    #[test]
+    fn the_arena_holds_exactly_the_datagrams_of_the_copying_path() {
+        let shard_len = video(FecScheme::None).shard_len();
+        let prefix: Vec<u8> = (0..=u8::MAX).cycle().take(shard_len + 9).collect();
+        let body: Vec<u8> = (0..=u8::MAX)
+            .rev()
+            .cycle()
+            .take(shard_len * 3 + 11)
+            .collect();
+        let joined = [prefix.as_slice(), body.as_slice()].concat();
+
+        for scheme in [FecScheme::None, FecScheme::for_overhead(4, 50)] {
+            let mut arena = DatagramArena::new();
+
+            video(scheme)
+                .packetize_into(&mut arena, 6, true, &prefix, &body)
+                .unwrap();
+
+            assert_eq!(
+                arena.to_vecs(),
+                video(scheme).packetize(6, true, &joined).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn packetizing_again_replaces_the_arena_contents() {
+        let mut packetizer = video(FecScheme::None);
+        let shard_len = packetizer.shard_len();
+        let mut arena = DatagramArena::new();
+
+        packetizer
+            .packetize_into(&mut arena, 0, false, &[], &vec![1; shard_len * 4])
+            .unwrap();
+        packetizer
+            .packetize_into(&mut arena, 1, false, &[], &[2; 5])
+            .unwrap();
+
+        let datagrams = arena.to_vecs();
+        assert_eq!(datagrams.len(), 1);
+        assert_eq!(headers(&datagrams)[0].frame, 1);
+        assert_eq!(headers(&datagrams)[0].sequence, 4);
+        assert_eq!(&datagrams[0][PacketHeader::SIZE..], [2; 5]);
     }
 }
