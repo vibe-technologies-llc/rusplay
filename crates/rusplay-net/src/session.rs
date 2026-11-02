@@ -402,4 +402,15 @@ mod tests {
         assert!(!rendered.contains("171"));
         assert!(!rendered.to_lowercase().contains("ab"));
     }
+
+    #[test]
+    fn every_strict_prefix_of_a_sealed_datagram_is_rejected() {
+        let (client, host) = pair();
+        let sealed = client.seal(&datagram(b"frame bytes")).unwrap();
+
+        for cut in 0..sealed.len() {
+            assert!(host.open(&sealed[..cut]).is_err());
+        }
+        assert!(host.open(&sealed).is_ok());
+    }
 }

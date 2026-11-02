@@ -264,4 +264,35 @@ mod tests {
             Err(ProtocolError::VersionMismatch { .. })
         ));
     }
+
+    #[test]
+    fn every_strict_prefix_of_a_header_is_rejected() {
+        let mut buf = [0; PacketHeader::SIZE];
+        sample().write(&mut buf).unwrap();
+
+        for cut in 0..PacketHeader::SIZE {
+            assert_eq!(
+                PacketHeader::read(&buf[..cut]),
+                Err(ProtocolError::BufferTooShort {
+                    needed: PacketHeader::SIZE,
+                    available: cut,
+                })
+            );
+            assert!(PacketHeader::parse(&buf[..cut]).is_err());
+        }
+    }
+
+    #[test]
+    fn every_prefix_with_a_complete_header_parses_with_the_payload_it_has() {
+        let mut datagram = vec![0; PacketHeader::SIZE];
+        sample().write(&mut datagram).unwrap();
+        datagram.extend_from_slice(&[1, 2, 3, 4]);
+
+        for cut in PacketHeader::SIZE..=datagram.len() {
+            let (header, payload) = PacketHeader::parse(&datagram[..cut]).unwrap();
+
+            assert_eq!(header, sample());
+            assert_eq!(payload.len(), cut - PacketHeader::SIZE);
+        }
+    }
 }

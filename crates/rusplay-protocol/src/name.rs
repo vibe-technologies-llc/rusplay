@@ -136,4 +136,16 @@ mod tests {
         assert_eq!(cut.as_str(), "é".repeat(32));
         assert_eq!(cleaned.as_str(), "abc");
     }
+
+    #[test]
+    fn every_prefix_of_an_encoded_name_is_accepted_or_rejected_without_panicking() {
+        let name = ClientName::new("Zażółć gęślą jaźń").unwrap();
+        let bytes = name.as_str().as_bytes();
+
+        for cut in 0..=bytes.len() {
+            let prefix = ClientName::from_bytes(&bytes[..cut]);
+
+            assert_eq!(prefix.is_ok(), std::str::from_utf8(&bytes[..cut]).is_ok());
+        }
+    }
 }

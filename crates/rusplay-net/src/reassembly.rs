@@ -1337,4 +1337,29 @@ mod tests {
         assert_eq!(limits.max_pending_frames, 3);
         assert_eq!(limits.max_fragments, 500);
     }
+
+    #[test]
+    fn every_prefix_of_a_data_or_parity_datagram_is_handled_without_panicking() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let datagrams = tx
+            .packetize(0, true, &frame_data(SHARD_LEN * 4 + 20, 3))
+            .unwrap();
+
+        assert!(datagrams.iter().any(|datagram| parity_of(datagram)));
+
+        for datagram in &datagrams {
+            for cut in 0..datagram.len() {
+                let mut rx = reassembler(StreamKind::Video);
+                let mut events = Vec::new();
+
+                let pushed = rx.push(&datagram[..cut], Instant::now(), &mut events);
+
+                if cut < PacketHeader::SIZE {
+                    assert!(pushed.is_err());
+                }
+                rx.poll_timeouts(Instant::now() + Duration::from_secs(1), &mut events);
+                assert_eq!(rx.pending_frames(), 0);
+            }
+        }
+    }
 }

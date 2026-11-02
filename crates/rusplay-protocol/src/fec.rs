@@ -146,4 +146,28 @@ mod tests {
             Err(ProtocolError::UnknownStreamKind(0xEE))
         );
     }
+
+    #[test]
+    fn every_prefix_of_a_parity_payload_is_rejected_or_parses() {
+        let mut payload = vec![0; FecHeader::SIZE];
+        sample().write(&mut payload).unwrap();
+        payload.extend_from_slice(&[9, 8, 7]);
+
+        for cut in 0..FecHeader::SIZE {
+            assert_eq!(
+                FecHeader::parse(&payload[..cut]),
+                Err(ProtocolError::BufferTooShort {
+                    needed: FecHeader::SIZE,
+                    available: cut,
+                })
+            );
+        }
+
+        for cut in FecHeader::SIZE..=payload.len() {
+            let (header, parity) = FecHeader::parse(&payload[..cut]).unwrap();
+
+            assert_eq!(header, sample());
+            assert_eq!(parity.len(), cut - FecHeader::SIZE);
+        }
+    }
 }
