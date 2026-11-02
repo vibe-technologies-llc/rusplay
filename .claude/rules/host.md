@@ -75,7 +75,11 @@ paths:
     `network.pacing_window_percent` of the frame interval, the shorter of the configured
     `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
     faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
-    frame never waits behind the previous one's pacing for long.
+    frame never waits behind the previous one's pacing for long. With `network.pacing_max_mbps`
+    above 0 the frame is instead sent at that rate when it fits inside the window (a frame
+    that would take longer at the cap still takes the whole window, so the window stays the
+    bound); 0 keeps the window-only behaviour and is the default until loss has been measured
+    on real links.
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
     encode stage has offered its encodable set, then answers with its own `Hello` carrying that

@@ -11,6 +11,7 @@ const MTU_RANGE: RangeInclusive<u16> = 576..=9000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const PIN_DIGITS_RANGE: RangeInclusive<u8> = 4..=12;
 const PACING_WINDOW_RANGE: RangeInclusive<u8> = 1..=100;
+const KBPS_PER_MBPS: u32 = 1_000;
 const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,7 @@ pub struct NetworkConfig {
     pub fec_overhead_percent: u8,
     pub pacing: bool,
     pub pacing_window_percent: u8,
+    pub pacing_max_mbps: u32,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
     pub reassembly_max_pending_frames: u8,
@@ -60,6 +62,7 @@ impl Default for NetworkConfig {
             fec_overhead_percent: 10,
             pacing: true,
             pacing_window_percent: 50,
+            pacing_max_mbps: 0,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
             reassembly_max_pending_frames: 8,
@@ -214,6 +217,10 @@ impl NetworkConfig {
         Ok(())
     }
 
+    pub fn pacing_max_kbps(&self) -> Option<u32> {
+        (self.pacing_max_mbps > 0).then(|| self.pacing_max_mbps.saturating_mul(KBPS_PER_MBPS))
+    }
+
     pub fn bitrate_hint_range(&self) -> RangeInclusive<u32> {
         self.bitrate_hint_min_kbps..=self.bitrate_hint_max_kbps
     }
@@ -309,6 +316,18 @@ mod tests {
                 Err(ConfigError::PacingWindowOutOfRange(found)) if found == percent
             ));
         }
+    }
+
+    #[test]
+    fn the_pacing_rate_cap_is_off_at_zero_and_converts_to_kilobits() {
+        let capped = NetworkConfig {
+            pacing_max_mbps: 940,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().pacing_max_kbps(), None);
+        assert_eq!(capped.pacing_max_kbps(), Some(940_000));
+        assert!(capped.validate().is_ok());
     }
 
     #[test]

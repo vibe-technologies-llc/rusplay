@@ -59,7 +59,9 @@ paths:
 - Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
   buffers and the client's socket from dropping packets. The host spreads each frame over
   `network.pacing_window_percent` (default 50) of the interval, so pacing never delays a frame by
-  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst.
+  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst, and
+  `network.pacing_max_mbps` (default 0, off) paces a frame at that rate when it takes less than
+  the window.
 - Every video frame handed to the `Packetizer` starts with the 8-byte big-endian
   `VideoFrameHeader`: the capture time in microseconds on the host's stream clock (zero at session
   start, `rusplay-host`'s `StreamClock`). It is part of the frame, so the first fragment carries it

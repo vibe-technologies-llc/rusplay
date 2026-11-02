@@ -796,6 +796,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Network,
         "Transport",
+        "network.pacing_max_mbps",
+        "Pacing rate cap",
+        U32,
+    )
+    .unit("Mbps"),
+    field(
+        Section::Network,
+        "Transport",
         "network.reassembly_timeout_ms",
         "Reassembly timeout",
         U16,
