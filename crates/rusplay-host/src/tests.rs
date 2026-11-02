@@ -1329,6 +1329,40 @@ fn a_peer_forgotten_in_the_store_file_cannot_reconnect_to_a_running_host() {
 }
 
 #[test]
+fn a_takeover_is_refused_while_the_peer_store_cannot_be_read() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
+    let (mut first, record) = TestClient::pair(fixture.address);
+    first.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(first.pump_until(|client| client.has_hello() && client.frames.len() >= 2));
+
+    std::fs::write(
+        fixture.dir.path().join("paired-clients"),
+        b"\xff not a store",
+    )
+    .unwrap();
+    let returning = TestClient::bind(fixture.address);
+    let result = reconnect_as_client(
+        &returning.transport,
+        fixture.address,
+        &record,
+        ReconnectTiming::from(&network()),
+    );
+
+    assert!(matches!(
+        result,
+        Err(NetError::ReconnectRejected {
+            reason: ReconnectRejection::Busy
+        })
+    ));
+    assert_eq!(stream.stats().sessions_taken_over, 0);
+    assert_eq!(stream.client(), first.transport.local_addr().unwrap());
+    stream.stop().unwrap();
+}
+
+#[test]
 fn accept_gives_up_after_the_pairing_timeout() {
     let mut config = host_config();
     config.network.pairing_timeout_ms = 50;

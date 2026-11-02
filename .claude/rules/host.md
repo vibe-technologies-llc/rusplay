@@ -20,7 +20,8 @@ paths:
   datagram from the client during a session is ignored, and a `Start` or a `Hello` for another
   peer from any other address is answered `Rejected(Busy)` (`networking.md`).
   - Takeover: a reconnect `Hello` for the session's own peer, from any address, runs through
-    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`).
+    the control stage's `SessionTakeover` (the peer store is refreshed first, like `accept`; a refresh that fails refuses the takeover with
+    `Rejected(Busy)` and leaves the session as it is, never falling back to the old list).
     Only on the authenticated `Accepted` the stage installs the new session keys, answers, and
     restarts the session for the new client: `Shared::suspend` (streaming flag off, mailbox held
     and a keyframe forced), `ClientLink::switch` (the shared client address every stage reads,

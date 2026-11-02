@@ -228,7 +228,13 @@ impl ControlStage {
         now: Instant,
         events: &mut Vec<ControlEvent>,
     ) -> Result<(), HostError> {
-        refresh_peers(&self.links.peers).ok();
+        if refresh_peers(&self.links.peers).is_err() {
+            if let Some(refusal) = busy_reply(datagram) {
+                self.links.transport.send_to(&refusal, from).ok();
+            }
+            return Ok(());
+        }
+
         let handled = self
             .takeover
             .handle(datagram, from, &self.links.peers.read());
