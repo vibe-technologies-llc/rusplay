@@ -12,7 +12,7 @@ use std::{
     sync::Arc,
 };
 
-use rusplay_config::{Config, ConfigError};
+use rusplay_config::{Config, ConfigEnvironment, ConfigError};
 use rusplay_host::{
     Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin, open_portal,
 };
@@ -20,7 +20,7 @@ use thiserror::Error;
 
 use crate::{
     cli::{CliError, Command, HELP, PeersAction, VERSION},
-    discovery::{ConfigSource, Environment},
+    discovery::ConfigSource,
     peers::{PeersError, render_list, resolve},
     responder::{Responder, ResponderError},
 };
@@ -73,7 +73,7 @@ fn run() -> Result<(), HostdError> {
 }
 
 fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {
-    let source = discovery::resolve(explicit, &Environment::from_process(), Path::is_file);
+    let source = discovery::resolve(explicit, &ConfigEnvironment::from_process(), Path::is_file);
 
     load(&source)
 }

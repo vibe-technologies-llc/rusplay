@@ -18,6 +18,12 @@ paths:
   conflict.
 - `validate` checks ranges that serde cannot express, each failure its own `ConfigError`
   variant. `Config::load` reads, parses and validates.
+- Role files (`ConfigRole`: `client.toml`, `host.toml`) are located by one resolver,
+  `ConfigEnvironment`: `candidates(role)` lists `$XDG_CONFIG_HOME/rusplay/<file>` then
+  `~/.config/rusplay/<file>` (a relative or empty directory is ignored, duplicates collapse), and
+  `config_path(role)` is the first candidate that exists, else the first candidate, which is where
+  a save creates it. `rusplay-hostd` and the app both go through it, so they never read and write
+  different files.
 - New options go through the `add-config-option` skill.
 - `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the
   client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the

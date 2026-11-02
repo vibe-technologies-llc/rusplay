@@ -49,8 +49,9 @@ paths:
 | `theme` | The colour palette, one function per colour |
 
 - Views never write to the status bar directly: they emit `NoticeRaised` and the root subscribes.
-- The client config lives at `$XDG_CONFIG_HOME/rusplay/client.toml` (`$HOME/.config` when unset),
-  resolved by `ConfigEnvironment` in `rusplay-config`. It is read again on every connect so a save
+- The client config is `client.toml` under `$XDG_CONFIG_HOME/rusplay/`, or `$HOME/.config/rusplay/`
+  when the XDG file does not exist, resolved by `ConfigEnvironment` in `rusplay-config` (the same
+  resolver `rusplay-hostd` uses for `host.toml`). It is read again on every connect so a save
   from the settings page takes effect without a restart. A missing file means defaults; a malformed
   one is reported in the status bar and defaults are used.
 - Discovery: `HostsView::refresh` runs `session::discover` on gpui's background executor (the
