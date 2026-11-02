@@ -6,8 +6,9 @@ paths:
 # Headless host binary
 
 - Arguments are parsed with `lexopt` in `cli.rs`: `-c`/`--config <PATH>`, `-h`/`--help`,
-  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>`, `pin` and
-  `config default` / `config check [PATH]` (below); any other positional word is
+  `-V`/`--version`, and the subcommands `peers list` / `peers forget <ID|NAME>`, `pin`, the
+  control requests `status` / `new-pin` / `forget <ID|NAME>` and `config default` /
+  `config check [PATH]` (below); any other positional word is
   `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
   chain.
@@ -20,7 +21,7 @@ paths:
   modified time, length and inode), which `accept` checks before every pairing or reconnect
   datagram, so a forgotten client is refused at its next reconnect attempt and the daemon never
   rewrites the file from a stale in-memory list. A client already streaming stays until it
-  leaves, and there is no control socket. A store file that fails to parse during a refresh
+  leaves (`forget` through the control socket behaves the same). A store file that fails to parse during a refresh
   fails the accept window (printed, then a new PIN), never silently keeps the old list.
 - `config` (`config.rs`) never touches the GPU, portal, network or peer store. `config default`
   prints `Config::default()` as TOML. `config check` resolves the path like a normal start (the
@@ -75,7 +76,31 @@ paths:
   when it is absent). `dist/systemd/rusplay-hostd.service` is a user unit
   (`PartOf=graphical-session.target`, `Restart=on-failure`) expecting the binary at
   `/usr/bin/rusplay-hostd`; the portal grant already survives restarts through
-  `capture.restore_token_file`. There is still no control socket (`hostd-control-socket`).
+  `capture.restore_token_file`.
+- `control.rs` and `control_server.rs` are the control socket. With `peers.control_socket`
+  (default on) the daemon binds `peers.control_socket_path`, else
+  `$XDG_RUNTIME_DIR/rusplay/control.sock`, after the session has bound its port, with the
+  directory created 0700 and the socket chmod 0600. A failure to bind (including no usable
+  runtime directory) is printed and the daemon runs without the socket, never stops. An existing
+  path is a stale socket and is replaced only when connecting to it is refused; a live one is
+  `AlreadyRunning` and a non-socket file is `NotASocket`. The thread `rusplay-hostd-control`
+  polls a non-blocking listener every 50 ms and serves one connection at a time with 1 s
+  read and write timeouts; the session never waits on it. The protocol is one request line
+  of at most 256 bytes of plain text (`status`, `new-pin`, `forget <ID|NAME>`; larger is
+  `too-long`, control characters or invalid UTF-8 `malformed`) answered by `ok` and a body or
+  `err <code> [detail]` (`Refusal`), after which the server half-closes, drains up to 64 KiB for
+  200 ms so the reply is not lost to a reset, and closes. `status` prints `listening`, `state`
+  (`starting`, `pairing` with `window_remaining_s`, or `streaming <addr>`) and `paired_clients`,
+  never a PIN or secret. `new-pin` generates the PIN in the control thread, stores it in
+  `PinWindow` and raises the cancel flag that `HostSession::accept_cancellable` polls (every
+  100 ms), so the open window ends with `AcceptCancelled` and the loop's next `PinWindow::open`
+  takes the requested PIN instead of generating one, then prints it to stderr and the PIN file
+  as usual; both the request and the open take the same lock so a request is never lost nor
+  cancels the window it was answered with. While a client streams it is refused
+  (`streaming`). `forget` resolves like `peers forget` against the daemon's own shared
+  `PeerStore` (refreshed first when stale) and edits the file through it; it does not end a
+  session already streaming. The CLI requests go through `control::send` (5 s timeouts, 16 KiB
+  reply cap) and `NotRunning` says no daemon answers.
 - `stats.rs` drives a session to its end: `wait_logging` polls `HostStream::is_finished` every
   100 ms, prints a one-line `HostStats` summary (RTT, frame, keyframe, datagram, loss, audio,
   cursor and input counters) to stderr every `network.stats_log_interval_ms` (default 10000, `0`

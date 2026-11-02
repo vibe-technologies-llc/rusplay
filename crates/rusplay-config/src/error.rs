@@ -146,6 +146,8 @@ pub enum ConfigError {
     EmptyClientPeersFile,
     #[error("peers.pin_file is set to an empty path")]
     EmptyPinFile,
+    #[error("peers.control_socket_path is set to an empty path")]
+    EmptyControlSocketPath,
     #[error("peers.host_name is set to an empty name")]
     EmptyHostName,
     #[error("peers.host_name is {bytes} bytes, above 64")]
@@ -251,6 +253,7 @@ impl ConfigError {
             Self::HotkeyKeyReused { field, .. } => Some(*field),
             Self::EmptyHostPeersFile => Some("peers.host_file"),
             Self::EmptyPinFile => Some("peers.pin_file"),
+            Self::EmptyControlSocketPath => Some("peers.control_socket_path"),
             Self::EmptyClientPeersFile => Some("peers.client_file"),
             Self::EmptyHostName | Self::HostNameTooLong { .. } => Some("peers.host_name"),
             Self::EmptyClientName

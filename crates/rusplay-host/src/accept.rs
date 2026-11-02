@@ -1,5 +1,6 @@
 use std::{
     net::SocketAddr,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -11,6 +12,8 @@ use rusplay_net::{
 use rusplay_protocol::{ClientName, PacketHeader, PeerId, StreamKind};
 
 use crate::HostError;
+
+const CANCEL_POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Replay {
@@ -61,6 +64,7 @@ pub(crate) fn accept(
     peers: &RwLock<PeerStore>,
     pin: Option<Pin>,
     network: &NetworkConfig,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Client, HostError> {
     let timeout = Duration::from_millis(u64::from(network.pairing_timeout_ms));
     let deadline = Instant::now() + timeout;
@@ -69,12 +73,20 @@ pub(crate) fn accept(
     let mut buf = vec![0; usize::from(network.mtu)];
 
     loop {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Acquire)) {
+            return Err(HostError::AcceptCancelled);
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(HostError::AcceptTimeout(timeout));
         }
+        let wait = if cancel.is_some() {
+            remaining.min(CANCEL_POLL)
+        } else {
+            remaining
+        };
 
-        let Some((len, from)) = transport.recv_from_timeout(&mut buf, remaining)? else {
+        let Some((len, from)) = transport.recv_from_timeout(&mut buf, wait)? else {
             continue;
         };
         let datagram = &buf[..len];

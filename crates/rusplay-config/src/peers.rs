@@ -7,7 +7,7 @@ use crate::ConfigError;
 const MAX_HOST_NAME_BYTES: usize = 64;
 const MAX_CLIENT_NAME_BYTES: usize = 64;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PeersConfig {
     pub host_file: Option<PathBuf>,
@@ -16,6 +16,23 @@ pub struct PeersConfig {
     pub client_name: Option<String>,
     pub write_pin_file: bool,
     pub pin_file: Option<PathBuf>,
+    pub control_socket: bool,
+    pub control_socket_path: Option<PathBuf>,
+}
+
+impl Default for PeersConfig {
+    fn default() -> Self {
+        Self {
+            host_file: None,
+            client_file: None,
+            host_name: None,
+            client_name: None,
+            write_pin_file: false,
+            pin_file: None,
+            control_socket: true,
+            control_socket_path: None,
+        }
+    }
 }
 
 impl PeersConfig {
@@ -42,6 +59,14 @@ impl PeersConfig {
             .is_some_and(|path| path.as_os_str().is_empty())
         {
             return Err(ConfigError::EmptyPinFile);
+        }
+
+        if self
+            .control_socket_path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            return Err(ConfigError::EmptyControlSocketPath);
         }
 
         match self.host_name.as_deref() {
@@ -105,6 +130,21 @@ mod tests {
         assert!(!PeersConfig::default().write_pin_file);
         assert_eq!(PeersConfig::default().pin_file, None);
         assert!(matches!(empty.validate(), Err(ConfigError::EmptyPinFile)));
+    }
+
+    #[test]
+    fn the_control_socket_is_on_by_default_and_an_empty_path_is_rejected() {
+        let empty = PeersConfig {
+            control_socket_path: Some(PathBuf::new()),
+            ..PeersConfig::default()
+        };
+
+        assert!(PeersConfig::default().control_socket);
+        assert_eq!(PeersConfig::default().control_socket_path, None);
+        assert!(matches!(
+            empty.validate(),
+            Err(ConfigError::EmptyControlSocketPath)
+        ));
     }
 
     fn client_named(name: &str) -> PeersConfig {

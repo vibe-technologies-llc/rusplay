@@ -3,6 +3,8 @@ use std::{ffi::OsString, path::PathBuf};
 use lexopt::{Arg, Parser, ValueExt};
 use thiserror::Error;
 
+use crate::control::Request;
+
 pub const HELP: &str = "\
 Headless Rusplay host
 
@@ -10,6 +12,9 @@ Usage: rusplay-hostd [OPTIONS]
        rusplay-hostd [OPTIONS] peers list
        rusplay-hostd [OPTIONS] peers forget <ID|NAME>
        rusplay-hostd [OPTIONS] pin
+       rusplay-hostd [OPTIONS] status
+       rusplay-hostd [OPTIONS] new-pin
+       rusplay-hostd [OPTIONS] forget <ID|NAME>
        rusplay-hostd config default
        rusplay-hostd [OPTIONS] config check [PATH]
 
@@ -22,6 +27,12 @@ Commands:
                        stays until it leaves.
   pin                  Print the pairing PIN of the running daemon's open window, read from
                        the PIN file (peers.write_pin_file); exits 1 when no window is open
+  status               Ask the running daemon for its address, state and paired client count
+                       over its control socket
+  new-pin              Ask the running daemon to close the open pairing window and open a new
+                       one, and print the new PIN; refused while a client is streaming
+  forget <ID|NAME>     Like `peers forget`, but through the running daemon's control socket,
+                       which edits the daemon's own peer list
   config default       Print the built-in default configuration as TOML
   config check [PATH]  Load and validate PATH (or the --config path, or the discovered file)
                        and print the first problem with its causes; exits 1 when invalid
@@ -30,6 +41,9 @@ Options:
   -c, --config <PATH>  Read the configuration from PATH
   -h, --help           Print this help
   -V, --version        Print the version
+
+The control socket is $XDG_RUNTIME_DIR/rusplay/control.sock unless peers.control_socket_path
+is set; the daemon creates it unless peers.control_socket is off.
 
 Without --config the first of these that exists is used, otherwise the built-in defaults:
   $XDG_CONFIG_HOME/rusplay/host.toml
@@ -50,7 +64,7 @@ pub enum CliError {
     PeersActionMissing,
     #[error("unknown peers action {0:?}")]
     UnknownPeersAction(String),
-    #[error("peers forget needs an id or a name")]
+    #[error("forget needs an id or a name")]
     ForgetTargetMissing,
     #[error("config needs an action, default or check")]
     ConfigActionMissing,
@@ -87,6 +101,10 @@ pub enum Command {
     },
     Pin {
         config: Option<PathBuf>,
+    },
+    Control {
+        config: Option<PathBuf>,
+        request: Request,
     },
     Help,
     Version,
@@ -129,6 +147,9 @@ where
             None => Ok(Command::Pin { config }),
         };
     }
+    if let Some(request) = control_request(&command, &mut words)? {
+        return Ok(Command::Control { config, request });
+    }
     if command != "peers" {
         return Err(CliError::UnknownCommand(command));
     }
@@ -146,6 +167,25 @@ where
     }
 
     Ok(Command::Peers { config, action })
+}
+
+fn control_request(
+    command: &str,
+    words: &mut impl Iterator<Item = String>,
+) -> Result<Option<Request>, CliError> {
+    let request = match command {
+        "status" => Request::Status,
+        "new-pin" => Request::NewPin,
+        "forget" => Request::Forget {
+            target: words.next().ok_or(CliError::ForgetTargetMissing)?,
+        },
+        _ => return Ok(None),
+    };
+    if let Some(extra) = words.next() {
+        return Err(CliError::UnexpectedArgument(extra));
+    }
+
+    Ok(Some(request))
 }
 
 fn parse_config(
@@ -194,6 +234,49 @@ mod tests {
         assert!(matches!(
             parse_strs(&["pin", "now"]),
             Err(CliError::UnexpectedArgument(_))
+        ));
+    }
+
+    #[test]
+    fn status_new_pin_and_forget_become_control_requests() {
+        assert_eq!(
+            parse_strs(&["status"]).unwrap(),
+            Command::Control {
+                config: None,
+                request: Request::Status
+            }
+        );
+        assert_eq!(
+            parse_strs(&["new-pin", "-c", "a.toml"]).unwrap(),
+            Command::Control {
+                config: Some(PathBuf::from("a.toml")),
+                request: Request::NewPin
+            }
+        );
+        assert_eq!(
+            parse_strs(&["forget", "desk pc"]).unwrap(),
+            Command::Control {
+                config: None,
+                request: Request::Forget {
+                    target: "desk pc".to_owned()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn incomplete_control_requests_are_errors() {
+        assert!(matches!(
+            parse_strs(&["forget"]),
+            Err(CliError::ForgetTargetMissing)
+        ));
+        assert!(matches!(
+            parse_strs(&["status", "now"]),
+            Err(CliError::UnexpectedArgument(word)) if word == "now"
+        ));
+        assert!(matches!(
+            parse_strs(&["forget", "a", "b"]),
+            Err(CliError::UnexpectedArgument(word)) if word == "b"
         ));
     }
 
