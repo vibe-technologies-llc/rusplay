@@ -32,6 +32,8 @@ pub enum ScaleError {
     PeakLuminanceOutOfRange(u32),
     #[error("row alignment {0} is not a power of two of at least 4 bytes")]
     RowAlignmentInvalid(u32),
+    #[error("extent alignment {0} is not a power of two")]
+    ExtentAlignmentInvalid(u32),
     #[error("a frame of {bytes} bytes exceeds the addressable 16 GiB")]
     FrameTooLarge { bytes: u64 },
     #[error("reference white {0} cd/m² is outside 0..=10000")]

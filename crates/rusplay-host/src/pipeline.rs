@@ -30,6 +30,7 @@ use crate::{
 };
 
 const CONVERT_ROW_ALIGNMENT: u32 = 4;
+const UNPADDED_EXTENT: u32 = 1;
 const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CONSECUTIVE_IMPORT_FAILURES: u32 = 60;
 const GPU_FENCE_POLL_ALLOWANCE: Duration = Duration::from_millis(500);
@@ -977,10 +978,16 @@ fn convert_settings(
     handoff: Option<Handoff>,
 ) -> ConvertSettings {
     let video = &config.video;
-    let (layout, row_alignment) = handoff
-        .map_or((PlaneLayout::Planar, CONVERT_ROW_ALIGNMENT), |handoff| {
-            (handoff.layout(), HANDOFF_ROW_ALIGNMENT)
-        });
+    let (layout, row_alignment, extent_alignment) = handoff.map_or(
+        (PlaneLayout::Planar, CONVERT_ROW_ALIGNMENT, UNPADDED_EXTENT),
+        |handoff| {
+            (
+                handoff.layout(),
+                HANDOFF_ROW_ALIGNMENT,
+                handoff.input.extent_alignment,
+            )
+        },
+    );
 
     ConvertSettings {
         resolution,
@@ -994,5 +1001,6 @@ fn convert_settings(
         chroma_filter: config.scaling.downscale.chroma_filter,
         chroma_siting: config.scaling.chroma_siting,
         row_alignment,
+        extent_alignment,
     }
 }

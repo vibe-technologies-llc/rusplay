@@ -152,7 +152,6 @@ fn handed_off_frames_decode_like_read_back_frames() {
 }
 
 #[test]
-#[ignore = "host-handoff-odd-size-edge: the hand-off differs from the readback in the last columns of an odd-width frame"]
 fn handed_off_frames_of_an_odd_size_decode_like_read_back_frames() {
     assert_handoff_matches_readback(Resolution::new(402, 226));
 }

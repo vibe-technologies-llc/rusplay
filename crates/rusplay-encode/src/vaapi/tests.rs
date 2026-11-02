@@ -730,7 +730,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
     let surface = Surface::create_exportable(display, surface_format, RESOLUTION).unwrap();
     let mut image = Image::new(display, surface_format.va_fourcc, RESOLUTION).unwrap();
     image
-        .write(|data, layout| pack(&view, data, layout))
+        .write(|data, layout| pack(&view, data, layout, RESOLUTION))
         .unwrap();
     image.put(&surface).unwrap();
     display.sync(surface.id()).unwrap();

@@ -26,6 +26,7 @@ use rusplay_core::{
 
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
+    device::VAAPI_CODED_ALIGNMENT,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
     vaapi::{
@@ -49,7 +50,7 @@ const YUV420_8: PixelFormat = PixelFormat {
     depth: BitDepth::Eight,
 };
 const INFINITE_INTRA_PERIOD: u32 = 0xffff;
-const RECONSTRUCTED_ALIGNMENT: u32 = 16;
+const RECONSTRUCTED_ALIGNMENT: u32 = VAAPI_CODED_ALIGNMENT;
 const CODED_BUFFER_HEADROOM: u64 = 64 * 1024;
 const IMPORT_CACHE_CAPACITY: usize = 16;
 const WANTED_PACKED_HEADERS: u32 = ffi::VA_ENC_PACKED_HEADER_SEQUENCE
@@ -478,6 +479,13 @@ enum Stream {
     Av1(Box<Av1Stream>),
 }
 
+pub(crate) const fn coded_extent(resolution: Resolution) -> Resolution {
+    Resolution::new(
+        resolution.width.next_multiple_of(RECONSTRUCTED_ALIGNMENT),
+        resolution.height.next_multiple_of(RECONSTRUCTED_ALIGNMENT),
+    )
+}
+
 impl Stream {
     fn new(profile: CodecProfile, info: StreamInfo) -> Self {
         match profile {
@@ -541,10 +549,7 @@ impl Session {
             });
         }
 
-        let aligned = Resolution::new(
-            resolution.width.next_multiple_of(RECONSTRUCTED_ALIGNMENT),
-            resolution.height.next_multiple_of(RECONSTRUCTED_ALIGNMENT),
-        );
+        let aligned = coded_extent(resolution);
         let format = surface_format(settings.format);
         let recon = [
             Surface::create(&device.display, format, aligned)?,
@@ -597,15 +602,17 @@ impl Session {
             Some(upload) => upload,
             empty => {
                 let format = surface_format(view.format);
-                let image = Image::new(display, format.va_fourcc, view.resolution)?;
-                let surface = Surface::create(display, format, view.resolution)?;
+                let extent = coded_extent(view.resolution);
+                let image = Image::new(display, format.va_fourcc, extent)?;
+                let surface = Surface::create(display, format, extent)?;
                 empty.insert(Upload { image, surface })
             }
         };
 
+        let extent = coded_extent(view.resolution);
         upload
             .image
-            .write(|data, layout| format::pack(view, data, layout))?;
+            .write(|data, layout| format::pack(view, data, layout, extent))?;
         upload.image.put(&upload.surface)?;
 
         Ok(upload.surface.id())

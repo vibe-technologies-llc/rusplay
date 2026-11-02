@@ -178,8 +178,14 @@ paths:
   so the buffers PipeWire recycles are imported once. A `FrameBuffer::Shm` follows the CPU input
   contract below and is packed into a `VAImage` and put into one upload surface. A
   `FrameBuffer::OpaqueFd` is `OpaqueFdUnsupported`. The host's GPU hand-off feeds this path with
-  linear `NV12`/`P010`/`P012` exported from RADV (256-byte pitch, chroma right after the luma);
+  linear `NV12`/`P010`/`P012` exported from RADV (256-byte pitch, chroma after the padded luma);
   radeonsi encodes it bit-identically to the uploaded frame.
+- Coded extent: the driver encodes whole blocks and reads the input past the picture, up to
+  `device::VAAPI_CODED_ALIGNMENT` (16, also the reconstructed surfaces' alignment). The upload
+  image and surface are that padded size (`coded_extent`) and `format::pack` fills the padding by
+  repeating the last column and row; a driver-allocated surface's padding is otherwise stale
+  memory, which made odd sizes encode nondeterministically. `DeviceInput::extent_alignment`
+  carries the same alignment to the host so a handed-off buffer has the same padding (NVENC: 1).
 - One frame in flight: `encode` waits for the input surface and reads the coded buffer before it
   returns, so the capture buffer is free again when the call returns. With `video.resolution`
   unset the session opens on the first frame; a later size is `FrameResolutionMismatch`.

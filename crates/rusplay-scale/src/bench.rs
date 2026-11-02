@@ -176,6 +176,7 @@ fn hdr_frame(
         chroma_filter: ScaleFilter::Hermite,
         chroma_siting: ChromaSiting::Left,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
+        extent_alignment: 1,
     };
     let mut converter = ColorConverter::new(pipelines, &gpu.device, encode).unwrap();
     let frame = converter.create_frame(&gpu.device);
@@ -413,6 +414,7 @@ fn scaling_frame_times() {
             chroma_filter,
             chroma_siting: ChromaSiting::Left,
             row_alignment: DEFAULT_ROW_ALIGNMENT,
+            extent_alignment: 1,
         };
 
         println!(

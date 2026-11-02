@@ -88,6 +88,7 @@ impl RgbConvertSettings {
             self.format,
             self.layout,
             self.row_alignment,
+            1,
         )
     }
 
@@ -688,6 +689,7 @@ mod tests {
             chroma_filter: ScaleFilter::Hermite,
             chroma_siting: settings.chroma_siting,
             row_alignment: settings.row_alignment,
+            extent_alignment: 1,
         }
     }
 

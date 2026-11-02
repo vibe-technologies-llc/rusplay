@@ -18,6 +18,8 @@ struct Params {
     horizontal_taps: u32,
     vertical_taps: u32,
     hdr: vec4<f32>,
+    luma_extent: vec2<u32>,
+    chroma_extent: vec2<u32>,
 }
 
 const TRANSFER_SRGB: u32 = 1u;
