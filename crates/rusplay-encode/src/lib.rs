@@ -24,6 +24,8 @@ pub mod input;
 mod nvenc;
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]
 mod obu;
+#[cfg(any(feature = "vaapi", feature = "nvenc"))]
+mod pool;
 mod rate;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod software;

@@ -107,9 +107,9 @@ impl CodedBuffer {
         self.buffer.id()
     }
 
-    pub(super) fn read(&self, delimit: bool) -> Result<Vec<u8>, EncodeError> {
+    pub(super) fn read(&self, delimit: bool, buffer: Vec<u8>) -> Result<Vec<u8>, EncodeError> {
         let mut segment = self.buffer.map()?.cast::<ffi::VACodedBufferSegment>();
-        let mut unit = AccessUnit::new(delimit);
+        let mut unit = AccessUnit::new(delimit, buffer);
         let mut overflow = false;
 
         while !segment.is_null() {

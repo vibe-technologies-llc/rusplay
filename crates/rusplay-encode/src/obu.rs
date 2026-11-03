@@ -22,9 +22,11 @@ pub(crate) struct AccessUnit {
 }
 
 impl AccessUnit {
-    pub(crate) const fn new(delimit: bool) -> Self {
+    pub(crate) fn new(delimit: bool, mut buffer: Vec<u8>) -> Self {
+        buffer.clear();
+
         Self {
-            data: Vec::new(),
+            data: buffer,
             delimit,
         }
     }
@@ -62,7 +64,7 @@ mod tests {
     }
 
     fn access_unit(delimit: bool, chunks: &[&[u8]]) -> Vec<u8> {
-        let mut unit = AccessUnit::new(delimit);
+        let mut unit = AccessUnit::new(delimit, Vec::new());
         for chunk in chunks {
             unit.push(chunk);
         }

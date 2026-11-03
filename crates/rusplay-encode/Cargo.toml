@@ -10,8 +10,8 @@ build = "build.rs"
 x264 = ["dep:bindgen", "dep:pkg-config"]
 x265 = ["dep:bindgen", "dep:pkg-config"]
 svt-av1 = ["dep:bindgen", "dep:parking_lot", "dep:pkg-config"]
-vaapi = ["dep:rusplay-va", "rusplay-va/libva"]
-nvenc = ["dep:rusplay-cuda"]
+vaapi = ["dep:parking_lot", "dep:rusplay-va", "rusplay-va/libva"]
+nvenc = ["dep:parking_lot", "dep:rusplay-cuda"]
 
 [dependencies]
 parking_lot = { workspace = true, optional = true }

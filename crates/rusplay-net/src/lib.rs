@@ -23,7 +23,7 @@ pub use crate::{
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},
     discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
     error::NetError,
-    fec::{FecBlock, FecScheme},
+    fec::{BlockEncoding, FecBlock, FecEncoder, FecScheme},
     host_id::load_or_create_host_id,
     pacer::Pacer,
     packetizer::{Packetizer, shard_len_for},

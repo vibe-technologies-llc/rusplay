@@ -468,7 +468,7 @@ impl Bitstream {
         self.buffer
     }
 
-    pub(super) fn read(&self, delimit: bool) -> Result<Coded, EncodeError> {
+    pub(super) fn read(&self, delimit: bool, buffer: Vec<u8>) -> Result<Coded, EncodeError> {
         let mut params = ffi::LockBitstream::zeroed();
         params.version = ffi::LOCK_BITSTREAM_VER;
         params.output_bitstream = self.buffer;
@@ -484,7 +484,7 @@ impl Bitstream {
                 params.bitstream_size_in_bytes as usize,
             )
         };
-        let mut unit = AccessUnit::new(delimit && !bitstream.is_empty());
+        let mut unit = AccessUnit::new(delimit && !bitstream.is_empty(), buffer);
         unit.push(bitstream);
         let data = unit.finish();
         unsafe { (api.unlock_bitstream)(self.encoder.handle, self.buffer) };
