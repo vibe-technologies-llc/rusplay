@@ -457,8 +457,7 @@ fn send_datagrams(
     transport: &Transport,
     client: SocketAddr,
     datagrams: &[Vec<u8>],
-    frame: u32,
-    frames_to_keyframe: usize,
+    (frame, frames_to_keyframe): (u32, usize),
     drop: &DropRule,
 ) {
     let mut data_index = 0;
@@ -590,14 +589,8 @@ fn serve(
             let datagrams = packetizer
                 .packetize(next_frame, keyframe, &payload)
                 .unwrap();
-            send_datagrams(
-                transport,
-                client,
-                &datagrams,
-                next_frame,
-                fixture.len() - fixture_index,
-                &options.drop,
-            );
+            let at = (next_frame, fixture.len() - fixture_index);
+            send_datagrams(transport, client, &datagrams, at, &options.drop);
 
             next_frame += 1;
             fixture_index = (fixture_index + 1) % fixture.len();
