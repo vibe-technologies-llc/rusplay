@@ -49,6 +49,8 @@ pub enum EncodeError {
     LibraryIncompatible { backend: Backend },
     #[error("the {backend} encoder failed with code {code}")]
     EncodeFailed { backend: Backend, code: i32 },
+    #[error("the encoder does not take borrowed planes")]
+    PlanesUnsupported,
     #[error("the {backend} encoder takes CPU frames, not GPU memory")]
     CpuFrameRequired { backend: Backend },
     #[error(

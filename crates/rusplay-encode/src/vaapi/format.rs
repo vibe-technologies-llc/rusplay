@@ -4,7 +4,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    input::YuvFrame,
+    input::{YuvFrame, YuvPlane},
     vaapi::{
         ffi,
         va::{ImageLayout, SurfaceFormat},
@@ -95,104 +95,245 @@ pub(super) const fn full_range(range: ColorRange) -> bool {
     matches!(range, ColorRange::Full)
 }
 
-fn sample(plane: &[u8], stride: usize, wide: bool, x: usize, y: usize) -> u16 {
-    if wide {
-        let at = y * stride + 2 * x;
-        u16::from_le_bytes([plane[at], plane[at + 1]])
-    } else {
-        u16::from(plane[y * stride + x])
+trait Sample {
+    const SIZE: usize;
+
+    fn load(bytes: &[u8]) -> u16;
+
+    fn store(value: u16, shift: u32, out: &mut [u8]);
+}
+
+struct Narrow;
+
+struct Wide;
+
+impl Sample for Narrow {
+    const SIZE: usize = 1;
+
+    fn load(bytes: &[u8]) -> u16 {
+        u16::from(bytes[0])
+    }
+
+    fn store(value: u16, _shift: u32, out: &mut [u8]) {
+        out[0] = u8::try_from(value).unwrap_or(u8::MAX);
     }
 }
 
-fn put_u16(data: &mut [u8], at: usize, value: u16) {
-    data[at..at + 2].copy_from_slice(&value.to_le_bytes());
+impl Sample for Wide {
+    const SIZE: usize = 2;
+
+    fn load(bytes: &[u8]) -> u16 {
+        u16::from_le_bytes([bytes[0], bytes[1]])
+    }
+
+    fn store(value: u16, shift: u32, out: &mut [u8]) {
+        out[..2].copy_from_slice(&(value << shift).to_le_bytes());
+    }
 }
 
-pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, padded: Resolution) {
-    let format = view.format;
-    let wide = format.depth != BitDepth::Eight;
-    let shift = 16 - u32::from(format.depth.bits());
-    let [luma, cb, cr] = view.planes;
+#[derive(Clone, Copy)]
+struct Row<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> Row<'a> {
+    fn of<S: Sample>(plane: &YuvPlane<'a>, y: usize) -> Self {
+        let y = y.min(plane.rows.saturating_sub(1));
+        let start = y * plane.stride;
+
+        Self {
+            bytes: &plane.data[start..start + plane.width * S::SIZE],
+        }
+    }
+
+    fn len<S: Sample>(self) -> usize {
+        self.bytes.len() / S::SIZE
+    }
+
+    fn at<S: Sample>(self, x: usize) -> u16 {
+        let x = x.min(self.len::<S>().saturating_sub(1));
+        S::load(&self.bytes[x * S::SIZE..])
+    }
+}
+
+fn store_all<S: Sample, const N: usize>(out: &mut [u8], values: [u16; N], shift: u32) {
+    for (slot, value) in out.chunks_exact_mut(S::SIZE).zip(values) {
+        S::store(value, shift, slot);
+    }
+}
+
+fn store_y410(out: &mut [u8], [luma, u, v]: [u16; 3]) {
+    let word = (3_u32 << 30) | (u32::from(v) << 20) | (u32::from(luma) << 10) | u32::from(u);
+    out[..4].copy_from_slice(&word.to_le_bytes());
+}
+
+fn pack_luma<S: Sample>(out: &mut [u8], luma: Row<'_>, shift: u32) {
+    let main = (out.len() / S::SIZE).min(luma.len::<S>());
+    let (head, tail) = out.split_at_mut(main * S::SIZE);
+
+    for (slot, source) in head
+        .chunks_exact_mut(S::SIZE)
+        .zip(luma.bytes.chunks_exact(S::SIZE))
+    {
+        S::store(S::load(source), shift, slot);
+    }
+    for (x, slot) in tail.chunks_exact_mut(S::SIZE).enumerate() {
+        S::store(luma.at::<S>(main + x), shift, slot);
+    }
+}
+
+fn pack_chroma_pairs<S: Sample>(out: &mut [u8], cb: Row<'_>, cr: Row<'_>, shift: u32) {
+    let unit = 2 * S::SIZE;
+    let main = (out.len() / unit).min(cb.len::<S>()).min(cr.len::<S>());
+    let (head, tail) = out.split_at_mut(main * unit);
+
+    for ((slot, u), v) in head
+        .chunks_exact_mut(unit)
+        .zip(cb.bytes.chunks_exact(S::SIZE))
+        .zip(cr.bytes.chunks_exact(S::SIZE))
+    {
+        store_all::<S, 2>(slot, [S::load(u), S::load(v)], shift);
+    }
+    for (x, slot) in tail.chunks_exact_mut(unit).enumerate() {
+        let x = main + x;
+        store_all::<S, 2>(slot, [cb.at::<S>(x), cr.at::<S>(x)], shift);
+    }
+}
+
+fn pack_pairs<S: Sample>(out: &mut [u8], luma: Row<'_>, cb: Row<'_>, cr: Row<'_>, shift: u32) {
+    let unit = 4 * S::SIZE;
+    let main = (out.len() / unit)
+        .min(luma.len::<S>() / 2)
+        .min(cb.len::<S>())
+        .min(cr.len::<S>());
+    let (head, tail) = out.split_at_mut(main * unit);
+
+    for (((slot, y), u), v) in head
+        .chunks_exact_mut(unit)
+        .zip(luma.bytes.chunks_exact(2 * S::SIZE))
+        .zip(cb.bytes.chunks_exact(S::SIZE))
+        .zip(cr.bytes.chunks_exact(S::SIZE))
+    {
+        let (left, right) = y.split_at(S::SIZE);
+        let quad = [S::load(left), S::load(u), S::load(right), S::load(v)];
+        store_all::<S, 4>(slot, quad, shift);
+    }
+    for (pair, slot) in tail.chunks_exact_mut(unit).enumerate() {
+        let pair = main + pair;
+        let quad = [
+            luma.at::<S>(2 * pair),
+            cb.at::<S>(pair),
+            luma.at::<S>(2 * pair + 1),
+            cr.at::<S>(pair),
+        ];
+        store_all::<S, 4>(slot, quad, shift);
+    }
+}
+
+fn pack_triples<S: Sample>(
+    out: &mut [u8],
+    luma: Row<'_>,
+    cb: Row<'_>,
+    cr: Row<'_>,
+    unit: usize,
+    store: impl Fn(&mut [u8], [u16; 3]),
+) {
+    let main = (out.len() / unit)
+        .min(luma.len::<S>())
+        .min(cb.len::<S>())
+        .min(cr.len::<S>());
+    let (head, tail) = out.split_at_mut(main * unit);
+
+    for (((slot, y), u), v) in head
+        .chunks_exact_mut(unit)
+        .zip(luma.bytes.chunks_exact(S::SIZE))
+        .zip(cb.bytes.chunks_exact(S::SIZE))
+        .zip(cr.bytes.chunks_exact(S::SIZE))
+    {
+        store(slot, [S::load(y), S::load(u), S::load(v)]);
+    }
+    for (x, slot) in tail.chunks_exact_mut(unit).enumerate() {
+        let x = main + x;
+        store(slot, [luma.at::<S>(x), cb.at::<S>(x), cr.at::<S>(x)]);
+    }
+}
+
+fn pack_rows<S: Sample>(
+    view: &YuvFrame<'_>,
+    data: &mut [u8],
+    layout: ImageLayout,
+    padded: Resolution,
+) {
+    let depth = view.format.depth;
+    let shift = 16 - u32::from(depth.bits());
+    let [luma, cb, cr] = &view.planes;
     let width = padded.width as usize;
     let rows = padded.height as usize;
     let chroma_width = width.div_ceil(2);
     let chroma_rows = rows.div_ceil(2);
-    let get = |plane: &crate::input::YuvPlane<'_>, x: usize, y: usize| {
-        let x = x.min(plane.width.saturating_sub(1));
-        let y = y.min(plane.rows.saturating_sub(1));
-        sample(plane.data, plane.stride, wide, x, y)
-    };
 
-    match format.chroma {
+    match view.format.chroma {
         ChromaSubsampling::Yuv420 => {
             for y in 0..rows {
-                let row = layout.offsets[0] + y * layout.pitches[0];
-                for x in 0..width {
-                    let value = get(&luma, x, y);
-                    if wide {
-                        put_u16(data, row + 2 * x, value << shift);
-                    } else {
-                        data[row + x] = u8::try_from(value).unwrap_or(u8::MAX);
-                    }
-                }
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                let out = &mut data[start..start + width * S::SIZE];
+                pack_luma::<S>(out, Row::of::<S>(luma, y), shift);
             }
             for y in 0..chroma_rows {
-                let row = layout.offsets[1] + y * layout.pitches[1];
-                for x in 0..chroma_width {
-                    let (u, v) = (get(&cb, x, y), get(&cr, x, y));
-                    if wide {
-                        put_u16(data, row + 4 * x, u << shift);
-                        put_u16(data, row + 4 * x + 2, v << shift);
-                    } else {
-                        data[row + 2 * x] = u8::try_from(u).unwrap_or(u8::MAX);
-                        data[row + 2 * x + 1] = u8::try_from(v).unwrap_or(u8::MAX);
-                    }
-                }
+                let start = layout.offsets[1] + y * layout.pitches[1];
+                let out = &mut data[start..start + chroma_width * 2 * S::SIZE];
+                let (u, v) = (Row::of::<S>(cb, y), Row::of::<S>(cr, y));
+                pack_chroma_pairs::<S>(out, u, v, shift);
             }
         }
         ChromaSubsampling::Yuv422 => {
             for y in 0..rows {
-                let row = layout.offsets[0] + y * layout.pitches[0];
-                for pair in 0..chroma_width {
-                    let left = get(&luma, 2 * pair, y);
-                    let right = get(&luma, 2 * pair + 1, y);
-                    let quad = [left, get(&cb, pair, y), right, get(&cr, pair, y)];
-                    for (index, value) in quad.into_iter().enumerate() {
-                        if wide {
-                            put_u16(data, row + 8 * pair + 2 * index, value << shift);
-                        } else {
-                            data[row + 4 * pair + index] = u8::try_from(value).unwrap_or(u8::MAX);
-                        }
-                    }
-                }
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                let out = &mut data[start..start + chroma_width * 4 * S::SIZE];
+                let (l, u, v) = (
+                    Row::of::<S>(luma, y),
+                    Row::of::<S>(cb, y),
+                    Row::of::<S>(cr, y),
+                );
+                pack_pairs::<S>(out, l, u, v, shift);
             }
         }
         ChromaSubsampling::Yuv444 => {
+            let unit = match depth {
+                BitDepth::Eight | BitDepth::Ten => 4,
+                BitDepth::Twelve => 8,
+            };
             for y in 0..rows {
-                let row = layout.offsets[0] + y * layout.pitches[0];
-                for x in 0..width {
-                    let (luma, u, v) = (get(&luma, x, y), get(&cb, x, y), get(&cr, x, y));
-                    match format.depth {
-                        BitDepth::Eight => {
-                            let bytes = [v, u, luma, 0xff]
-                                .map(|value| u8::try_from(value).unwrap_or(u8::MAX));
-                            data[row + 4 * x..row + 4 * x + 4].copy_from_slice(&bytes);
-                        }
-                        BitDepth::Ten => {
-                            let word = (3_u32 << 30)
-                                | (u32::from(v) << 20)
-                                | (u32::from(luma) << 10)
-                                | u32::from(u);
-                            data[row + 4 * x..row + 4 * x + 4].copy_from_slice(&word.to_le_bytes());
-                        }
-                        BitDepth::Twelve => {
-                            for (index, value) in [u, luma, v, 0x0fff].into_iter().enumerate() {
-                                put_u16(data, row + 8 * x + 2 * index, value << shift);
-                            }
-                        }
-                    }
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                let out = &mut data[start..start + width * unit];
+                let (l, u, v) = (
+                    Row::of::<S>(luma, y),
+                    Row::of::<S>(cb, y),
+                    Row::of::<S>(cr, y),
+                );
+                match depth {
+                    BitDepth::Eight => pack_triples::<S>(out, l, u, v, unit, |slot, [y, u, v]| {
+                        store_all::<S, 4>(slot, [v, u, y, 0xff], shift);
+                    }),
+                    BitDepth::Ten => pack_triples::<S>(out, l, u, v, unit, |slot, values| {
+                        store_y410(slot, values);
+                    }),
+                    BitDepth::Twelve => pack_triples::<S>(out, l, u, v, unit, |slot, [y, u, v]| {
+                        store_all::<S, 4>(slot, [u, y, v, 0x0fff], shift);
+                    }),
                 }
             }
         }
     }
 }
+
+pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, padded: Resolution) {
+    if view.format.depth == BitDepth::Eight {
+        pack_rows::<Narrow>(view, data, layout, padded);
+    } else {
+        pack_rows::<Wide>(view, data, layout, padded);
+    }
+}
+
+#[cfg(test)]
+mod tests;

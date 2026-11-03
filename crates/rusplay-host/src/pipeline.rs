@@ -179,6 +179,7 @@ pub(crate) struct GpuPipeline {
     handoff: HandoffState,
     encoder: Option<OpenEncoder>,
     input: Option<Frame>,
+    readback_held: bool,
     bitrate_kbps: Option<u32>,
     import_failures: u32,
     poll_timeout: Option<Duration>,
@@ -272,6 +273,7 @@ impl GpuPipeline {
             handoff,
             encoder: None,
             input: None,
+            readback_held: false,
             bitrate_kbps: None,
             import_failures: 0,
             poll_timeout: None,
@@ -567,6 +569,7 @@ impl GpuPipeline {
         let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
         self.poll_gpu(Some(submission))?;
         self.input = Some(frame);
+        self.readback_held = false;
 
         Ok(())
     }
@@ -594,21 +597,13 @@ impl GpuPipeline {
                 self.input = None;
                 self.encoder = None;
                 self.convert(source)?;
-                self.read_back(timestamp)?;
-                self.encode_input(keyframe)
+                self.encode_read_back(timestamp, keyframe)
             }
             (result, _) => result,
         }
     }
 
-    fn read_back(&mut self, timestamp: Timestamp) -> Result<(), HostError> {
-        let Some(Conversion {
-            converter,
-            target: Target::Readback(readback),
-        }) = &self.conversion
-        else {
-            return Ok(());
-        };
+    fn map_readback(&self, readback: &Readback) -> Result<(), HostError> {
         let (done, mapped) = mpsc::channel();
         readback
             .buffer
@@ -619,6 +614,94 @@ impl GpuPipeline {
         if let Ok(result) = mapped.recv() {
             result.map_err(HostError::GpuReadback)?;
         }
+
+        Ok(())
+    }
+
+    fn reads_planes(&mut self) -> Result<bool, HostError> {
+        let Some(Conversion { converter, .. }) = &self.conversion else {
+            return Ok(false);
+        };
+
+        let resolution = converter.settings().resolution;
+        let open = open_encoder(
+            &mut self.encoder,
+            &self.config,
+            self.bitrate_kbps,
+            resolution,
+        )?;
+
+        Ok(open.encoder.reads_planes())
+    }
+
+    fn encode_read_back(
+        &mut self,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        if self.reads_planes()? {
+            return self.encode_mapped(timestamp, keyframe);
+        }
+
+        self.read_back(timestamp)?;
+        self.readback_held = false;
+        self.encode_input(keyframe)
+    }
+
+    fn encode_mapped(
+        &mut self,
+        timestamp: Timestamp,
+        keyframe: bool,
+    ) -> Result<Option<EncodedFrame>, HostError> {
+        let Some(Conversion {
+            converter,
+            target: Target::Readback(readback),
+        }) = &self.conversion
+        else {
+            return Ok(None);
+        };
+        self.map_readback(readback)?;
+
+        let Some(open) = &mut self.encoder else {
+            readback.buffer.unmap();
+            return Ok(None);
+        };
+        if keyframe {
+            open.encoder.request_keyframe();
+        }
+
+        let settings = converter.settings();
+        let encoded = match readback.buffer.get_mapped_range(..) {
+            Ok(mapped) => {
+                let planes = EncoderPlanes::view(
+                    converter.layout(),
+                    &mapped,
+                    settings.resolution,
+                    settings.format,
+                );
+                open.encoder
+                    .encode_planes(&planes, timestamp)
+                    .map_err(HostError::from)
+            }
+            Err(error) => Err(HostError::GpuMappedRange(error)),
+        };
+        readback.buffer.unmap();
+
+        self.input = None;
+        self.readback_held = true;
+
+        encoded
+    }
+
+    fn read_back(&mut self, timestamp: Timestamp) -> Result<(), HostError> {
+        let Some(Conversion {
+            converter,
+            target: Target::Readback(readback),
+        }) = &self.conversion
+        else {
+            return Ok(());
+        };
+        self.map_readback(readback)?;
 
         let layout = converter.layout();
         let settings = converter.settings();
@@ -666,23 +749,12 @@ impl GpuPipeline {
             return Ok(None);
         };
 
-        let encoder = match self.encoder.take() {
-            Some(open) if open.resolution == input.resolution => open,
-            _ => {
-                let mut encoder = rusplay_encode::open_sited(
-                    &self.config.video,
-                    self.config.scaling.chroma_siting,
-                )?;
-                if let Some(kbps) = self.bitrate_kbps {
-                    encoder.set_bitrate(kbps)?;
-                }
-                OpenEncoder {
-                    resolution: input.resolution,
-                    encoder,
-                }
-            }
-        };
-        let encoder = self.encoder.insert(encoder);
+        let encoder = open_encoder(
+            &mut self.encoder,
+            &self.config,
+            self.bitrate_kbps,
+            input.resolution,
+        )?;
 
         if keyframe {
             encoder.encoder.request_keyframe();
@@ -712,8 +784,7 @@ impl GpuPipeline {
                 keyframe,
             );
         }
-        self.read_back(frame.timestamp)?;
-        self.encode_input(keyframe)
+        self.encode_read_back(frame.timestamp, keyframe)
     }
 }
 
@@ -730,6 +801,9 @@ impl VideoPipeline for GpuPipeline {
         keyframe: bool,
     ) -> Result<Option<EncodedFrame>, HostError> {
         self.gpu.faults.check()?;
+        if self.readback_held {
+            return self.encode_mapped(timestamp, keyframe);
+        }
         if let Some(input) = &mut self.input {
             input.timestamp = timestamp;
         }
@@ -759,6 +833,30 @@ impl VideoPipeline for GpuPipeline {
             siting: self.config.scaling.chroma_siting,
         })
     }
+}
+
+fn open_encoder<'a>(
+    slot: &'a mut Option<OpenEncoder>,
+    config: &Config,
+    bitrate_kbps: Option<u32>,
+    resolution: Resolution,
+) -> Result<&'a mut OpenEncoder, HostError> {
+    let encoder = match slot.take() {
+        Some(open) if open.resolution == resolution => open,
+        _ => {
+            let mut encoder =
+                rusplay_encode::open_sited(&config.video, config.scaling.chroma_siting)?;
+            if let Some(kbps) = bitrate_kbps {
+                encoder.set_bitrate(kbps)?;
+            }
+            OpenEncoder {
+                resolution,
+                encoder,
+            }
+        }
+    };
+
+    Ok(slot.insert(encoder))
 }
 
 fn poll_failure(error: wgpu::PollError, timeout: Option<Duration>) -> HostError {
