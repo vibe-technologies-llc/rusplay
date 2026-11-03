@@ -264,7 +264,12 @@ paths:
   and `decode_software` (`Rav1dDecoder`). The input is a sequence of packets, each a big-endian
   `u16` length and its bytes (`rusplay_fuzz::packets`); `decode_color` takes a codec selector byte
   first. Run them with `cargo +nightly fuzz run -O <target> -- -max_len=65536`; `-O` drops
-  overflow checks to match release builds. Seed a corpus from `tests/data` by splitting the
+  debug assertions and overflow checks to match release builds. `cros-codecs` builds without
+  overflow checks in every profile (`[profile.dev.package.cros-codecs]` in the workspace manifest,
+  `[profile.release.package.cros-codecs]` in `fuzz/Cargo.toml`), because its parsers overflow on
+  hostile headers where release wraps; the fuzz override also turns debug assertions on, so that
+  cargo passes an explicit `-C overflow-checks=off` that outranks cargo-fuzz's
+  `-Cdebug-assertions`. Seed a corpus from `tests/data` by splitting the
   fixtures into packets. Open findings are in `docs/BUGS.md` (`decode-rav1d-*`,
   `decode-cros-codecs-*`).
 

@@ -114,3 +114,6 @@ inherits = "release"
 debug = true
 strip = "none"
 panic = "unwind"
+
+[profile.dev.package.cros-codecs]
+overflow-checks = false
