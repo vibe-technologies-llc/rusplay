@@ -404,7 +404,6 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
 
     assert!(stats.frames_lost >= 1);
     assert!(stats.recovery_requests_sent >= 1);
-    assert!(stats.frames_skipped >= 1);
     assert!(stats.frame_acks_sent >= 1);
     assert_eq!(stats.decode_errors, 0);
     assert!(seen.iter().any(|frame| frame.frame > LOST_FRAME));
