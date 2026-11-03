@@ -27,6 +27,8 @@ use rusplay_config::{
 use rusplay_core::{Codec, EncodedFrame};
 
 #[cfg(feature = "nvdec")]
+pub use crate::error::CuvidCall;
+#[cfg(feature = "nvdec")]
 pub use crate::nvdec::NvdecDecoder;
 #[cfg(feature = "software")]
 pub use crate::software::Rav1dDecoder;
@@ -34,7 +36,7 @@ pub use crate::software::Rav1dDecoder;
 pub use crate::vaapi::VaapiDecoder;
 pub use crate::{
     capabilities::{Capabilities, capabilities},
-    error::{BitstreamUnit, CudaCall, CudaStatus, DecodeError, VaCall, VaStatus},
+    error::{BitstreamUnit, DecodeError},
     frame::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
         DmaBufPlane, DrmFourcc,
@@ -210,7 +212,7 @@ mod tests {
         let result = open(Codec::Av1, &config);
 
         if cfg!(feature = "vaapi") {
-            assert!(matches!(result, Err(DecodeError::DeviceOpen { .. })));
+            assert!(matches!(&result, Err(error) if error.is_device_open()));
         } else {
             assert!(matches!(
                 result,

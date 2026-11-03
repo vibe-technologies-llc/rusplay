@@ -10,14 +10,15 @@ build = "build.rs"
 x264 = ["dep:bindgen", "dep:pkg-config"]
 x265 = ["dep:bindgen", "dep:pkg-config"]
 svt-av1 = ["dep:bindgen", "dep:parking_lot", "dep:pkg-config"]
-vaapi = ["dep:bindgen", "dep:pkg-config"]
-nvenc = ["dep:libloading"]
+vaapi = ["dep:rusplay-va", "rusplay-va/libva"]
+nvenc = ["dep:rusplay-cuda"]
 
 [dependencies]
-libloading = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 rusplay-config.workspace = true
 rusplay-core.workspace = true
+rusplay-cuda = { workspace = true, optional = true }
+rusplay-va = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [dev-dependencies]

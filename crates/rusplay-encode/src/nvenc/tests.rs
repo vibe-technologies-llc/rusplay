@@ -12,6 +12,7 @@ use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Chromaticities, Codec, ColorPrimaries, ColorSpace,
     DrmFourcc, EncodedFrame, Frame, FrameBuffer, PixelFormat, Plane, Resolution, Timestamp,
 };
+use rusplay_cuda::CudaError;
 use rusplay_decode::{Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
 use crate::{
@@ -132,7 +133,7 @@ fn a_missing_driver_fails_open_with_the_library_name() {
 
     assert!(matches!(
         error,
-        EncodeError::LibraryNotFound { library, .. } if library == MISSING.cuda
+        EncodeError::Cuda(CudaError::LibraryNotFound { library, .. }) if library == MISSING.cuda
     ));
 }
 
@@ -140,7 +141,10 @@ fn a_missing_driver_fails_open_with_the_library_name() {
 fn a_missing_driver_is_what_capabilities_report() {
     let error = capabilities_with(&NvencConfig::default(), MISSING).unwrap_err();
 
-    assert!(matches!(error, EncodeError::LibraryNotFound { .. }));
+    assert!(matches!(
+        error,
+        EncodeError::Cuda(CudaError::LibraryNotFound { .. })
+    ));
 }
 
 #[test]
@@ -150,13 +154,10 @@ fn the_system_driver_either_answers_or_names_what_is_missing() {
         Err(error) => assert!(
             matches!(
                 error,
-                EncodeError::LibraryNotFound { .. }
-                    | EncodeError::SymbolMissing { .. }
+                EncodeError::Cuda(_)
                     | EncodeError::DriverTooOld { .. }
                     | EncodeError::DriverFunctionMissing { .. }
-                    | EncodeError::Cuda { .. }
                     | EncodeError::Nvenc { .. }
-                    | EncodeError::GpuIndexOutOfRange { .. }
             ),
             "{error}"
         ),

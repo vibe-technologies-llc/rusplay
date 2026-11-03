@@ -5,7 +5,7 @@ use crate::{
     DecodeError,
     vaapi::{
         ffi, hevc, rt_format,
-        va::{Display, Profile},
+        va::{DecoderDisplay, Display, Profile},
     },
 };
 
@@ -156,9 +156,6 @@ mod tests {
             device: "/dev/dri/rusplay-missing-node".into(),
         };
 
-        assert!(matches!(
-            probe(&config),
-            Err(DecodeError::DeviceOpen { .. })
-        ));
+        assert!(matches!(probe(&config), Err(error) if error.is_device_open()));
     }
 }

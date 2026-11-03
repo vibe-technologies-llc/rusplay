@@ -1,7 +1,11 @@
-use std::{fmt, io, path::PathBuf};
+use std::{fmt, io};
 
 use rusplay_config::RateControl;
 use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorPrimaries, DrmFourcc, Resolution};
+#[cfg(feature = "nvenc")]
+use rusplay_cuda::CudaError;
+#[cfg(feature = "vaapi")]
+use rusplay_va::VaError;
 use thiserror::Error;
 
 use crate::{Backend, input::fourcc_text};
@@ -79,12 +83,9 @@ pub enum EncodeError {
         backend: Backend,
         resolution: Resolution,
     },
-    #[error("failed to open the render node {path}")]
-    DeviceOpen { path: PathBuf, source: io::Error },
-    #[error("libva has no display for the render node {path}")]
-    DisplayUnavailable { path: PathBuf },
-    #[error("{call} failed with {status}")]
-    Va { call: VaCall, status: VaStatus },
+    #[cfg(feature = "vaapi")]
+    #[error(transparent)]
+    Va(#[from] VaError),
     #[error("a {} DMA-BUF needs {expected} planes, the frame has {actual}", fourcc_text(*.fourcc))]
     DmaBufPlaneCount {
         fourcc: DrmFourcc,
@@ -96,20 +97,8 @@ pub enum EncodeError {
     #[error("the encoded frame did not fit the {capacity} byte coded buffer")]
     CodedBufferOverflow { capacity: usize },
     #[cfg(feature = "nvenc")]
-    #[error("could not load {library}")]
-    LibraryNotFound {
-        library: &'static str,
-        #[source]
-        source: libloading::Error,
-    },
-    #[cfg(feature = "nvenc")]
-    #[error("{library} has no symbol {symbol}")]
-    SymbolMissing {
-        library: &'static str,
-        symbol: &'static str,
-        #[source]
-        source: libloading::Error,
-    },
+    #[error(transparent)]
+    Cuda(#[from] CudaError),
     #[error("the {backend} driver supports API {supported}, rusplay needs {required}")]
     DriverTooOld {
         backend: Backend,
@@ -121,10 +110,6 @@ pub enum EncodeError {
         backend: Backend,
         function: &'static str,
     },
-    #[error("gpu index {index} is out of range, {count} gpus are present")]
-    GpuIndexOutOfRange { index: u32, count: u32 },
-    #[error("{call} failed with {status}")]
-    Cuda { call: CudaCall, status: CudaStatus },
     #[error("{call} failed with {status}")]
     Nvenc {
         call: NvencCall,
@@ -169,67 +154,6 @@ pub struct ApiVersion {
 impl fmt::Display for ApiVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}", self.major, self.minor)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CudaCall {
-    Init,
-    DeviceGetCount,
-    DeviceGet,
-    CtxCreate,
-    CtxPushCurrent,
-    CtxPopCurrent,
-    ImportExternalMemory,
-    ExternalMemoryGetMappedBuffer,
-}
-
-impl fmt::Display for CudaCall {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Init => "cuInit",
-            Self::DeviceGetCount => "cuDeviceGetCount",
-            Self::DeviceGet => "cuDeviceGet",
-            Self::CtxCreate => "cuCtxCreate",
-            Self::CtxPushCurrent => "cuCtxPushCurrent",
-            Self::CtxPopCurrent => "cuCtxPopCurrent",
-            Self::ImportExternalMemory => "cuImportExternalMemory",
-            Self::ExternalMemoryGetMappedBuffer => "cuExternalMemoryGetMappedBuffer",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CudaStatus(pub i32);
-
-impl CudaStatus {
-    const NAMES: [(i32, &'static str); 17] = [
-        (1, "invalid value"),
-        (2, "out of memory"),
-        (3, "not initialized"),
-        (4, "deinitialized"),
-        (34, "stub library"),
-        (35, "insufficient driver"),
-        (46, "devices unavailable"),
-        (100, "no device"),
-        (101, "invalid device"),
-        (201, "invalid context"),
-        (205, "map failed"),
-        (216, "context already in use"),
-        (304, "operating system call failed"),
-        (400, "invalid handle"),
-        (801, "not supported"),
-        (802, "system not ready"),
-        (999, "unknown error"),
-    ];
-}
-
-impl fmt::Display for CudaStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match Self::NAMES.iter().find(|(code, _)| *code == self.0) {
-            Some((_, name)) => write!(f, "{name} ({})", self.0),
-            None => write!(f, "cuda error {}", self.0),
-        }
     }
 }
 
@@ -319,104 +243,6 @@ impl fmt::Display for NvencStatus {
         match name {
             Some(name) => write!(f, "{name} ({})", self.0),
             None => write!(f, "nvenc status {}", self.0),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VaCall {
-    Initialize,
-    QueryConfigProfiles,
-    QueryConfigEntrypoints,
-    GetConfigAttributes,
-    CreateConfig,
-    QuerySurfaceAttributes,
-    CreateContext,
-    CreateSurfaces,
-    ExportSurfaceHandle,
-    CreateBuffer,
-    MapBuffer,
-    UnmapBuffer,
-    BeginPicture,
-    RenderPicture,
-    EndPicture,
-    SyncSurface,
-    CreateImage,
-    PutImage,
-    GetImage,
-}
-
-impl fmt::Display for VaCall {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Initialize => "vaInitialize",
-            Self::QueryConfigProfiles => "vaQueryConfigProfiles",
-            Self::QueryConfigEntrypoints => "vaQueryConfigEntrypoints",
-            Self::GetConfigAttributes => "vaGetConfigAttributes",
-            Self::CreateConfig => "vaCreateConfig",
-            Self::QuerySurfaceAttributes => "vaQuerySurfaceAttributes",
-            Self::CreateContext => "vaCreateContext",
-            Self::CreateSurfaces => "vaCreateSurfaces",
-            Self::ExportSurfaceHandle => "vaExportSurfaceHandle",
-            Self::CreateBuffer => "vaCreateBuffer",
-            Self::MapBuffer => "vaMapBuffer",
-            Self::UnmapBuffer => "vaUnmapBuffer",
-            Self::BeginPicture => "vaBeginPicture",
-            Self::RenderPicture => "vaRenderPicture",
-            Self::EndPicture => "vaEndPicture",
-            Self::SyncSurface => "vaSyncSurface",
-            Self::CreateImage => "vaCreateImage",
-            Self::PutImage => "vaPutImage",
-            Self::GetImage => "vaGetImage",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VaStatus(pub i32);
-
-impl VaStatus {
-    const NAMES: [(i32, &'static str); 32] = [
-        (0x01, "operation failed"),
-        (0x02, "allocation failed"),
-        (0x03, "invalid display"),
-        (0x04, "invalid config"),
-        (0x05, "invalid context"),
-        (0x06, "invalid surface"),
-        (0x07, "invalid buffer"),
-        (0x08, "invalid image"),
-        (0x09, "invalid subpicture"),
-        (0x0a, "attribute not supported"),
-        (0x0b, "maximum number exceeded"),
-        (0x0c, "unsupported profile"),
-        (0x0d, "unsupported entrypoint"),
-        (0x0e, "unsupported rt format"),
-        (0x0f, "unsupported buffer type"),
-        (0x10, "surface busy"),
-        (0x11, "flag not supported"),
-        (0x12, "invalid parameter"),
-        (0x13, "resolution not supported"),
-        (0x14, "unimplemented"),
-        (0x15, "surface in displaying"),
-        (0x16, "invalid image format"),
-        (0x17, "decoding error"),
-        (0x18, "encoding error"),
-        (0x19, "invalid value"),
-        (0x20, "unsupported filter"),
-        (0x21, "invalid filter chain"),
-        (0x22, "hardware busy"),
-        (0x24, "unsupported memory type"),
-        (0x25, "not enough buffer"),
-        (0x26, "timed out"),
-        (-1, "unknown error"),
-    ];
-}
-
-impl fmt::Display for VaStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match Self::NAMES.iter().find(|(code, _)| *code == self.0) {
-            Some((_, name)) => write!(f, "{name} ({:#x})", self.0),
-            None => write!(f, "status {:#x}", self.0),
         }
     }
 }

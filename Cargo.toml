@@ -14,6 +14,7 @@ rusplay-capture.path = "crates/rusplay-capture"
 rusplay-client.path = "crates/rusplay-client"
 rusplay-config.path = "crates/rusplay-config"
 rusplay-core.path = "crates/rusplay-core"
+rusplay-cuda.path = "crates/rusplay-cuda"
 rusplay-decode.path = "crates/rusplay-decode"
 rusplay-encode.path = "crates/rusplay-encode"
 rusplay-host.path = "crates/rusplay-host"
@@ -22,6 +23,7 @@ rusplay-net.path = "crates/rusplay-net"
 rusplay-priority.path = "crates/rusplay-priority"
 rusplay-protocol.path = "crates/rusplay-protocol"
 rusplay-scale.path = "crates/rusplay-scale"
+rusplay-va.path = "crates/rusplay-va"
 
 ash = { version = "0.38.0", default-features = false }
 ashpd = { version = "0.13.13", default-features = false }

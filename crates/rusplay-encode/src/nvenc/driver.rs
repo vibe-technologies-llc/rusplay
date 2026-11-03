@@ -5,11 +5,14 @@ use std::{
     rc::Rc,
 };
 
-use libloading::Library;
 use rusplay_core::Resolution;
+use rusplay_cuda::{
+    ContextHandle, CudaCall, CudaError, Current, Driver as CudaDriver, Library,
+    check as cuda_check, open_library, symbol,
+};
 
 use crate::{
-    ApiVersion, Backend, CudaCall, CudaStatus, EncodeError, NvencCall, NvencStatus,
+    ApiVersion, Backend, EncodeError, NvencCall, NvencStatus,
     nvenc::ffi::{self, Plain},
     obu::AccessUnit,
 };
@@ -39,17 +42,6 @@ pub(super) const fn api_version_of(packed: u32) -> ApiVersion {
     }
 }
 
-fn cuda(call: CudaCall, result: ffi::CuResult) -> Result<(), EncodeError> {
-    if result == ffi::CUDA_SUCCESS {
-        Ok(())
-    } else {
-        Err(EncodeError::Cuda {
-            call,
-            status: CudaStatus(result),
-        })
-    }
-}
-
 fn nvenc(call: NvencCall, status: ffi::Status) -> Result<(), EncodeError> {
     if status == ffi::SUCCESS {
         Ok(())
@@ -61,25 +53,6 @@ fn nvenc(call: NvencCall, status: ffi::Status) -> Result<(), EncodeError> {
     }
 }
 
-fn open_library(library: &'static str) -> Result<Library, EncodeError> {
-    unsafe { Library::new(library) }
-        .map_err(|source| EncodeError::LibraryNotFound { library, source })
-}
-
-fn symbol<T: Copy>(
-    library: &Library,
-    name: &'static str,
-    symbol: &'static str,
-) -> Result<T, EncodeError> {
-    unsafe { library.get::<T>(symbol) }
-        .map(|found| *found)
-        .map_err(|source| EncodeError::SymbolMissing {
-            library: name,
-            symbol,
-            source,
-        })
-}
-
 fn required<T>(function: Option<T>, name: &'static str) -> Result<T, EncodeError> {
     function.ok_or(EncodeError::DriverFunctionMissing {
         backend: BACKEND,
@@ -88,13 +61,9 @@ fn required<T>(function: Option<T>, name: &'static str) -> Result<T, EncodeError
 }
 
 struct CudaApi {
-    init: ffi::CuInitFn,
-    device_get_count: ffi::CuDeviceGetCountFn,
-    device_get: ffi::CuDeviceGetFn,
+    driver: CudaDriver,
     ctx_create: ffi::CuCtxCreateFn,
     ctx_destroy: ffi::CuCtxDestroyFn,
-    ctx_push_current: ffi::CuCtxPushCurrentFn,
-    ctx_pop_current: ffi::CuCtxPopCurrentFn,
     import_external_memory: ffi::CuImportExternalMemoryFn,
     external_memory_get_mapped_buffer: ffi::CuExternalMemoryGetMappedBufferFn,
     destroy_external_memory: ffi::CuDestroyExternalMemoryFn,
@@ -102,23 +71,17 @@ struct CudaApi {
 }
 
 impl CudaApi {
-    fn load(library: &Library, name: &'static str) -> Result<Self, EncodeError> {
+    fn load(name: &'static str) -> Result<Self, CudaError> {
+        let driver = CudaDriver::load_from(name)?;
+
         Ok(Self {
-            init: symbol(library, name, "cuInit")?,
-            device_get_count: symbol(library, name, "cuDeviceGetCount")?,
-            device_get: symbol(library, name, "cuDeviceGet")?,
-            ctx_create: symbol(library, name, "cuCtxCreate_v2")?,
-            ctx_destroy: symbol(library, name, "cuCtxDestroy_v2")?,
-            ctx_push_current: symbol(library, name, "cuCtxPushCurrent_v2")?,
-            ctx_pop_current: symbol(library, name, "cuCtxPopCurrent_v2")?,
-            import_external_memory: symbol(library, name, "cuImportExternalMemory")?,
-            external_memory_get_mapped_buffer: symbol(
-                library,
-                name,
-                "cuExternalMemoryGetMappedBuffer",
-            )?,
-            destroy_external_memory: symbol(library, name, "cuDestroyExternalMemory")?,
-            mem_free: symbol(library, name, "cuMemFree_v2")?,
+            ctx_create: driver.symbol("cuCtxCreate_v2")?,
+            ctx_destroy: driver.symbol("cuCtxDestroy_v2")?,
+            import_external_memory: driver.symbol("cuImportExternalMemory")?,
+            external_memory_get_mapped_buffer: driver.symbol("cuExternalMemoryGetMappedBuffer")?,
+            destroy_external_memory: driver.symbol("cuDestroyExternalMemory")?,
+            mem_free: driver.symbol("cuMemFree_v2")?,
+            driver,
         })
     }
 }
@@ -221,22 +184,19 @@ pub(super) struct Driver {
     cuda: CudaApi,
     nvenc: NvencApi,
     _nvenc_library: Library,
-    _cuda_library: Library,
 }
 
 impl Driver {
     pub(super) fn load(names: LibraryNames) -> Result<Rc<Self>, EncodeError> {
-        let cuda_library = open_library(names.cuda)?;
+        let cuda = CudaApi::load(names.cuda)?;
         let nvenc_library = open_library(names.nvenc)?;
 
-        let cuda = CudaApi::load(&cuda_library, names.cuda)?;
         let nvenc = NvencApi::load(&nvenc_library, names.nvenc)?;
 
         Ok(Rc::new(Self {
             cuda,
             nvenc,
             _nvenc_library: nvenc_library,
-            _cuda_library: cuda_library,
         }))
     }
 }
@@ -249,28 +209,10 @@ pub(super) struct CudaContext {
 impl CudaContext {
     pub(super) fn new(driver: &Rc<Driver>, gpu_index: u32) -> Result<Rc<Self>, EncodeError> {
         let api = &driver.cuda;
-        cuda(CudaCall::Init, unsafe { (api.init)(0) })?;
-
-        let mut count: c_int = 0;
-        cuda(CudaCall::DeviceGetCount, unsafe {
-            (api.device_get_count)(&raw mut count)
-        })?;
-        let count = u32::try_from(count).unwrap_or(0);
-        let ordinal = c_int::try_from(gpu_index)
-            .ok()
-            .filter(|_| gpu_index < count)
-            .ok_or(EncodeError::GpuIndexOutOfRange {
-                index: gpu_index,
-                count,
-            })?;
-
-        let mut device: ffi::CuDevice = 0;
-        cuda(CudaCall::DeviceGet, unsafe {
-            (api.device_get)(&raw mut device, ordinal)
-        })?;
+        let device = api.driver.device(gpu_index)?;
 
         let mut context: ffi::CuContext = ptr::null_mut();
-        cuda(CudaCall::CtxCreate, unsafe {
+        cuda_check(CudaCall::CtxCreate, unsafe {
             (api.ctx_create)(&raw mut context, 0, device)
         })?;
         let created = Rc::new(Self {
@@ -278,37 +220,23 @@ impl CudaContext {
             context,
         });
 
-        let mut popped: ffi::CuContext = ptr::null_mut();
-        cuda(CudaCall::CtxPopCurrent, unsafe {
-            (api.ctx_pop_current)(&raw mut popped)
-        })?;
+        api.driver.pop_current()?;
 
         Ok(created)
     }
 
     pub(super) fn enter(&self) -> Result<Current<'_>, EncodeError> {
-        cuda(CudaCall::CtxPushCurrent, unsafe {
-            (self.driver.cuda.ctx_push_current)(self.context)
-        })?;
-
-        Ok(Current { context: self })
+        Ok(self
+            .driver
+            .cuda
+            .driver
+            .push_current(ContextHandle::new(self.context))?)
     }
 }
 
 impl Drop for CudaContext {
     fn drop(&mut self) {
         unsafe { (self.driver.cuda.ctx_destroy)(self.context) };
-    }
-}
-
-pub(super) struct Current<'a> {
-    context: &'a CudaContext,
-}
-
-impl Drop for Current<'_> {
-    fn drop(&mut self) {
-        let mut popped: ffi::CuContext = ptr::null_mut();
-        unsafe { (self.context.driver.cuda.ctx_pop_current)(&raw mut popped) };
     }
 }
 
@@ -612,24 +540,24 @@ impl ExternalBuffer {
         let handle = memory.handle_desc(raw);
 
         let mut memory: ffi::CuExternalMemory = ptr::null_mut();
-        let imported = cuda(CudaCall::ImportExternalMemory, unsafe {
+        let imported = cuda_check(CudaCall::ImportExternalMemory, unsafe {
             (api.import_external_memory)(&raw mut memory, &raw const handle)
         });
         if let Err(error) = imported {
             drop(unsafe { OwnedFd::from_raw_fd(raw) });
-            return Err(error);
+            return Err(error.into());
         }
 
         let mut buffer = ffi::ExternalMemoryBufferDesc::zeroed();
         buffer.size = size;
 
         let mut pointer: ffi::CuDevicePtr = 0;
-        let mapped = cuda(CudaCall::ExternalMemoryGetMappedBuffer, unsafe {
+        let mapped = cuda_check(CudaCall::ExternalMemoryGetMappedBuffer, unsafe {
             (api.external_memory_get_mapped_buffer)(&raw mut pointer, memory, &raw const buffer)
         });
         if let Err(error) = mapped {
             unsafe { (api.destroy_external_memory)(memory) };
-            return Err(error);
+            return Err(error.into());
         }
 
         Ok(Self {
@@ -743,7 +671,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            EncodeError::LibraryNotFound { library, .. } if library == MISSING.cuda
+            EncodeError::Cuda(CudaError::LibraryNotFound { library, .. })
+                if library == MISSING.cuda
         ));
     }
 
@@ -770,15 +699,10 @@ mod tests {
     #[test]
     fn failing_calls_carry_their_status() {
         let error = nvenc(NvencCall::EncodePicture, 8).unwrap_err();
-        let cuda_error = cuda(CudaCall::ImportExternalMemory, 801).unwrap_err();
 
         assert_eq!(
             error.to_string(),
             "nvEncEncodePicture failed with invalid parameter (8)"
-        );
-        assert_eq!(
-            cuda_error.to_string(),
-            "cuImportExternalMemory failed with not supported (801)"
         );
         assert!(nvenc(NvencCall::EncodePicture, ffi::SUCCESS).is_ok());
     }

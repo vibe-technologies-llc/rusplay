@@ -1,9 +1,4 @@
-#[cfg(any(
-    feature = "x264",
-    feature = "x265",
-    feature = "svt-av1",
-    feature = "vaapi"
-))]
+#[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod bindings {
     use std::{env, io, path::PathBuf};
 
@@ -117,12 +112,7 @@ mod bindings {
     }
 }
 
-#[cfg(any(
-    feature = "x264",
-    feature = "x265",
-    feature = "svt-av1",
-    feature = "vaapi"
-))]
+#[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 fn main() -> Result<(), bindings::BuildError> {
     use bindgen::MacroTypeVariation;
 
@@ -158,23 +148,8 @@ fn main() -> Result<(), bindings::BuildError> {
         build_suffixed_prefix: None,
     })?;
 
-    #[cfg(feature = "vaapi")]
-    bindings::generate(&bindings::Library {
-        packages: &["libva", "libva-drm"],
-        headers: &["va/va.h", "va/va_drm.h", "va/va_drmcommon.h"],
-        macro_type: MacroTypeVariation::Unsigned,
-        output: "va.rs",
-        symbols: "(va|VA|_VA)[A-Z_].*",
-        build_suffixed_prefix: None,
-    })?;
-
     Ok(())
 }
 
-#[cfg(not(any(
-    feature = "x264",
-    feature = "x265",
-    feature = "svt-av1",
-    feature = "vaapi"
-)))]
+#[cfg(not(any(feature = "x264", feature = "x265", feature = "svt-av1")))]
 fn main() {}

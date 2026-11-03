@@ -1,0 +1,22 @@
+[package]
+name = "rusplay-va"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[features]
+libva = ["dep:bindgen", "dep:pkg-config"]
+
+[dependencies]
+rusplay-core.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+bindgen = { workspace = true, optional = true }
+pkg-config = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[lints]
+workspace = true

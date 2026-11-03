@@ -1,4 +1,4 @@
-#[cfg(feature = "vaapi")]
+#[cfg(feature = "libva")]
 mod libva {
     use std::{env, io, path::PathBuf};
 
@@ -64,12 +64,12 @@ mod libva {
     }
 }
 
-#[cfg(feature = "vaapi")]
+#[cfg(feature = "libva")]
 fn main() -> Result<(), libva::BuildError> {
     println!("cargo:rerun-if-changed=build.rs");
 
     libva::generate()
 }
 
-#[cfg(not(feature = "vaapi"))]
+#[cfg(not(feature = "libva"))]
 fn main() {}

@@ -3,15 +3,12 @@ use std::{
     ptr,
 };
 
-pub(super) type CuResult = c_int;
-pub(super) type CuDevice = c_int;
-pub(super) type CuContext = *mut c_void;
+pub(super) use rusplay_cuda::ffi::{CuContext, CuDevice, CuResult};
+
 pub(super) type CuDevicePtr = c_ulonglong;
 pub(super) type CuVideoDecoder = *mut c_void;
 pub(super) type CuVideoParser = *mut c_void;
 pub(super) type CuVideoTimestamp = c_longlong;
-
-pub(super) const CUDA_SUCCESS: CuResult = 0;
 
 pub(super) const CUDA_VIDEO_CODEC_H264: c_int = 4;
 pub(super) const CUDA_VIDEO_CODEC_HEVC: c_int = 8;
@@ -279,14 +276,9 @@ impl Memcpy2D {
     }
 }
 
-pub(super) type CuInit = unsafe extern "C" fn(c_uint) -> CuResult;
-pub(super) type CuDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
-pub(super) type CuDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
 pub(super) type CuDevicePrimaryCtxRetain =
     unsafe extern "C" fn(*mut CuContext, CuDevice) -> CuResult;
 pub(super) type CuDevicePrimaryCtxRelease = unsafe extern "C" fn(CuDevice) -> CuResult;
-pub(super) type CuCtxPushCurrent = unsafe extern "C" fn(CuContext) -> CuResult;
-pub(super) type CuCtxPopCurrent = unsafe extern "C" fn(*mut CuContext) -> CuResult;
 pub(super) type CuMemcpy2D = unsafe extern "C" fn(*const Memcpy2D) -> CuResult;
 
 pub(super) type CuvidGetDecoderCaps = unsafe extern "C" fn(*mut DecodeCaps) -> CuResult;

@@ -1,7 +1,6 @@
 mod av1;
 mod capabilities;
 mod crop;
-mod ffi;
 mod h264;
 mod hevc;
 mod reorder;
@@ -16,11 +15,12 @@ use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution, SignalledColor,
     Timestamp,
 };
+use rusplay_va::ffi;
 
 pub(crate) use crate::vaapi::capabilities::probe as capabilities;
 use crate::{
     Backend, DecodeError, DecodedBuffer, DecodedFrame, DmaBufFrame, VideoDecoder,
-    vaapi::va::{Display, PoolSurface, Profile, Session, SurfacePool},
+    vaapi::va::{DecoderDisplay, Display, PoolSurface, Profile, Session, SurfacePool},
 };
 
 const OUTPUT_FRAMES_IN_FLIGHT: usize = 8;

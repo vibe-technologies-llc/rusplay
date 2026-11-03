@@ -136,7 +136,7 @@ mod tests {
         let result = capabilities(&config);
 
         if cfg!(feature = "vaapi") {
-            assert!(matches!(result, Err(DecodeError::DeviceOpen { .. })));
+            assert!(matches!(&result, Err(error) if error.is_device_open()));
         } else {
             assert!(matches!(
                 result,

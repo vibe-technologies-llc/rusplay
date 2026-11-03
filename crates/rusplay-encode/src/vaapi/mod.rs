@@ -1,6 +1,5 @@
 mod av1;
 mod bits;
-mod ffi;
 pub(crate) mod format;
 mod h264;
 mod hdr;
@@ -25,6 +24,7 @@ use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer,
     FrameRate, PixelFormat, Plane, Resolution,
 };
+use rusplay_va::ffi;
 
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
@@ -41,7 +41,8 @@ use crate::{
         params::VaapiParams,
         va::{
             Buffer, CodedBuffer, Config, Context, Display, DmaBufImport, DmaBufPlaneLayout,
-            Entrypoint, Image, PackedHeader, SizeLimits, Surface, SurfaceId,
+            EncoderContext, Entrypoint, Image, PackedHeader, SizeLimits, Surface, SurfaceId,
+            encoder_surface, imported_surface,
         },
     },
 };
@@ -102,6 +103,7 @@ fn sequence_buffer<T: Copy>(
             )
         })
         .transpose()
+        .map_err(EncodeError::from)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -557,8 +559,8 @@ impl Session {
         let aligned = coded_extent(resolution);
         let format = surface_format(settings.format);
         let recon = [
-            Surface::create(&device.display, format, aligned)?,
-            Surface::create(&device.display, format, aligned)?,
+            encoder_surface(&device.display, format, aligned)?,
+            encoder_surface(&device.display, format, aligned)?,
         ];
         let context = Context::new(
             &device.config,
@@ -609,7 +611,7 @@ impl Session {
                 let format = surface_format(view.format);
                 let extent = coded_extent(view.resolution);
                 let image = Image::new(display, format.va_fourcc, extent)?;
-                let surface = Surface::create(display, format, extent)?;
+                let surface = encoder_surface(display, format, extent)?;
                 empty.insert(Upload { image, surface })
             }
         };
@@ -683,7 +685,7 @@ impl Session {
                 pitch: plane.stride,
             })
             .collect();
-        let surface = Surface::import(
+        let surface = imported_surface(
             display,
             surface_format(format),
             &DmaBufImport {
