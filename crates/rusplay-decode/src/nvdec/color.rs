@@ -27,7 +27,10 @@ pub(crate) struct ColorReader {
 
 enum Parsers {
     H264(Box<H264Parser>),
-    Hevc(Box<HevcParser>),
+    Hevc {
+        parser: Box<HevcParser>,
+        checks: hevc::ParameterSets,
+    },
     Av1 {
         parser: Box<ObuParser>,
         sequence: Option<Rc<SequenceHeaderObu>>,
@@ -38,7 +41,10 @@ impl ColorReader {
     pub(crate) fn new(codec: Codec) -> Self {
         let parsers = match codec {
             Codec::H264 => Parsers::H264(Box::default()),
-            Codec::Hevc => Parsers::Hevc(Box::default()),
+            Codec::Hevc => Parsers::Hevc {
+                parser: Box::default(),
+                checks: hevc::ParameterSets::default(),
+            },
             Codec::Av1 => Parsers::Av1 {
                 parser: Box::new(ObuParser::new()),
                 sequence: None,
@@ -59,7 +65,7 @@ impl ColorReader {
     pub(crate) fn read(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         let picture = match &mut self.parsers {
             Parsers::H264(parser) => read_h264(parser, &mut self.hdr, data)?,
-            Parsers::Hevc(parser) => read_hevc(parser, &mut self.hdr, data)?,
+            Parsers::Hevc { parser, checks } => read_hevc(parser, checks, &mut self.hdr, data)?,
             Parsers::Av1 { parser, sequence } => read_av1(parser, sequence, &mut self.hdr, data)?,
         };
 
@@ -121,6 +127,7 @@ fn read_h264(
 
 fn read_hevc(
     parser: &mut HevcParser,
+    checks: &mut hevc::ParameterSets,
     hdr: &mut HdrTracker,
     data: &[u8],
 ) -> Result<Picture, DecodeError> {
@@ -138,16 +145,18 @@ fn read_hevc(
                     .map_err(malformed(CODEC, BitstreamUnit::VideoParameterSet))?;
             }
             HevcNaluType::SpsNut => {
-                hevc::check_sequence_parameter_set(nalu.as_ref())?;
+                let checked = hevc::check_sequence_parameter_set(nalu.as_ref())?;
                 parser
                     .parse_sps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::SequenceParameterSet))?;
+                checks.keep_sequence_parameter_set(checked);
             }
             HevcNaluType::PpsNut => {
-                hevc::check_picture_parameter_set(nalu.as_ref())?;
+                let checked = checks.check_picture_parameter_set(nalu.as_ref())?;
                 parser
                     .parse_pps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::PictureParameterSet))?;
+                checks.keep_picture_parameter_set(checked);
             }
             HevcNaluType::PrefixSeiNut => {
                 if let Some(payload) = nalu.as_ref().get(HEVC_NAL_HEADER_LEN..) {
@@ -155,6 +164,7 @@ fn read_hevc(
                 }
             }
             _ if picture.is_none() && is_first_slice_segment(kind, nalu.as_ref()) => {
+                checks.check_slice_header(nalu.as_ref(), kind)?;
                 let slice = parser
                     .parse_slice_header(nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::SliceHeader))?;
