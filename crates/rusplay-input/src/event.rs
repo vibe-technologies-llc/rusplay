@@ -19,6 +19,7 @@ impl GamepadButton {
     pub const DPAD_DOWN: Self = Self(12);
     pub const DPAD_LEFT: Self = Self(13);
     pub const DPAD_RIGHT: Self = Self(14);
+    pub const TOUCHPAD: Self = Self(15);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +34,12 @@ impl GamepadAxis {
     pub const RIGHT_TRIGGER: Self = Self(5);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SensorKind {
+    Gyro,
+    Accel,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GamepadEvent {
     Connected,
@@ -44,6 +51,25 @@ pub enum GamepadEvent {
     Axis {
         axis: GamepadAxis,
         value: f32,
+    },
+    Sensor {
+        sensor: SensorKind,
+        x: f32,
+        y: f32,
+        z: f32,
+    },
+    TouchpadDown {
+        finger: u8,
+        x: f32,
+        y: f32,
+    },
+    TouchpadMotion {
+        finger: u8,
+        x: f32,
+        y: f32,
+    },
+    TouchpadUp {
+        finger: u8,
     },
 }
 

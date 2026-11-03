@@ -1,6 +1,6 @@
 use crate::{
-    GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent, LockState, MAX_TOUCHES,
-    TouchEvent,
+    GamepadAxis, GamepadButton, GamepadEvent, InputError, InputEvent, LockState, MAX_PAD_FINGERS,
+    MAX_TOUCHES, SensorKind, TouchEvent,
 };
 
 const TAG_KEY: u8 = 0;
@@ -19,14 +19,25 @@ const PAD_CONNECTED: u8 = 0;
 const PAD_DISCONNECTED: u8 = 1;
 const PAD_BUTTON: u8 = 2;
 const PAD_AXIS: u8 = 3;
+const PAD_SENSOR: u8 = 4;
+const PAD_TOUCHPAD_DOWN: u8 = 5;
+const PAD_TOUCHPAD_MOTION: u8 = 6;
+const PAD_TOUCHPAD_UP: u8 = 7;
+
+const SENSOR_GYRO: u8 = 0;
+const SENSOR_ACCEL: u8 = 1;
 
 const TAG_LEN: usize = 1;
 const BOOL_LEN: usize = 1;
 const U32_LEN: usize = 4;
+const F32_LEN: usize = 4;
 const F64_LEN: usize = 8;
 const GAMEPAD_HEADER_LEN: usize = 2;
 const PAD_BUTTON_LEN: usize = 2 + BOOL_LEN;
 const PAD_AXIS_LEN: usize = 1 + 4;
+const PAD_SENSOR_LEN: usize = 1 + 3 * F32_LEN;
+const PAD_TOUCHPAD_POSITION_LEN: usize = 1 + 2 * F32_LEN;
+const PAD_TOUCHPAD_UP_LEN: usize = 1;
 const LOCKS_LEN: usize = 1;
 const TOUCH_SLOT_LEN: usize = 1;
 
@@ -176,6 +187,11 @@ fn gamepad_payload_len(event: GamepadEvent) -> usize {
         GamepadEvent::Connected | GamepadEvent::Disconnected => 0,
         GamepadEvent::Button { .. } => PAD_BUTTON_LEN,
         GamepadEvent::Axis { .. } => PAD_AXIS_LEN,
+        GamepadEvent::Sensor { .. } => PAD_SENSOR_LEN,
+        GamepadEvent::TouchpadDown { .. } | GamepadEvent::TouchpadMotion { .. } => {
+            PAD_TOUCHPAD_POSITION_LEN
+        }
+        GamepadEvent::TouchpadUp { .. } => PAD_TOUCHPAD_UP_LEN,
     }
 }
 
@@ -193,7 +209,64 @@ fn encode_gamepad(event: GamepadEvent, out: &mut Vec<u8>) {
             out.push(axis.0);
             out.extend_from_slice(&value.to_le_bytes());
         }
+        GamepadEvent::Sensor { sensor, x, y, z } => {
+            out.push(PAD_SENSOR);
+            out.push(sensor_kind_byte(sensor));
+            for value in [x, y, z] {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        GamepadEvent::TouchpadDown { finger, x, y } => {
+            encode_touchpad_position(PAD_TOUCHPAD_DOWN, finger, x, y, out);
+        }
+        GamepadEvent::TouchpadMotion { finger, x, y } => {
+            encode_touchpad_position(PAD_TOUCHPAD_MOTION, finger, x, y, out);
+        }
+        GamepadEvent::TouchpadUp { finger } => {
+            out.push(PAD_TOUCHPAD_UP);
+            out.push(finger);
+        }
     }
+}
+
+fn encode_touchpad_position(tag: u8, finger: u8, x: f32, y: f32, out: &mut Vec<u8>) {
+    out.push(tag);
+    out.push(finger);
+    out.extend_from_slice(&x.to_le_bytes());
+    out.extend_from_slice(&y.to_le_bytes());
+}
+
+pub(crate) const fn sensor_kind_byte(sensor: SensorKind) -> u8 {
+    match sensor {
+        SensorKind::Gyro => SENSOR_GYRO,
+        SensorKind::Accel => SENSOR_ACCEL,
+    }
+}
+
+pub(crate) fn decode_sensor_kind(byte: u8) -> Result<SensorKind, InputError> {
+    match byte {
+        SENSOR_GYRO => Ok(SensorKind::Gyro),
+        SENSOR_ACCEL => Ok(SensorKind::Accel),
+        other => Err(InputError::WireUnknownSensorKind(other)),
+    }
+}
+
+fn finite_f32(reader: &mut Reader) -> Result<f32, InputError> {
+    let value = reader.f32()?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(InputError::NonFiniteValue)
+    }
+}
+
+fn finger(reader: &mut Reader) -> Result<u8, InputError> {
+    let finger = reader.u8()?;
+    if usize::from(finger) >= MAX_PAD_FINGERS {
+        return Err(InputError::PadFingerOutOfRange(finger));
+    }
+
+    Ok(finger)
 }
 
 fn decode_gamepad(reader: &mut Reader) -> Result<GamepadEvent, InputError> {
@@ -207,6 +280,25 @@ fn decode_gamepad(reader: &mut Reader) -> Result<GamepadEvent, InputError> {
         PAD_AXIS => Ok(GamepadEvent::Axis {
             axis: GamepadAxis(reader.u8()?),
             value: reader.f32()?,
+        }),
+        PAD_SENSOR => Ok(GamepadEvent::Sensor {
+            sensor: decode_sensor_kind(reader.u8()?)?,
+            x: finite_f32(reader)?,
+            y: finite_f32(reader)?,
+            z: finite_f32(reader)?,
+        }),
+        PAD_TOUCHPAD_DOWN => Ok(GamepadEvent::TouchpadDown {
+            finger: finger(reader)?,
+            x: finite_f32(reader)?,
+            y: finite_f32(reader)?,
+        }),
+        PAD_TOUCHPAD_MOTION => Ok(GamepadEvent::TouchpadMotion {
+            finger: finger(reader)?,
+            x: finite_f32(reader)?,
+            y: finite_f32(reader)?,
+        }),
+        PAD_TOUCHPAD_UP => Ok(GamepadEvent::TouchpadUp {
+            finger: finger(reader)?,
         }),
         tag => Err(InputError::WireUnknownGamepadTag(tag)),
     }
@@ -326,6 +418,44 @@ mod tests {
                     axis: GamepadAxis::RIGHT_TRIGGER,
                     value: -0.75,
                 },
+            },
+            InputEvent::Gamepad {
+                slot: 1,
+                event: GamepadEvent::Sensor {
+                    sensor: SensorKind::Gyro,
+                    x: -3.5,
+                    y: 0.0,
+                    z: 12.25,
+                },
+            },
+            InputEvent::Gamepad {
+                slot: 0,
+                event: GamepadEvent::Sensor {
+                    sensor: SensorKind::Accel,
+                    x: 0.0,
+                    y: -9.80665,
+                    z: 0.5,
+                },
+            },
+            InputEvent::Gamepad {
+                slot: 2,
+                event: GamepadEvent::TouchpadDown {
+                    finger: 0,
+                    x: 0.25,
+                    y: 0.75,
+                },
+            },
+            InputEvent::Gamepad {
+                slot: 2,
+                event: GamepadEvent::TouchpadMotion {
+                    finger: 3,
+                    x: 1.0,
+                    y: 0.0,
+                },
+            },
+            InputEvent::Gamepad {
+                slot: 2,
+                event: GamepadEvent::TouchpadUp { finger: 1 },
             },
             InputEvent::Locks(LockState {
                 caps: true,
@@ -460,6 +590,58 @@ mod tests {
 
         assert_eq!(up, [TAG_TOUCH_UP, 2]);
         assert!(matches!(too_high, Err(InputError::TouchSlotOutOfRange(16))));
+    }
+
+    #[test]
+    fn sensor_events_have_a_fixed_layout() {
+        let bytes = round_trip(InputEvent::Gamepad {
+            slot: 2,
+            event: GamepadEvent::Sensor {
+                sensor: SensorKind::Accel,
+                x: 1.0,
+                y: 0.0,
+                z: -1.0,
+            },
+        });
+
+        let mut expected = vec![TAG_GAMEPAD, 2, PAD_SENSOR, SENSOR_ACCEL];
+        for value in [1.0f32, 0.0, -1.0] {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn hostile_sensor_and_touchpad_events_are_rejected() {
+        let mut nan_gyro = vec![TAG_GAMEPAD, 0, PAD_SENSOR, SENSOR_GYRO];
+        nan_gyro.extend_from_slice(&f32::NAN.to_le_bytes());
+        nan_gyro.extend_from_slice(&[0; 8]);
+        let mut infinite_touch = vec![TAG_GAMEPAD, 0, PAD_TOUCHPAD_DOWN, 0];
+        infinite_touch.extend_from_slice(&0.5f32.to_le_bytes());
+        infinite_touch.extend_from_slice(&f32::INFINITY.to_le_bytes());
+        let mut far_finger = vec![TAG_GAMEPAD, 0, PAD_TOUCHPAD_MOTION, 4];
+        far_finger.extend_from_slice(&[0; 8]);
+
+        assert!(matches!(
+            InputEvent::decode(&nan_gyro),
+            Err(InputError::NonFiniteValue)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&infinite_touch),
+            Err(InputError::NonFiniteValue)
+        ));
+        assert!(matches!(
+            InputEvent::decode(&far_finger),
+            Err(InputError::PadFingerOutOfRange(4))
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[TAG_GAMEPAD, 0, PAD_TOUCHPAD_UP, 255]),
+            Err(InputError::PadFingerOutOfRange(255))
+        ));
+        assert!(matches!(
+            InputEvent::decode(&[TAG_GAMEPAD, 0, PAD_SENSOR, 2]),
+            Err(InputError::WireUnknownSensorKind(2))
+        ));
     }
 
     #[test]

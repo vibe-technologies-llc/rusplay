@@ -20,7 +20,9 @@ pub enum InputError {
     ButtonOutOfRange(u32),
     #[error("gamepad slot {slot} has no rumble effect {id}")]
     RumbleEffectUnknown { slot: u8, id: i64 },
-    #[error("a pointer value is not a finite number")]
+    #[error("a gamepad touchpad finger {0} is outside the supported range")]
+    PadFingerOutOfRange(u8),
+    #[error("a value is not a finite number")]
     NonFiniteValue,
     #[error("an encoded input event is missing {missing} bytes")]
     WireTruncated { missing: usize },
@@ -30,6 +32,8 @@ pub enum InputError {
     WireUnknownTag(u8),
     #[error("an encoded gamepad event has the unknown tag {0}")]
     WireUnknownGamepadTag(u8),
+    #[error("an encoded gamepad sensor has the unknown kind {0}")]
+    WireUnknownSensorKind(u8),
     #[error("an encoded boolean is {0}, not 0 or 1")]
     WireInvalidBool(u8),
     #[error("an encoded lock state has the unknown bits {0:#04x}")]

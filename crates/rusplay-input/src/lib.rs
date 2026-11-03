@@ -16,8 +16,11 @@ mod wire;
 
 pub use crate::{
     error::InputError,
-    event::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, TouchEvent},
-    held::{HeldInput, KeySet, MAX_PADS, MAX_TOUCHES, PAD_AXES, PadState, TouchSet},
+    event::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, SensorKind, TouchEvent},
+    held::{
+        HeldInput, KeySet, MAX_PAD_FINGERS, MAX_PADS, MAX_TOUCHES, PAD_AXES, PadFingers, PadState,
+        TouchSet,
+    },
     locks::{KEY_CAPS_LOCK, KEY_NUM_LOCK, LOCK_SETTLE, LockMasks, LockState, LockSync, LockTaps},
     record::{InputRecord, StateRecord},
     rumble::{MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker},
