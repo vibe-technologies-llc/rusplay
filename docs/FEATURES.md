@@ -21,5 +21,8 @@
 # Headless host
 
 # Input
-- [XL] `input-gamepad-sensors`: carry gyro, accelerometer and touchpad from DualSense, DS4 and Switch Pro pads, which are skipped today because only nodes with `BTN_SOUTH`/`ABS_X`/`ABS_Y` are accepted, and the host pad is a 360 pad with rumble only. Split before starting: a selectable `/dev/uhid` DualSense/DS4 personality next to the 360 one, pairing sibling evdev nodes on the client, sensor and touch events in the wire model and snapshot, and LED and lightbar feedback as control messages
+- [M] `input-gamepad-sensor-events`: gyro, accelerometer and touchpad contacts as `GamepadEvent`s on the wire and in `PadState` and the snapshot, ignored by the 360 host pad
+- [M, blocked by: input-gamepad-sensor-events] `input-gamepad-sibling-nodes`: pair the motion-sensor (`INPUT_PROP_ACCELEROMETER`) and touchpad evdev nodes of DualSense, DS4 and Switch Pro pads with their main node by `uniq`, `phys` or sysfs parent, which are skipped today because only nodes with `BTN_SOUTH`/`ABS_X`/`ABS_Y` are accepted, and emit the sensor events
+- [L, blocked by: input-gamepad-sensor-events] `input-gamepad-uhid-dualsense`: a selectable `/dev/uhid` DualSense/DS4 personality on the host next to the 360 pad, with the HID report descriptor, input reports carrying sticks, buttons, sensors and touchpad, and rumble from output reports
+- [M, blocked by: input-gamepad-uhid-dualsense] `input-gamepad-led-feedback`: lightbar, player LEDs and adaptive trigger output reports from the host's uhid pad as control messages (protocol bump), applied to the client's physical pad
 - [L] `session-clipboard-sync`: text clipboard between client and host as a control message (protocol bump). Host-side access varies by compositor: `ext-data-control-v1`/`wlr-data-control` on KWin and wlroots, the portal Clipboard interface on the RemoteDesktop session the host already opens for libei, nothing on plain GNOME. Start with a spike of those three before defining the message
