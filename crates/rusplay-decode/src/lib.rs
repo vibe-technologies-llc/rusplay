@@ -6,6 +6,9 @@ mod error;
 #[path = "../tests/common/mod.rs"]
 mod fixtures;
 mod frame;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod hevc;
 #[cfg(any(feature = "software", feature = "vaapi", feature = "nvdec"))]

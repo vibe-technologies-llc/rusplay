@@ -70,17 +70,27 @@ impl VaapiDecoder {
             });
         }
 
+        Ok(Self::with_display(codec, display))
+    }
+
+    #[cfg(feature = "fuzzing")]
+    #[doc(hidden)]
+    pub fn detached(codec: Codec) -> Self {
+        Self::with_display(codec, Display::detached())
+    }
+
+    fn with_display(codec: Codec, display: Rc<Display>) -> Self {
         let state = match codec {
             Codec::H264 => CodecState::H264(Box::new(h264::H264Decoder::new())),
             Codec::Hevc => CodecState::Hevc(Box::new(hevc::HevcDecoder::new())),
             Codec::Av1 => CodecState::Av1(Box::new(av1::Av1Decoder::new())),
         };
 
-        Ok(Self {
+        Self {
             codec,
             display,
             state,
-        })
+        }
     }
 }
 

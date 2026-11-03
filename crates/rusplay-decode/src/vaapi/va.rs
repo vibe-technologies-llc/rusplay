@@ -35,10 +35,28 @@ fn to_c_int(value: usize) -> c_int {
 
 pub(super) struct Display {
     raw: ffi::VADisplay,
-    _device: File,
+    _device: Option<File>,
 }
 
 impl Display {
+    #[cfg(feature = "fuzzing")]
+    pub(super) fn detached() -> Rc<Self> {
+        Rc::new(Self {
+            raw: ptr::null_mut(),
+            _device: None,
+        })
+    }
+
+    #[cfg(feature = "fuzzing")]
+    fn is_detached(&self) -> bool {
+        self.raw.is_null()
+    }
+
+    #[cfg(not(feature = "fuzzing"))]
+    const fn is_detached(&self) -> bool {
+        false
+    }
+
     pub(super) fn open(path: &Path) -> Result<Rc<Self>, DecodeError> {
         let device = OpenOptions::new()
             .read(true)
@@ -58,7 +76,7 @@ impl Display {
 
         let display = Rc::new(Self {
             raw,
-            _device: device,
+            _device: Some(device),
         });
 
         let (mut major, mut minor) = (0, 0);
@@ -70,6 +88,10 @@ impl Display {
     }
 
     pub(super) fn has_decoder(&self, profile: Profile) -> Result<bool, DecodeError> {
+        if self.is_detached() {
+            return Ok(true);
+        }
+
         let mut profiles =
             vec![0; usize::try_from(unsafe { ffi::vaMaxNumProfiles(self.raw) }).unwrap_or(0)];
         let mut count = 0;
@@ -99,6 +121,10 @@ impl Display {
     }
 
     pub(super) fn rt_formats(&self, profile: Profile) -> Result<u32, DecodeError> {
+        if self.is_detached() {
+            return Ok(u32::MAX);
+        }
+
         let mut attribute = ffi::VAConfigAttrib {
             type_: ffi::VAConfigAttribType_VAConfigAttribRTFormat,
             value: 0,
@@ -121,6 +147,10 @@ impl Display {
     }
 
     pub(super) fn sync(&self, surface: SurfaceId) -> Result<(), DecodeError> {
+        if self.is_detached() {
+            return Ok(());
+        }
+
         check(VaCall::SyncSurface, unsafe {
             ffi::vaSyncSurface(self.raw, surface)
         })
@@ -129,6 +159,10 @@ impl Display {
 
 impl Drop for Display {
     fn drop(&mut self) {
+        if self.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaTerminate(self.raw) };
     }
 }
@@ -147,6 +181,14 @@ impl Session {
         width: u32,
         height: u32,
     ) -> Result<Self, DecodeError> {
+        if display.is_detached() {
+            return Ok(Self {
+                display: Rc::clone(display),
+                config: ffi::VA_INVALID_ID,
+                context: ffi::VA_INVALID_ID,
+            });
+        }
+
         let mut attribute = ffi::VAConfigAttrib {
             type_: ffi::VAConfigAttribType_VAConfigAttribRTFormat,
             value: rt_format,
@@ -230,6 +272,13 @@ impl Session {
         data: *mut c_void,
     ) -> Result<Buffer, DecodeError> {
         let mut id = ffi::VA_INVALID_ID;
+        if self.display.is_detached() {
+            return Ok(Buffer {
+                display: Rc::clone(&self.display),
+                id,
+            });
+        }
+
         check(VaCall::CreateBuffer, unsafe {
             ffi::vaCreateBuffer(
                 self.display.raw,
@@ -249,6 +298,10 @@ impl Session {
     }
 
     pub(super) fn decode(&self, target: SurfaceId, buffers: &[Buffer]) -> Result<(), DecodeError> {
+        if self.display.is_detached() {
+            return Ok(());
+        }
+
         let mut ids: Vec<ffi::VABufferID> = buffers.iter().map(|buffer| buffer.id).collect();
 
         check(VaCall::BeginPicture, unsafe {
@@ -272,6 +325,10 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        if self.display.is_detached() {
+            return;
+        }
+
         unsafe {
             ffi::vaDestroyContext(self.display.raw, self.context);
             ffi::vaDestroyConfig(self.display.raw, self.config);
@@ -286,6 +343,10 @@ pub(super) struct Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
+        if self.display.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaDestroyBuffer(self.display.raw, self.id) };
     }
 }
@@ -296,7 +357,7 @@ pub(super) struct PoolSurface {
     pub(super) image: Arc<DmaBufImage>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 impl PoolSurface {
     pub(super) fn detached(id: SurfaceId) -> Self {
         Self {
@@ -353,6 +414,14 @@ impl SurfacePool {
             return Err(DecodeError::SurfacePoolExhausted {
                 capacity: self.capacity,
             });
+        }
+
+        if self.display.is_detached() {
+            let surface = PoolSurface::detached(
+                SurfaceId::try_from(self.surfaces.len()).unwrap_or(INVALID_SURFACE),
+            );
+            self.surfaces.push(surface.clone());
+            return Ok(surface);
         }
 
         let id = self.create_surface()?;
@@ -454,7 +523,7 @@ impl SurfacePool {
 impl Drop for SurfacePool {
     fn drop(&mut self) {
         let mut ids: Vec<SurfaceId> = self.surfaces.iter().map(|surface| surface.id).collect();
-        if !ids.is_empty() {
+        if !ids.is_empty() && !self.display.is_detached() {
             unsafe {
                 ffi::vaDestroySurfaces(self.display.raw, ids.as_mut_ptr(), to_c_int(ids.len()))
             };

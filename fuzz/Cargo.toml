@@ -12,6 +12,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.13"
+rusplay-config.path = "../crates/rusplay-config"
+rusplay-core.path = "../crates/rusplay-core"
+rusplay-decode = { path = "../crates/rusplay-decode", features = ["fuzzing", "software"] }
 rusplay-input.path = "../crates/rusplay-input"
 rusplay-net.path = "../crates/rusplay-net"
 rusplay-protocol.path = "../crates/rusplay-protocol"
@@ -68,6 +71,41 @@ bench = false
 [[bin]]
 name = "reassembly"
 path = "fuzz_targets/reassembly.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_h264"
+path = "fuzz_targets/decode_h264.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_hevc"
+path = "fuzz_targets/decode_hevc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_av1"
+path = "fuzz_targets/decode_av1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_software"
+path = "fuzz_targets/decode_software.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_color"
+path = "fuzz_targets/decode_color.rs"
 test = false
 doc = false
 bench = false

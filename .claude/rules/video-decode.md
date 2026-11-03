@@ -148,7 +148,11 @@ paths:
   panics on a missing size field, a set reserved bit or a size past the packet. Every OBU must
   carry a size field that fits the packet, else `Malformed { unit: Obu }`. The parser is also
   primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
-  colour reader both go through it.
+  colour reader both go through it. `obu::ObuParser` wraps the `cros-codecs` parser for both: a
+  tile group before any frame header is `Malformed` (the tile column count is still zero and the
+  parser divides by it), and so is a frame header or `show_existing_frame` that is not a key frame
+  while no key frame has refreshed all eight reference slots (an invalid slot has width 0 and the
+  parser divides by it); any parse error withdraws that state until the next key frame.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
   header when each picture is decoded, and so does the chroma siting (`SignalledColor::chroma_siting`: VUI `chroma_sample_loc_type_top_field`, AV1 `chroma_sample_position`, rav1d's `chr` in the software decoder); mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
@@ -161,6 +165,13 @@ paths:
   header; a change rebuilds the `Session` and surface pool. A profile or RT format the driver
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
   `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
+- `annexb::next_nalu` rejects a NAL unit shorter than its header (the HEVC slice and parameter set
+  parsers slice past it). `src/hevc.rs` scans HEVC VPS, SPS and PPS bits (emulation prevention
+  removed) before `cros-codecs` parses them, and rejects what would index out of range there: a
+  sub-layer count of 7 (the profile tier level arrays hold 6) and a scaling list predicted from a
+  matrix id that does not precede it. A truncated parameter set passes the scan so the parser
+  reports it. Release builds are `panic = "abort"`, so `catch_unwind` around `cros-codecs` is not
+  available and every parse panic has to be pre-validated or recorded in `docs/BUGS.md`.
 - Hostile headers are rejected before `cros-codecs` computes on them. An H.264 SPS above level
   6.2's 139264 macroblocks, or 1055 macroblocks in either dimension, is `ResolutionUnsupported`
   (the DPB size divides by the macroblock count). Picture order count arithmetic on SPS and slice
@@ -233,6 +244,22 @@ paths:
   mastering SEI, and the missing-library error. Everything that talks to the driver is unverified
   until `decode-nvdec-hardware` in `docs/FEATURES.md`.
 
+## Fuzzing
+
+- The `fuzzing` feature (never in a shipped build; `--all-features` turns it on) adds
+  `VaapiDecoder::detached(codec)` and `fuzzing::ColorProbe`. A detached `Display` has a null
+  `VADisplay`: `Display::is_detached` (constant `false` without the feature) makes every libva call
+  in `va.rs` a no-op and the surface pool hands out `PoolSurface::detached`, so the whole H.264,
+  HEVC and AV1 decode path (parsing, DPB, reference lists, parameter buffers, reorder queue) runs
+  without a device. `ColorProbe` is NVDEC's colour reader, which parses the same bitstreams.
+- `fuzz/` has `decode_h264`, `decode_hevc`, `decode_av1` (the detached decoder), `decode_color`
+  and `decode_software` (`Rav1dDecoder`). The input is a sequence of packets, each a big-endian
+  `u16` length and its bytes (`rusplay_fuzz::packets`); `decode_color` takes a codec selector byte
+  first. Run them with `cargo +nightly fuzz run -O <target> -- -max_len=65536`; `-O` drops
+  overflow checks to match release builds. Seed a corpus from `tests/data` by splitting the
+  fixtures into packets. Open findings are in `docs/BUGS.md` (`decode-rav1d-*`,
+  `decode-cros-codecs-*`).
+
 ## Test fixtures
 
 - `tests/data/` holds 256x144 clips made by `tests/data/generate.sh` with ffmpeg: 8 frames of
@@ -254,7 +281,7 @@ paths:
 - The reference logic has device-free unit tests next to it: `src/vaapi/h264/dpb/tests.rs` (marking
   by every MMCO, sliding window, initial and modified lists for frames and fields, the three
   order count types), `src/vaapi/hevc/tests.rs` (order count unwrapping, the RPS helpers,
-  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing).
+  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing). The bitstream guards have their own: `src/hevc/tests.rs`, `src/obu/tests.rs`, `src/annexb/tests.rs`.
   They build `PoolSurface::detached` surfaces, which carry an id and an empty image.
 - No available encoder writes field pictures (x264 only does MBAFF), so
   `src/vaapi/tests/fields.rs` is a tiny H.264 writer for PAFF streams: 128x64 frames of 16

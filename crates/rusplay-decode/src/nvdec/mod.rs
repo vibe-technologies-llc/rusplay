@@ -1,4 +1,4 @@
-mod color;
+pub(crate) mod color;
 mod driver;
 mod ffi;
 mod format;

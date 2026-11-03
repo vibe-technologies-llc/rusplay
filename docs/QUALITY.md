@@ -1,5 +1,2 @@
-# Tests
-- [M] `test-fuzz-network-parsers`: `fuzz/` covers the network and input decoders and `Reassembler::push`; it still lacks targets for the decoders' bitstream entry points (`decode-av1-obu-framing-panic` shows `cros-codecs` panics there; release builds abort on panic, so a parse panic ends the app)
-
 # Architecture
 - [L] `arch-shared-va-cuda-crate`: `rusplay-encode/src/vaapi/va.rs` and `rusplay-decode/src/vaapi/va.rs` each wrap the libva display and buffers with their own unsafe `Drop`, status check, export and bindgen step, and both NVIDIA backends load `libcuda.so.1` and resolve overlapping symbols (`nvenc/driver.rs:25`, `nvdec/driver.rs:10`); `dependencies.md` justifies the copies by forbidding a sideways edge, which a crate below both would not be. Pull the shared primitives into feature-gated sys-wrapper crates over `core`, after the characterisation tests exist

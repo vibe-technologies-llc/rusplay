@@ -32,7 +32,8 @@ Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale
 `audio`, `input`) build on `core`/`config`. `host` and `client` compose them and `priority`, and the two binaries
 depend only on `host`/`client`/`config`. No crate depends upward, and no media crate depends on
 `net`. `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
-commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders.
+commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders and to
+the `decode` bitstream parsers (through its `fuzzing` feature).
 
 ## Invariants
 
@@ -60,7 +61,7 @@ commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
 | Hardware test run | `RUSPLAY_REQUIRE_HW=1 cargo test --workspace --all-features` |
-| Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`) |
+| Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) and `decode_software` with `ASAN_OPTIONS=detect_leaks=0` (see `decode-rav1d-picture-unref-leak`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
 | App with decoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software` |
