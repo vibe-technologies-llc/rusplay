@@ -1,8 +1,6 @@
-use std::borrow::Cow;
-
 use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, ProtocolVersion, StreamKind};
 
-use crate::{DatagramArena, FecScheme, NetError};
+use crate::{DatagramArena, FecEncoder, FecScheme, NetError};
 
 #[derive(Debug, Clone)]
 pub struct Packetizer {
@@ -11,6 +9,8 @@ pub struct Packetizer {
     max_fragments: u16,
     scheme: FecScheme,
     next_sequence: u32,
+    encoder: FecEncoder,
+    scratch: Vec<u8>,
 }
 
 impl Packetizer {
@@ -34,6 +34,8 @@ impl Packetizer {
             max_fragments: u16::MAX,
             scheme,
             next_sequence: 0,
+            encoder: FecEncoder::default(),
+            scratch: Vec::new(),
         })
     }
 
@@ -135,24 +137,27 @@ impl Packetizer {
             })?;
         let mut fec_index = 0usize;
 
+        let shard_len = self.shard_len;
+        let stream = self.stream;
+
         for block in &blocks {
             let first = usize::from(block.first_fragment);
-            let shards: Vec<Cow<'_, [u8]>> = (first..first + usize::from(block.data_shards))
-                .map(|index| data.padded_shard(index, self.shard_len))
-                .collect();
-            let shard_refs: Vec<&[u8]> = shards.iter().map(AsRef::as_ref).collect();
-            let parity = block.encode(&shard_refs)?;
+            let mut encoding = self.encoder.begin(block, shard_len)?;
+            for index in first..first + usize::from(block.data_shards) {
+                encoding.add(data.shard(index, shard_len, &mut self.scratch))?;
+            }
+            let result = encoding.finish()?;
 
-            for (parity_index, shard) in parity.iter().enumerate() {
-                let header = self.next_header(
+            for (parity_index, shard) in result.recovery_iter().enumerate() {
+                let header = header(
+                    &mut self.next_sequence,
                     StreamKind::Fec,
                     base_flags,
                     frame,
-                    fec_index,
-                    fec_packet_count,
+                    (fec_index, fec_packet_count),
                 );
                 let fec_header = FecHeader {
-                    protects: self.stream,
+                    protects: stream,
                     first_fragment: block.first_fragment,
                     data_shards: block.data_shards,
                     parity_shards: block.parity_shards,
@@ -178,18 +183,34 @@ impl Packetizer {
         index: usize,
         count: u16,
     ) -> PacketHeader {
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.wrapping_add(1);
-
-        PacketHeader {
-            version: ProtocolVersion::CURRENT,
+        header(
+            &mut self.next_sequence,
             stream,
             flags,
-            sequence,
             frame,
-            fragment_index: u16::try_from(index).unwrap_or(u16::MAX),
-            fragment_count: count,
-        }
+            (index, count),
+        )
+    }
+}
+
+fn header(
+    next_sequence: &mut u32,
+    stream: StreamKind,
+    flags: PacketFlags,
+    frame: u32,
+    (index, count): (usize, u16),
+) -> PacketHeader {
+    let sequence = *next_sequence;
+    *next_sequence = sequence.wrapping_add(1);
+
+    PacketHeader {
+        version: ProtocolVersion::CURRENT,
+        stream,
+        flags,
+        sequence,
+        frame,
+        fragment_index: u16::try_from(index).unwrap_or(u16::MAX),
+        fragment_count: count,
     }
 }
 
@@ -206,21 +227,6 @@ impl<'a> Payload<'a> {
 
     fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    fn range(&self, start: usize, end: usize) -> Cow<'a, [u8]> {
-        let split = self.prefix.len();
-
-        if end <= split {
-            Cow::Borrowed(&self.prefix[start..end])
-        } else if start >= split {
-            Cow::Borrowed(&self.body[start - split..end - split])
-        } else {
-            let mut joined = Vec::with_capacity(end - start);
-            joined.extend_from_slice(&self.prefix[start..]);
-            joined.extend_from_slice(&self.body[..end - split]);
-            Cow::Owned(joined)
-        }
     }
 
     fn shard_bounds(&self, index: usize, shard_len: usize) -> (usize, usize) {
@@ -242,19 +248,27 @@ impl<'a> Payload<'a> {
         }
     }
 
-    fn shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
+    fn shard<'s>(self, index: usize, shard_len: usize, scratch: &'s mut Vec<u8>) -> &'s [u8]
+    where
+        'a: 's,
+    {
         let (start, end) = self.shard_bounds(index, shard_len);
+        let split = self.prefix.len();
 
-        self.range(start, end)
-    }
-
-    fn padded_shard(&self, index: usize, shard_len: usize) -> Cow<'a, [u8]> {
-        let mut shard = self.shard(index, shard_len);
-        if shard.len() < shard_len {
-            shard.to_mut().resize(shard_len, 0);
+        if end - start == shard_len {
+            if end <= split {
+                return &self.prefix[start..end];
+            }
+            if start >= split {
+                return &self.body[start - split..end - split];
+            }
         }
 
-        shard
+        scratch.clear();
+        scratch.resize(shard_len, 0);
+        self.copy_range(start, end, &mut scratch[..end - start]);
+
+        scratch
     }
 }
 
@@ -503,5 +517,99 @@ mod tests {
         assert_eq!(headers(&datagrams)[0].frame, 1);
         assert_eq!(headers(&datagrams)[0].sequence, 4);
         assert_eq!(&datagrams[0][PacketHeader::SIZE..], [2; 5]);
+    }
+
+    fn reference_parity(scheme: FecScheme, shard_len: usize, frame: &[u8]) -> Vec<Vec<u8>> {
+        let fragment_count = u16::try_from(frame.len().div_ceil(shard_len)).unwrap();
+
+        scheme
+            .blocks(fragment_count)
+            .iter()
+            .flat_map(|block| {
+                let first = usize::from(block.first_fragment);
+                let shards: Vec<Vec<u8>> = (first..first + usize::from(block.data_shards))
+                    .map(|index| {
+                        let start = index * shard_len;
+                        let mut shard = frame[start..(start + shard_len).min(frame.len())].to_vec();
+                        shard.resize(shard_len, 0);
+                        shard
+                    })
+                    .collect();
+
+                reed_solomon_simd::encode(
+                    usize::from(block.data_shards),
+                    usize::from(block.parity_shards),
+                    &shards,
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn parity_payloads(datagrams: &[Vec<u8>]) -> Vec<Vec<u8>> {
+        datagrams
+            .iter()
+            .filter_map(|datagram| {
+                let (header, payload) = PacketHeader::parse(datagram).unwrap();
+                (header.stream == StreamKind::Fec)
+                    .then(|| FecHeader::parse(payload).unwrap().1.to_vec())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parity_is_what_the_one_shot_encoder_produces() {
+        let scheme = FecScheme::for_overhead(4, 50);
+        let shard_len = video(scheme).shard_len();
+
+        for (prefix_len, body_len) in [
+            (8, 1),
+            (8, shard_len * 6),
+            (0, shard_len * 9 + 7),
+            (40, 500),
+        ] {
+            let prefix: Vec<u8> = (0..prefix_len)
+                .map(|byte| u8::try_from(byte).unwrap() ^ 0x33)
+                .collect();
+            let body: Vec<u8> = (0..body_len)
+                .map(|byte| u8::try_from(byte * 5 % 251).unwrap())
+                .collect();
+            let joined = [prefix.as_slice(), body.as_slice()].concat();
+
+            let datagrams = video(scheme)
+                .packetize_prefixed(2, false, &prefix, &body)
+                .unwrap();
+
+            assert_eq!(
+                parity_payloads(&datagrams),
+                reference_parity(scheme, shard_len, &joined),
+                "prefix {prefix_len} body {body_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn consecutive_frames_reuse_the_encoder_and_the_arena() {
+        let scheme = FecScheme::for_overhead(4, 50);
+        let mut packetizer = video(scheme);
+        let shard_len = packetizer.shard_len();
+        let mut arena = DatagramArena::new();
+        let frame: Vec<u8> = (0..shard_len * 7 + 3)
+            .map(|byte| u8::try_from(byte % 251).unwrap())
+            .collect();
+
+        packetizer
+            .packetize_into(&mut arena, 0, false, &[1; 8], &frame)
+            .unwrap();
+        let scratch = packetizer.scratch.as_ptr();
+        let storage = arena.to_vecs();
+        for number in 1..4 {
+            packetizer
+                .packetize_into(&mut arena, number, false, &[1; 8], &frame)
+                .unwrap();
+
+            assert_eq!(packetizer.scratch.as_ptr(), scratch);
+            assert_eq!(parity_payloads(&arena.to_vecs()), parity_payloads(&storage));
+        }
     }
 }

@@ -49,7 +49,12 @@ paths:
   VAAPI and NVENC H.264), `av1_payload` (R, G, B, white, VAAPI) and `content_light_payload`.
   `src/obu.rs` holds the AV1 temporal delimiter and `AccessUnit`, which both backends use to copy
   the driver's output once into a `Vec` and write the delimiter in front of it when the driver's
-  first byte is not one, so the delimiter costs no second copy. Each backend
+  first byte is not one, so the delimiter costs no second copy. That `Vec` comes from the
+  session's `FramePool` (`src/pool.rs`) and travels in the `EncodedFrame` as a
+  `FrameBytes::recycled`, which hands the `Vec` back to the pool when the frame is dropped
+  wherever that happens (the host's send stage), so a steady stream reads back into the same few
+  buffers and allocates nothing per frame; the pool keeps at most four idle buffers and a clone
+  or `into_vec` detaches from it. Each backend
   has a parameter-mapping test and a test that encodes BT.2020 PQ with Display P3 mastering
   metadata (`hdr::fixtures::hdr10_color`) and decodes it with `rusplay-decode` (VAAPI for
   H.264/HEVC, rav1d and VAAPI for AV1), expecting `DecodedFrame::color` to report all of it.

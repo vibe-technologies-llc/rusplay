@@ -43,6 +43,7 @@ use crate::{
         },
         params::NvencParams,
     },
+    pool::FramePool,
 };
 
 const BACKEND: Backend = Backend::Nvenc;
@@ -324,6 +325,7 @@ struct Session {
     imports: Vec<Import>,
     upload: Option<InputBuffer>,
     bitstream: Bitstream,
+    pool: FramePool,
     config: Box<ffi::Config>,
     resolution: Resolution,
     frame_index: u32,
@@ -352,6 +354,7 @@ impl Session {
             imports: Vec::new(),
             upload: None,
             bitstream,
+            pool: FramePool::default(),
             config,
             resolution,
             frame_index: 0,
@@ -716,7 +719,9 @@ impl VideoEncoder for NvencEncoder {
                     },
                 );
                 device.encoder.encode(&mut params)?;
-                session.bitstream.read(settings.codec == Codec::Av1)?
+                session
+                    .bitstream
+                    .read(settings.codec == Codec::Av1, session.pool.take())?
             }
             FrameBuffer::DmaBuf { .. } | FrameBuffer::OpaqueFd { .. } => {
                 let index = session.import(device, frame, settings.format)?;
@@ -738,7 +743,9 @@ impl VideoEncoder for NvencEncoder {
                     },
                 );
                 device.encoder.encode(&mut params)?;
-                let coded = session.bitstream.read(settings.codec == Codec::Av1)?;
+                let coded = session
+                    .bitstream
+                    .read(settings.codec == Codec::Av1, session.pool.take())?;
                 drop(mapped);
                 coded
             }
@@ -748,13 +755,14 @@ impl VideoEncoder for NvencEncoder {
         session.frame_index = session.frame_index.wrapping_add(1);
 
         if coded.data.is_empty() {
+            session.pool.give_back(coded.data);
             return Ok(None);
         }
         Ok(Some(EncodedFrame {
             codec: settings.codec,
             timestamp: frame.timestamp,
             keyframe: keyframe || coded.picture_type == ffi::PIC_TYPE_IDR,
-            data: coded.data.into(),
+            data: session.pool.wrap(coded.data),
         }))
     }
 

@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{fmt, mem, ops::Deref};
 
 use crate::{Codec, Timestamp};
 
@@ -10,17 +10,32 @@ pub struct EncodedFrame {
     pub data: FrameBytes,
 }
 
-#[derive(Debug, Clone, Default)]
+type Recycle = Box<dyn FnOnce(Vec<u8>) + Send>;
+
+#[derive(Default)]
 pub struct FrameBytes {
     bytes: Vec<u8>,
     start: usize,
+    recycle: Option<Recycle>,
 }
 
 impl FrameBytes {
     pub fn skipping(bytes: Vec<u8>, skip: usize) -> Self {
         let start = skip.min(bytes.len());
 
-        Self { bytes, start }
+        Self {
+            bytes,
+            start,
+            recycle: None,
+        }
+    }
+
+    pub fn recycled(bytes: Vec<u8>, recycle: impl FnOnce(Vec<u8>) + Send + 'static) -> Self {
+        Self {
+            bytes,
+            start: 0,
+            recycle: Some(Box::new(recycle)),
+        }
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -28,9 +43,35 @@ impl FrameBytes {
     }
 
     pub fn into_vec(mut self) -> Vec<u8> {
-        self.bytes.drain(..self.start);
+        self.recycle = None;
+        let mut bytes = mem::take(&mut self.bytes);
+        bytes.drain(..self.start);
 
-        self.bytes
+        bytes
+    }
+}
+
+impl Clone for FrameBytes {
+    fn clone(&self) -> Self {
+        Self::from(self.as_slice().to_vec())
+    }
+}
+
+impl Drop for FrameBytes {
+    fn drop(&mut self) {
+        if let Some(recycle) = self.recycle.take() {
+            recycle(mem::take(&mut self.bytes));
+        }
+    }
+}
+
+impl fmt::Debug for FrameBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrameBytes")
+            .field("len", &self.len())
+            .field("recycled", &self.recycle.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -50,7 +91,11 @@ impl AsRef<[u8]> for FrameBytes {
 
 impl From<Vec<u8>> for FrameBytes {
     fn from(bytes: Vec<u8>) -> Self {
-        Self { bytes, start: 0 }
+        Self {
+            bytes,
+            start: 0,
+            recycle: None,
+        }
     }
 }
 
@@ -76,6 +121,8 @@ impl PartialEq<[u8]> for FrameBytes {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
 
     #[test]
@@ -106,5 +153,42 @@ mod tests {
         assert_eq!(skipped, plain);
         assert_eq!(skipped, vec![7, 8]);
         assert_eq!(skipped.into_vec(), vec![7, 8]);
+    }
+
+    #[test]
+    fn dropped_recycled_bytes_return_their_buffer_once() {
+        let (returned, idle) = mpsc::channel();
+
+        let bytes = FrameBytes::recycled(vec![1, 2, 3], move |bytes| returned.send(bytes).unwrap());
+        let address = bytes.as_ptr();
+        let before = idle.try_recv();
+        drop(bytes);
+        let back = idle.try_recv().unwrap();
+
+        assert!(before.is_err());
+        assert_eq!(back, vec![1, 2, 3]);
+        assert_eq!(back.as_ptr(), address);
+        assert!(idle.try_recv().is_err());
+    }
+
+    #[test]
+    fn into_vec_and_clone_detach_from_the_pool() {
+        let (returned, idle) = mpsc::channel();
+        let make = |bytes: Vec<u8>| {
+            let returned = returned.clone();
+            FrameBytes::recycled(bytes, move |bytes| returned.send(bytes).unwrap())
+        };
+
+        let original = make(vec![4, 5]);
+
+        let cloned = original.clone();
+        drop(cloned);
+        let taken = make(vec![6]).into_vec();
+        let detached = idle.try_recv();
+        drop(original);
+
+        assert!(detached.is_err());
+        assert_eq!(taken, vec![6]);
+        assert_eq!(idle.try_recv().unwrap(), vec![4, 5]);
     }
 }

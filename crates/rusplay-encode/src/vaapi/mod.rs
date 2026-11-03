@@ -30,6 +30,7 @@ use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
     device::VAAPI_CODED_ALIGNMENT,
     input::YuvFrame,
+    pool::FramePool,
     rate::vbv_buffer_kbit,
     vaapi::{
         av1::{Av1Profile, Av1Stream},
@@ -532,6 +533,7 @@ struct Upload {
 struct Session {
     stream: Stream,
     coded: CodedBuffer,
+    pool: FramePool,
     context: Context,
     upload: Option<Upload>,
     imports: Vec<(ImportKey, Surface)>,
@@ -575,6 +577,7 @@ impl Session {
         Ok(Self {
             stream: Stream::new(device.selection.profile, settings.info(resolution)),
             coded,
+            pool: FramePool::default(),
             context,
             upload: None,
             imports: Vec::new(),
@@ -955,7 +958,9 @@ impl VideoEncoder for VaapiEncoder {
 
         context.render(input, &buffers)?;
         device.display.sync(input)?;
-        let data = session.coded.read(settings.codec == Codec::Av1)?;
+        let data = session
+            .coded
+            .read(settings.codec == Codec::Av1, session.pool.take())?;
         drop(buffers);
 
         session.needs_keyframe = false;
@@ -966,7 +971,7 @@ impl VideoEncoder for VaapiEncoder {
             codec: settings.codec,
             timestamp: frame.timestamp,
             keyframe,
-            data: data.into(),
+            data: session.pool.wrap(data),
         }))
     }
 
