@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{
         Arc,
         mpsc::{SyncSender, TrySendError},
@@ -11,15 +12,16 @@ use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Timestamp};
 use crate::{
     CaptureFeed, HostError,
     capture::Captured,
-    mailbox::{Delivery, Waited},
+    mailbox::{Delivery, RecoveryRequest, Waited},
     negotiate::NegotiatedFormat,
     outbox::ControlOutbox,
-    pipeline::{PipelineNotices, StreamFormat, VideoPipeline},
+    pipeline::{OutputRef, PipelineNotices, PipelineRecovery, StreamFormat, VideoPipeline},
     shared::Shared,
     stats::Counters,
 };
 
 const IDLE_WAKE: Duration = Duration::from_millis(20);
+const REFERENCE_HISTORY: usize = 256;
 
 pub(crate) trait PipelineFactory: Send {
     fn encodable(&mut self) -> Result<FormatSet, HostError>;
@@ -31,6 +33,7 @@ pub(crate) trait PipelineFactory: Send {
 pub(crate) struct Outgoing {
     pub number: u32,
     pub captured_micros: u64,
+    pub recovers_from: Option<u32>,
     pub frame: EncodedFrame,
 }
 
@@ -87,10 +90,43 @@ fn record_notices(notices: PipelineNotices, counters: &Counters) {
 }
 
 #[derive(Debug, Default)]
+struct References {
+    sent: VecDeque<(u32, OutputRef)>,
+}
+
+impl References {
+    fn record(&mut self, number: u32, output: OutputRef) {
+        if self.sent.len() == REFERENCE_HISTORY {
+            self.sent.pop_front();
+        }
+        self.sent.push_back((number, output));
+    }
+
+    fn output_of(&self, number: u32) -> Option<OutputRef> {
+        self.sent
+            .iter()
+            .rev()
+            .find(|(sent, _)| *sent == number)
+            .map(|(_, output)| *output)
+    }
+
+    fn number_of(&self, output: OutputRef) -> Option<u32> {
+        self.sent
+            .iter()
+            .rev()
+            .find(|(_, sent)| *sent == output)
+            .map(|(number, _)| *number)
+    }
+}
+
+#[derive(Debug, Default)]
 struct EncodeStage {
     next_number: u32,
     last_keyframe: Option<u32>,
+    last_refresh: Option<u32>,
     force_keyframe: bool,
+    recovering: Option<u32>,
+    references: References,
     last_input: Option<(Timestamp, Instant)>,
     announced: Option<StreamFormat>,
     generation: u32,
@@ -115,6 +151,8 @@ impl EncodeStage {
                 frame,
                 keyframe_for,
                 keyframe_forced,
+                recovery_for,
+                acknowledged,
                 bitrate_kbps,
             } = delivery;
 
@@ -133,6 +171,12 @@ impl EncodeStage {
                     self.force_keyframe = true;
                 }
             }
+            if let Some(frame) = acknowledged {
+                self.acknowledge(pipeline, frame, counters);
+            }
+            if let Some(request) = recovery_for {
+                self.recover(pipeline, request, counters);
+            }
 
             let (encoded, captured_micros) = match frame {
                 Some(Captured {
@@ -147,9 +191,9 @@ impl EncodeStage {
                     links.feed.retain(frame);
                     (encoded, captured_micros)
                 }
-                None if self.force_keyframe => {
+                None if self.force_keyframe || self.recovering.is_some() => {
                     counters.frames_repeated.increment();
-                    let encoded = pipeline.repeat(self.repeat_timestamp(), true);
+                    let encoded = pipeline.repeat(self.repeat_timestamp(), self.force_keyframe);
                     record_notices(pipeline.take_notices(), counters);
                     let encoded = encoded?;
                     (encoded, links.shared.clock.micros())
@@ -161,7 +205,7 @@ impl EncodeStage {
                 continue;
             };
             self.announce(pipeline.stream_format(), negotiated.configured, links)?;
-            if !self.forward(encoded, captured_micros, links) {
+            if !self.forward(encoded, captured_micros, pipeline.last_output(), links) {
                 return Ok(());
             }
         }
@@ -184,9 +228,50 @@ impl EncodeStage {
             .announce(format.describe(self.generation, configured))
     }
 
+    fn acknowledge(&self, pipeline: &mut dyn VideoPipeline, frame: u32, counters: &Counters) {
+        counters.frame_acks.increment();
+        if let Some(output) = self.references.output_of(frame) {
+            pipeline.acknowledge(output);
+        }
+    }
+
+    fn recover(
+        &mut self,
+        pipeline: &mut dyn VideoPipeline,
+        request: RecoveryRequest,
+        counters: &Counters,
+    ) {
+        counters.recovery_requests.increment();
+        if self.refresh_follows(request.frame) {
+            counters.recovery_requests_ignored.increment();
+            return;
+        }
+        if self.force_keyframe || self.recovering.is_some() {
+            return;
+        }
+
+        let reference = self
+            .references
+            .output_of(request.last_good)
+            .filter(|_| !self.keyframe_follows(request.last_good))
+            .and_then(|last_good| match pipeline.recover(last_good) {
+                PipelineRecovery::Reference(output) => self.references.number_of(output),
+                PipelineRecovery::Keyframe => None,
+            })
+            .filter(|&number| request.last_good.wrapping_sub(number).cast_signed() >= 0);
+
+        match reference {
+            Some(number) => self.recovering = Some(number),
+            None => self.force_keyframe = true,
+        }
+    }
+
     fn keyframe_follows(&self, frame: u32) -> bool {
-        self.last_keyframe
-            .is_some_and(|keyframe| keyframe.wrapping_sub(frame).cast_signed() > 0)
+        follows(self.last_keyframe, frame)
+    }
+
+    fn refresh_follows(&self, frame: u32) -> bool {
+        follows(self.last_refresh, frame)
     }
 
     fn repeat_timestamp(&self) -> Timestamp {
@@ -196,20 +281,38 @@ impl EncodeStage {
         })
     }
 
-    fn forward(&mut self, frame: EncodedFrame, captured_micros: u64, links: &EncodeLinks) -> bool {
+    fn forward(
+        &mut self,
+        frame: EncodedFrame,
+        captured_micros: u64,
+        output: Option<OutputRef>,
+        links: &EncodeLinks,
+    ) -> bool {
         let number = self.next_number;
         let keyframe = frame.keyframe;
+        let recovers_from = self.recovering.filter(|_| !keyframe);
 
         match links.output.try_send(Outgoing {
             number,
             captured_micros,
+            recovers_from,
             frame,
         }) {
             Ok(()) => {
                 self.next_number = number.wrapping_add(1);
                 self.force_keyframe = false;
+                self.recovering = None;
                 if keyframe {
                     self.last_keyframe = Some(number);
+                }
+                if keyframe || recovers_from.is_some() {
+                    self.last_refresh = Some(number);
+                }
+                if recovers_from.is_some() {
+                    links.shared.counters.reference_recoveries.increment();
+                }
+                if let Some(output) = output {
+                    self.references.record(number, output);
                 }
                 links.shared.counters.frames_encoded.increment();
                 true
@@ -217,6 +320,7 @@ impl EncodeStage {
             Err(TrySendError::Full(_)) => {
                 links.shared.counters.frames_dropped.increment();
                 self.force_keyframe = true;
+                self.recovering = None;
                 true
             }
             Err(TrySendError::Disconnected(_)) => false,
@@ -224,9 +328,22 @@ impl EncodeStage {
     }
 }
 
+fn follows(refresh: Option<u32>, frame: u32) -> bool {
+    refresh.is_some_and(|refresh| refresh.wrapping_sub(frame).cast_signed() > 0)
+}
+
 #[cfg(test)]
 mod tests {
+    use rusplay_encode::OutputIndex;
+
     use super::*;
+
+    fn output(index: u64) -> OutputRef {
+        OutputRef {
+            epoch: 1,
+            index: OutputIndex(index),
+        }
+    }
 
     #[test]
     fn a_request_for_a_frame_before_the_last_keyframe_is_already_answered() {
@@ -239,5 +356,40 @@ mod tests {
         assert!(!stage.keyframe_follows(10));
         assert!(!stage.keyframe_follows(11));
         assert!(!EncodeStage::default().keyframe_follows(0));
+    }
+
+    #[test]
+    fn a_recovery_request_before_the_last_refresh_is_already_answered() {
+        let stage = EncodeStage {
+            last_refresh: Some(20),
+            ..EncodeStage::default()
+        };
+
+        assert!(stage.refresh_follows(19));
+        assert!(!stage.refresh_follows(20));
+    }
+
+    #[test]
+    fn references_map_frame_numbers_to_outputs_both_ways() {
+        let mut references = References::default();
+
+        references.record(u32::MAX, output(7));
+        references.record(0, output(8));
+
+        assert_eq!(references.output_of(0), Some(output(8)));
+        assert_eq!(references.number_of(output(7)), Some(u32::MAX));
+        assert_eq!(references.output_of(1), None);
+    }
+
+    #[test]
+    fn the_reference_history_forgets_the_oldest_frame() {
+        let mut references = References::default();
+
+        for number in 0..=u32::try_from(REFERENCE_HISTORY).unwrap() {
+            references.record(number, output(u64::from(number)));
+        }
+
+        assert_eq!(references.output_of(0), None);
+        assert_eq!(references.output_of(1), Some(output(1)));
     }
 }

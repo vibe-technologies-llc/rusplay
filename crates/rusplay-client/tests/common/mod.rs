@@ -560,7 +560,9 @@ fn serve(
                     answer_hello(&mut control, transport, client, options, !streaming);
                     streaming = true;
                 }
-                ControlMessage::RequestKeyframe { .. } => fixture_index = 0,
+                ControlMessage::RequestKeyframe { .. } | ControlMessage::RequestRecovery { .. } => {
+                    fixture_index = 0;
+                }
                 ControlMessage::ClockPing { sent_micros } => {
                     answer_ping(&mut control, sent_micros, host_micros());
                 }
@@ -578,6 +580,7 @@ fn serve(
             payload.clear();
             VideoFrameHeader {
                 captured_micros: host_micros(),
+                recovers_from: None,
             }
             .write(&mut payload);
             payload.extend_from_slice(&fixture[fixture_index]);

@@ -659,6 +659,16 @@ mod tests {
     }
 
     #[test]
+    fn recovery_without_reference_support_is_an_idr() {
+        let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
+
+        testing::check_recovery_falls_back_to_a_keyframe(
+            &config(format, X265Config::default()),
+            contains_idr,
+        );
+    }
+
+    #[test]
     fn set_bitrate_reconfigures_in_place() {
         testing::check_set_bitrate_in_place(&config(PixelFormat::default(), X265Config::default()));
     }

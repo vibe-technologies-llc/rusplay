@@ -1,7 +1,7 @@
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
 use crate::{
-    EncodeError,
+    EncodeError, OutputIndex,
     vaapi::{
         CodecBuffers, INFINITE_INTRA_PERIOD, PackedKind, Picture, StreamInfo,
         bits::{BitWriter, leb128, packed},
@@ -35,6 +35,13 @@ const MIN_QINDEX: u8 = 1;
 const MAX_QINDEX: u8 = 255;
 const FRAME_HEADER_SIZE_FIELD_BYTES: usize = 2;
 const LAST_FRAME_SEARCH: u32 = 1;
+const LAST_SLOT: usize = 0;
+const LONG_TERM_SLOTS: [usize; 2] = [1, 2];
+const HELD_SLOTS: usize = 3;
+pub(super) const RECONSTRUCTED_SURFACES: usize = HELD_SLOTS + 1;
+const LONG_TERM_INTERVAL: u64 = 8;
+const LONG_TERM_STALE: u64 = 60;
+const MAX_RECOVERY_DISTANCE: u64 = 120;
 
 const fn level(
     id: u8,
@@ -204,9 +211,25 @@ pub(super) fn obu(kind: u8, payload: Vec<u8>, size_field_bytes: usize) -> Vec<u8
     bytes
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReferencePicture {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Slot {
     surface: u32,
+    output: OutputIndex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FramePlan {
+    reference: usize,
+    refresh: u8,
+    recovery: bool,
+}
+
+impl FramePlan {
+    const PREVIOUS: Self = Self {
+        reference: LAST_SLOT,
+        refresh: 1 << LAST_SLOT,
+        recovery: false,
+    };
 }
 
 pub(super) struct Av1Stream {
@@ -214,7 +237,11 @@ pub(super) struct Av1Stream {
     level: level::Selected,
     tiles: TileLayout,
     info: StreamInfo,
-    reference: Option<ReferencePicture>,
+    slots: [Option<Slot>; HELD_SLOTS],
+    next_output: OutputIndex,
+    acknowledged: Option<OutputIndex>,
+    recovering_from: Option<usize>,
+    plan: FramePlan,
 }
 
 impl Av1Stream {
@@ -226,7 +253,99 @@ impl Av1Stream {
             level: level::select(&LEVELS, demand, profile.bitrate_percent()),
             tiles: TileLayout::new(info.resolution),
             info,
-            reference: None,
+            slots: [None; HELD_SLOTS],
+            next_output: OutputIndex(0),
+            acknowledged: None,
+            recovering_from: None,
+            plan: FramePlan::PREVIOUS,
+        }
+    }
+
+    pub(super) fn holds(&self, surface: u32) -> bool {
+        self.slots
+            .iter()
+            .flatten()
+            .any(|slot| slot.surface == surface)
+    }
+
+    pub(super) fn acknowledge(&mut self, output: OutputIndex) {
+        if output < self.next_output && self.acknowledged.is_none_or(|known| output > known) {
+            self.acknowledged = Some(output);
+        }
+    }
+
+    pub(super) fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
+        self.acknowledge(last_good);
+        let next = self.next_output.0;
+
+        let (slot, reference) = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.map(|slot| (index, slot.output)))
+            .filter(|&(_, output)| {
+                output <= last_good && next.saturating_sub(output.0) <= MAX_RECOVERY_DISTANCE
+            })
+            .max_by_key(|&(_, output)| output)?;
+        self.recovering_from = Some(slot);
+
+        Some(reference)
+    }
+
+    fn age(&self, slot: Slot) -> u64 {
+        self.next_output.0.saturating_sub(slot.output.0)
+    }
+
+    fn confirmed(&self, slot: Slot) -> bool {
+        self.acknowledged.is_some_and(|known| slot.output <= known)
+    }
+
+    fn long_term_refresh(&self) -> Option<usize> {
+        let keeper = LONG_TERM_SLOTS
+            .into_iter()
+            .filter(|&index| self.slots[index].is_some_and(|slot| self.confirmed(slot)))
+            .max_by_key(|&index| self.slots[index].map(|slot| slot.output));
+        let candidate = LONG_TERM_SLOTS
+            .into_iter()
+            .filter(|&index| Some(index) != keeper)
+            .min_by_key(|&index| self.slots[index].map(|slot| slot.output))?;
+
+        let Some(held) = self.slots[candidate] else {
+            return Some(candidate);
+        };
+        let newest = LONG_TERM_SLOTS
+            .into_iter()
+            .filter_map(|index| self.slots[index])
+            .map(|slot| self.age(slot))
+            .min()
+            .unwrap_or(u64::MAX);
+        let replaceable = self.acknowledged.is_none() || self.confirmed(held);
+        let due = newest >= LONG_TERM_INTERVAL;
+
+        (due && (replaceable || self.age(held) >= LONG_TERM_STALE)).then_some(candidate)
+    }
+
+    fn plan(&self, keyframe: bool) -> FramePlan {
+        if keyframe {
+            return FramePlan {
+                reference: LAST_SLOT,
+                refresh: ALL_FRAMES,
+                recovery: false,
+            };
+        }
+        if let Some(reference) = self.recovering_from {
+            return FramePlan {
+                reference,
+                refresh: 1 << LAST_SLOT,
+                recovery: true,
+            };
+        }
+
+        FramePlan {
+            refresh: self
+                .long_term_refresh()
+                .map_or(1 << LAST_SLOT, |slot| (1 << LAST_SLOT) | (1 << slot)),
+            ..FramePlan::PREVIOUS
         }
     }
 
@@ -346,10 +465,10 @@ impl Av1Stream {
             self.render_size(&mut header);
         } else {
             header.bits(0, 3);
-            header.bits(1, 8);
+            header.bits(u64::from(self.plan.refresh), 8);
             header.flag(false);
             for _ in 0..REFS_PER_FRAME {
-                header.bits(0, 3);
+                header.bits(u64::try_from(self.plan.reference).unwrap_or(0), 3);
             }
             self.render_size(&mut header);
             header.flag(false);
@@ -454,7 +573,11 @@ impl Av1Stream {
                 0
             },
             order_hint,
-            refresh_frame_flags: if picture.keyframe { ALL_FRAMES } else { 1 },
+            refresh_frame_flags: if picture.keyframe {
+                ALL_FRAMES
+            } else {
+                self.plan.refresh
+            },
             base_qindex: self.qindex(),
             min_base_qindex: MIN_QINDEX,
             max_base_qindex: MAX_QINDEX,
@@ -469,8 +592,13 @@ impl Av1Stream {
             size_in_bits_frame_hdr_obu: offsets.total_bits,
             ..Default::default()
         };
-        if let Some(reference) = self.reference {
-            parameters.reference_frames[0] = reference.surface;
+        if !picture.keyframe && self.slots[self.plan.reference].is_some() {
+            for (entry, slot) in parameters.reference_frames.iter_mut().zip(&self.slots) {
+                if let Some(slot) = slot {
+                    *entry = slot.surface;
+                }
+            }
+            parameters.ref_frame_idx = [u8::try_from(self.plan.reference).unwrap_or(0); 7];
             parameters.ref_frame_ctrl_l0.value = LAST_FRAME_SEARCH;
         }
         for (slot, width) in parameters
@@ -554,8 +682,11 @@ impl Av1Stream {
 
     pub(super) fn begin(&mut self, picture: &Picture) {
         if picture.keyframe {
-            self.reference = None;
+            self.slots = [None; HELD_SLOTS];
+            self.acknowledged = None;
+            self.recovering_from = None;
         }
+        self.plan = self.plan(picture.keyframe);
     }
 
     pub(super) fn order_hint(picture: &Picture) -> u8 {
@@ -563,8 +694,29 @@ impl Av1Stream {
     }
 
     pub(super) fn commit(&mut self, picture: &Picture) {
-        self.reference = Some(ReferencePicture {
+        let output = self.next_output;
+        let committed = Slot {
             surface: picture.recon,
-        });
+            output,
+        };
+
+        if self.plan.recovery {
+            let reference = self.slots[self.plan.reference].map(|slot| slot.output);
+            for slot in &mut self.slots {
+                if slot
+                    .zip(reference)
+                    .is_some_and(|(held, kept)| held.output > kept)
+                {
+                    *slot = None;
+                }
+            }
+            self.recovering_from = None;
+        }
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            if self.plan.refresh & (1 << index) != 0 {
+                *slot = Some(committed);
+            }
+        }
+        self.next_output = output.next();
     }
 }

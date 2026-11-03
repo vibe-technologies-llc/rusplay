@@ -398,7 +398,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   alone because a lock is not a stuck key. `Touches` carries the `TouchSet` mask of held slots as
   a `u16`: `reconcile` lifts the held touches the record lacks and never invents a `Down` (the
   position is gone), so a lost `Up` is repaired. `ProtocolVersion::CURRENT` 16 added the lock and
-  touch records and events, 22 the pad sensor and touchpad events and records.
+  touch records and events, 22 the pad sensor and touchpad events and records, 23 the frame acknowledgement, the recovery request and the recovery flag and reference in the video frame header.
 - Gamepad `Connected` and `Disconnected` events create and drop the host's virtual pads, so the
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,

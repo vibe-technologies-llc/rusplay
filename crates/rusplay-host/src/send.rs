@@ -149,6 +149,7 @@ fn send_frame(
     header.clear();
     VideoFrameHeader {
         captured_micros: outgoing.captured_micros,
+        recovers_from: outgoing.recovers_from,
     }
     .write(header);
     packetizer.packetize_into(

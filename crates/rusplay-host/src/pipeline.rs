@@ -13,7 +13,7 @@ use rusplay_core::{
     ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
     Timestamp,
 };
-use rusplay_encode::{VideoEncoder, input::fourcc_for};
+use rusplay_encode::{OutputIndex, Recovery, VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
 use rusplay_scale::{
     ColorConverter, ColorMapSettings, ColorMapper, ConvertSettings, DmaBuf, DmaBufImporter,
@@ -70,6 +70,18 @@ pub(crate) struct PipelineNotices {
     pub handoff_disabled: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OutputRef {
+    pub epoch: u32,
+    pub index: OutputIndex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PipelineRecovery {
+    Reference(OutputRef),
+    Keyframe,
+}
+
 pub(crate) trait VideoPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError>;
 
@@ -85,6 +97,16 @@ pub(crate) trait VideoPipeline {
 
     fn take_notices(&mut self) -> PipelineNotices {
         PipelineNotices::default()
+    }
+
+    fn last_output(&self) -> Option<OutputRef> {
+        None
+    }
+
+    fn acknowledge(&mut self, _output: OutputRef) {}
+
+    fn recover(&mut self, _last_good: OutputRef) -> PipelineRecovery {
+        PipelineRecovery::Keyframe
     }
 }
 
@@ -156,6 +178,14 @@ impl HandoffState {
 struct OpenEncoder {
     resolution: Resolution,
     encoder: Box<dyn VideoEncoder>,
+    epoch: u32,
+    next_output: OutputIndex,
+}
+
+impl OpenEncoder {
+    fn holds(&self, output: OutputRef) -> bool {
+        output.epoch == self.epoch && output.index < self.next_output
+    }
 }
 
 pub(crate) struct GpuPipeline {
@@ -178,6 +208,8 @@ pub(crate) struct GpuPipeline {
     conversion: Option<Conversion>,
     handoff: HandoffState,
     encoder: Option<OpenEncoder>,
+    encoder_epoch: u32,
+    last_output: Option<OutputRef>,
     input: Option<Frame>,
     readback_held: bool,
     bitrate_kbps: Option<u32>,
@@ -272,6 +304,8 @@ impl GpuPipeline {
             conversion: None,
             handoff,
             encoder: None,
+            encoder_epoch: 0,
+            last_output: None,
             input: None,
             readback_held: false,
             bitrate_kbps: None,
@@ -626,6 +660,7 @@ impl GpuPipeline {
         let resolution = converter.settings().resolution;
         let open = open_encoder(
             &mut self.encoder,
+            &mut self.encoder_epoch,
             &self.config,
             self.bitrate_kbps,
             resolution,
@@ -687,6 +722,13 @@ impl GpuPipeline {
         };
         readback.buffer.unmap();
 
+        if let Ok(Some(_)) = &encoded {
+            self.last_output = Some(OutputRef {
+                epoch: open.epoch,
+                index: open.next_output,
+            });
+            open.next_output = open.next_output.next();
+        }
         self.input = None;
         self.readback_held = true;
 
@@ -751,6 +793,7 @@ impl GpuPipeline {
 
         let encoder = open_encoder(
             &mut self.encoder,
+            &mut self.encoder_epoch,
             &self.config,
             self.bitrate_kbps,
             input.resolution,
@@ -759,7 +802,16 @@ impl GpuPipeline {
         if keyframe {
             encoder.encoder.request_keyframe();
         }
-        Ok(encoder.encoder.encode(input)?)
+        let output = encoder.encoder.encode(input)?;
+        if output.is_some() {
+            self.last_output = Some(OutputRef {
+                epoch: encoder.epoch,
+                index: encoder.next_output,
+            });
+            encoder.next_output = encoder.next_output.next();
+        }
+
+        Ok(output)
     }
 
     fn encode_frame(
@@ -822,6 +874,30 @@ impl VideoPipeline for GpuPipeline {
         std::mem::take(&mut self.notices)
     }
 
+    fn last_output(&self) -> Option<OutputRef> {
+        self.last_output
+    }
+
+    fn acknowledge(&mut self, output: OutputRef) {
+        if let Some(open) = self.encoder.as_mut().filter(|open| open.holds(output)) {
+            open.encoder.acknowledge(output.index);
+        }
+    }
+
+    fn recover(&mut self, last_good: OutputRef) -> PipelineRecovery {
+        let Some(open) = self.encoder.as_mut().filter(|open| open.holds(last_good)) else {
+            return PipelineRecovery::Keyframe;
+        };
+
+        match open.encoder.recover(last_good.index) {
+            Recovery::Reference(index) => PipelineRecovery::Reference(OutputRef {
+                epoch: open.epoch,
+                index,
+            }),
+            Recovery::Keyframe => PipelineRecovery::Keyframe,
+        }
+    }
+
     fn stream_format(&self) -> Option<StreamFormat> {
         let video = &self.config.video;
 
@@ -837,6 +913,7 @@ impl VideoPipeline for GpuPipeline {
 
 fn open_encoder<'a>(
     slot: &'a mut Option<OpenEncoder>,
+    epoch: &mut u32,
     config: &Config,
     bitrate_kbps: Option<u32>,
     resolution: Resolution,
@@ -849,9 +926,12 @@ fn open_encoder<'a>(
             if let Some(kbps) = bitrate_kbps {
                 encoder.set_bitrate(kbps)?;
             }
+            *epoch = epoch.wrapping_add(1);
             OpenEncoder {
                 resolution,
                 encoder,
+                epoch: *epoch,
+                next_output: OutputIndex(0),
             }
         }
     };

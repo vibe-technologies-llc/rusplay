@@ -7,7 +7,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    EncodeError, VideoEncoder,
+    EncodeError, OutputIndex, Recovery, VideoEncoder,
     hdr::fixtures::{expected_siting, hdr10_color, signalled},
     input::{fixtures::yuv_frame, fourcc_for},
     open, open_sited,
@@ -108,6 +108,26 @@ pub fn check_keyframe_on_request(config: &VideoConfig, contains_idr: impl Fn(&[u
     assert!(forced.keyframe);
     assert!(contains_idr(&forced.data));
     assert!(!after.keyframe);
+}
+
+pub fn check_recovery_falls_back_to_a_keyframe(
+    config: &VideoConfig,
+    contains_idr: impl Fn(&[u8]) -> bool,
+) {
+    let format = config.pixel_format;
+    let mut encoder = open(config).unwrap();
+
+    for index in 0..3 {
+        encoder.encode(&frame(format, index)).unwrap();
+    }
+    encoder.acknowledge(OutputIndex(1));
+    let recovery = encoder.recover(OutputIndex(1));
+
+    let recovered = encoder.encode(&frame(format, 3)).unwrap().unwrap();
+
+    assert_eq!(recovery, Recovery::Keyframe);
+    assert!(recovered.keyframe);
+    assert!(contains_idr(&recovered.data));
 }
 
 pub fn check_set_bitrate_in_place(config: &VideoConfig) {

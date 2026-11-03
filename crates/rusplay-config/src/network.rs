@@ -16,6 +16,14 @@ const RTKIT_PRIORITY_MAX: u8 = 99;
 const KBPS_PER_MBPS: u32 = 1_000;
 const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LossRecovery {
+    #[default]
+    Reference,
+    Keyframe,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
@@ -46,6 +54,8 @@ pub struct NetworkConfig {
     pub peer_timeout_ms: u32,
     pub keepalive_interval_ms: u32,
     pub keyframe_request_interval_ms: u16,
+    pub loss_recovery: LossRecovery,
+    pub frame_ack_interval_ms: u16,
     pub cursor_image_repeat_ms: u16,
     pub stats_log_interval_ms: u32,
     pub stats_json: bool,
@@ -89,6 +99,8 @@ impl Default for NetworkConfig {
             peer_timeout_ms: 5_000,
             keepalive_interval_ms: 1_000,
             keyframe_request_interval_ms: 100,
+            loss_recovery: LossRecovery::Reference,
+            frame_ack_interval_ms: 50,
             cursor_image_repeat_ms: 1_000,
             stats_log_interval_ms: 10_000,
             stats_json: false,
@@ -299,6 +311,22 @@ mod tests {
                 peer_timeout_ms: 5_000
             })
         ));
+    }
+
+    #[test]
+    fn loss_recovery_defaults_to_a_reference_with_acks_every_fifty_ms() {
+        let silent = NetworkConfig {
+            frame_ack_interval_ms: 0,
+            loss_recovery: LossRecovery::Keyframe,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(
+            NetworkConfig::default().loss_recovery,
+            LossRecovery::Reference
+        );
+        assert_eq!(NetworkConfig::default().frame_ack_interval_ms, 50);
+        assert!(silent.validate().is_ok());
     }
 
     #[test]

@@ -51,6 +51,22 @@ pub use crate::{
     error::{ApiVersion, EncodeError, NvencCall, NvencStatus},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OutputIndex(pub u64);
+
+impl OutputIndex {
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recovery {
+    Reference(OutputIndex),
+    Keyframe,
+}
+
 pub trait VideoEncoder: Send {
     fn encode(&mut self, frame: &Frame) -> Result<Option<EncodedFrame>, EncodeError>;
 
@@ -70,6 +86,13 @@ pub trait VideoEncoder: Send {
     fn request_keyframe(&mut self);
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), EncodeError>;
+
+    fn acknowledge(&mut self, _output: OutputIndex) {}
+
+    fn recover(&mut self, _last_good: OutputIndex) -> Recovery {
+        self.request_keyframe();
+        Recovery::Keyframe
+    }
 }
 
 pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> {
@@ -123,5 +146,46 @@ pub fn open_sited(
             feature = "svt-av1"
         )))]
         _ => Err(EncodeError::BackendNotCompiled { backend }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct KeyframeOnly {
+        keyframe_requested: bool,
+    }
+
+    impl VideoEncoder for KeyframeOnly {
+        fn encode(&mut self, _frame: &Frame) -> Result<Option<EncodedFrame>, EncodeError> {
+            Ok(None)
+        }
+
+        fn request_keyframe(&mut self) {
+            self.keyframe_requested = true;
+        }
+
+        fn set_bitrate(&mut self, _kbps: u32) -> Result<(), EncodeError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_encoder_without_reference_recovery_forces_a_keyframe() {
+        let mut encoder = KeyframeOnly::default();
+
+        encoder.acknowledge(OutputIndex(3));
+        let recovery = encoder.recover(OutputIndex(4));
+
+        assert_eq!(recovery, Recovery::Keyframe);
+        assert!(encoder.keyframe_requested);
+    }
+
+    #[test]
+    fn output_indices_count_up_and_wrap() {
+        assert_eq!(OutputIndex(4).next(), OutputIndex(5));
+        assert_eq!(OutputIndex(u64::MAX).next(), OutputIndex(0));
     }
 }

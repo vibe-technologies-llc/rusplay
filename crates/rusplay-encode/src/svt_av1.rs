@@ -672,6 +672,17 @@ mod tests {
     }
 
     #[test]
+    fn recovery_without_reference_support_is_a_keyframe() {
+        testing::check_recovery_falls_back_to_a_keyframe(
+            &config(
+                pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+                SvtAv1Config::default(),
+            ),
+            contains_sequence_header,
+        );
+    }
+
+    #[test]
     fn set_bitrate_applies_to_the_next_frame() {
         testing::check_set_bitrate_in_place(&config(
             pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),

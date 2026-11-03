@@ -109,6 +109,7 @@ const GAMUT_MODES: &[&str] = &[
     "highlight",
 ];
 const RANGES: &[&str] = &["limited", "full"];
+const LOSS_RECOVERIES: &[&str] = &["reference", "keyframe"];
 const PRESENT_MODES: &[&str] = &["mailbox", "immediate", "fifo"];
 const PRESENT_PACINGS: &[&str] = &["off", "latency", "smooth"];
 const OUTPUT_COLOR_SPACES: &[&str] = &["auto", "srgb", "display-p3", "extended-linear", "pq"];
@@ -1000,6 +1001,21 @@ pub static FIELDS: &[Field] = &[
         "Session",
         "network.keyframe_request_interval_ms",
         "Keyframe request interval",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Network,
+        "Session",
+        "network.loss_recovery",
+        "Loss recovery",
+        Kind::Choice(LOSS_RECOVERIES),
+    ),
+    field(
+        Section::Network,
+        "Session",
+        "network.frame_ack_interval_ms",
+        "Frame acknowledgement interval",
         U16,
     )
     .unit("ms"),

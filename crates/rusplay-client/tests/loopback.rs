@@ -143,6 +143,7 @@ fn frames_arrive_decoded_at_the_source_resolution() {
 
     assert!(paired);
     assert_eq!(stats.keyframe_requests_sent, 0);
+    assert_eq!(stats.recovery_requests_sent, 0);
     assert_eq!(stats.frames_dropped, 0);
     assert_eq!(stats.frames_decoded, u64::from(common::DEFAULT_FRAMES));
     assert!(first_is_keyframe_or_was_superseded(&seen, &stats));
@@ -374,7 +375,7 @@ fn fec_recovers_a_lost_fragment_and_loss_is_reported() {
 }
 
 #[test]
-fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
+fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
     let Some(gpu) = common::gpu() else {
         return;
     };
@@ -402,13 +403,19 @@ fn an_unrecoverable_frame_requests_a_keyframe_and_the_stream_resumes() {
     let ceiling_kbps = common::client_config().video.bitrate_kbps;
 
     assert!(stats.frames_lost >= 1);
-    assert!(stats.keyframe_requests_sent >= 1);
+    assert!(stats.recovery_requests_sent >= 1);
     assert!(stats.frames_skipped >= 1);
+    assert!(stats.frame_acks_sent >= 1);
     assert_eq!(stats.decode_errors, 0);
     assert!(seen.iter().any(|frame| frame.frame > LOST_FRAME));
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
-        ControlMessage::RequestKeyframe { frame } if *frame == LOST_FRAME
+        ControlMessage::RequestRecovery { frame, last_good }
+            if *frame == LOST_FRAME && *last_good < LOST_FRAME
+    )));
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
+        message,
+        ControlMessage::AcknowledgeFrame { frame } if *frame < LOST_FRAME
     )));
     assert!(stats.bitrate_hints_sent >= 1);
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
