@@ -91,10 +91,14 @@ paths:
   `/dev/dri/renderD128`) with `vaGetDisplayDRM`, and fails with `CodecUnsupported` when the
   driver has no VLD entrypoint for the codec's base profile (H.264 Constrained Baseline/Main/
   High, HEVC Main, AV1 Profile 0).
-- libva is reached through bindgen bindings generated in `build.rs` from the system headers
-  (`src/vaapi/ffi.rs`); `src/vaapi/va.rs` wraps display, config/context (`Session`), buffers and
-  surfaces in owning types, and is the only place with libva calls besides the parameter-buffer
-  unions. Errors are `DecodeError::Va { call, status }`.
+- libva is reached through `rusplay-va` (bindgen bindings re-exported as `ffi`, and the owning
+  display, config, context, buffer, surface and image wrappers shared with `rusplay-encode`);
+  `src/vaapi/va.rs` keeps only what is decode specific: `Session` (a VLD config and context pair
+  that drops the context first), `DecoderDisplay` (profile, entry point and RT format queries),
+  the `SurfacePool` that exports each surface read-only as a `DmaBufImage` (a layer count other
+  than one is `ExportLayers`), and the test-only `read_back`. Besides `rusplay-va`, the only libva
+  use is the parameter-buffer unions. Errors are `DecodeError::Va(VaError)`, transparent over
+  `rusplay-va`.
 - Parsing uses the `cros-codecs` parsers (`codec::h264`, `codec::h265`, `codec::av1`). The
   decoding processes are Rusplay's own, one module per codec, because the `cros-codecs`
   stateless decoders finish a picture only when the next one starts and output H.264 only once
@@ -181,15 +185,19 @@ paths:
 
 ## NVDEC (`nvdec` feature)
 
-- Nothing NVIDIA is needed to build: `src/nvdec/driver.rs` loads `libcuda.so.1` and
-  `libnvcuvid.so.1` with `libloading` when `NvdecDecoder::new(codec, &NvdecDecoderConfig)` runs,
+- Nothing NVIDIA is needed to build: `src/nvdec/driver.rs` loads `libcuda.so.1` through
+  `rusplay-cuda`'s `Driver` (which owns `cuInit`, device lookup and the context push and pop, and
+  resolves the symbols NVDEC adds on top: the primary-context calls and `cuMemcpy2D_v2`) and
+  `libnvcuvid.so.1` through its `open_library` and `symbol` when
+  `NvdecDecoder::new(codec, &NvdecDecoderConfig)` runs,
   so `--all-features` builds and tests on machines without the driver. `src/nvdec/ffi.rs` holds
   hand-written `#[repr(C)]` declarations of exactly the CUDA driver and cuviddec/nvcuvid subset in
   use, taken from the SDK 13.1 headers (FFmpeg's `nv-codec-headers`); its tests pin every struct
   size and the offsets that matter on LP64. `CUVIDPICPARAMS` is opaque, since it only travels from
-  the parser to `cuvidDecodePicture`. A missing library is `LibraryUnavailable`, a missing symbol
-  `SymbolMissing`, a failed call `DecodeError::Cuda { call, status }`, a `gpu_index` past the
-  device count `CudaDeviceMissing`.
+  the parser to `cuvidDecodePicture`. A missing library is `CudaError::LibraryNotFound`, a missing symbol
+  `CudaError::SymbolMissing`, a failed driver call `CudaError::Call`, a `gpu_index` past the
+  device count `CudaError::DeviceMissing`, all inside `DecodeError::Cuda`; a failed `cuvid` call is
+  `DecodeError::Cuvid { call, status }`.
 - `new` retains the device's primary context (pushed around every call and released on drop) and
   fails with `CodecUnsupported` when `cuvidGetDecoderCaps` reports no 8-bit 4:2:0 decoder for the
   codec. Decoding uses the driver's parser (`cuvidCreateVideoParser`) with display delay 0, a

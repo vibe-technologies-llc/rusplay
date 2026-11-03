@@ -91,7 +91,6 @@ pub(super) const CHROMA_FORMAT_IDC_444: u32 = 3;
 pub(super) const AV1_COLOR_RANGE_STUDIO: u32 = 0;
 pub(super) const AV1_COLOR_RANGE_FULL: u32 = 1;
 
-pub(super) const CUDA_SUCCESS: i32 = 0;
 pub(super) const CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD: u32 = 1;
 pub(super) const CUDA_EXTERNAL_MEMORY_DEDICATED: u32 = 1;
 
@@ -957,9 +956,8 @@ pub(super) struct FunctionList {
 pub(super) type CreateInstanceFn = unsafe extern "C" fn(*mut FunctionList) -> Status;
 pub(super) type GetMaxSupportedVersionFn = unsafe extern "C" fn(*mut u32) -> Status;
 
-pub(super) type CuResult = c_int;
-pub(super) type CuDevice = c_int;
-pub(super) type CuContext = *mut c_void;
+pub(super) use rusplay_cuda::ffi::{CuContext, CuDevice, CuResult};
+
 pub(super) type CuExternalMemory = *mut c_void;
 pub(super) type CuDevicePtr = u64;
 
@@ -989,13 +987,8 @@ pub(super) struct ExternalMemoryBufferDesc {
     pub reserved: [c_uint; 16],
 }
 
-pub(super) type CuInitFn = unsafe extern "C" fn(c_uint) -> CuResult;
-pub(super) type CuDeviceGetCountFn = unsafe extern "C" fn(*mut c_int) -> CuResult;
-pub(super) type CuDeviceGetFn = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
 pub(super) type CuCtxCreateFn = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
 pub(super) type CuCtxDestroyFn = unsafe extern "C" fn(CuContext) -> CuResult;
-pub(super) type CuCtxPushCurrentFn = unsafe extern "C" fn(CuContext) -> CuResult;
-pub(super) type CuCtxPopCurrentFn = unsafe extern "C" fn(*mut CuContext) -> CuResult;
 pub(super) type CuImportExternalMemoryFn =
     unsafe extern "C" fn(*mut CuExternalMemory, *const ExternalMemoryHandleDesc) -> CuResult;
 pub(super) type CuExternalMemoryGetMappedBufferFn = unsafe extern "C" fn(

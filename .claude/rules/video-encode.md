@@ -110,11 +110,15 @@ paths:
 ## VAAPI (`vaapi` feature)
 
 - `VaapiEncoder::new(&VideoConfig, &VaapiConfig)` opens `encoder.device` (default
-  `/dev/dri/renderD128`) with `vaGetDisplayDRM`. libva is reached through the bindgen bindings in
-  `src/vaapi/ffi.rs`; `src/vaapi/va.rs` wraps display, config, context, buffers, surfaces and images
-  in owning types and holds every libva call outside the bitfield setters of the parameter
-  structs. Errors are `EncodeError::Va { call, status }`. The VA objects share an `Rc<Display>`, all
-  reachable only through the encoder, which is why `VaapiEncoder` is `Send` by an `unsafe impl`.
+  `/dev/dri/renderD128`) with `vaGetDisplayDRM`. libva is reached through `rusplay-va` (bindgen
+  bindings re-exported as `ffi`, and the owning display, config, context, buffer, surface and image
+  wrappers shared with `rusplay-decode`); `src/vaapi/va.rs` keeps only what is encode specific:
+  the `EncoderContext` extension (misc and packed-header buffers, the coded buffer), `CodedBuffer`
+  reading, `PackedHeader`, and the surface constructors that map `SurfaceFormat` and a DMA-BUF
+  import onto `rusplay-va`. The only `unsafe` besides `rusplay-va` is the bitfield setters of the
+  parameter structs and the coded-buffer segment walk. Errors are `EncodeError::Va(VaError)`,
+  transparent over `rusplay-va`. The VA objects share an `Rc<Display>`, all reachable only through
+  the encoder, which is why `VaapiEncoder` is `Send` by an `unsafe impl`.
 - Profile choice (`select` in `src/vaapi/mod.rs`): H.264 is 4:2:0 8-bit only, High, then Main,
   then Constrained Baseline; HEVC takes the profile of the format (Main, Main10, Main12,
   Main422_10 for 8- and 10-bit 4:2:2, Main422_12, Main444, Main444_10, Main444_12); AV1 is Profile 0
@@ -209,19 +213,22 @@ paths:
 
 ## NVENC (`nvenc` feature)
 
-- Nothing is linked at build time. `src/nvenc/driver.rs` loads `libcuda.so.1` and
-  `libnvidia-encode.so.1` with `libloading` on every `open` and `capabilities` call (a missing
-  library is `LibraryNotFound`, a missing symbol `SymbolMissing`), refuses a driver whose
+- Nothing is linked at build time. `src/nvenc/driver.rs` loads `libcuda.so.1` through
+  `rusplay-cuda`'s `Driver` (which owns `cuInit`, device lookup and the context push and pop, and
+  resolves the symbols NVENC adds on top: `cuCtxCreate_v2`, the external-memory calls and
+  `cuMemFree_v2`) and `libnvidia-encode.so.1` through its `open_library` and `symbol`, on every
+  `open` and `capabilities` call (a missing library is `CudaError::LibraryNotFound`, a missing
+  symbol `CudaError::SymbolMissing`, both inside `EncodeError::Cuda`), refuses a driver whose
   `NvEncodeAPIGetMaxSupportedVersion` is below 13.0 (`DriverTooOld`; driver R570 or newer), fills
   the function list from `NvEncodeAPICreateInstance` and requires every entry it uses
   (`DriverFunctionMissing`). The structs in `src/nvenc/ffi.rs` are hand written for SDK 13.0; their
   sizes, offsets and versions, the `NV_ENC_CAPS` positions and the bit-field positions are tested
   against the header (see `dependencies.md`). `NV_ENC_CAPS` values are positions in the header's
   enum, not documented numbers, so a new SDK means recounting them. Bit fields are `BitField` offsets into the
-  `u32` that holds them. Errors are `EncodeError::Cuda { call, status }` and
-  `EncodeError::Nvenc { call, status }`.
+  `u32` that holds them. Errors are `EncodeError::Cuda(CudaError)`, transparent over
+  `rusplay-cuda`, and `EncodeError::Nvenc { call, status }`.
 - Ownership: `Driver` (libraries and function pointers) → `CudaContext` (created with
-  `cuCtxCreate` on `encoder.gpu_index`, else `GpuIndexOutOfRange`, then popped so no thread keeps
+  `cuCtxCreate` on `encoder.gpu_index`, else `CudaError::DeviceMissing`, then popped so no thread keeps
   it current) → `Encoder` (the `nvEncOpenEncodeSessionEx` handle) → input buffers, bitstream
   buffer, registrations and imported CUDA memory, each an `Rc` owner whose `Drop` frees it. Every
   entry point pushes the context for its duration (`CudaContext::enter`) and pops it after, so the
@@ -303,7 +310,7 @@ paths:
   rate-control, low-latency, intra refresh, chroma/depth, VUI/AV1 colour, params, H.264 SEI
   fallback and native HDR mapping on zeroed configs;
   `layout.rs` the packing and the DMA-BUF layout checks; `driver.rs` and `tests.rs` the
-  missing-library path (`LibraryNotFound` from both `open` and `capabilities`, and parameter and
+  missing-library path (`CudaError::LibraryNotFound` from both `open` and `capabilities`, and parameter and
   colour errors before any library loads). The hardware tests in `tests.rs` (capabilities against
   `open`, keyframes on start and request with the bitstream agreeing, every rate-control mode,
   first-frame resolution, AV1 HDR10 through rav1d) skip visibly without the driver (a failure under `RUSPLAY_REQUIRE_HW=1`); none has run

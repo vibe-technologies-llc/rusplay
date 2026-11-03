@@ -22,10 +22,9 @@ paths:
   |---|---|---|
   | PipeWire stream consumption | `pipewire` | `rusplay-capture/pipewire` |
   | PipeWire audio capture and playback | `pipewire` | `rusplay-audio/pipewire` |
-  | VAAPI encode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-encode/vaapi` |
-  | VAAPI decode | system `libva` + `libva-drm` through own bindgen bindings | `rusplay-decode/vaapi` |
-  | NVENC | system `libcuda.so.1` + `libnvidia-encode.so.1`, loaded at run time through `libloading`, with own hand-written FFI for Video Codec SDK 13.0 (driver R570 or newer) | `rusplay-encode/nvenc` |
-  | NVDEC | the driver's `libcuda.so.1` and `libnvcuvid.so.1`, loaded at run time with `libloading` through own `#[repr(C)]` declarations in `src/nvdec/ffi.rs`; nothing is linked or needed at build time | `rusplay-decode/nvdec` |
+  | VAAPI encode and decode | system `libva` + `libva-drm` through own bindgen bindings, generated once in `rusplay-va` and shared by both backends | `rusplay-va/libva`, enabled by `rusplay-encode/vaapi` and `rusplay-decode/vaapi` |
+  | NVENC | system `libcuda.so.1` (through `rusplay-cuda`) + `libnvidia-encode.so.1`, loaded at run time through `libloading`, with own hand-written FFI for Video Codec SDK 13.0 (driver R570 or newer) | `rusplay-encode/nvenc` |
+  | NVDEC | the driver's `libcuda.so.1` (through `rusplay-cuda`) and `libnvcuvid.so.1`, loaded at run time with `libloading` through own `#[repr(C)]` declarations in `src/nvdec/ffi.rs`; nothing is linked or needed at build time | `rusplay-decode/nvdec` |
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
@@ -40,13 +39,15 @@ paths:
   only by the three software-encoder features, so the default build neither needs libclang nor
   links anything C.
 
-  VAAPI decode and encode follow the same pattern (`crates/rusplay-decode/build.rs` and
-  `crates/rusplay-encode/build.rs`, each behind its crate's `vaapi` feature, each with its own copy
-  of the bindings since neither crate may depend on the other): `cros-libva` 0.0.12 and 0.0.13
+  VAAPI follows the same pattern in `crates/rusplay-va/build.rs`, behind that crate's `libva`
+  feature, which the `vaapi` features of `rusplay-encode` and `rusplay-decode` switch on. Neither
+  media crate may depend on the other, so the one set of bindings and the libva wrappers live in
+  `rusplay-va`, a crate below both (`.claude/rules/driver-wrappers.md`); likewise `rusplay-cuda`
+  holds the `libcuda.so.1` loading both NVIDIA backends share. `cros-libva` 0.0.12 and 0.0.13
   generate their bindings from the system headers too but do not compile against libva 2.24 (new
   `VAEncPictureParameterBufferVP9` fields), and `cros-codecs` 0.0.6 pins 0.0.12. The encode
   `build.rs` drives one `Library` description per system library (pkg-config packages, headers,
-  symbol pattern, macro constant signedness), so libva and the software encoders share it.
+  symbol pattern, macro constant signedness) for the software encoders.
   Bitstream parsing comes from `cros-codecs` with its default features off, which is only its
   pure-Rust `codec` parsers (H.264, HEVC, AV1) and pulls in no libva, GBM or DRM crates.
   `rusplay-encode` writes its own parameter sets and headers and uses `cros-codecs` only as a
@@ -62,8 +63,8 @@ paths:
   NVENC subset the backend calls, as `#[repr(C)]` structs whose sizes, field offsets and
   `NVENCAPI_STRUCT_VERSION` values, `NV_ENC_CAPS` positions, buffer formats and bit-field
   positions are unit tested against the 13.0 header (FFmpeg's `nv-codec-headers` `n13.0.19.1`,
-  `include/ffnvcodec/nvEncodeAPI.h`). `libloading` (pure Rust over `dlopen`) is the loader; a missing
-  library is `LibraryNotFound`, a missing symbol `SymbolMissing`. Moving to a newer SDK means
+  `include/ffnvcodec/nvEncodeAPI.h`). `libloading` (pure Rust over `dlopen`, used by `rusplay-cuda`) is the loader; a missing
+  library is `CudaError::LibraryNotFound`, a missing symbol `CudaError::SymbolMissing`. Moving to a newer SDK means
   updating those structs and their tests together.
 
   `fuzz/` is the one exception outside the table: `libfuzzer-sys` compiles LLVM's C++ libFuzzer,

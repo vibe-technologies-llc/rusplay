@@ -28,7 +28,10 @@ use crate::{
     open,
     vaapi::{
         format::{pack, surface_format},
-        va::{Display, DmaBufImport, Image, Surface},
+        va::{
+            Display, DmaBufImport, Image, Surface, export_surface, exportable_surface,
+            imported_surface,
+        },
     },
 };
 
@@ -211,7 +214,7 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
             pitch: u32::try_from(plane.pitch).unwrap(),
         })
         .collect();
-    let surface = Surface::import(
+    let surface = imported_surface(
         display,
         surface_format(format),
         &DmaBufImport {
@@ -227,7 +230,7 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
     let mut va_image =
         Image::new(display, surface_format(format).va_fourcc, output.resolution).unwrap();
     let bytes = va_image.get(&surface).unwrap();
-    let layout = va_image.image_layout();
+    let layout = va_image.layout();
 
     let wide = format.depth != BitDepth::Eight;
     let shift = 16 - u32::from(format.depth.bits());
@@ -692,7 +695,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
     let source = pattern_frame(format, RESOLUTION, index);
     let view = crate::input::YuvFrame::from_frame(&source, crate::Backend::Vaapi, format).unwrap();
     let surface_format = surface_format(format);
-    let surface = Surface::create_exportable(display, surface_format, RESOLUTION).unwrap();
+    let surface = exportable_surface(display, surface_format, RESOLUTION).unwrap();
     let mut image = Image::new(display, surface_format.va_fourcc, RESOLUTION).unwrap();
     image
         .write(|data, layout| pack(&view, data, layout, RESOLUTION))
@@ -700,7 +703,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
     image.put(&surface).unwrap();
     display.sync(surface.id()).unwrap();
 
-    let exported = surface.export().unwrap();
+    let exported = export_surface(&surface).unwrap();
     let frame = Frame {
         resolution: RESOLUTION,
         format: DrmFourcc(surface_format.drm_fourcc),

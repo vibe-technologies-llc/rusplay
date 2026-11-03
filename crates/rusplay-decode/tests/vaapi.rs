@@ -9,6 +9,7 @@ use std::path::Path;
 use rusplay_config::VaapiDecoderConfig;
 use rusplay_core::{BitDepth, ChromaSubsampling, Codec, EncodedFrame, PixelFormat, Resolution};
 use rusplay_decode::{Backend, DecodeError, DecodedBuffer, DrmFourcc, VaapiDecoder, VideoDecoder};
+use rusplay_va::VaError;
 
 const FIXTURE_RESOLUTION: Resolution = Resolution::new(256, 144);
 const FIXTURE_FRAMES: usize = 8;
@@ -141,7 +142,7 @@ fn missing_device_is_reported() {
 
     assert!(matches!(
         VaapiDecoder::new(Codec::H264, &config),
-        Err(DecodeError::DeviceOpen { .. })
+        Err(DecodeError::Va(VaError::DeviceOpen { .. }))
     ));
 }
 

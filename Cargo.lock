@@ -4773,16 +4773,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusplay-cuda"
+version = "0.1.0"
+dependencies = [
+ "libloading 0.9.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rusplay-decode"
 version = "0.1.0"
 dependencies = [
- "bindgen 0.73.2",
  "cros-codecs",
- "libloading 0.9.0",
- "pkg-config",
  "rav1d",
  "rusplay-config",
  "rusplay-core",
+ "rusplay-cuda",
+ "rusplay-va",
  "thiserror 2.0.21",
 ]
 
@@ -4792,12 +4799,13 @@ version = "0.1.0"
 dependencies = [
  "bindgen 0.73.2",
  "cros-codecs",
- "libloading 0.9.0",
  "parking_lot 0.13.0",
  "pkg-config",
  "rusplay-config",
  "rusplay-core",
+ "rusplay-cuda",
  "rusplay-decode",
+ "rusplay-va",
  "thiserror 2.0.21",
 ]
 
@@ -4906,6 +4914,16 @@ dependencies = [
  "rustix",
  "thiserror 2.0.21",
  "wgpu 30.0.1",
+]
+
+[[package]]
+name = "rusplay-va"
+version = "0.1.0"
+dependencies = [
+ "bindgen 0.73.2",
+ "pkg-config",
+ "rusplay-core",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

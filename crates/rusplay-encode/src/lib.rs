@@ -46,9 +46,7 @@ use rusplay_core::{ChromaSiting, EncodedFrame, Frame};
 pub use crate::{
     backend::Backend,
     capabilities::{Capabilities, capabilities},
-    error::{
-        ApiVersion, CudaCall, CudaStatus, EncodeError, NvencCall, NvencStatus, VaCall, VaStatus,
-    },
+    error::{ApiVersion, EncodeError, NvencCall, NvencStatus},
 };
 
 pub trait VideoEncoder: Send {

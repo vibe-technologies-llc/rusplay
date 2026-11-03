@@ -16,9 +16,10 @@ use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, CodecFormat, EncodedFrame, FormatSet, PixelFormat,
     SignalledColor, Timestamp,
 };
+use rusplay_cuda::{CudaCall, check as cuda_check};
 
 use crate::{
-    Backend, CudaCall, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
+    Backend, CuvidCall, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
     nvdec::{
         color::ColorReader,
         driver::{Context, Driver, check},
@@ -153,7 +154,7 @@ fn decoder_caps(
         bit_depth_minus8: c_uint::from(format.depth.bits() - 8),
         ..DecodeCaps::default()
     };
-    check(CudaCall::GetDecoderCaps, unsafe {
+    check(CuvidCall::GetDecoderCaps, unsafe {
         (driver.cuvid.get_decoder_caps)(&raw mut caps)
     })?;
 
@@ -202,7 +203,7 @@ impl Parser {
             reserved2: [ptr::null_mut(); 5],
             ext_video_info: ptr::null_mut(),
         };
-        check(CudaCall::CreateVideoParser, unsafe {
+        check(CuvidCall::CreateVideoParser, unsafe {
             (parser.driver.cuvid.create_video_parser)(&raw mut parser.handle, &raw mut params)
         })?;
 
@@ -219,7 +220,7 @@ impl Parser {
         if let Some(error) = self.state().error.take() {
             return Err(error);
         }
-        check(CudaCall::ParseVideoData, result)
+        check(CuvidCall::ParseVideoData, result)
     }
 }
 
@@ -273,7 +274,7 @@ impl ParserState {
             .as_ref()
             .ok_or(DecodeError::PictureBeforeSequence { codec: self.codec })?;
 
-        check(CudaCall::DecodePicture, unsafe {
+        check(CuvidCall::DecodePicture, unsafe {
             (self.context.driver().cuvid.decode_picture)(decoder.handle, picture)
         })
     }
@@ -394,7 +395,7 @@ impl Decoder {
         };
 
         let mut handle: CuVideoDecoder = ptr::null_mut();
-        check(CudaCall::CreateDecoder, unsafe {
+        check(CuvidCall::CreateDecoder, unsafe {
             (context.driver().cuvid.create_decoder)(&raw mut handle, &raw mut info)
         })?;
 
@@ -418,7 +419,7 @@ impl Decoder {
         let mut params = ProcParams::for_display(info);
         let mut device: CuDevicePtr = 0;
         let mut pitch: c_uint = 0;
-        check(CudaCall::MapVideoFrame, unsafe {
+        check(CuvidCall::MapVideoFrame, unsafe {
             (cuvid.map_video_frame)(
                 self.handle,
                 info.picture_index,
@@ -523,9 +524,11 @@ impl Decoder {
             rows,
         );
 
-        check(CudaCall::Memcpy2D, unsafe {
+        cuda_check(CudaCall::Memcpy2D, unsafe {
             (self.context.driver().cuda.memcpy_2d)(&raw const copy)
-        })
+        })?;
+
+        Ok(())
     }
 }
 
@@ -538,8 +541,9 @@ impl Drop for Decoder {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_cuda::{CUDA_LIBRARY, CudaError, open_library};
+
     use super::*;
-    use crate::nvdec::driver::{CUDA_LIBRARY, open_library};
 
     #[test]
     fn opening_without_the_nvidia_driver_is_a_specific_error() {
@@ -550,10 +554,10 @@ mod tests {
         if !driver_present {
             assert!(matches!(
                 result,
-                Err(DecodeError::LibraryUnavailable {
+                Err(DecodeError::Cuda(CudaError::LibraryNotFound {
                     library: CUDA_LIBRARY,
                     ..
-                })
+                }))
             ));
         }
     }
@@ -566,10 +570,10 @@ mod tests {
 
         assert!(matches!(
             capabilities(&NvdecDecoderConfig::default()),
-            Err(DecodeError::LibraryUnavailable {
+            Err(DecodeError::Cuda(CudaError::LibraryNotFound {
                 library: CUDA_LIBRARY,
                 ..
-            })
+            }))
         ));
     }
 
@@ -588,14 +592,16 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(DecodeError::CudaDeviceMissing {
-                index: u32::MAX,
-                ..
-            } | DecodeError::LibraryUnavailable { .. }
-                | DecodeError::Cuda {
-                    call: CudaCall::Init,
+            Err(DecodeError::Cuda(
+                CudaError::DeviceMissing {
+                    index: u32::MAX,
                     ..
-                })
+                } | CudaError::LibraryNotFound { .. }
+                    | CudaError::Call {
+                        call: CudaCall::Init,
+                        ..
+                    }
+            ))
         ));
     }
 }

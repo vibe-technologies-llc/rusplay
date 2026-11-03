@@ -16,6 +16,8 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-protocol` | Versioned wire format, no I/O |
 | `rusplay-net` | Raw UDP transport, pacing, FEC, reliable control channel |
 | `rusplay-priority` | Frame-thread scheduling: nice value, timer slack, rtkit realtime fallback |
+| `rusplay-va` | libva wrappers shared by VAAPI encode and decode: bindgen bindings, display, config, context, buffers, surfaces, images (feature `libva`) |
+| `rusplay-cuda` | `libcuda.so.1` loading and the driver symbols shared by NVENC and NVDEC, loaded at run time |
 | `rusplay-capture` | xdg ScreenCast portal + PipeWire capture into DMA-BUF or shared-memory frames |
 | `rusplay-scale` | GPU (wgpu compute) resampling with Hermite, Lanczos, EWA and other kernels |
 | `rusplay-encode` | Video encoder trait and backends: VAAPI, NVENC, x264, x265, SVT-AV1 |
@@ -28,8 +30,9 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-app` | The gpui desktop app, binary `rusplay` |
 
 Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale` build on it,
-`net` builds on `protocol` and `config`, `priority` builds on `config`, and the media crates (`capture`, `encode`, `decode`,
-`audio`, `input`) build on `core`/`config`. `host` and `client` compose them and `priority`, and the two binaries
+`net` builds on `protocol` and `config`, `priority` builds on `config`, `va` and `cuda` build on `core` (`cuda` on nothing else),
+and the media crates (`capture`, `encode`, `decode`, `audio`, `input`) build on `core`/`config`; `encode` and `decode` also
+use `va` and `cuda`, which is how the two share driver code without depending on each other. `host` and `client` compose them and `priority`, and the two binaries
 depend only on `host`/`client`/`config`. No crate depends upward, and no media crate depends on
 `net`. `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
 commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders.
@@ -101,6 +104,7 @@ that implements it. The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/audio.md` | Audio codecs, threads, resampling |
 | `.claude/rules/networking.md` | Wire protocol and UDP transport |
 | `.claude/rules/priority.md` | Thread scheduling for the host and client frame threads |
+| `.claude/rules/driver-wrappers.md` | `rusplay-va` and `rusplay-cuda`: libva and libcuda wrappers shared by encode and decode |
 | `.claude/rules/input.md` | Input forwarding and injection |
 | `.claude/rules/ui.md` | The gpui desktop app |
 | `.claude/rules/hostd.md` | Headless host binary: arguments and config discovery |
