@@ -22,14 +22,14 @@ use std::{
 use rusplay_config::{RateControl, VaapiConfig, VideoConfig};
 use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer,
-    FrameRate, PixelFormat, Plane, Resolution,
+    FrameRate, PixelFormat, Plane, Resolution, Timestamp,
 };
 use rusplay_va::ffi;
 
 use crate::{
     Backend, Capabilities, EncodeError, VideoEncoder,
     device::VAAPI_CODED_ALIGNMENT,
-    input::YuvFrame,
+    input::{YuvFrame, fourcc_for},
     pool::FramePool,
     rate::vbv_buffer_kbit,
     vaapi::{
@@ -883,8 +883,13 @@ fn packed_frame_rate(frame_rate: FrameRate) -> u32 {
     }
 }
 
-impl VideoEncoder for VaapiEncoder {
-    fn encode(&mut self, frame: &Frame) -> Result<Option<EncodedFrame>, EncodeError> {
+impl VaapiEncoder {
+    fn encode_surface(
+        &mut self,
+        resolution: Resolution,
+        timestamp: Timestamp,
+        prepare: impl FnOnce(&mut Session, &Rc<Display>, &Settings) -> Result<SurfaceId, EncodeError>,
+    ) -> Result<Option<EncodedFrame>, EncodeError> {
         let Self {
             session: slot,
             device,
@@ -894,28 +899,17 @@ impl VideoEncoder for VaapiEncoder {
         } = self;
 
         if let Some(expected) = settings.resolution
-            && frame.resolution != expected
+            && resolution != expected
         {
             return Err(EncodeError::FrameResolutionMismatch {
                 backend: BACKEND,
                 expected,
-                actual: frame.resolution,
+                actual: resolution,
             });
         }
 
-        let session = session_for(slot, device, settings, frame.resolution)?;
-        let input = match &frame.buffer {
-            FrameBuffer::Shm { .. } => {
-                let view = YuvFrame::from_frame(frame, BACKEND, settings.format)?;
-                session.upload(&device.display, &view)?
-            }
-            FrameBuffer::DmaBuf { .. } => {
-                session.import(&device.display, frame, settings.format)?
-            }
-            FrameBuffer::OpaqueFd { .. } => {
-                return Err(EncodeError::OpaqueFdUnsupported { backend: BACKEND });
-            }
-        };
+        let session = session_for(slot, device, settings, resolution)?;
+        let input = prepare(session, &device.display, settings)?;
 
         let requested = std::mem::take(keyframe_requested);
         let keyframe = session.needs_keyframe || requested;
@@ -969,10 +963,54 @@ impl VideoEncoder for VaapiEncoder {
 
         Ok(Some(EncodedFrame {
             codec: settings.codec,
-            timestamp: frame.timestamp,
+            timestamp,
             keyframe,
             data: session.pool.wrap(data),
         }))
+    }
+}
+
+impl VideoEncoder for VaapiEncoder {
+    fn encode(&mut self, frame: &Frame) -> Result<Option<EncodedFrame>, EncodeError> {
+        self.encode_surface(
+            frame.resolution,
+            frame.timestamp,
+            |session, display, settings| match &frame.buffer {
+                FrameBuffer::Shm { .. } => {
+                    let view = YuvFrame::from_frame(frame, BACKEND, settings.format)?;
+                    session.upload(display, &view)
+                }
+                FrameBuffer::DmaBuf { .. } => session.import(display, frame, settings.format),
+                FrameBuffer::OpaqueFd { .. } => {
+                    Err(EncodeError::OpaqueFdUnsupported { backend: BACKEND })
+                }
+            },
+        )
+    }
+
+    fn reads_planes(&self) -> bool {
+        true
+    }
+
+    fn encode_planes(
+        &mut self,
+        planes: &YuvFrame<'_>,
+        timestamp: Timestamp,
+    ) -> Result<Option<EncodedFrame>, EncodeError> {
+        self.encode_surface(
+            planes.resolution,
+            timestamp,
+            |session, display, settings| {
+                if planes.format != settings.format {
+                    return Err(EncodeError::FrameFormatMismatch {
+                        backend: BACKEND,
+                        expected: fourcc_for(settings.format),
+                        actual: fourcc_for(planes.format),
+                    });
+                }
+                session.upload(display, planes)
+            },
+        )
     }
 
     fn request_keyframe(&mut self) {

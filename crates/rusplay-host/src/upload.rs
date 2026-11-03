@@ -1,5 +1,6 @@
 use rusplay_capture::DrmFourcc;
-use rusplay_core::ChromaSubsampling;
+use rusplay_core::{ChromaSubsampling, PixelFormat, Resolution};
+use rusplay_encode::input::{YuvFrame, YuvPlane};
 use rusplay_scale::{ChannelOrder, FrameLayout, SourceChannels};
 
 use crate::HostError;
@@ -130,6 +131,32 @@ impl EncoderPlanes {
         }
     }
 
+    pub(crate) fn view<'a>(
+        layout: &FrameLayout,
+        source: &'a [u8],
+        resolution: Resolution,
+        format: PixelFormat,
+    ) -> YuvFrame<'a> {
+        let plane = |index: usize| {
+            let plane = &layout.planes[index];
+            let start = usize::try_from(plane.offset).unwrap_or(usize::MAX);
+            let end = start.saturating_add(plane.stride as usize * plane.height as usize);
+
+            YuvPlane {
+                data: &source[start.min(source.len())..end.min(source.len())],
+                stride: plane.stride as usize,
+                width: plane.width as usize,
+                rows: plane.height as usize,
+            }
+        };
+
+        YuvFrame {
+            format,
+            resolution,
+            planes: [plane(0), plane(1), plane(2)],
+        }
+    }
+
     pub(crate) fn repack(&self, layout: &FrameLayout, source: &[u8], out: &mut Vec<u8>) {
         if out.len() != self.size {
             out.clear();
@@ -220,6 +247,41 @@ mod tests {
                     for (plane, expected) in yuv.planes.iter().zip(&layout.planes) {
                         let sample = layout.bytes_per_sample as usize;
                         let offset = usize::try_from(expected.offset).unwrap();
+                        assert_eq!(plane.width, expected.width as usize);
+                        assert_eq!(plane.rows, expected.height as usize);
+                        for row in 0..plane.rows {
+                            let got = &plane.data[row * plane.stride..][..plane.width * sample];
+                            let want = &source[offset + row * expected.stride as usize..]
+                                [..plane.width * sample];
+                            assert_eq!(got, want, "{format:?} {resolution} row {row}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plane_views_read_the_readback_buffer_in_place() {
+        for chroma in [
+            ChromaSubsampling::Yuv420,
+            ChromaSubsampling::Yuv422,
+            ChromaSubsampling::Yuv444,
+        ] {
+            for depth in [BitDepth::Eight, BitDepth::Ten, BitDepth::Twelve] {
+                for resolution in [Resolution::new(7, 5), Resolution::new(64, 4)] {
+                    let format = PixelFormat { chroma, depth };
+                    let layout = layout(resolution, format);
+                    let source = numbered(&layout);
+
+                    let view = EncoderPlanes::view(&layout, &source, resolution, format);
+
+                    assert_eq!(view.resolution, resolution);
+                    assert_eq!(view.format, format);
+                    for (plane, expected) in view.planes.iter().zip(&layout.planes) {
+                        let sample = layout.bytes_per_sample as usize;
+                        let offset = usize::try_from(expected.offset).unwrap();
+                        assert_eq!(plane.stride, expected.stride as usize);
                         assert_eq!(plane.width, expected.width as usize);
                         assert_eq!(plane.rows, expected.height as usize);
                         for row in 0..plane.rows {

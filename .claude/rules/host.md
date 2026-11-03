@@ -276,12 +276,17 @@ paths:
     failed one may hold state from the discarded frame), so a driver that refuses the import costs
     one extra conversion and one encoder reopen; `HostStats::handoff_disabled` counts it. Once a frame has encoded (`Proven`), errors end the session
     like any other encoder error.
-  - Readback: the converter writes planar with 4-byte rows, the frame is copied into a `MAP_READ`
-    buffer in the same submission, mapped, and its planes are repacked row by row into the reused
-    buffer of the encoder's input `Frame` in the CPU input contract layout (`EncoderPlanes`: luma
-    pitch of the width rounded up to even, chroma pitch half of it when subsampled), which is the
-    one copy out of the GPU. One frame is in flight: upload, convert, read back and encode run
-    back to back.
+  - Readback: the converter writes planar with 4-byte rows and the frame is copied into a
+    `MAP_READ` buffer in the same submission. An encoder whose `VideoEncoder::reads_planes` is
+    true (VAAPI, which packs into a `VAImage` anyway) is handed the mapped buffer in place:
+    `encode_mapped` maps it, builds a `rusplay_encode::input::YuvFrame` over the converter's planes
+    with their own offsets and strides (`EncoderPlanes::view`) and calls `encode_planes`, so the
+    frame is read once, by the packer, and never copied into a `Frame`; `repeat` maps the same
+    buffer again (`readback_held`). Any other encoder gets the planes repacked row by row into the
+    reused buffer of its input `Frame` in the CPU input contract layout (`EncoderPlanes`: luma
+    pitch of the width rounded up to even, chroma pitch half of it when subsampled), the one copy
+    out of the GPU. One frame is in flight: upload, convert, read back and encode run back to
+    back.
   - Measured at 3840x2160 on an RX 9070 XT (radeonsi, VCN 5) from a DMA-BUF `XR24` capture,
     `GpuPipeline::encode` from import to encoded frame, median of 240 frames with both paths run
     round robin (`cargo test --release -p rusplay-host --all-features --lib handoff_frame_times --

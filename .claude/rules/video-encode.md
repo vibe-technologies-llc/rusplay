@@ -7,7 +7,11 @@ paths:
 
 - `VideoEncoder` is the backend-neutral trait (`Send`, so a session can move it to its encode
   thread). `rusplay_encode::open` picks the backend from `VideoEncoderConfig` and returns
-  `BackendNotCompiled` for a backend whose cargo feature is off.
+  `BackendNotCompiled` for a backend whose cargo feature is off. `reads_planes` says whether the
+  encoder takes `encode_planes(&YuvFrame, timestamp)`, a borrowed view of planar samples with
+  their own strides that it reads in place (VAAPI, whose `pack` is the only copy; the host's
+  readback uses it so no intermediate `Frame` is filled); the others return `PlanesUnsupported`
+  and take a `Frame`.
 - Backend matrix:
 
   | Backend | Codecs | Chroma / depth | Input |
@@ -193,7 +197,12 @@ paths:
   is `FrameFormatMismatch`, a wrong plane count `DmaBufPlaneCount`. Imports are cached, keyed by
   the dma-buf's device and inode, modifier, planes and size (16 entries, least recently used out),
   so the buffers PipeWire recycles are imported once. A `FrameBuffer::Shm` follows the CPU input
-  contract below and is packed into a `VAImage` and put into one upload surface. A
+  contract below and is packed into a `VAImage` and put into one upload surface, as is a
+  `YuvFrame` given to `encode_planes`. `format::pack` works per row on slices
+  (`chunks_exact` zips the compiler vectorises, a scalar tail for the padding) and is checked
+  against the former per-sample implementation, kept in `src/vaapi/format/tests.rs`, over every
+  format, odd and padded extents and strides above the row; the ignored `pack_times` test times
+  both at 4K. A
   `FrameBuffer::OpaqueFd` is `OpaqueFdUnsupported`. The host's GPU hand-off feeds this path with
   linear `NV12`/`P010`/`P012` exported from RADV (256-byte pitch, chroma after the padded luma);
   radeonsi encodes it bit-identically to the uploaded frame.

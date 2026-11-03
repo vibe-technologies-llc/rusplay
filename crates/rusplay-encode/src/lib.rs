@@ -43,7 +43,7 @@ mod x265;
 mod x26x;
 
 use rusplay_config::VideoConfig;
-use rusplay_core::{ChromaSiting, EncodedFrame, Frame};
+use rusplay_core::{ChromaSiting, EncodedFrame, Frame, Timestamp};
 
 pub use crate::{
     backend::Backend,
@@ -53,6 +53,19 @@ pub use crate::{
 
 pub trait VideoEncoder: Send {
     fn encode(&mut self, frame: &Frame) -> Result<Option<EncodedFrame>, EncodeError>;
+
+    fn reads_planes(&self) -> bool {
+        false
+    }
+
+    fn encode_planes(
+        &mut self,
+        planes: &input::YuvFrame<'_>,
+        timestamp: Timestamp,
+    ) -> Result<Option<EncodedFrame>, EncodeError> {
+        let _ = (planes, timestamp);
+        Err(EncodeError::PlanesUnsupported)
+    }
 
     fn request_keyframe(&mut self);
 
