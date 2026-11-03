@@ -5,7 +5,7 @@ mod common;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Duration,
 };
@@ -26,7 +26,9 @@ use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
 
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
-const LOST_FRAME: u32 = 5;
+const UNARMED: u32 = u32::MAX;
+const FRAMES_BEFORE_LOSS: usize = 3;
+const FRAMES_AFTER_LOSS: usize = 2;
 const HELD_KEY: u32 = 30;
 const SNAPSHOT_INTERVAL_MS: u16 = 30;
 const AUDIO_PACKETS: u32 = 40;
@@ -380,9 +382,22 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
         return;
     };
     let frames = 120;
+    let armed = Arc::new(AtomicBool::new(false));
+    let lost = Arc::new(AtomicU32::new(UNARMED));
+    let drop_rule = {
+        let armed = Arc::clone(&armed);
+        let lost = Arc::clone(&lost);
+        move |outgoing: Outgoing| {
+            if armed.load(Ordering::Acquire) && outgoing.frames_to_keyframe > FRAMES_AFTER_LOSS {
+                lost.compare_exchange(UNARMED, outgoing.frame, Ordering::AcqRel, Ordering::Acquire)
+                    .ok();
+            }
+            lost.load(Ordering::Acquire) == outgoing.frame
+        }
+    };
     let host = TestHost::start(HostOptions {
         frames,
-        drop: Box::new(|outgoing: Outgoing| outgoing.frame == LOST_FRAME),
+        drop: Box::new(drop_rule),
         goodbye: false,
         ..HostOptions::default()
     });
@@ -397,24 +412,31 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
         sink,
     )
     .unwrap();
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while seen.lock().len() < FRAMES_BEFORE_LOSS && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    armed.store(true, Ordering::Release);
     let stats = settle(stream, &seen, frames - 1);
 
     let seen = seen.lock().clone();
     let ceiling_kbps = common::client_config().video.bitrate_kbps;
+    let lost_frame = lost.load(Ordering::Acquire);
 
+    assert_ne!(lost_frame, UNARMED);
     assert!(stats.frames_lost >= 1);
     assert!(stats.recovery_requests_sent >= 1);
     assert!(stats.frame_acks_sent >= 1);
     assert_eq!(stats.decode_errors, 0);
-    assert!(seen.iter().any(|frame| frame.frame > LOST_FRAME));
+    assert!(seen.iter().any(|frame| frame.frame > lost_frame));
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
         ControlMessage::RequestRecovery { frame, last_good }
-            if *frame == LOST_FRAME && *last_good < LOST_FRAME
+            if *frame == lost_frame && *last_good < lost_frame
     )));
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
-        ControlMessage::AcknowledgeFrame { frame } if *frame < LOST_FRAME
+        ControlMessage::AcknowledgeFrame { frame } if *frame < lost_frame
     )));
     assert!(stats.bitrate_hints_sent >= 1);
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
@@ -743,6 +765,10 @@ fn input_events_reach_the_host_in_order() {
     input.send(InputEvent::PointerMotion { dx: 3.0, dy: -2.0 });
     input.send(key(false));
     let delivered = host.wait_for_input(STREAM_TIMEOUT, 3);
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while stream.stats().input_packets_sent == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let stats = stream.stats();
     stream.stop().unwrap();
 

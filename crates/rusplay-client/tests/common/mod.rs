@@ -147,6 +147,7 @@ pub struct Outgoing {
     pub frame: u32,
     pub index: usize,
     pub parity: bool,
+    pub frames_to_keyframe: usize,
 }
 
 pub type DropRule = Box<dyn Fn(Outgoing) -> bool + Send>;
@@ -457,6 +458,7 @@ fn send_datagrams(
     client: SocketAddr,
     datagrams: &[Vec<u8>],
     frame: u32,
+    frames_to_keyframe: usize,
     drop: &DropRule,
 ) {
     let mut data_index = 0;
@@ -472,6 +474,7 @@ fn send_datagrams(
             frame,
             index: *index,
             parity,
+            frames_to_keyframe,
         };
         *index += 1;
         if !drop(outgoing) {
@@ -587,7 +590,14 @@ fn serve(
             let datagrams = packetizer
                 .packetize(next_frame, keyframe, &payload)
                 .unwrap();
-            send_datagrams(transport, client, &datagrams, next_frame, &options.drop);
+            send_datagrams(
+                transport,
+                client,
+                &datagrams,
+                next_frame,
+                fixture.len() - fixture_index,
+                &options.drop,
+            );
 
             next_frame += 1;
             fixture_index = (fixture_index + 1) % fixture.len();
