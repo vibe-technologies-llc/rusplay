@@ -63,6 +63,16 @@ pub fn open(config: &VideoConfig) -> Result<Box<dyn VideoEncoder>, EncodeError> 
 
 pub fn open_sited(
     config: &VideoConfig,
+    #[cfg_attr(
+        not(any(
+            feature = "vaapi",
+            feature = "nvenc",
+            feature = "x264",
+            feature = "x265",
+            feature = "svt-av1"
+        )),
+        expect(unused_variables)
+    )]
     siting: ChromaSiting,
 ) -> Result<Box<dyn VideoEncoder>, EncodeError> {
     let backend = Backend::from(&config.encoder);
