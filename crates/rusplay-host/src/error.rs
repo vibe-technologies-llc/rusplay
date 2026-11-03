@@ -85,6 +85,14 @@ pub enum HostError {
     },
     #[error("the {stage} thread panicked")]
     StagePanicked { stage: Stage },
+    #[error("failed to spawn the host service thread")]
+    SpawnService(#[source] io::Error),
+    #[error("the host service thread panicked")]
+    ServicePanicked,
+    #[error("failed to bind the discovery responder")]
+    DiscoveryBind(#[source] NetError),
+    #[error("failed to spawn the discovery thread")]
+    SpawnDiscovery(#[source] io::Error),
     #[error("no client paired or reconnected within {0:?}")]
     AcceptTimeout(Duration),
     #[error("the pairing window was cancelled")]

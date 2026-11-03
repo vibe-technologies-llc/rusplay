@@ -11,24 +11,35 @@ path = "src/main.rs"
 
 [features]
 default = ["flac", "pipewire"]
-flac = ["rusplay-client/flac"]
+flac = ["rusplay-client/flac", "rusplay-host/flac"]
+input = ["rusplay-host/input"]
 nvdec = ["rusplay-client/nvdec"]
-pipewire = ["rusplay-client/pipewire"]
+nvenc = ["rusplay-host/nvenc"]
+pipewire = ["rusplay-client/pipewire", "rusplay-host/pipewire"]
 software = ["rusplay-client/software"]
 software-asm = ["rusplay-client/software-asm"]
-vaapi = ["rusplay-client/vaapi"]
+software-encoders = ["rusplay-host/software-encoders"]
+svt-av1 = ["rusplay-host/svt-av1"]
+vaapi = ["rusplay-client/vaapi", "rusplay-host/vaapi"]
+x264 = ["rusplay-host/x264"]
+x265 = ["rusplay-host/x265"]
 
 [dependencies]
 gpui.workspace = true
 gpui_platform = { workspace = true, features = ["wayland"] }
 lexopt.workspace = true
+parking_lot.workspace = true
 raw-window-handle.workspace = true
 rusplay-client = { workspace = true, features = ["window"] }
 rusplay-config.workspace = true
 rusplay-core.workspace = true
+rusplay-host.workspace = true
 thiserror.workspace = true
 toml = { workspace = true, features = ["std", "parse", "serde"] }
 unicode-segmentation.workspace = true
+
+[dev-dependencies]
+rusplay-net.workspace = true
 
 [lints]
 workspace = true

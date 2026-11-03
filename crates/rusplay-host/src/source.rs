@@ -270,7 +270,7 @@ mod portal {
     }
 }
 
-#[cfg(feature = "pipewire")]
+#[cfg(all(feature = "pipewire", feature = "input"))]
 pub(crate) use self::portal::feed_from_session;
 #[cfg(feature = "pipewire")]
 pub use self::portal::open_portal_capture;

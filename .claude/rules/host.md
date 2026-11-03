@@ -37,6 +37,29 @@ paths:
     dropped: its datagrams no longer unseal. The microphone stage, which numbers nothing itself but
     follows the client's numbering, starts a fresh `Reassembler` and calls
     `ConcealingPlayer::restart` when the epoch changes, since a new client numbers packets from 0.
+- `HostSession::bind_shared(Config, Arc<RwLock<PeerStore>>)` is `bind` with a store the caller
+  keeps a handle on, so a UI can list and revoke pairings through the very store the session
+  pairs into.
+- `HostService` (`src/service.rs`) is the whole host as a handle, for a caller that has no loop of
+  its own (the desktop app, `ui.md`). `start(Config, &Arc<RwLock<PeerStore>>)` blocks (host id file
+  next to the store, `Gpu::open`, `open_portal`, `HostSession::bind_shared`, `with_input`, the
+  discovery `Responder` carrying the busy flag) and then spawns the thread
+  `rusplay-host-service`, which loops like the daemon: a fresh `Pin::generate` per
+  `network.pairing_timeout_ms` window, `accept_cancellable`, `serve`, then watch the stream every
+  100 ms (publishing a `StreamSnapshot` of `HostStats` and the negotiated format) until it ends or
+  a stop is requested. Everything the thread learns goes out as `HostEvent`s on a channel the
+  owner drains with `poll_events`: `PairingOpened { pin, window }`, `PairingLocked`,
+  `ClientAdmitted { address, peer, name, admission }`, `ClientLeft`, `SessionFailed(HostError)`
+  (a `HostError::is_session_failure`, after which the next window opens) and `Stopped(Option<HostError>)`
+  for any other error, which ends the loop. `renew_pin` raises the cancel flag `accept` polls, and
+  the flag is cleared again when the next window opens, so a request made while a client streams
+  is dropped and never cancels a window it was not meant for. `stop` raises the stop flag and the
+  cancel flag, joins the thread (which stops the `HostStream` and drops the responder), and
+  returns the events still queued, with `Stopped(Some(ServicePanicked))` added if the thread
+  panicked; dropping the service does the same. The loop is generic over the `serve` call so
+  its tests (`service::tests`) run it over loopback with no GPU and no portal; they cover the
+  window events, timeout renewal, `renew_pin` and `stop`. A client that streams is driven end to end
+  only by `src/tests.rs` against `serve_with`, not through `HostService`.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across

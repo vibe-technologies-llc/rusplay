@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton,
-    Subscription, Window, actions, div, prelude::*, px,
+    AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, FontWeight, KeyBinding,
+    MouseButton, Subscription, Window, actions, div, prelude::*, px,
 };
 use rusplay_client::HostBook;
 use rusplay_config::{Config, ConfigEnvironment};
@@ -8,6 +8,7 @@ use rusplay_config::{Config, ConfigEnvironment};
 use crate::{
     chrome::{self, Frame},
     cli::Launch,
+    host_page::HostPageView,
     hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
     session,
@@ -36,15 +37,17 @@ pub fn bind_keys(cx: &mut App) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Hosts,
+    Hosting,
     Settings,
 }
 
 impl Page {
-    const ALL: [Self; 2] = [Self::Hosts, Self::Settings];
+    const ALL: [Self; 3] = [Self::Hosts, Self::Hosting, Self::Settings];
 
     const fn title(self) -> &'static str {
         match self {
             Self::Hosts => "Hosts",
+            Self::Hosting => "Host this PC",
             Self::Settings => "Settings",
         }
     }
@@ -62,6 +65,7 @@ pub struct RusplayApp {
     abandoned: Vec<ActiveStream>,
     exit_on_disconnect: bool,
     hosts: Entity<HostsView>,
+    hosting: Entity<HostPageView>,
     settings: Option<Entity<SettingsView>>,
     notice: Option<Notice>,
     titlebar_drag: bool,
@@ -118,9 +122,19 @@ impl RusplayApp {
             },
         ));
 
+        let hosting = cx.new(|cx| HostPageView::new(environment.clone(), cx));
+        subscriptions.push(cx.subscribe(&hosting, |this, _, event: &NoticeRaised, cx| {
+            this.notice = Some(event.0.clone());
+            cx.notify();
+        }));
+
         let app = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
-            app.update(cx, Self::end_stream).ok();
+            app.update(cx, |this, cx| {
+                this.end_stream(cx);
+                this.end_hosting(cx);
+            })
+            .ok();
             true
         });
 
@@ -152,6 +166,7 @@ impl RusplayApp {
             abandoned: Vec::new(),
             exit_on_disconnect: launch.exit_on_disconnect,
             hosts,
+            hosting,
             settings,
             notice,
             titlebar_drag: false,
@@ -289,29 +304,38 @@ impl RusplayApp {
         }
     }
 
+    fn end_hosting(&mut self, cx: &mut Context<Self>) {
+        self.hosting.update(cx, |hosting, _| hosting.shutdown());
+    }
+
+    fn render_tabs(&self, cx: &mut Context<Self>) -> Div {
+        let mut tabs = Vec::with_capacity(Page::ALL.len());
+        for (position, page) in Page::ALL.into_iter().enumerate() {
+            tabs.push(
+                tab(("page", position), page.title(), self.page == page).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.page = page;
+                        match page {
+                            Page::Hosts => this.hosts.update(cx, HostsView::refresh),
+                            Page::Hosting => this.hosting.update(cx, HostPageView::refresh),
+                            Page::Settings => {}
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
+        }
+
+        div().occlude().child(tab_strip(tabs))
+    }
+
     fn render_titlebar(
         &self,
         frame: Frame,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let tabs = self.stream.is_none().then(|| {
-            let mut tabs = Vec::with_capacity(Page::ALL.len());
-            for (position, page) in Page::ALL.into_iter().enumerate() {
-                tabs.push(
-                    tab(("page", position), page.title(), self.page == page).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.page = page;
-                            if page == Page::Hosts {
-                                this.hosts.update(cx, HostsView::refresh);
-                            }
-                            cx.notify();
-                        },
-                    )),
-                );
-            }
-            div().occlude().child(tab_strip(tabs))
-        });
+        let tabs = self.stream.is_none().then(|| self.render_tabs(cx));
 
         let brand = div()
             .flex()
@@ -349,6 +373,7 @@ impl RusplayApp {
                     window,
                     cx.listener(|this, _, _, cx| {
                         this.end_stream(cx);
+                        this.end_hosting(cx);
                         cx.quit();
                     }),
                 ))
@@ -401,6 +426,7 @@ impl RusplayApp {
     fn render_page(&self) -> AnyElement {
         match (self.page, &self.settings) {
             (Page::Hosts, _) => self.hosts.clone().into_any_element(),
+            (Page::Hosting, _) => self.hosting.clone().into_any_element(),
             (Page::Settings, Some(settings)) => settings.clone().into_any_element(),
             (Page::Settings, None) => div()
                 .p_6()
@@ -483,6 +509,7 @@ impl Render for RusplayApp {
                     return;
                 }
                 this.end_stream(cx);
+                this.end_hosting(cx);
                 cx.quit();
             }))
             .flex()

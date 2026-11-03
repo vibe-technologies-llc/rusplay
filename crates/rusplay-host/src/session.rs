@@ -66,6 +66,10 @@ impl fmt::Debug for HostSession {
 
 impl HostSession {
     pub fn bind(config: Config, peers: PeerStore) -> Result<Self, HostError> {
+        Self::bind_shared(config, Arc::new(RwLock::new(peers)))
+    }
+
+    pub fn bind_shared(config: Config, peers: Arc<RwLock<PeerStore>>) -> Result<Self, HostError> {
         let network = &config.network;
         let transport = Transport::bind(
             SocketAddr::new(network.bind_address, network.port),
@@ -75,7 +79,7 @@ impl HostSession {
         Ok(Self {
             config,
             transport: Arc::new(transport),
-            peers: Arc::new(RwLock::new(peers)),
+            peers,
             audio: default_audio_source(),
             microphone: default_microphone_output(),
             input: None,
