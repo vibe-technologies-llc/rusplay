@@ -10,6 +10,8 @@ pub type EncoderParams = BTreeMap<String, String>;
 const MAX_QP: u8 = 51;
 const MAX_SVT_AV1_PRESET: u8 = 13;
 const PRESENT_FRAME_LATENCY_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
+const MAX_PRESENT_MARGIN_US: u32 = 50_000;
+const MAX_PRESENT_JITTER_US: u32 = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -27,6 +29,9 @@ pub struct VideoConfig {
     pub decode_queue_frames: u8,
     pub present_mode: PresentMode,
     pub present_frame_latency: u8,
+    pub present_pacing: PresentPacing,
+    pub present_margin_us: u32,
+    pub present_jitter_us: u32,
     pub stats_overlay: bool,
 }
 
@@ -46,6 +51,9 @@ impl Default for VideoConfig {
             decode_queue_frames: 3,
             present_mode: PresentMode::default(),
             present_frame_latency: 1,
+            present_pacing: PresentPacing::default(),
+            present_margin_us: 3_000,
+            present_jitter_us: 8_000,
             stats_overlay: false,
         }
     }
@@ -102,6 +110,12 @@ impl VideoConfig {
                 self.present_frame_latency,
             ));
         }
+        if self.present_margin_us > MAX_PRESENT_MARGIN_US {
+            return Err(ConfigError::PresentMarginOutOfRange(self.present_margin_us));
+        }
+        if self.present_jitter_us > MAX_PRESENT_JITTER_US {
+            return Err(ConfigError::PresentJitterOutOfRange(self.present_jitter_us));
+        }
 
         self.encoder.validate()?;
         self.decoder.validate()
@@ -115,6 +129,15 @@ pub enum PresentMode {
     Mailbox,
     Immediate,
     Fifo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PresentPacing {
+    #[default]
+    Off,
+    Latency,
+    Smooth,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -381,6 +404,38 @@ mod tests {
         ));
 
         config.present_frame_latency = 3;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn present_pacing_is_off_by_default_and_parses_kebab_case_names() {
+        let parsed: VideoConfig = toml::from_str("present_pacing = \"smooth\"").unwrap();
+
+        assert_eq!(VideoConfig::default().present_pacing, PresentPacing::Off);
+        assert_eq!(parsed.present_pacing, PresentPacing::Smooth);
+    }
+
+    #[test]
+    fn present_margin_and_jitter_are_range_checked() {
+        let mut config = VideoConfig {
+            present_margin_us: MAX_PRESENT_MARGIN_US + 1,
+            ..VideoConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::PresentMarginOutOfRange(50_001))
+        ));
+
+        config.present_margin_us = MAX_PRESENT_MARGIN_US;
+        config.present_jitter_us = MAX_PRESENT_JITTER_US + 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::PresentJitterOutOfRange(100_001))
+        ));
+
+        config.present_jitter_us = 0;
+        config.present_margin_us = 0;
         assert!(config.validate().is_ok());
     }
 

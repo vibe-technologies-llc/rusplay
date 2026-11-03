@@ -110,6 +110,7 @@ const GAMUT_MODES: &[&str] = &[
 ];
 const RANGES: &[&str] = &["limited", "full"];
 const PRESENT_MODES: &[&str] = &["mailbox", "immediate", "fifo"];
+const PRESENT_PACINGS: &[&str] = &["off", "latency", "smooth"];
 const OUTPUT_COLOR_SPACES: &[&str] = &["auto", "srgb", "display-p3", "extended-linear", "pq"];
 const OUTPUT_FORMATS: &[&str] = &["auto", "rgba8", "rgb10a2", "rgba16-float"];
 const DITHER_MODES: &[&str] = &["blue-noise", "ordered", "off"];
@@ -639,6 +640,35 @@ pub static FIELDS: &[Field] = &[
         Kind::Integer { min: 1, max: 3 },
     )
     .unit("frames"),
+    field(
+        Section::Video,
+        "Presentation",
+        "video.present_pacing",
+        "Pacing",
+        Kind::Choice(PRESENT_PACINGS),
+    ),
+    field(
+        Section::Video,
+        "Presentation",
+        "video.present_margin_us",
+        "Margin before the display refresh",
+        Kind::Integer {
+            min: 0,
+            max: 50_000,
+        },
+    )
+    .unit("us"),
+    field(
+        Section::Video,
+        "Presentation",
+        "video.present_jitter_us",
+        "Jitter buffer",
+        Kind::Integer {
+            min: 0,
+            max: 100_000,
+        },
+    )
+    .unit("us"),
     field(
         Section::Video,
         "Presentation",

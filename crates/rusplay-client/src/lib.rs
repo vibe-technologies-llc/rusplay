@@ -37,7 +37,8 @@ pub use rusplay_scale::{ColorVolume, OutputLight};
 
 #[cfg(feature = "window")]
 pub use crate::window::{
-    LogicalArea, OverlayText, StreamWindow, WaylandTarget, WindowLayout, WindowSink,
+    LogicalArea, OverlayText, PresentationFlags, PresentationStats, StreamWindow, WaylandTarget,
+    WindowLayout, WindowSink,
 };
 pub use crate::{
     audio::default_audio_output,

@@ -7,8 +7,8 @@ use std::{
 };
 
 use rusplay_client::{
-    ClientStats, ColorVolume, FrameSink, OverlayText, PresentedFrame, StatsPhase, StatsSchedule,
-    stats_json_line, unix_millis_now,
+    ClientStats, ColorVolume, FrameSink, OverlayText, PresentationStats, PresentedFrame,
+    StatsPhase, StatsSchedule, stats_json_line, unix_millis_now,
 };
 use rusplay_config::NetworkConfig;
 
@@ -126,6 +126,47 @@ pub struct StreamRates {
     pub audio_underruns: f64,
     pub latency: Option<ClientLatency>,
     pub end_to_end: Option<EndToEnd>,
+    pub display: Option<DisplayTiming>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayTiming {
+    pub submit_to_display: Duration,
+    pub capture_to_display: Option<Duration>,
+    pub refresh: Option<Duration>,
+}
+
+impl DisplayTiming {
+    pub fn from_presentation(stats: &PresentationStats) -> Option<Self> {
+        Some(Self {
+            submit_to_display: stats.display_latency?,
+            capture_to_display: stats.capture_to_display,
+            refresh: stats.refresh,
+        })
+    }
+
+    fn rate_label(self) -> String {
+        self.refresh.map_or_else(
+            || "VRR".to_owned(),
+            |refresh| format!("{:.0} HZ", 1.0 / refresh.as_secs_f64()),
+        )
+    }
+
+    fn summary(self) -> String {
+        let rate = self.refresh.map_or_else(
+            || "variable refresh".to_owned(),
+            |refresh| format!("{:.0} Hz", 1.0 / refresh.as_secs_f64()),
+        );
+        let submit = format!(
+            "{:.1} ms submit to display at {rate}",
+            millis(self.submit_to_display)
+        );
+
+        match self.capture_to_display {
+            Some(capture) => format!("{submit}, {:.1} ms capture to display", millis(capture)),
+            None => submit,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,7 +222,13 @@ impl StreamRates {
             audio_underruns: rate(now.audio_underruns, before.audio_underruns),
             latency,
             end_to_end: EndToEnd::from_stats(now),
+            display: None,
         })
+    }
+
+    pub fn with_presentation(mut self, stats: &PresentationStats) -> Self {
+        self.display = DisplayTiming::from_presentation(stats);
+        self
     }
 
     pub fn overlay(&self) -> OverlayText {
@@ -203,6 +250,18 @@ impl StreamRates {
                     .map(|time| format!("  DEC {:.1} MS", millis(time))),
             );
         }
+        if let Some(display) = self.display {
+            lines.push(format!(
+                "DISPLAY +{:.1} MS  {}",
+                millis(display.submit_to_display),
+                display.rate_label()
+            ));
+            lines.extend(
+                display
+                    .capture_to_display
+                    .map(|time| format!("  E2E {:.1} MS", millis(time))),
+            );
+        }
         if let Some(latency) = self.latency {
             lines.push(format!(
                 "CLIENT {:.1} MS  PEAK {:.1}",
@@ -219,6 +278,9 @@ impl StreamRates {
 
         if let Some(end_to_end) = self.end_to_end {
             parts.push(end_to_end.summary());
+        }
+        if let Some(display) = self.display {
+            parts.push(display.summary());
         }
         if let Some(latency) = self.latency {
             parts.push(format!(
@@ -473,6 +535,7 @@ mod tests {
                 peak: Duration::from_micros(6_500),
             }),
             end_to_end: None,
+            display: None,
         };
 
         assert_eq!(
@@ -530,6 +593,58 @@ mod tests {
                 .lines()
                 .iter()
                 .any(|line| line.contains("E2E"))
+        );
+    }
+
+    #[test]
+    fn presentation_feedback_adds_a_display_line_and_summary_part() {
+        let stats = PresentationStats {
+            feedback: true,
+            frames_presented: 10,
+            display_latency: Some(Duration::from_micros(4_200)),
+            capture_to_display: Some(Duration::from_millis(21)),
+            refresh: Some(Duration::from_nanos(16_666_667)),
+            ..PresentationStats::default()
+        };
+
+        let rates = measured_rates().with_presentation(&stats);
+        let variable = measured_rates().with_presentation(&PresentationStats {
+            refresh: None,
+            capture_to_display: None,
+            ..stats
+        });
+
+        assert!(
+            rates
+                .overlay()
+                .lines()
+                .iter()
+                .any(|line| line == "DISPLAY +4.2 MS  60 HZ")
+        );
+        assert!(
+            rates
+                .overlay()
+                .lines()
+                .iter()
+                .any(|line| line == "  E2E 21.0 MS")
+        );
+        assert!(
+            rates
+                .summary()
+                .contains("4.2 ms submit to display at 60 Hz, 21.0 ms capture to display")
+        );
+        assert!(
+            variable
+                .overlay()
+                .lines()
+                .iter()
+                .any(|line| line == "DISPLAY +4.2 MS  VRR")
+        );
+        assert_eq!(
+            measured_rates()
+                .with_presentation(&PresentationStats::default())
+                .display,
+            None
         );
     }
 

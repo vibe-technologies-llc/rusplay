@@ -371,6 +371,16 @@ impl StreamView {
             .as_ref()
             .and_then(|stats| self.sampler.sample(Instant::now(), stats))
         {
+            let presentation = self
+                .live
+                .borrow()
+                .window
+                .as_ref()
+                .map(StreamWindow::presentation);
+            let rates = match presentation {
+                Some(presentation) => rates.with_presentation(&presentation),
+                None => rates,
+            };
             self.rates = Some(rates);
             self.sync_overlay();
             cx.notify();

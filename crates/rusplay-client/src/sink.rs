@@ -19,6 +19,7 @@ pub struct PresentedFrame {
     pub received_at: Instant,
     pub decoded_at: Instant,
     pub submitted_at: Instant,
+    pub captured_at: Option<Instant>,
     pub texture: Arc<wgpu::Texture>,
 }
 

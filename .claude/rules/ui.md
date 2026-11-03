@@ -163,7 +163,11 @@ paths:
   underruns) appear only while non-zero. The line starts with the capture-to-present figure
   (`ClientStats::capture_to_present`, with `capture_to_receive` and `capture_to_decode` as its
   stages, from the host clock offset; absent until the first clock pong) followed by the client
-  side latency measured from `PresentedFrame`.
+  side latency measured from `PresentedFrame`. When the window has presentation feedback,
+  `StreamRates::with_presentation(&StreamWindow::presentation())` adds `DisplayTiming`: the
+  summary gains "submit to display at <rate>" (`variable refresh` without a fixed one) and the
+  capture-to-display figure, the overlay a `DISPLAY +x MS  <n> HZ|VRR` line and an `E2E` line under
+  it.
   With `video.stats_overlay` (default off) the same rates are also drawn over the picture, for
   when the header is hidden: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
   hands it to `StreamWindow::set_overlay` on every new sample and on the toggle. The overlay
