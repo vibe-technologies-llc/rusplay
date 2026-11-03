@@ -27,13 +27,13 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-host` | Host session: capture → scale → encode → net, plus input injection |
 | `rusplay-client` | Client session: net → decode → scale → present, plus input capture |
 | `rusplay-hostd` | Headless host binary |
-| `rusplay-app` | The gpui desktop app, binary `rusplay` |
+| `rusplay-app` | The gpui desktop app, binary `rusplay`: connects to hosts and hosts this machine through `rusplay-host`'s `HostService` |
 
 Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale` build on it,
 `net` builds on `protocol` and `config`, `priority` builds on `config`, `va` and `cuda` build on `core` (`cuda` on nothing else),
 and the media crates (`capture`, `encode`, `decode`, `audio`, `input`) build on `core`/`config`; `encode` and `decode` also
-use `va` and `cuda`, which is how the two share driver code without depending on each other. `host` and `client` compose them and `priority`, and the two binaries
-depend only on `host`/`client`/`config`. No crate depends upward, and no media crate depends on
+use `va` and `cuda`, which is how the two share driver code without depending on each other. `host` and `client` compose them and `priority`, and the binaries
+depend only on `host`/`client`/`config` (`hostd` on `host`, `app` on both). No crate depends upward, and no media crate depends on
 `net`. `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
 commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders and to
 the `decode` bitstream parsers (through its `fuzzing` feature).
@@ -67,7 +67,7 @@ the `decode` bitstream parsers (through its `fuzzing` feature).
 | Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) and `decode_software` with `ASAN_OPTIONS=detect_leaks=0` (see `decode-rav1d-picture-unref-leak`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
-| App with decoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software` |
+| App with decoders and host encoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software,input` |
 
 Tests that need a GPU, a VAAPI render node or an NVIDIA driver skip when it is missing, writing
 `skipped <test>: <reason>` straight to stderr so `cargo test` shows it despite output capture. With

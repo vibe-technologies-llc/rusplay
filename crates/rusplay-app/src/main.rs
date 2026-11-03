@@ -1,6 +1,8 @@
 mod app;
 mod chrome;
 mod cli;
+mod host_page;
+mod hosting;
 mod hosts;
 mod notice;
 mod session;

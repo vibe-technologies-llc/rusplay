@@ -19,8 +19,10 @@ mod negotiate;
 mod outbox;
 mod pipeline;
 mod portal;
+mod responder;
 mod route;
 mod send;
+mod service;
 mod session;
 mod shared;
 mod source;
@@ -47,6 +49,8 @@ pub use crate::{
     microphone::MicrophoneOutputFactory,
     negotiate::NegotiatedFormat,
     portal::{PortalHost, open_portal},
+    responder::Responder,
+    service::{HostEvent, HostService, StreamSnapshot},
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},
     stats::HostStats,

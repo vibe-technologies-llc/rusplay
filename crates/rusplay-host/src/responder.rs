@@ -9,22 +9,16 @@ use std::{
 };
 
 use rusplay_config::NetworkConfig;
-use rusplay_host::{DiscoveryResponder, HostId, NetError};
-use thiserror::Error;
+use rusplay_net::DiscoveryResponder;
+use rusplay_protocol::HostId;
+
+use crate::HostError;
 
 const HOSTNAME_FILE: &str = "/proc/sys/kernel/hostname";
 const FALLBACK_NAME: &str = "rusplay";
 const MAX_NAME_BYTES: usize = 64;
 const QUERY_WAIT: Duration = Duration::from_millis(200);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
-
-#[derive(Debug, Error)]
-pub enum ResponderError {
-    #[error("failed to bind the discovery responder")]
-    Bind(#[source] NetError),
-    #[error("failed to spawn the discovery thread")]
-    Spawn(#[source] std::io::Error),
-}
 
 pub struct Responder {
     stop: Arc<AtomicBool>,
@@ -38,24 +32,24 @@ impl Responder {
         configured_name: Option<&str>,
         host_id: HostId,
         busy: Arc<AtomicBool>,
-    ) -> Result<Self, ResponderError> {
+    ) -> Result<Self, HostError> {
         let name = announced_name(configured_name, system_hostname());
         let responder = DiscoveryResponder::bind_with_options(network.into(), host_port, &name)
-            .map_err(ResponderError::Bind)?
+            .map_err(HostError::DiscoveryBind)?
             .with_host_id(host_id)
             .with_busy_flag(busy);
 
         Self::spawn(responder)
     }
 
-    pub fn spawn(responder: DiscoveryResponder) -> Result<Self, ResponderError> {
+    pub fn spawn(responder: DiscoveryResponder) -> Result<Self, HostError> {
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let stop = Arc::clone(&stop);
             thread::Builder::new()
-                .name("rusplay-hostd-discovery".to_owned())
+                .name("rusplay-host-discovery".to_owned())
                 .spawn(move || answer(&responder, &stop))
-                .map_err(ResponderError::Spawn)?
+                .map_err(HostError::SpawnDiscovery)?
         };
 
         Ok(Self {
@@ -77,7 +71,7 @@ impl Drop for Responder {
 fn answer(responder: &DiscoveryResponder, stop: &AtomicBool) {
     while !stop.load(Ordering::Relaxed) {
         if let Err(error) = responder.handle_next(QUERY_WAIT) {
-            eprintln!("rusplay-hostd: discovery: {error}");
+            eprintln!("rusplay-host: discovery: {error}");
             thread::sleep(RETRY_DELAY);
         }
     }

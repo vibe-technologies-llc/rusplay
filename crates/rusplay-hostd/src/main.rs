@@ -5,7 +5,6 @@ mod control_server;
 mod discovery;
 mod peers;
 mod pin_file;
-mod responder;
 mod stats;
 mod stats_json;
 
@@ -21,7 +20,7 @@ use std::{
 
 use rusplay_config::{Config, ConfigEnvironment, ConfigError};
 use rusplay_host::{
-    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin,
+    Admission, CaptureFeed, Gpu, HostError, HostSession, NetError, PeerStore, Pin, Responder,
     load_or_create_host_id, open_portal,
 };
 use thiserror::Error;
@@ -33,7 +32,6 @@ use crate::{
     discovery::ConfigSource,
     peers::{PeersError, render_list, resolve},
     pin_file::{PinFile, PinFileError},
-    responder::{Responder, ResponderError},
 };
 
 const USAGE_EXIT_CODE: u8 = 2;
@@ -48,8 +46,6 @@ enum HostdError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     Host(#[from] HostError),
-    #[error(transparent)]
-    Discovery(#[from] ResponderError),
     #[error(transparent)]
     Peers(#[from] PeersError),
     #[error(transparent)]

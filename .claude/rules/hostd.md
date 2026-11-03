@@ -36,18 +36,18 @@ paths:
   a read error and not a fallthrough), `$XDG_CONFIG_HOME/rusplay/host.toml`,
   `~/.config/rusplay/host.toml`, then `Config::default()`. A relative or empty `XDG_CONFIG_HOME`
   is ignored as the XDG specification says.
-- `responder.rs` runs the `DiscoveryResponder` (re-exported by `rusplay-host`) on the thread
-  `rusplay-hostd-discovery`, bound on `network.discovery_port` and `network.discovery_group` and
-  announcing the host's media port (the port `HostSession` actually bound) and its name, so a
-  client's `DiscoveryBrowser` finds the host without an address. The name is `peers.host_name`
+- The discovery responder is `rusplay_host::Responder` (`responder.rs` in `rusplay-host`, shared
+  with the app's `HostService`): a `DiscoveryResponder` on the thread `rusplay-host-discovery`,
+  bound on `network.discovery_port` and `network.discovery_group` and announcing the host's
+  media port (the port `HostSession` actually bound) and its name, so a client's
+  `DiscoveryBrowser` finds the host without an address. The name is `peers.host_name`
   when set, else the kernel hostname from `/proc/sys/kernel/hostname`, else `rusplay`, cut to 64
   bytes on a character boundary. It starts after the session binds, before the first PIN, and
   stops when the daemon returns; its announces carry the stable host id, `load_or_create_host_id` on a `host-id` file
   next to the peer store file (so the id lives and moves with the pairings), and `HostSession::busy_flag`, raised while a
   `HostStream` lives (from `serve` until the stream is dropped, not during pairing or accept),
   so a client's host list can show the host as mid-session; a bind failure (the port is taken) ends the daemon with the
-  cause, a later receive error is printed and retried after a second. `rusplay-net` is a
-  dev-dependency only, for the browser in its test.
+  cause (`HostError::DiscoveryBind`), a later receive error is printed and retried after a second.
 - Cargo features are pure forwarding, none on by default so the default build stays pure Rust and
   needs no system library: `vaapi`, `nvenc`, `x264`, `x265`, `svt-av1` (each enables
   `rusplay-encode/<name>` through `rusplay-host`), `software-encoders` (the three software ones), `pipewire`

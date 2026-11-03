@@ -13,9 +13,11 @@ paths:
   workspace applies; a git dependency does not inherit them, and gpui needs the forks. Moving the
   `rev` means re-reading Zed's `[patch.crates-io]` and `gpui_linux` features.
 - The app is a thin shell over `rusplay-client` and `rusplay-host`. Session logic stays in those
-  crates so `rusplay-hostd` and the app behave the same. The app builds the config, attaches a
-  `rusplay_client::StreamWindow` to its own window, runs `ClientSession::connect` with that
-  window's `Gpu` and `WindowSink` on gpui's background executor, and shows any error as text.
+  crates so `rusplay-hostd` and the app behave the same. To stream, the app builds the config,
+  attaches a `rusplay_client::StreamWindow` to its own window, runs `ClientSession::connect` with
+  that window's `Gpu` and `WindowSink` on gpui's background executor, and shows any error as text.
+  To host, the `hosting` module loads `host.toml`, opens the paired-client store and starts a
+  `rusplay_host::HostService`, on the background executor too (see Host page).
 - Every setting in `rusplay-config` is reachable from the UI, and the UI writes the same TOML the
   headless host reads.
 - The stream never goes through gpui's renderer: on Linux gpui exposes neither its wgpu device nor
@@ -30,10 +32,14 @@ paths:
   method of the same name). Their validity is the one `unsafe` contract: the `StreamWindow` lives
   in the `StreamView` of the same window, and the root ends the stream on `Quit` and in
   `on_window_should_close`, before gpui destroys the surface.
-- Features: `pipewire` and `flac` are on by default (audio playback and FLAC); the decoders are
-  opt-in like the host's encoders: `vaapi`, `software`, `software-asm` forward to
-  `rusplay-client`. A build that can stream is
-  `cargo build --release -p rusplay-app --features vaapi,software`.
+- Features: `pipewire` and `flac` are on by default (audio playback and FLAC on the client, screen
+  capture and audio capture on the host); the decoders and encoders are opt-in. `vaapi` forwards to
+  `rusplay-client` and `rusplay-host` (decode and encode), `nvdec`, `software` and `software-asm`
+  to the client, and `nvenc`, `software-encoders` (`x264`, `x265`, `svt-av1`) and `input` (host
+  input injection) to the host, with the names and meaning `rusplay-hostd` uses. A build that can
+  stream and host is `cargo build --release -p rusplay-app --features vaapi,nvdec,software,input`;
+  a host config selecting an encoder whose feature is off fails at start with
+  `BackendNotCompiled`, shown as a notice.
 
 ## Structure
 
@@ -44,6 +50,8 @@ paths:
 | `chrome` | Client-side window decorations: the resize frame, resize-edge hit testing and the minimize/maximize/close controls |
 | `hosts` | `HostList` model (address parsing, selection, remembered pairings, discovery merge, no UI types) and `HostsView`, which scans and emits `ConnectRequested` |
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
+| `hosting` | Loads `host.toml`, opens the paired-client store (`PairedClients`) and starts the `HostService` (`HostHandle`); the only place the app calls into `rusplay-host` |
+| `host_page` | `HostModel` (phase, pairing window, connected client, rates; no gpui types) and `HostPageView`, the Host this PC page |
 | `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
 | `stats` | `TimingSink` (wraps the window's sink and records `PresentedFrame` timings), `StatsSampler` and `StreamRates`; no gpui types |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
@@ -178,6 +186,47 @@ paths:
   `network.stats_log_interval_ms` (`0` turns the periodic ones off) with `"phase":"interval"`, and
   one with `"final"` read just before the session is stopped, so two runs can be compared without
   scraping the UI. Beyond `--version`, nothing else in the app writes to stdout.
+
+## Host page
+
+- The Host this PC tab is `HostPageView`. `Start hosting` runs `hosting::start` on gpui's
+  background executor: it reads `host.toml` through `ConfigEnvironment` (`ConfigRole::Host`, the
+  resolver `rusplay-hostd` and the Host settings use, so all three read the same file; a missing
+  file means defaults, a malformed one is a notice and nothing starts), opens the peer store and
+  calls `HostService::start`, which opens the GPU and the portal (the permission dialog, with
+  `input.accept_remote` the input session in the same dialog), binds, starts the discovery
+  responder and spawns the accept and serve thread. The config is read at start, so a Settings
+  save applies at the next start. Any failure is a failure notice and the page goes back to
+  `Stopped`.
+- `rusplay_host::HostService` (`host.md`) is the one accept and serve loop the app runs. The page
+  polls it every 250 ms on the foreground executor: `poll_events` yields `HostEvent`s
+  (`PairingOpened` with the PIN and window length, `ClientAdmitted`, `ClientLeft`,
+  `PairingLocked`, `SessionFailed`, `Stopped`) that `HostModel::apply` folds into the page state
+  and, where they matter, into a `NoticeRaised`, and `snapshot` gives the live `HostStats` and
+  negotiated format, from which `HostModel::observe` derives per-second rates over 500 ms
+  windows. The countdown is computed from the window length and the time the event was seen.
+  `HostModel` has no gpui types and is unit tested; the view only renders it.
+- The page shows the PIN in groups of three while a pairing window is open, with the seconds left
+  and `New PIN` (`HostService::renew_pin`, which ends the open window so the loop issues the next
+  PIN at once); no PIN is shown while a client streams. The connected client card shows its name,
+  address, whether it just paired or reconnected, the stream format (and that it is a fallback when
+  it is) and the rates (sent and encoded frame rate, round trip, dropped frames, lost packets,
+  keyframes, bitrate target). The paired clients card lists the host peer store with `Revoke`.
+- Revoking edits the store file through the same `Arc<RwLock<PeerStore>>` the running host uses
+  (refreshed first when stale, like `rusplay-hostd peers forget`), so the host refuses the client
+  at its next reconnect; a client already streaming stays until it leaves, and the notice says so.
+  While stopped the page opens its own handle on the same file. The list is re-read on every poll
+  when the file changed, so a pairing made while hosting appears at once, and again on each switch
+  to the tab while stopped (a changed `peers.host_file` applies then).
+- `Stop hosting`, `Quit` and closing the window stop the service (`HostService::stop` joins the
+  stages and the responder, so the button does it on the background executor and the window
+  closes synchronously). A service that ends by itself (a capture or encoder failure, which
+  `HostError::is_session_failure` says is not one client's) ends with `HostEvent::Stopped` carrying
+  the error and the page returns to `Stopped` with a failure notice; a session failure only ends
+  that client and the next pairing window opens.
+- Not covered here: the discovery announce of the app host name is `peers.host_name` or the kernel
+  hostname like the daemon; there is no control socket or PIN file in the app, since the page is
+  the control surface.
 
 ## Settings
 

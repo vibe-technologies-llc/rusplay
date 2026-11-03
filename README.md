@@ -20,10 +20,10 @@ Host daemon, `rusplay-hostd`:
 cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac
 ```
 
-Client app, `rusplay`:
+Desktop app, `rusplay` (client, and host through the same encoder features as the daemon):
 
 ```sh
-cargo build --release -p rusplay-app --features vaapi,nvdec,software
+cargo build --release -p rusplay-app --features vaapi,nvdec,software,input
 ```
 
 Drop the features of the backends you do not need. `vaapi,pipewire,input` is enough for a host

@@ -9,7 +9,8 @@
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
 
 # Client app
-- [XL] `app-host-mode`: host from the desktop app. `ui.md` calls the app a thin shell over `rusplay-client` and `rusplay-host`, but `rusplay-app` does not depend on `rusplay-host` at all; either build a hosting page (portal session, PIN display, paired clients, stats) or correct the rule. Split before starting
+- [S] `app-host-live-check`: run the Host this PC page on a live Wayland session and fix what the compile-only work missed: the portal permission dialog while `Starting`, the PIN, countdown and `New PIN`, a PIN pairing and a reconnect from a second machine, the streaming stats, `Revoke`, and `Stop hosting` and quit while streaming (`HostService::stop` joins every stage, so check the window does not freeze)
+- [S] `app-host-disconnect`: a `Disconnect` button on the connected client card that ends the streaming client without stopping the host (a `HostService` method that stops the current `HostStream`, then the loop opens the next pairing window as when a client leaves)
 
 # Session
 - [L] `capture-virtual-output`: stream a virtual output sized to the client. Add `SourceKind::Virtual` (ashpd 0.13 offers `SourceType::Virtual`; `portal_sources` maps only monitor and window), send the client's swapchain size, refresh rate and colour volume in the handshake, and use them for `video.resolution`/`frame_rate`; later resize live through the encoder reopen path. Removes the host downscale and client upscale and makes a monitorless host work. Start with a per-compositor spike (Mutter, KWin), since sizing virtual streams is compositor specific
@@ -21,6 +22,7 @@
 # Scaling
 
 # Headless host
+- [M] `hostd-host-service`: run `rusplay-hostd`'s accept and serve loop on `rusplay_host::HostService` instead of its own copy in `main.rs`, which the desktop app already uses. The daemon's pin file, control socket (`new-pin` through `HostService::renew_pin`, `forget` through its shared `PeerStore`, `status` from the events) and stats lines then read the service's events and snapshots; `PinWindow` and the cancel flag go away
 
 # Input
 - [L] `input-gamepad-uhid-dualsense`: a selectable `/dev/uhid` DualSense/DS4 personality on the host next to the 360 pad (a new `input` config choice per pad), with the HID report descriptor, the feature reports `hid-playstation` probes for (calibration, firmware, pairing info) so the kernel driver binds and creates the real sensor and touchpad nodes, input reports carrying sticks, buttons, the `PadState` sensors and touchpad contacts, and rumble from output reports. The sensor events and snapshot state it consumes exist. `/dev/uhid` is root-only on a stock system (a udev `uaccess` rule is needed like for `/dev/uinput`), and it can only be validated by a kernel `hid-playstation` or SDL binding, so its tests skip visibly without access

@@ -401,11 +401,11 @@ fn to_f64(value: u64) -> f64 {
     f64::from(u32::try_from(value).unwrap_or(u32::MAX))
 }
 
-fn per_second(delta: u64, seconds: f64) -> f64 {
+pub fn per_second(delta: u64, seconds: f64) -> f64 {
     to_f64(delta) / seconds
 }
 
-fn millis(duration: Duration) -> f64 {
+pub fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
