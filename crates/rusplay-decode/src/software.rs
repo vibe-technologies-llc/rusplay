@@ -21,6 +21,7 @@ use rusplay_core::{
 
 use crate::{
     Backend, CpuFrame, DecodeError, DecodedBuffer, DecodedFrame, VideoDecoder,
+    av1::Av1Syntax,
     frame::{CpuPlane, PlaneStorage},
     metadata::{av1_mastering_display, content_light},
 };
@@ -30,6 +31,7 @@ const ONE_FRAME_IN_FLIGHT: c_int = 1;
 
 pub struct Rav1dDecoder {
     context: Option<Dav1dContext>,
+    syntax: Av1Syntax,
 }
 
 impl fmt::Debug for Rav1dDecoder {
@@ -59,7 +61,10 @@ impl Rav1dDecoder {
         };
         check(result).map_err(DecodeError::Rav1dOpen)?;
 
-        Ok(Self { context })
+        Ok(Self {
+            context,
+            syntax: Av1Syntax::default(),
+        })
     }
 
     fn send(&self, data: &mut InputData) -> Result<SendOutcome, DecodeError> {
@@ -102,6 +107,18 @@ impl VideoDecoder for Rav1dDecoder {
             return Ok(None);
         }
 
+        let packet = self.syntax.check_packet(&frame.data)?;
+        let decoded = self.decode_checked(frame);
+        if decoded.is_err() {
+            self.syntax.forget_after_decode_error(packet);
+        }
+
+        decoded
+    }
+}
+
+impl Rav1dDecoder {
+    fn decode_checked(&self, frame: &EncodedFrame) -> Result<Option<DecodedFrame>, DecodeError> {
         let mut data = InputData::copy_from(&frame.data, frame.timestamp)?;
         let mut latest = None;
 

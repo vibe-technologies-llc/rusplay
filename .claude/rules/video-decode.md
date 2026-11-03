@@ -73,6 +73,15 @@ paths:
 - `max_frame_delay = 1` turns frame threading off so every packet yields its picture on the same
   call; `SoftwareDecoderConfig::threads` sets the tile/postfilter thread count (`None` lets
   rav1d use every logical CPU, at most 256).
+- Every packet goes through `Av1Syntax::check_packet` (the AV1 syntax check above) before
+  `dav1d_send_data`; it works on a copy of the state and commits only when the whole packet
+  passes, drops OBUs outside operating point 0 as rav1d does, and refreshes reference slots when a
+  frame's last tile arrives or a key frame is shown again, which is when rav1d does. When rav1d
+  still fails a checked packet, the slots are forgotten (and the sequence header too when the
+  packet carried one), since rav1d may not have refreshed them. Errors inside the tile data
+  (symbol decoder overread, an invalid 4:2:2 partition, an intra block copy vector into the
+  current superblock) cannot be seen without decoding and still abort
+  (`decode-rav1d-error-path-panic`).
 - rav1d is built with `default-features = false` plus `bitdepth_8` and `bitdepth_16`. Its `asm`
   feature (hand-written SIMD, several times faster) is behind `software-asm`, which implies
   `software` and is forwarded as `rusplay-client/software-asm`. It needs `nasm` at build time on
@@ -148,15 +157,42 @@ paths:
   - `reorder.rs`: the codec-independent output queue keyed by picture order count that the H.264
     and HEVC decoders push into. Its depth also sizes the surface pool (`reorder_frames` in
     `StreamFormat`), since held frames keep their surfaces busy.
-- AV1 packets are checked in `src/obu.rs` before `cros-codecs` sees them, because its OBU reader
-  panics on a missing size field, a set reserved bit or a size past the packet. Every OBU must
-  carry a size field that fits the packet, else `Malformed { unit: Obu }`. The parser is also
-  primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and NVDEC's
-  colour reader both go through it. `obu::ObuParser` wraps the `cros-codecs` parser for both: a
-  tile group before any frame header is `Malformed` (the tile column count is still zero and the
-  parser divides by it), and so is a frame header or `show_existing_frame` that is not a key frame
-  while no key frame has refreshed all eight reference slots (an invalid slot has width 0 and the
-  parser divides by it); any parse error withdraws that state until the next key frame.
+- AV1 packets are checked before `cros-codecs` sees them, because its OBU reader panics on a
+  missing size field, a set reserved bit or a size past the packet: `av1::check_framing` requires
+  every OBU to carry a size field that fits the packet, else `Malformed { unit: Obu }`. The parser
+  is also primed with a temporal delimiter so it never probes a packet as Annex B. VAAPI and
+  NVDEC's colour reader both go through `obu::ObuParser`, which wraps the `cros-codecs` parser.
+  An OBU outside operating point 0 comes back as `ObuAction::Drop` with the whole OBU's length
+  (`cros-codecs` reports only its header and size field, and the callers would then read the
+  payload as the next OBU, whose missing size field trips an assertion). A
+  frame header or `show_existing_frame` that is not a key frame while no key frame has refreshed
+  all eight reference slots is `Malformed` (an invalid slot has width 0 and the parser divides by
+  it). Every OBU then goes through the shared AV1 syntax check (below) before `cros-codecs` parses
+  it, fed in lock step: the check's reference slots are refreshed from the `cros-codecs` frame
+  header inside `ObuParser::ref_frame_update`, so both see the same reference sizes and order
+  hints. A changed sequence header rebuilds the `cros-codecs` parser, and any `cros-codecs` parse
+  error rebuilds both from the last accepted sequence header and withdraws the reference state
+  until the next key frame. `cros-codecs` reads `temporal_point_info` under the inverted
+  `equal_picture_interval` condition, so a sequence with decoder model info is
+  `DecoderModelUnsupported` on these paths (it would misparse every shown frame).
+- The AV1 syntax check (`src/av1/`, shared by VAAPI, NVDEC's colour reader and the software
+  decoder) exists because the third-party parsers trust the tile layout: `cros-codecs` indexes
+  64-entry arrays with the tile column and row counters and wraps the tile group size, and rav1d
+  aborts the process (`decode-rav1d-error-path-panic`) on a tile size past the tile group data.
+  It parses the sequence header and the whole `uncompressed_header` (AV1 spec 5.5 and 5.9) with
+  its own bit reader, keeping per reference slot the upscaled width, frame height, order hint,
+  key-frame flag and segmentation `ALT_Q` features (all the header syntax depends on), and walks
+  the tile groups. Failures are `DecodeError::Av1Syntax(Av1SyntaxError)`: more than 64 tile
+  columns or rows, a `context_update_tile_id` past the tile count, a tile group that does not
+  start at the next tile or ends past the last, a tile size past the remaining tile group data,
+  an empty tile, a tile group or redundant frame header without its frame, a frame header while
+  the previous frame still waits for tiles (an identical `OBU_FRAME_HEADER` copy is allowed), a
+  frame sized from or showing a slot that holds no known frame, short reference signalling naming
+  a non-past slot, superres that does not downscale (rav1d and the spec disagree on whether
+  `allow_intrabc` is read then), and a header that runs out of bits. Where the parsers' dialects
+  differ the check rejects instead of guessing: an error-resilient frame whose `ref_order_hint`
+  disagrees with a slot forgets that slot, a temporal delimiter abandons an unfinished frame, and
+  a different sequence header forgets every slot.
 - Colour (`src/signal.rs`, shared with NVDEC, as is the Annex B splitter `src/annexb.rs`): the codes and range come from the active SPS VUI or sequence
   header when each picture is decoded, and so does the chroma siting (`SignalledColor::chroma_siting`: VUI `chroma_sample_loc_type_top_field`, AV1 `chroma_sample_position`, rav1d's `chr` in the software decoder); mastering display (SEI 137 / metadata type 2) and content
   light level (SEI 144 / metadata type 1) are read from H.264 SEI NALs, HEVC prefix SEI NALs
@@ -294,7 +330,11 @@ paths:
 - The reference logic has device-free unit tests next to it: `src/vaapi/h264/dpb/tests.rs` (marking
   by every MMCO, sliding window, initial and modified lists for frames and fields, the three
   order count types), `src/vaapi/hevc/tests.rs` (order count unwrapping, the RPS helpers,
-  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing). The bitstream guards have their own: `src/hevc/tests.rs`, `src/obu/tests.rs`, `src/annexb/tests.rs`.
+  reference lists, profile mapping) and `src/vaapi/av1/tests.rs` (stream format, CDEF packing). The bitstream guards have their own: `src/hevc/tests.rs`, `src/obu/tests.rs`, `src/annexb/tests.rs`,
+  and `src/av1/tests.rs`, whose `BitWriter`, sequence header and key frame builders craft headers
+  (65 tile columns or rows, oversized and empty tiles, out-of-order tile groups, empty reference
+  slots) that `src/obu/tests.rs` also pushes through `ObuParser` to show they never reach
+  `cros-codecs`.
   They build `PoolSurface::detached` surfaces, which carry an id and an empty image.
 - No available encoder writes field pictures (x264 only does MBAFF), so
   `src/vaapi/tests/fields.rs` is a tiny H.264 writer for PAFF streams: 128x64 frames of 16

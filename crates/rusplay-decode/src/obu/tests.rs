@@ -1,89 +1,32 @@
 use cros_codecs::codec::av1::parser::ObuAction;
 
 use super::*;
-use crate::fixtures as common;
+use crate::{
+    av1::tests::{
+        FRAME_HEADER, SEQUENCE_HEADER, Shape, TILE_GROUP, explicit_columns, key_frame_header,
+        packet, sequence_header, tile_group, two_columns, whole_frame,
+    },
+    fixtures as common,
+};
 
-fn is_malformed(result: &Result<(), DecodeError>) -> bool {
-    matches!(
-        result,
-        Err(DecodeError::Malformed {
-            codec: Codec::Av1,
-            unit: BitstreamUnit::Obu,
-            ..
-        })
-    )
-}
-
-#[test]
-fn every_fixture_packet_passes() {
-    let frames = common::ivf_frames(Codec::Av1, &common::fixture("av1-420-8bit-altref.ivf"));
-
-    let first = frames.first().unwrap();
-
-    check_framing(&first.data).unwrap();
-    for frame in &frames {
-        check_framing(&frame.data).unwrap();
+fn feed(parser: &mut ObuParser, mut data: &[u8]) -> Result<(), DecodeError> {
+    while !data.is_empty() {
+        let obu = match parser.read_obu(data)? {
+            ObuAction::Process(obu) => obu,
+            ObuAction::Drop(length) => {
+                data = &data[usize::try_from(length).unwrap()..];
+                continue;
+            }
+        };
+        let length = obu.bytes_used;
+        match parser.parse(obu)? {
+            ParsedObu::FrameHeader(header) => parser.ref_frame_update(&header)?,
+            ParsedObu::Frame(frame) => parser.ref_frame_update(&frame.header)?,
+            _ => {}
+        }
+        data = &data[length..];
     }
-}
-
-#[test]
-fn an_empty_packet_passes() {
-    check_framing(&[]).unwrap();
-}
-
-#[test]
-fn an_obu_without_a_size_field_is_malformed() {
-    assert!(is_malformed(&check_framing(&[0x10, 0x00])));
-}
-
-#[test]
-fn a_set_reserved_bit_is_malformed() {
-    assert!(is_malformed(&check_framing(&[0x13, 0x00])));
-}
-
-#[test]
-fn a_size_past_the_packet_end_is_malformed() {
-    assert!(is_malformed(&check_framing(&[0x12, 0x05, 0x00])));
-    assert!(is_malformed(&check_framing(&[0x32, 0x02, 0xaa])));
-}
-
-#[test]
-fn a_huge_leb128_size_is_malformed() {
-    let packet = [0x32, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x00];
-
-    assert!(is_malformed(&check_framing(&packet)));
-}
-
-#[test]
-fn an_unterminated_or_truncated_size_is_malformed() {
-    let unterminated = [0x32, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01];
-
-    assert!(is_malformed(&check_framing(&unterminated)));
-    assert!(is_malformed(&check_framing(&[0x32, 0x80])));
-    assert!(is_malformed(&check_framing(&[0x32])));
-}
-
-#[test]
-fn a_truncated_extension_header_is_malformed() {
-    assert!(is_malformed(&check_framing(&[0x16])));
-    assert!(is_malformed(&check_framing(&[0x16, 0x00])));
-}
-
-#[test]
-fn consecutive_obus_with_extension_headers_pass() {
-    let packet = [0x12, 0x00, 0x16, 0x08, 0x01, 0xaa, 0x32, 0x81, 0x00, 0xbb];
-
-    check_framing(&packet).unwrap();
-}
-
-#[test]
-fn every_truncation_of_a_fixture_packet_is_handled() {
-    let frames = common::ivf_frames(Codec::Av1, &common::fixture("av1-420-8bit-altref.ivf"));
-    let packet = &frames[0].data;
-
-    for length in 0..packet.len() {
-        let _ = check_framing(&packet[..length]);
-    }
+    Ok(())
 }
 
 #[test]
@@ -98,11 +41,9 @@ fn a_tile_group_before_any_frame_header_is_malformed() {
 
     assert!(matches!(
         result,
-        Err(DecodeError::Malformed {
-            codec: Codec::Av1,
-            unit: BitstreamUnit::Obu,
-            ..
-        })
+        Err(DecodeError::Av1Syntax(
+            Av1SyntaxError::TileGroupWithoutFrameHeader
+        ))
     ));
 }
 
@@ -136,4 +77,88 @@ fn an_inter_frame_before_any_key_frame_is_malformed() {
             ..
         })
     ));
+}
+
+#[test]
+fn every_fixture_parses_through_cros_codecs() {
+    for name in [
+        "av1-420-8bit.ivf",
+        "av1-420-10bit.ivf",
+        "av1-444-8bit.ivf",
+        "av1-420-8bit-altref.ivf",
+    ] {
+        let mut parser = ObuParser::new();
+
+        for frame in common::ivf_frames(Codec::Av1, &common::fixture(name)) {
+            feed(&mut parser, &frame.data).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+}
+
+#[test]
+fn sixty_five_tile_columns_never_reach_cros_codecs() {
+    let shape = Shape::new(4160, 64);
+    let mut parser = ObuParser::new();
+
+    let data = packet(&[
+        (SEQUENCE_HEADER, sequence_header(shape)),
+        (FRAME_HEADER, key_frame_header(shape, explicit_columns(65))),
+    ]);
+
+    assert!(matches!(
+        feed(&mut parser, &data),
+        Err(DecodeError::Av1Syntax(
+            Av1SyntaxError::TileColumnsOutOfRange(65)
+        ))
+    ));
+}
+
+#[test]
+fn an_oversized_tile_never_reaches_cros_codecs() {
+    let shape = Shape::new(128, 64);
+    let mut parser = ObuParser::new();
+
+    let mut tiles = tile_group(whole_frame, &[]);
+    tiles.extend([0xff, 1, 2, 3]);
+    let data = packet(&[
+        (SEQUENCE_HEADER, sequence_header(shape)),
+        (FRAME_HEADER, key_frame_header(shape, two_columns)),
+        (TILE_GROUP, tiles),
+    ]);
+
+    assert!(matches!(
+        feed(&mut parser, &data),
+        Err(DecodeError::Av1Syntax(Av1SyntaxError::TileSizePastData {
+            tile: 0,
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn a_crafted_two_tile_frame_decodes_through_cros_codecs() {
+    let shape = Shape::new(128, 64);
+    let mut parser = ObuParser::new();
+
+    let data = packet(&[
+        (SEQUENCE_HEADER, sequence_header(shape)),
+        (FRAME_HEADER, key_frame_header(shape, two_columns)),
+        (TILE_GROUP, tile_group(whole_frame, &[&[1, 2], &[3]])),
+    ]);
+
+    feed(&mut parser, &data).unwrap();
+}
+
+#[test]
+fn an_obu_outside_the_operating_point_is_skipped_whole() {
+    let shape = Shape {
+        operating_point_idc: 0x101,
+        ..Shape::new(64, 64)
+    };
+    let mut parser = ObuParser::new();
+
+    let mut data = packet(&[(SEQUENCE_HEADER, sequence_header(shape))]);
+    data.extend([0x2e, 0x20, 0x02, 0x00, 0x00]);
+
+    feed(&mut parser, &data).unwrap();
 }

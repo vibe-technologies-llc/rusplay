@@ -93,3 +93,18 @@ fn rejects_frames_of_another_codec() {
         })
     ));
 }
+
+#[test]
+fn decodes_hidden_frames_tiles_and_shown_existing_frames() {
+    let frames = common::ivf_frames(Codec::Av1, &common::fixture("av1-420-8bit-altref.ivf"));
+    let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig::default()).unwrap();
+
+    for frame in &frames {
+        let output = decoder
+            .decode(frame)
+            .unwrap()
+            .unwrap_or_else(|| panic!("no picture for the packet at {:?}", frame.timestamp));
+
+        assert_eq!(output.resolution, FIXTURE_RESOLUTION);
+    }
+}
