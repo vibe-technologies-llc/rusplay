@@ -45,7 +45,7 @@ pub(crate) fn usize_of(value: impl TryInto<usize>) -> usize {
 
 pub struct Display {
     raw: ffi::VADisplay,
-    _device: File,
+    _device: Option<File>,
 }
 
 impl Display {
@@ -68,7 +68,7 @@ impl Display {
 
         let display = Rc::new(Self {
             raw,
-            _device: device,
+            _device: Some(device),
         });
 
         let (mut major, mut minor) = (0, 0);
@@ -77,6 +77,24 @@ impl Display {
         })?;
 
         Ok(display)
+    }
+
+    #[cfg(feature = "detached")]
+    pub fn detached() -> Rc<Self> {
+        Rc::new(Self {
+            raw: ptr::null_mut(),
+            _device: None,
+        })
+    }
+
+    #[cfg(feature = "detached")]
+    pub fn is_detached(&self) -> bool {
+        self.raw.is_null()
+    }
+
+    #[cfg(not(feature = "detached"))]
+    pub const fn is_detached(&self) -> bool {
+        false
     }
 
     pub(crate) fn raw(&self) -> ffi::VADisplay {
@@ -133,6 +151,10 @@ impl Display {
     }
 
     pub fn sync(&self, surface: SurfaceId) -> Result<(), VaError> {
+        if self.is_detached() {
+            return Ok(());
+        }
+
         check(VaCall::SyncSurface, unsafe {
             ffi::vaSyncSurface(self.raw, surface)
         })
@@ -141,6 +163,10 @@ impl Display {
 
 impl Drop for Display {
     fn drop(&mut self) {
+        if self.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaTerminate(self.raw) };
     }
 }
@@ -175,6 +201,13 @@ impl Config {
             .map(|&(type_, value)| ffi::VAConfigAttrib { type_, value })
             .collect();
         let mut id = ffi::VA_INVALID_ID;
+        if display.is_detached() {
+            return Ok(Self {
+                display: Rc::clone(display),
+                id,
+            });
+        }
+
         check(VaCall::CreateConfig, unsafe {
             ffi::vaCreateConfig(
                 display.raw,
@@ -238,6 +271,10 @@ impl Config {
 
 impl Drop for Config {
     fn drop(&mut self) {
+        if self.display.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaDestroyConfig(self.display.raw, self.id) };
     }
 }
@@ -261,6 +298,13 @@ impl Context {
             targets.as_mut_ptr()
         };
         let mut id = ffi::VA_INVALID_ID;
+        if config.display.is_detached() {
+            return Ok(Self {
+                display: Rc::clone(&config.display),
+                id,
+            });
+        }
+
         check(VaCall::CreateContext, unsafe {
             ffi::vaCreateContext(
                 config.display.raw,
@@ -326,6 +370,13 @@ impl Context {
         data: *mut c_void,
     ) -> Result<Buffer, VaError> {
         let mut id = ffi::VA_INVALID_ID;
+        if self.display.is_detached() {
+            return Ok(Buffer {
+                display: Rc::clone(&self.display),
+                id,
+            });
+        }
+
         check(VaCall::CreateBuffer, unsafe {
             ffi::vaCreateBuffer(
                 self.display.raw,
@@ -345,6 +396,10 @@ impl Context {
     }
 
     pub fn render(&self, target: SurfaceId, buffers: &[Buffer]) -> Result<(), VaError> {
+        if self.display.is_detached() {
+            return Ok(());
+        }
+
         let mut ids: Vec<ffi::VABufferID> = buffers.iter().map(|buffer| buffer.id).collect();
 
         check(VaCall::BeginPicture, unsafe {
@@ -368,6 +423,10 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        if self.display.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaDestroyContext(self.display.raw, self.id) };
     }
 }
@@ -400,6 +459,10 @@ impl Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
+        if self.display.is_detached() {
+            return;
+        }
+
         unsafe { ffi::vaDestroyBuffer(self.display.raw, self.id) };
     }
 }

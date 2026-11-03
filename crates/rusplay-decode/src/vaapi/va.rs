@@ -14,6 +14,10 @@ pub(super) trait DecoderDisplay {
 
 impl DecoderDisplay for Rc<Display> {
     fn has_decoder(&self, profile: Profile) -> Result<bool, DecodeError> {
+        if self.is_detached() {
+            return Ok(true);
+        }
+
         if !self.profiles()?.contains(&profile) {
             return Ok(false);
         }
@@ -24,6 +28,10 @@ impl DecoderDisplay for Rc<Display> {
     }
 
     fn rt_formats(&self, profile: Profile) -> Result<u32, DecodeError> {
+        if self.is_detached() {
+            return Ok(u32::MAX);
+        }
+
         let [rt_formats] = self.attributes(
             profile,
             ffi::VAEntrypoint_VAEntrypointVLD,
@@ -98,7 +106,7 @@ pub(super) struct PoolSurface {
     pub(super) image: Arc<DmaBufImage>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 impl PoolSurface {
     pub(super) fn detached(id: SurfaceId) -> Self {
         Self {
@@ -157,6 +165,15 @@ impl SurfacePool {
             return Err(DecodeError::SurfacePoolExhausted {
                 capacity: self.capacity,
             });
+        }
+
+        #[cfg(feature = "fuzzing")]
+        if self.display.is_detached() {
+            let surface = PoolSurface::detached(
+                SurfaceId::try_from(self.surfaces.len()).unwrap_or(INVALID_SURFACE),
+            );
+            self.surfaces.push(surface.clone());
+            return Ok(surface);
         }
 
         let owned = Surface::create(

@@ -1,3 +1,5 @@
+use rusplay_core::{Codec, EncodedFrame, FrameBytes, Timestamp};
+use rusplay_decode::VideoDecoder;
 use rusplay_protocol::{PacketHeader, ProtocolVersion, StreamKind};
 
 const VERSION_END: usize = 2;
@@ -34,4 +36,37 @@ pub fn datagram_list(data: &[u8]) -> Vec<&[u8]> {
     }
 
     datagrams
+}
+
+const LENGTH_PREFIX: usize = 2;
+const PACKET_INTERVAL_MICROS: u64 = 16_667;
+
+pub fn packets(data: &[u8]) -> Vec<&[u8]> {
+    let mut rest = data;
+    let mut packets = Vec::new();
+
+    while let Some((prefix, tail)) = rest.split_at_checked(LENGTH_PREFIX) {
+        let length = usize::from(u16::from_be_bytes([prefix[0], prefix[1]]));
+        let (packet, remainder) = tail.split_at(length.min(tail.len()));
+        packets.push(packet);
+        rest = remainder;
+    }
+
+    packets
+}
+
+pub fn feed(decoder: &mut dyn VideoDecoder, codec: Codec, data: &[u8]) {
+    for (index, packet) in packets(data).into_iter().enumerate() {
+        let micros = u64::try_from(index).unwrap_or(0) * PACKET_INTERVAL_MICROS;
+        let frame = EncodedFrame {
+            codec,
+            timestamp: Timestamp::from_micros(micros),
+            keyframe: index == 0,
+            data: FrameBytes::skipping(packet.to_vec(), 0),
+        };
+
+        let _ = decoder.decode(&frame);
+    }
+
+    let _ = decoder.flush();
 }

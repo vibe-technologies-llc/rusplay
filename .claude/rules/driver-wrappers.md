@@ -34,3 +34,7 @@ paths:
   cuvid calls are NVDEC's own `CuvidCall`. `ffi` holds the shared `CuResult`, `CuDevice`,
   `CuContext` and function pointer types.
 - Both crates' errors are wrapped transparently with `#[from]` in `EncodeError` and `DecodeError`.
+- `rusplay-va`'s `detached` feature adds `Display::detached()`, a display with a null `VADisplay` on
+  which config, context, buffer, render and sync calls and every `Drop` are no-ops; only
+  `rusplay-decode`'s `fuzzing` feature turns it on. Without it `Display::is_detached` is a constant
+  `false`.

@@ -9,7 +9,7 @@ use rusplay_core::{
 };
 
 use crate::{
-    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb,
+    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb, hevc,
     signal::{self, HdrTracker},
     vaapi::{
         Stream, StreamFormat,
@@ -124,16 +124,19 @@ impl HevcDecoder {
         while let Some(nalu) = annexb::next_nalu::<NaluHeader>(&mut cursor, CODEC)? {
             match nalu.header.type_ {
                 NaluType::VpsNut => {
+                    hevc::check_video_parameter_set(nalu.as_ref())?;
                     self.parser
                         .parse_vps(&nalu)
                         .map_err(malformed(BitstreamUnit::VideoParameterSet))?;
                 }
                 NaluType::SpsNut => {
+                    hevc::check_sequence_parameter_set(nalu.as_ref())?;
                     self.parser
                         .parse_sps(&nalu)
                         .map_err(malformed(BitstreamUnit::SequenceParameterSet))?;
                 }
                 NaluType::PpsNut => {
+                    hevc::check_picture_parameter_set(nalu.as_ref())?;
                     self.parser
                         .parse_pps(&nalu)
                         .map_err(malformed(BitstreamUnit::PictureParameterSet))?;

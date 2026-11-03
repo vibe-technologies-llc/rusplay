@@ -1,9 +1,7 @@
 use std::{io::Cursor, rc::Rc};
 
 use cros_codecs::codec::{
-    av1::parser::{
-        FrameType, ObuAction, ObuType, ParsedObu, Parser as Av1Parser, SequenceHeaderObu,
-    },
+    av1::parser::{FrameType, ObuAction, ObuType, ParsedObu, SequenceHeaderObu},
     h264::parser::{NaluHeader as H264NaluHeader, NaluType as H264NaluType, Parser as H264Parser},
     h265::parser::{NaluHeader as HevcNaluHeader, NaluType as HevcNaluType, Parser as HevcParser},
 };
@@ -12,7 +10,8 @@ use rusplay_core::{Codec, SignalledColor};
 use crate::{
     BitstreamUnit, DecodeError,
     annexb::{malformed, next_nalu},
-    obu,
+    hevc,
+    obu::{self, ObuParser},
     signal::{self, HdrTracker},
 };
 
@@ -20,7 +19,7 @@ const H264_NAL_HEADER_LEN: usize = 1;
 const HEVC_NAL_HEADER_LEN: usize = 2;
 const FIRST_SLICE_SEGMENT_IN_PIC: u8 = 0x80;
 
-pub(super) struct ColorReader {
+pub(crate) struct ColorReader {
     parsers: Parsers,
     hdr: HdrTracker,
     current: SignalledColor,
@@ -30,18 +29,18 @@ enum Parsers {
     H264(Box<H264Parser>),
     Hevc(Box<HevcParser>),
     Av1 {
-        parser: Box<Av1Parser>,
+        parser: Box<ObuParser>,
         sequence: Option<Rc<SequenceHeaderObu>>,
     },
 }
 
 impl ColorReader {
-    pub(super) fn new(codec: Codec) -> Self {
+    pub(crate) fn new(codec: Codec) -> Self {
         let parsers = match codec {
             Codec::H264 => Parsers::H264(Box::default()),
             Codec::Hevc => Parsers::Hevc(Box::default()),
             Codec::Av1 => Parsers::Av1 {
-                parser: Box::new(obu::low_overhead_parser()),
+                parser: Box::new(ObuParser::new()),
                 sequence: None,
             },
         };
@@ -53,11 +52,11 @@ impl ColorReader {
         }
     }
 
-    pub(super) fn current(&self) -> SignalledColor {
+    pub(crate) fn current(&self) -> SignalledColor {
         self.current
     }
 
-    pub(super) fn read(&mut self, data: &[u8]) -> Result<(), DecodeError> {
+    pub(crate) fn read(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         let picture = match &mut self.parsers {
             Parsers::H264(parser) => read_h264(parser, &mut self.hdr, data)?,
             Parsers::Hevc(parser) => read_hevc(parser, &mut self.hdr, data)?,
@@ -133,16 +132,19 @@ fn read_hevc(
         let kind = nalu.header.type_;
         match kind {
             HevcNaluType::VpsNut => {
+                hevc::check_video_parameter_set(nalu.as_ref())?;
                 parser
                     .parse_vps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::VideoParameterSet))?;
             }
             HevcNaluType::SpsNut => {
+                hevc::check_sequence_parameter_set(nalu.as_ref())?;
                 parser
                     .parse_sps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::SequenceParameterSet))?;
             }
             HevcNaluType::PpsNut => {
+                hevc::check_picture_parameter_set(nalu.as_ref())?;
                 parser
                     .parse_pps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::PictureParameterSet))?;
@@ -199,7 +201,7 @@ fn is_first_slice_segment(kind: HevcNaluType, nalu: &[u8]) -> bool {
 }
 
 fn read_av1(
-    parser: &mut Av1Parser,
+    parser: &mut ObuParser,
     sequence: &mut Option<Rc<SequenceHeaderObu>>,
     hdr: &mut HdrTracker,
     mut data: &[u8],
@@ -210,10 +212,7 @@ fn read_av1(
     let mut picture: Picture = None;
 
     while !data.is_empty() {
-        let obu = match parser
-            .read_obu(data)
-            .map_err(malformed(CODEC, BitstreamUnit::Obu))?
-        {
+        let obu = match parser.read_obu(data)? {
             ObuAction::Process(obu) => obu,
             ObuAction::Drop(length) => {
                 data = data
@@ -227,10 +226,7 @@ fn read_av1(
             hdr.read_av1_metadata(obu.as_ref());
         }
 
-        let header = match parser
-            .parse_obu(obu)
-            .map_err(malformed(CODEC, BitstreamUnit::Obu))?
-        {
+        let header = match parser.parse(obu)? {
             ParsedObu::SequenceHeader(parsed) => {
                 *sequence = Some(parsed);
                 None
@@ -253,9 +249,7 @@ fn read_av1(
                     None => (signal::av1_color(current), key),
                 });
             }
-            parser
-                .ref_frame_update(&header)
-                .map_err(malformed(CODEC, BitstreamUnit::FrameHeader))?;
+            parser.ref_frame_update(&header)?;
         }
 
         data = data.get(length..).unwrap_or_default();

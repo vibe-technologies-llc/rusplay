@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+fuzzing = ["nvdec", "vaapi", "rusplay-va/detached"]
 nvdec = ["dep:cros-codecs", "dep:rusplay-cuda"]
 software = ["dep:rav1d"]
 software-asm = ["software", "rav1d/asm"]

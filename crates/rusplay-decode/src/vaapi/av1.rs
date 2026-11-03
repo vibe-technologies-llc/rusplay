@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cros_codecs::codec::av1::parser::{
     BitDepth as Av1BitDepth, FrameHeaderObu, FrameType, NUM_REF_FRAMES, ObuAction, ObuType,
-    ParsedObu, Parser, Profile as Av1Profile, SEG_LVL_MAX, SegmentationParams, SequenceHeaderObu,
+    ParsedObu, Profile as Av1Profile, SEG_LVL_MAX, SegmentationParams, SequenceHeaderObu,
     TileGroupObu,
 };
 use rusplay_core::{
@@ -10,7 +10,8 @@ use rusplay_core::{
 };
 
 use crate::{
-    Backend, BitstreamUnit, DecodeError, DecodedFrame, annexb, obu,
+    Backend, BitstreamUnit, DecodeError, DecodedFrame,
+    obu::{self, ObuParser},
     signal::{self, HdrTracker},
     vaapi::{
         Stream, StreamFormat, ffi,
@@ -21,10 +22,6 @@ use crate::{
 const CODEC: Codec = Codec::Av1;
 const GRAIN_SURFACES: usize = 1;
 const STRENGTH_SECONDARY_MAX: u32 = 4;
-
-fn malformed(unit: BitstreamUnit) -> impl FnOnce(String) -> DecodeError {
-    annexb::malformed(CODEC, unit)
-}
 
 #[derive(Debug, Clone)]
 struct Slot {
@@ -41,7 +38,7 @@ struct Pending {
 }
 
 pub(super) struct Av1Decoder {
-    parser: Parser,
+    parser: ObuParser,
     stream: Option<Stream>,
     sequence: Option<Rc<SequenceHeaderObu>>,
     slots: [Option<Slot>; NUM_REF_FRAMES],
@@ -51,7 +48,7 @@ pub(super) struct Av1Decoder {
 impl Av1Decoder {
     pub(super) fn new() -> Self {
         Self {
-            parser: obu::low_overhead_parser(),
+            parser: ObuParser::new(),
             stream: None,
             sequence: None,
             slots: Default::default(),
@@ -71,11 +68,7 @@ impl Av1Decoder {
         let mut output = None;
 
         while !data.is_empty() {
-            let obu = match self
-                .parser
-                .read_obu(data)
-                .map_err(malformed(BitstreamUnit::Obu))?
-            {
+            let obu = match self.parser.read_obu(data)? {
                 ObuAction::Process(obu) => obu,
                 ObuAction::Drop(length) => {
                     data = data
@@ -89,11 +82,7 @@ impl Av1Decoder {
                 self.hdr.read_av1_metadata(obu.as_ref());
             }
 
-            match self
-                .parser
-                .parse_obu(obu)
-                .map_err(malformed(BitstreamUnit::Obu))?
-            {
+            match self.parser.parse(obu)? {
                 ParsedObu::SequenceHeader(sequence) => {
                     self.sequence = Some(sequence);
                 }
@@ -303,9 +292,7 @@ impl Av1Decoder {
             }
         }
 
-        self.parser
-            .ref_frame_update(&header)
-            .map_err(malformed(BitstreamUnit::FrameHeader))?;
+        self.parser.ref_frame_update(&header)?;
 
         shown
             .map(|slot| stream.output_sized(&slot.display, timestamp, slot.render))
