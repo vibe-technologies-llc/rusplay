@@ -32,6 +32,16 @@ paths:
   intersects with the client's decodable set (`host.md`).
 - Defaults are low latency: no B-frames, no lookahead, one frame in flight, infinite GOP with
   intra refresh, and IDR only on explicit request (`request_keyframe`, driven by loss reports).
+- Loss recovery against a reference: `VideoEncoder` identifies its outputs by `OutputIndex`, the
+  count of `Some` results `encode` returned since the encoder opened, from 0. `acknowledge(index)`
+  says the client decoded that output on an unbroken chain (a candidate to keep as a long-term
+  reference); `recover(last_good)` asks that the next output reference nothing newer than
+  `last_good` and returns `Recovery::Reference(index)` naming the output it will reference
+  (at or before `last_good`), after which no output between that one and the recovery frame is
+  referenced again. The default implementation, which every backend uses today (x264, x265,
+  SVT-AV1, VAAPI, NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays
+  that of a keyframe request; the software backends' tests hold it (`check_recovery_falls_back_to_a_keyframe`).
+  Per-backend reference recovery is in `docs/FEATURES.md` (`video-ltr-*`).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.
 - The software encoders expose every library parameter: typed config fields for the common ones,
   plus `params` passed verbatim (`x264_param_parse`, `x265_param_parse`, SVT-AV1's

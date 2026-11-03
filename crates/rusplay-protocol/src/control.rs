@@ -15,6 +15,8 @@ const TAG_RUMBLE: u8 = 6;
 const TAG_STREAM_FORMAT: u8 = 7;
 const TAG_CLOCK_PING: u8 = 8;
 const TAG_CLOCK_PONG: u8 = 9;
+const TAG_ACKNOWLEDGE_FRAME: u8 = 10;
+const TAG_REQUEST_RECOVERY: u8 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -49,6 +51,13 @@ pub enum ControlMessage {
         sent_micros: u64,
         host_micros: u64,
     },
+    AcknowledgeFrame {
+        frame: u32,
+    },
+    RequestRecovery {
+        frame: u32,
+        last_good: u32,
+    },
 }
 
 impl ControlMessage {
@@ -56,12 +65,14 @@ impl ControlMessage {
 
     pub const fn encoded_len(&self) -> usize {
         match self {
-            Self::RequestKeyframe { .. } | Self::BitrateHint { .. } => 5,
+            Self::RequestKeyframe { .. }
+            | Self::BitrateHint { .. }
+            | Self::AcknowledgeFrame { .. } => 5,
             Self::Hello { .. } | Self::ReportLoss { .. } => 7,
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
-            Self::ClockPing { .. } => 9,
+            Self::ClockPing { .. } | Self::RequestRecovery { .. } => 9,
             Self::ClockPong { .. } => 17,
         }
     }
@@ -126,6 +137,15 @@ impl ControlMessage {
                 out[1..9].copy_from_slice(&sent_micros.to_be_bytes());
                 out[9..17].copy_from_slice(&host_micros.to_be_bytes());
             }
+            Self::AcknowledgeFrame { frame } => {
+                out[0] = TAG_ACKNOWLEDGE_FRAME;
+                out[1..5].copy_from_slice(&frame.to_be_bytes());
+            }
+            Self::RequestRecovery { frame, last_good } => {
+                out[0] = TAG_REQUEST_RECOVERY;
+                out[1..5].copy_from_slice(&frame.to_be_bytes());
+                out[5..9].copy_from_slice(&last_good.to_be_bytes());
+            }
             Self::StreamFormat(description) => {
                 let mut body = Vec::with_capacity(len);
                 body.push(TAG_STREAM_FORMAT);
@@ -155,11 +175,11 @@ impl ControlMessage {
         }
 
         let body_len = match tag {
-            TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT => 4,
+            TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT | TAG_ACKNOWLEDGE_FRAME => 4,
             TAG_HELLO | TAG_REPORT_LOSS => 6,
             TAG_GOODBYE | TAG_KEEPALIVE => 0,
             TAG_RUMBLE => 9,
-            TAG_CLOCK_PING => 8,
+            TAG_CLOCK_PING | TAG_REQUEST_RECOVERY => 8,
             TAG_CLOCK_PONG => 16,
             unknown => return Err(ProtocolError::UnknownControlTag(unknown)),
         };
@@ -208,6 +228,11 @@ impl ControlMessage {
                 count: u16::from_be_bytes([body[4], body[5]]),
             },
             TAG_BITRATE_HINT => Self::BitrateHint { kbps: word(0) },
+            TAG_ACKNOWLEDGE_FRAME => Self::AcknowledgeFrame { frame: word(0) },
+            TAG_REQUEST_RECOVERY => Self::RequestRecovery {
+                frame: word(0),
+                last_good: word(4),
+            },
             TAG_KEEPALIVE => Self::Keepalive,
             TAG_CLOCK_PING => Self::ClockPing {
                 sent_micros: long(0),
@@ -309,7 +334,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 10] {
+    fn every_message() -> [ControlMessage; 12] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -337,6 +362,11 @@ mod tests {
             ControlMessage::ClockPong {
                 sent_micros: 1,
                 host_micros: u64::MAX,
+            },
+            ControlMessage::AcknowledgeFrame { frame: u32::MAX },
+            ControlMessage::RequestRecovery {
+                frame: 0x0102_0304,
+                last_good: 0x0102_0300,
             },
         ]
     }
@@ -415,6 +445,32 @@ mod tests {
         assert_eq!(
             &buf[..reply_len],
             [9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
+        );
+    }
+
+    #[test]
+    fn recovery_messages_are_big_endian_after_the_tag() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let ack_len = ControlMessage::AcknowledgeFrame { frame: 0x0102_0304 }
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..ack_len], [10, 1, 2, 3, 4]);
+
+        let request_len = ControlMessage::RequestRecovery {
+            frame: 0x0506_0708,
+            last_good: 0x0102_0304,
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(&buf[..request_len], [11, 5, 6, 7, 8, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn trailing_bytes_after_a_recovery_request_are_rejected() {
+        assert_eq!(
+            ControlMessage::decode(&[TAG_REQUEST_RECOVERY, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
+            Err(ProtocolError::TrailingBytes { extra: 1 })
         );
     }
 

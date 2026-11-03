@@ -52,10 +52,21 @@ paths:
 - Feedback, all over the control channel, never blocking the frame path: `PacketsMissing` becomes
   `ReportLoss` (dropped and counted when the control window is full, since reports are advisory);
   a `FrameLost` newer than the last keyframe, a gap in completed frame numbers, a frame dropped
-  because the decode queue is full, or a decode error on a non-keyframe enters resync: one
-  `RequestKeyframe { frame }` naming the first missing frame, repeated every
-  `network.keyframe_request_interval_ms` until a keyframe arrives, and every non-keyframe until
-  then is skipped (counted in `frames_skipped`). A decode error on a keyframe is fatal. Nothing
+  because the decode queue is full, or a decode error on a non-keyframe enters resync. The first
+  request of a resync is `RequestRecovery { frame, last_good }` when
+  `network.loss_recovery = "reference"` (the default) and the decoder has a last good frame, else
+  `RequestKeyframe { frame }`, naming the first missing frame; it is repeated every
+  `network.keyframe_request_interval_ms` as `RequestKeyframe` until a keyframe or a usable
+  recovery frame arrives, and every other frame until then is skipped (counted in
+  `frames_skipped`). A recovery frame is usable when its reference is at or before the last good
+  frame and not before the last keyframe (`Resync::can_resume_from`, `reference_recoveries`). A
+  decode error on a keyframe is fatal.
+- The last good frame comes from the decode stage: every frame its decoder accepts is sent back
+  as `Feedback::Decoded`, and the receive stage keeps the newest (`Resync::last_good`, cleared when
+  a new codec reopens the decoder). It is acknowledged to the host as `AcknowledgeFrame` at most
+  every `network.frame_ack_interval_ms` (default 50, 0 sends none) and only when it changed
+  (`frame_acks_sent`). The decode stage, skipping after its own decode error, resumes on a
+  keyframe or on a recovery frame whose reference is at or before the last frame it decoded. Nothing
   arriving for `network.peer_timeout_ms` ends the stream with `HostSilent`.
 - `frames_lost` counts each frame once: a `FrameLost` and a completed frame both advance
   `last_frame` (`Resync::advance_to`), and only the frame numbers that never produced a packet
@@ -269,7 +280,7 @@ paths:
   (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names
   H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per
-  datagram, keyframe restarts on `RequestKeyframe`, Opus audio packets every 5 ms with a drop
+  datagram, keyframe restarts on `RequestKeyframe` and `RequestRecovery`, Opus audio packets every 5 ms with a drop
   rule and cursor messages. The test host also records `StreamKind::Microphone` datagrams, which
   the microphone tests reassemble. They connect with `connect_with_audio` (or
   `connect_with_devices` for a scripted microphone) and a capturing output, so they need no

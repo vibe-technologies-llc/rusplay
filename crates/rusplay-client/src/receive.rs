@@ -9,7 +9,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusplay_config::NetworkConfig;
+use rusplay_config::{LossRecovery, NetworkConfig};
 use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
 use rusplay_input::RumbleCommand;
 use rusplay_net::{
@@ -37,6 +37,7 @@ pub(crate) struct EncodedVideo {
     pub frame: EncodedFrame,
     pub number: u32,
     pub stream: StreamDescription,
+    pub recovers_from: Option<u32>,
     pub captured_micros: u64,
     pub received_at: Instant,
 }
@@ -51,6 +52,7 @@ pub(crate) type SharedFormat = Arc<Mutex<Option<StreamDescription>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Feedback {
+    Decoded { frame: u32 },
     DecodeFailed { frame: u32 },
 }
 
@@ -64,6 +66,8 @@ enum Flow {
 struct Timing {
     peer_timeout: Duration,
     keyframe_interval: Duration,
+    ack_interval: Option<Duration>,
+    loss_recovery: LossRecovery,
 }
 
 #[derive(Debug, Default)]
@@ -73,9 +77,28 @@ struct Resync {
     last_request: Option<Instant>,
     last_keyframe: Option<u32>,
     last_frame: Option<u32>,
+    last_good: Option<u32>,
+    recovery_tried: bool,
 }
 
 impl Resync {
+    fn decoded(&mut self, frame: u32) {
+        if self
+            .last_good
+            .is_none_or(|good| frame.wrapping_sub(good).cast_signed() > 0)
+        {
+            self.last_good = Some(frame);
+        }
+    }
+
+    fn can_resume_from(&self, reference: u32) -> bool {
+        self.last_good
+            .is_some_and(|good| good.wrapping_sub(reference).cast_signed() >= 0)
+            && self
+                .last_keyframe
+                .is_none_or(|keyframe| reference.wrapping_sub(keyframe).cast_signed() >= 0)
+    }
+
     fn predates_last_keyframe(&self, frame: u32) -> bool {
         self.last_keyframe
             .is_some_and(|keyframe| keyframe.wrapping_sub(frame).cast_signed() >= 0)
@@ -108,6 +131,29 @@ impl Resync {
             .then_some(self.last_request)
             .flatten()
             .map(|last| last + interval)
+    }
+}
+
+#[derive(Debug, Default)]
+struct Acks {
+    sent: Option<u32>,
+    last_sent: Option<Instant>,
+}
+
+impl Acks {
+    fn next_due(
+        &self,
+        now: Instant,
+        interval: Option<Duration>,
+        last_good: Option<u32>,
+    ) -> Option<Instant> {
+        let interval = interval?;
+        let good = last_good?;
+        if self.sent == Some(good) {
+            return None;
+        }
+
+        Some(self.last_sent.map_or(now, |last| last + interval))
     }
 }
 
@@ -158,6 +204,7 @@ pub(crate) struct ReceiveStage {
     links: Links,
     handshake_done: bool,
     resync: Resync,
+    acks: Acks,
     adaptation: Option<Adaptation>,
     clock_sync: ClockSync,
     last_heard: Instant,
@@ -196,6 +243,9 @@ impl ReceiveStage {
                 keyframe_interval: Duration::from_millis(u64::from(
                     network.keyframe_request_interval_ms,
                 )),
+                ack_interval: (network.frame_ack_interval_ms > 0)
+                    .then(|| Duration::from_millis(u64::from(network.frame_ack_interval_ms))),
+                loss_recovery: network.loss_recovery,
             },
             control: ControlChannel::new(ControlConfig::from(network)),
             video: Reassembler::new(StreamKind::Video, limits),
@@ -204,6 +254,7 @@ impl ReceiveStage {
             links,
             handshake_done: false,
             resync: Resync::default(),
+            acks: Acks::default(),
             adaptation,
             clock_sync: ClockSync::new(network.clock_sync_interval_ms, now),
             last_heard: now,
@@ -263,8 +314,9 @@ impl ReceiveStage {
             self.drain_feedback(now)?;
             self.send_clock_ping(now)?;
             if self.resync.retry_due(now, self.timing.keyframe_interval) {
-                self.send_keyframe_request(now)?;
+                self.send_refresh_request(now)?;
             }
+            self.send_frame_ack(now)?;
             self.adapt_bitrate(now)?;
 
             self.control.flush(&self.transport, self.host)?;
@@ -297,6 +349,8 @@ impl ReceiveStage {
                 .as_ref()
                 .and_then(|audio| audio.reassembler.next_timeout()),
             self.resync.next_retry(self.timing.keyframe_interval),
+            self.acks
+                .next_due(now, self.timing.ack_interval, self.resync.last_good),
             self.adaptation
                 .as_ref()
                 .and_then(|adaptation| adaptation.controller.next_deadline(self.control.rtt())),
@@ -407,7 +461,7 @@ impl ReceiveStage {
                     counters.frames_lost.add(1 + u64::from(unseen));
                     self.congested(now);
                     if !self.resync.predates_last_keyframe(frame) {
-                        self.request_keyframe(frame, now)?;
+                        self.request_refresh(frame, now)?;
                     }
                 }
                 ReassemblyEvent::PacketsMissing {
@@ -430,30 +484,39 @@ impl ReceiveStage {
             self.links.counters.frames_lost.add(u64::from(skipped));
             self.congested(now);
             if !frame.keyframe {
-                self.request_keyframe(frame.frame.wrapping_sub(skipped), now)?;
+                self.request_refresh(frame.frame.wrapping_sub(skipped), now)?;
             }
         }
 
         let Some(stream) = self.stream else {
             self.links.counters.frames_skipped.increment();
-            self.request_keyframe(frame.frame, now)?;
+            self.request_refresh(frame.frame, now)?;
+            return Ok(Flow::Continue);
+        };
+
+        let number = frame.frame;
+        let Ok((header, _)) = VideoFrameHeader::parse(&frame.data) else {
+            self.links.counters.malformed_datagrams.increment();
+            self.request_refresh(number, now)?;
             return Ok(Flow::Continue);
         };
 
         if frame.keyframe {
             self.resync.awaiting_keyframe = false;
-            self.resync.last_keyframe = Some(frame.frame);
+            self.resync.last_keyframe = Some(number);
         } else if self.resync.awaiting_keyframe {
-            self.links.counters.frames_skipped.increment();
-            return Ok(Flow::Continue);
+            match header.recovers_from {
+                Some(reference) if self.resync.can_resume_from(reference) => {
+                    self.resync.awaiting_keyframe = false;
+                    self.links.counters.reference_recoveries.increment();
+                }
+                _ => {
+                    self.links.counters.frames_skipped.increment();
+                    return Ok(Flow::Continue);
+                }
+            }
         }
 
-        let number = frame.frame;
-        let Ok((header, _)) = VideoFrameHeader::parse(&frame.data) else {
-            self.links.counters.malformed_datagrams.increment();
-            self.request_keyframe(number, now)?;
-            return Ok(Flow::Continue);
-        };
         let captured_micros = header.captured_micros;
         let data = FrameBytes::skipping(frame.data, VideoFrameHeader::SIZE);
 
@@ -475,6 +538,7 @@ impl ReceiveStage {
             },
             number,
             stream,
+            recovers_from: header.recovers_from,
             captured_micros,
             received_at: now,
         };
@@ -484,7 +548,7 @@ impl ReceiveStage {
             Err(TrySendError::Full(_)) => {
                 self.links.counters.frames_dropped.increment();
                 self.congested(now);
-                self.request_keyframe(number, now)?;
+                self.request_refresh(number, now)?;
                 Ok(Flow::Continue)
             }
             Err(TrySendError::Disconnected(_)) => Ok(Flow::Ended),
@@ -609,6 +673,7 @@ impl ReceiveStage {
 
         self.stream = Some(description);
         if reopens {
+            self.resync.last_good = None;
             self.links
                 .decode_queue
                 .try_send(DecodeInput::Open(description.codec))
@@ -621,9 +686,10 @@ impl ReceiveStage {
     fn drain_feedback(&mut self, now: Instant) -> Result<(), ClientError> {
         while let Ok(feedback) = self.links.feedback.try_recv() {
             match feedback {
+                Feedback::Decoded { frame } => self.resync.decoded(frame),
                 Feedback::DecodeFailed { frame } => {
                     self.congested(now);
-                    self.request_keyframe(frame, now)?;
+                    self.request_refresh(frame, now)?;
                 }
             }
         }
@@ -667,27 +733,67 @@ impl ReceiveStage {
         }
     }
 
-    fn request_keyframe(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
+    fn request_refresh(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
         let already_waiting = self.resync.awaiting_keyframe;
         self.resync.awaiting_keyframe = true;
         self.resync.missing_frame = frame;
+        if !already_waiting {
+            self.resync.recovery_tried = false;
+        }
 
         if !already_waiting || self.resync.retry_due(now, self.timing.keyframe_interval) {
-            self.send_keyframe_request(now)?;
+            self.send_refresh_request(now)?;
         }
 
         Ok(())
     }
 
-    fn send_keyframe_request(&mut self, now: Instant) -> Result<(), ClientError> {
-        let request = ControlMessage::RequestKeyframe {
-            frame: self.resync.missing_frame,
+    fn send_refresh_request(&mut self, now: Instant) -> Result<(), ClientError> {
+        let frame = self.resync.missing_frame;
+        let recovery = self.resync.last_good.filter(|_| {
+            self.timing.loss_recovery == LossRecovery::Reference && !self.resync.recovery_tried
+        });
+        let request = match recovery {
+            Some(last_good) => ControlMessage::RequestRecovery { frame, last_good },
+            None => ControlMessage::RequestKeyframe { frame },
         };
 
         match self.control.send(request, now) {
             Ok(_) => {
                 self.resync.last_request = Some(now);
-                self.links.counters.keyframe_requests_sent.increment();
+                if recovery.is_some() {
+                    self.resync.recovery_tried = true;
+                    self.links.counters.recovery_requests_sent.increment();
+                } else {
+                    self.links.counters.keyframe_requests_sent.increment();
+                }
+                Ok(())
+            }
+            Err(NetError::ControlWindowFull { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn send_frame_ack(&mut self, now: Instant) -> Result<(), ClientError> {
+        let Some(frame) = self.resync.last_good else {
+            return Ok(());
+        };
+        if self
+            .acks
+            .next_due(now, self.timing.ack_interval, Some(frame))
+            .is_none_or(|due| due > now)
+        {
+            return Ok(());
+        }
+
+        match self
+            .control
+            .send(ControlMessage::AcknowledgeFrame { frame }, now)
+        {
+            Ok(_) => {
+                self.acks.sent = Some(frame);
+                self.acks.last_sent = Some(now);
+                self.links.counters.frame_acks_sent.increment();
                 Ok(())
             }
             Err(NetError::ControlWindowFull { .. }) => Ok(()),
@@ -758,7 +864,7 @@ mod tests {
         stage: Option<JoinHandle<Result<(), ClientError>>>,
         format: SharedFormat,
         decode: Receiver<DecodeInput>,
-        _feedback: Sender<Feedback>,
+        feedback: Sender<Feedback>,
     }
 
     impl Rig {
@@ -819,7 +925,7 @@ mod tests {
                 stage: Some(stage),
                 format,
                 decode,
-                _feedback: feedback_sender,
+                feedback: feedback_sender,
             }
         }
 
@@ -915,10 +1021,46 @@ mod tests {
     }
 
     fn video_frame(captured_micros: u64, len: usize, seed: u8) -> Vec<u8> {
+        recovery_frame(captured_micros, None, len, seed)
+    }
+
+    fn recovery_frame(
+        captured_micros: u64,
+        recovers_from: Option<u32>,
+        len: usize,
+        seed: u8,
+    ) -> Vec<u8> {
         let mut frame = Vec::new();
-        VideoFrameHeader { captured_micros }.write(&mut frame);
+        VideoFrameHeader {
+            captured_micros,
+            recovers_from,
+        }
+        .write(&mut frame);
         frame.extend(payload(len, seed));
         frame
+    }
+
+    fn decoded_through(rig: &Rig, packetizer: &mut Packetizer, frames: u32) {
+        for frame in 0..frames {
+            rig.send(
+                &packetizer
+                    .packetize(frame, frame == 0, &video_frame(0, 64, 0))
+                    .unwrap(),
+            );
+            let video = rig.next_video();
+            rig.feedback
+                .send(Feedback::Decoded {
+                    frame: video.number,
+                })
+                .unwrap();
+        }
+    }
+
+    fn next_message_matching(
+        rig: &Rig,
+        wanted: impl Fn(&ControlMessage) -> bool,
+    ) -> Option<ControlMessage> {
+        std::iter::from_fn(|| rig.next_control_message()).find(wanted)
     }
 
     fn cursor_bytes(message: &CursorMessage) -> Vec<u8> {
@@ -1017,6 +1159,110 @@ mod tests {
         assert_eq!(stats.bitrate_hints_sent, 1);
         assert_eq!(stats.bitrate_target_kbps, Some(60_000));
         assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_loss_after_decoded_frames_asks_to_recover_from_the_last_good_one() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 3);
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+        packetizer
+            .packetize(3, false, &video_frame(0, 64, 3))
+            .unwrap();
+        rig.send(
+            &packetizer
+                .packetize(4, false, &video_frame(0, 64, 4))
+                .unwrap(),
+        );
+        let request = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestRecovery { .. })
+        });
+        let Some(ControlMessage::RequestRecovery { frame, last_good }) = request else {
+            panic!("no recovery request in {request:?}");
+        };
+        rig.send(
+            &packetizer
+                .packetize(5, false, &recovery_frame(0, Some(3), 64, 5))
+                .unwrap(),
+        );
+        rig.send(
+            &packetizer
+                .packetize(6, false, &recovery_frame(0, Some(last_good), 64, 6))
+                .unwrap(),
+        );
+        let recovered = rig.next_video();
+        let skipped = rig.decode.recv_timeout(Duration::from_millis(100));
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(frame, 3);
+        assert!((1..=2).contains(&last_good));
+        assert_eq!(recovered.number, 6);
+        assert_eq!(recovered.recovers_from, Some(last_good));
+        assert!(skipped.is_err());
+        assert_eq!(stats.recovery_requests_sent, 1);
+        assert_eq!(stats.reference_recoveries, 1);
+        assert_eq!(stats.frames_skipped, 2);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn decoded_frames_are_acknowledged_to_the_host() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 1);
+        let ack = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::AcknowledgeFrame { .. })
+        });
+
+        assert_eq!(ack, Some(ControlMessage::AcknowledgeFrame { frame: 0 }));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn an_unanswered_recovery_request_is_retried_as_a_keyframe_request() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 2);
+        packetizer
+            .packetize(2, false, &video_frame(0, 64, 2))
+            .unwrap();
+        rig.send(
+            &packetizer
+                .packetize(3, false, &video_frame(0, 64, 3))
+                .unwrap(),
+        );
+        let retry = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestKeyframe { .. })
+        });
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(retry, Some(ControlMessage::RequestKeyframe { frame: 2 }));
+        assert_eq!(stats.recovery_requests_sent, 1);
+        assert!(stats.keyframe_requests_sent >= 1);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn the_last_good_frame_never_moves_back_and_a_recovery_needs_it() {
+        let mut resync = Resync::default();
+
+        resync.decoded(5);
+        resync.decoded(4);
+        resync.last_keyframe = Some(2);
+
+        assert_eq!(resync.last_good, Some(5));
+        assert!(resync.can_resume_from(5));
+        assert!(resync.can_resume_from(2));
+        assert!(!resync.can_resume_from(6));
+        assert!(!resync.can_resume_from(1));
+        assert!(!Resync::default().can_resume_from(0));
     }
 
     #[test]

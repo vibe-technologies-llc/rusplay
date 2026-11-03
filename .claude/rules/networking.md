@@ -37,7 +37,14 @@ paths:
   that one-datagram redundancy and the periodic snapshot as its only loss repair. See `input.md` for the full contract.
 - Loss is handled per frame: Reed-Solomon FEC shards (`FecScheme`, overhead from
   `network.fec_overhead_percent`) recover small losses, and an unrecoverable frame triggers a
-  `RequestKeyframe`/intra-refresh request instead of retransmission.
+  `RequestRecovery` or `RequestKeyframe` instead of retransmission (below).
+- `ControlMessage::AcknowledgeFrame { frame }` (tag 10, client to host, 5 bytes) names the newest
+  frame the client's decoder decoded on an unbroken reference chain; the host hands it to the
+  encoder as a confirmed reference candidate. `ControlMessage::RequestRecovery { frame, last_good }`
+  (tag 11, client to host, 9 bytes) asks for a refresh after the lost `frame` that references
+  nothing newer than `last_good`, the client's last good frame; the host answers with a recovery
+  frame or, when its encoder cannot, a keyframe. Both are big-endian u32s after the tag.
+  `RequestKeyframe { frame }` stays for a client with no good frame.
 - FEC is `reed-solomon-simd` (pure Rust, Leopard codes). A frame's data fragments are split into
   balanced blocks of at most `data_shards` fragments (`FecScheme::blocks`), each block with its
   own parity shards (`parity_shards` scaled to the block size, at least one), so a large keyframe
@@ -64,10 +71,14 @@ paths:
   more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst, and
   `network.pacing_max_mbps` (default 0, off) paces a frame at that rate when it takes less than
   the window.
-- Every video frame handed to the `Packetizer` starts with the 8-byte big-endian
+- Every video frame handed to the `Packetizer` starts with the 13-byte big-endian
   `VideoFrameHeader`: the capture time in microseconds on the host's stream clock (zero at session
-  start, `rusplay-host`'s `StreamClock`). It is part of the frame, so the first fragment carries it
-  and FEC covers it. The receiver strips it after reassembly and treats a frame shorter than the
+  start, `rusplay-host`'s `StreamClock`), a flags byte (bit 0 recovery; other bits are
+  `UnknownVideoFrameFlags`) and a u32 reference frame number. A recovery frame
+  (`recovers_from: Some(reference)`) is a non-keyframe that references only frame `reference` or
+  older frames the client decoded before it, so a client that decoded `reference` can resume on
+  it; without the flag the reference must be zero (`ReferenceWithoutRecovery`). It is part of the
+  frame, so the first fragment carries it and FEC covers it. The receiver strips it after reassembly and treats a frame shorter than the
   header as malformed (counted, answered with a keyframe request).
 - `ControlMessage::ClockPing { sent_micros }` (tag 8, client to host) and
   `ClockPong { sent_micros, host_micros }` (tag 9, host to client) are an NTP-style exchange on the
@@ -116,8 +127,8 @@ paths:
   8-bit. An empty intersection is `NoCommonFormat { encodable, decodable }` on both ends: the host
   still answers the `Hello` with its set before its `Goodbye`, and the client computes the same
   empty intersection from it. The order is unit tested in `rusplay-core/src/format.rs`.
-- The control channel (hello, keyframe requests, loss reports, bitrate hints, keepalives,
-  stream format, clock ping and pong, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+- The control channel (hello, keyframe and recovery requests, frame acknowledgements, loss
+  reports, bitrate hints, keepalives, stream format, clock ping and pong, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.
 
 ## Control channel
@@ -361,7 +372,7 @@ paths:
   `ReassemblyEvent::FrameLost` immediately and its late packets are dropped as stale. Pending
   frames are also lost when they exceed `max_pending_frames` or live longer than
   `network.reassembly_timeout_ms` (`poll_timeouts`, `next_timeout`). The caller answers a
-  `FrameLost` with `ControlMessage::RequestKeyframe`.
+  `FrameLost` with `ControlMessage::RequestRecovery` or `RequestKeyframe` (`client.md`).
 - Frame numbers and sequences use serial-number arithmetic (`wrapping_sub` as `i32`), so wrap is
   transparent. A sender that restarts its frame numbering needs `Reassembler::reset`.
 - `ReassemblyEvent::PacketsMissing` reports a sequence gap for `ControlMessage::ReportLoss`. A

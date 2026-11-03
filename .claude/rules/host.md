@@ -101,7 +101,7 @@ paths:
     `NoCommonFormat`, a session failure. After a session takeover the format is never
     renegotiated, since the encoder is already built for it: the new client's `Hello` must list the
     agreed format (`resume_after_takeover`), otherwise the session ends with `NoCommonFormat`.
-    `RequestKeyframe`, `BitrateHint` and `ReportLoss` go to
+    `RequestKeyframe`, `RequestRecovery`, `AcknowledgeFrame`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
     `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.
     A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped to
@@ -168,6 +168,20 @@ paths:
   (`frames_repeated`), so a static screen still answers. The forced flag is cleared only once a frame reached the send queue, so a
   pipeline that produced nothing (an import that fell back to shared memory, a repeat with no
   input yet) or a full queue leaves the next frame a keyframe.
+- Recovery against a reference (`encode.rs`): the encode stage keeps the last 256 sent frames as
+  `(number, OutputRef)` (`References`), where `OutputRef` is the encoder epoch (bumped by
+  `GpuPipeline` whenever it opens an encoder) and the `OutputIndex` the pipeline reports through
+  `VideoPipeline::last_output`. `AcknowledgeFrame` (newest wins in the mailbox, which it does not
+  wake) maps to `VideoPipeline::acknowledge`. `RequestRecovery { frame, last_good }` (coalesced to
+  the earliest of each) is ignored when a keyframe or recovery frame numbered after `frame` was
+  already sent (`recovery_requests_ignored`), and otherwise calls `VideoPipeline::recover` on the
+  output of `last_good`; a `Reference` the history can map back to a frame number at or before
+  `last_good` makes the next frame (a repeat of the last input on a static screen) a recovery
+  frame whose `Outgoing::recovers_from` names that number (`reference_recoveries`). Everything
+  else forces a keyframe: an unknown or too old `last_good`, one before the last keyframe, an
+  output of an older encoder epoch, or an encoder that answers `Recovery::Keyframe` (the default).
+  A pending keyframe wins over a recovery, and a full queue drops a pending recovery for a
+  keyframe.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
   - DMA-BUF frames are the default path and are never copied: `GpuPipeline` imports them with its
     own `DmaBufImporter` (created on the first DMA-BUF frame, its cache keeping a capture
@@ -367,7 +381,7 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
-  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, format negotiation with fallback and with no overlap, keyframe repeat and suppression, bitrate hints, `Goodbye`
+  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, format negotiation with fallback and with no overlap, keyframe repeat and suppression, recovery against a reference and its keyframe fallbacks, bitrate hints, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the

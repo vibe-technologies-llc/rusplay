@@ -18,6 +18,7 @@ use rusplay_core::{
     ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
     Timestamp,
 };
+use rusplay_encode::OutputIndex;
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, PairingTiming, PeerRecord, PeerStore,
     Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectInitiator,
@@ -33,7 +34,7 @@ use tempfile::TempDir;
 use crate::{
     Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream, Stage,
     encode::PipelineFactory,
-    pipeline::{StreamFormat, VideoPipeline},
+    pipeline::{OutputRef, PipelineRecovery, StreamFormat, VideoPipeline},
 };
 
 const PIN: &str = "583014";
@@ -170,6 +171,7 @@ struct FakePipeline {
     format: CodecFormat,
     last: Option<u8>,
     encoded: u32,
+    recovers: bool,
     resolution: Option<Resolution>,
     stream: Option<Resolution>,
     bitrate: Arc<AtomicU32>,
@@ -227,12 +229,28 @@ impl VideoPipeline for FakePipeline {
             siting: ChromaSiting::Center,
         })
     }
+
+    fn last_output(&self) -> Option<OutputRef> {
+        self.encoded.checked_sub(1).map(|last| OutputRef {
+            epoch: 0,
+            index: OutputIndex(u64::from(last)),
+        })
+    }
+
+    fn recover(&mut self, last_good: OutputRef) -> PipelineRecovery {
+        if self.recovers {
+            PipelineRecovery::Reference(last_good)
+        } else {
+            PipelineRecovery::Keyframe
+        }
+    }
 }
 
 struct FakeFactory {
     bitrate: Arc<AtomicU32>,
     stream: Option<Resolution>,
     encodable: FormatSet,
+    recovers: bool,
 }
 
 impl PipelineFactory for FakeFactory {
@@ -245,6 +263,7 @@ impl PipelineFactory for FakeFactory {
             format,
             last: None,
             encoded: 0,
+            recovers: self.recovers,
             resolution: None,
             stream: self.stream,
             bitrate: self.bitrate,
@@ -257,6 +276,16 @@ fn encoding_factory(bitrate: &Arc<AtomicU32>, encodable: FormatSet) -> Box<dyn P
         bitrate: Arc::clone(bitrate),
         stream: None,
         encodable,
+        recovers: false,
+    })
+}
+
+fn recovering_factory(bitrate: &Arc<AtomicU32>) -> Box<dyn PipelineFactory> {
+    Box::new(FakeFactory {
+        bitrate: Arc::clone(bitrate),
+        stream: None,
+        encodable: FormatSet::ALL,
+        recovers: true,
     })
 }
 
@@ -269,6 +298,7 @@ fn scaling_factory(bitrate: &Arc<AtomicU32>, stream: Resolution) -> Box<dyn Pipe
         bitrate: Arc::clone(bitrate),
         stream: Some(stream),
         encodable: FormatSet::ALL,
+        recovers: false,
     })
 }
 
@@ -323,6 +353,7 @@ impl PipelineFactory for LosesFirstKeyframeFactory {
                 format,
                 last: None,
                 encoded: 1,
+                recovers: false,
                 resolution: None,
                 stream: None,
                 bitrate: Arc::default(),
@@ -348,6 +379,7 @@ struct TestClient {
     cursor: Reassembler,
     frames: Vec<ReceivedFrame>,
     captures: Vec<u64>,
+    recoveries: Vec<Option<u32>>,
     audio_packets: Vec<ReassembledFrame>,
     cursor_messages: Vec<CursorMessage>,
     messages: Vec<ControlMessage>,
@@ -373,6 +405,7 @@ impl TestClient {
             cursor: Reassembler::new(StreamKind::Cursor, ReassemblyLimits::from(&network)),
             frames: Vec::new(),
             captures: Vec::new(),
+            recoveries: Vec::new(),
             audio_packets: Vec::new(),
             cursor_messages: Vec::new(),
             messages: Vec::new(),
@@ -459,6 +492,7 @@ impl TestClient {
                 if let ReassemblyEvent::Frame(frame) = event {
                     let (header, body) = VideoFrameHeader::parse(&frame.data).unwrap();
                     self.captures.push(header.captured_micros);
+                    self.recoveries.push(header.recovers_from);
                     self.frames.push(ReceivedFrame {
                         number: frame.frame,
                         keyframe: frame.keyframe,
@@ -835,6 +869,91 @@ fn a_keyframe_request_on_a_static_screen_repeats_the_last_frame_as_a_keyframe() 
     );
     assert_eq!(stats.frames_repeated, 1);
     assert_eq!(stats.keyframe_requests, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_recovery_request_the_pipeline_cannot_serve_is_answered_with_a_keyframe() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 3);
+    client.send(ControlMessage::RequestRecovery {
+        frame: 3,
+        last_good: 1,
+    });
+    let repeated = client.pump_until(|client| client.frames.len() >= 4);
+    let stats = stream.stats();
+
+    assert!(repeated);
+    assert!(client.frames[3].keyframe);
+    assert_eq!(client.recoveries[3], None);
+    assert_eq!(stats.recovery_requests, 1);
+    assert_eq!(stats.reference_recoveries, 0);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_recovery_request_is_answered_against_the_named_reference() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), recovering_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 3);
+    client.send(ControlMessage::AcknowledgeFrame { frame: 1 });
+    client.send(ControlMessage::RequestRecovery {
+        frame: 2,
+        last_good: 1,
+    });
+    let repeated = client.pump_until(|client| client.frames.len() >= 4);
+    client.send(ControlMessage::RequestRecovery {
+        frame: 2,
+        last_good: 1,
+    });
+    let settled = client.pump_until(|_| stream.stats().recovery_requests >= 2);
+    client.pump(Duration::from_millis(100), |_| false);
+    let stats = stream.stats();
+
+    assert!(repeated);
+    assert!(settled);
+    assert!(!client.frames[3].keyframe);
+    assert_eq!(client.frames[3].fill, client.frames[2].fill);
+    assert_eq!(client.recoveries[..4], [None, None, None, Some(1)]);
+    assert_eq!(client.frames.len(), 4);
+    assert_eq!(stats.reference_recoveries, 1);
+    assert_eq!(stats.recovery_requests_ignored, 1);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_recovery_against_a_frame_before_the_last_keyframe_is_a_keyframe() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), recovering_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= 3);
+    client.send(ControlMessage::RequestKeyframe { frame: 3 });
+    client.pump_until(|client| client.frames.len() >= 4);
+    client.send(ControlMessage::RequestRecovery {
+        frame: 4,
+        last_good: 2,
+    });
+    let repeated = client.pump_until(|client| client.frames.len() >= 5);
+
+    assert!(repeated);
+    assert!(client.frames[3].keyframe);
+    assert!(client.frames[4].keyframe);
+    assert_eq!(client.recoveries[4], None);
     stream.stop().unwrap();
 }
 

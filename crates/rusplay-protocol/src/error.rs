@@ -100,4 +100,8 @@ pub enum ProtocolError {
         "mastering display minimum of {min_units} is not below its maximum of {max_units} units of 0.0001 cd/m²"
     )]
     MasteringLuminanceInverted { min_units: u32, max_units: u32 },
+    #[error("video frame flags {0:#04x} carry unknown bits")]
+    UnknownVideoFrameFlags(u8),
+    #[error("video frame names reference frame {0} without the recovery flag")]
+    ReferenceWithoutRecovery(u32),
 }

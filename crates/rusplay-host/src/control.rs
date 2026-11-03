@@ -23,6 +23,7 @@ use crate::{
     HostError,
     accept::{Replay, refresh_peers},
     datagrams::ForwardedDatagram,
+    mailbox::RecoveryRequest,
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
@@ -431,6 +432,14 @@ impl ControlStage {
                 }
                 ControlEvent::Received(ControlMessage::RequestKeyframe { frame }) => {
                     shared.mailbox.request_keyframe(frame);
+                }
+                ControlEvent::Received(ControlMessage::RequestRecovery { frame, last_good }) => {
+                    shared
+                        .mailbox
+                        .request_recovery(RecoveryRequest { frame, last_good });
+                }
+                ControlEvent::Received(ControlMessage::AcknowledgeFrame { frame }) => {
+                    shared.mailbox.acknowledge(frame);
                 }
                 ControlEvent::Received(ControlMessage::ReportLoss { count, .. }) => {
                     shared.counters.packets_reported_lost.add(u64::from(count));
