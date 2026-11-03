@@ -92,7 +92,7 @@ impl Gauge {
         self.0.store(smoothed, Ordering::Relaxed);
     }
 
-    fn get(&self) -> Option<Duration> {
+    pub(crate) fn get(&self) -> Option<Duration> {
         match self.0.load(Ordering::Relaxed) {
             0 => None,
             nanos => Some(Duration::from_nanos(nanos)),

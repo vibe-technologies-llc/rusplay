@@ -142,6 +142,10 @@ pub enum ConfigError {
     ZeroDecodeQueue,
     #[error("present frame latency {0} is outside 1..=3")]
     PresentFrameLatencyOutOfRange(u8),
+    #[error("present margin {0} us is above 50000 us")]
+    PresentMarginOutOfRange(u32),
+    #[error("present jitter target {0} us is above 100000 us")]
+    PresentJitterOutOfRange(u32),
     #[error("peers.host_file is set to an empty path")]
     EmptyHostPeersFile,
     #[error("peers.client_file is set to an empty path")]
@@ -247,6 +251,8 @@ impl ConfigError {
             Self::ZeroVbvFrames => Some("video.vbv_frames"),
             Self::ZeroDecodeQueue => Some("video.decode_queue_frames"),
             Self::PresentFrameLatencyOutOfRange(_) => Some("video.present_frame_latency"),
+            Self::PresentMarginOutOfRange(_) => Some("video.present_margin_us"),
+            Self::PresentJitterOutOfRange(_) => Some("video.present_jitter_us"),
             Self::SigmoidCenterOutOfRange(_) => Some("scaling.upscale.sigmoid_center"),
             Self::SigmoidSlopeOutOfRange(_) => Some("scaling.upscale.sigmoid_slope"),
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),

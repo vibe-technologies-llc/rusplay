@@ -30,7 +30,7 @@ use crate::{
 };
 
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const OUTPUT_TEXTURES: usize = 4;
+const OUTPUT_TEXTURES: usize = 6;
 const UPLOAD_ROW_ALIGNMENT: u32 = 4;
 const DECODED_PLANES: usize = 3;
 const SCRATCH_TEXTURES: usize = 2;
@@ -126,6 +126,7 @@ struct Retained {
     captured: Timestamp,
     received_at: Instant,
     decoded_at: Instant,
+    captured_at: Option<Instant>,
 }
 
 impl Retained {
@@ -139,6 +140,7 @@ impl Retained {
             received_at: self.received_at,
             decoded_at: self.decoded_at,
             submitted_at,
+            captured_at: self.captured_at,
             texture,
         }
     }
@@ -317,6 +319,8 @@ impl PresentStage {
         if let Some(lease) = lease {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
+        let submitted_at = Instant::now();
+        let captured_at = record_presented(&links.counters, video.captured_micros, submitted_at);
         let retained = Retained {
             image: unscaled.unwrap_or_else(|| output.clone()),
             presented: target,
@@ -328,10 +332,9 @@ impl PresentStage {
             captured: Timestamp::from_micros(video.captured_micros),
             received_at: video.received_at,
             decoded_at: video.decoded_at,
+            captured_at,
         };
 
-        let submitted_at = Instant::now();
-        record_presented(&links.counters, video.captured_micros, submitted_at);
         links
             .sink
             .present(retained.frame(submitted_at, output.texture));
@@ -359,11 +362,19 @@ fn unpack_input(
     }
 }
 
-fn record_presented(counters: &Counters, captured_micros: u64, submitted_at: Instant) {
+fn record_presented(
+    counters: &Counters,
+    captured_micros: u64,
+    submitted_at: Instant,
+) -> Option<Instant> {
     counters.frames_presented.increment();
-    if let Some(latency) = counters.clock.since_capture(captured_micros, submitted_at) {
-        counters.capture_to_present.record(latency);
-    }
+
+    let latency = counters
+        .clock
+        .since_capture(captured_micros, submitted_at)?;
+    counters.capture_to_present.record(latency);
+
+    submitted_at.checked_sub(latency)
 }
 
 struct Chain<'a> {

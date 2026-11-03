@@ -6,11 +6,14 @@ mod follow;
 mod layout;
 mod output;
 mod overlay;
+mod pacing;
+mod presentation;
 mod surface;
 
 use std::{
     sync::Arc,
     thread::{self, JoinHandle},
+    time::Instant,
 };
 
 use parking_lot::{Condvar, Mutex};
@@ -28,6 +31,8 @@ use rusplay_scale::ColorVolume;
 pub use crate::window::{
     layout::{LogicalArea, WindowLayout},
     overlay::OverlayText,
+    pacing::PresentationFlags,
+    presentation::PresentationStats,
 };
 use crate::{
     ClientError, ClientStream, DisplayImage, FrameSink, Gpu, LatestCursor, PresentedFrame, Stage,
@@ -41,6 +46,8 @@ use crate::{
         follow::DisplayFollower,
         output::{Display, SurfaceOutput},
         overlay::OverlayLayer,
+        pacing::{Feedback, PACED_FRAMES, PacedQueue, Pacer, PacingOptions, Submission},
+        presentation::PresentationCounters,
         surface::ChildSurface,
     },
 };
@@ -62,6 +69,7 @@ struct Shared {
     wake: Condvar,
     color_target: Mutex<ColorVolume>,
     cursors_skipped: Arc<Counter>,
+    presentation: PresentationCounters,
 }
 
 impl Shared {
@@ -71,7 +79,15 @@ impl Shared {
             wake: Condvar::new(),
             color_target: Mutex::new(color_target),
             cursors_skipped: Arc::new(Counter::default()),
+            presentation: PresentationCounters::default(),
         }
+    }
+
+    fn arrive(&self, frame: PresentedFrame) -> Option<PresentedFrame> {
+        let replaced = self.pending.lock().frame.replace(frame);
+        self.wake.notify_one();
+
+        replaced
     }
 
     fn set_overlay(&self, overlay: Option<OverlayText>) {
@@ -130,7 +146,7 @@ pub struct WindowSink {
 
 impl FrameSink for WindowSink {
     fn present(&mut self, frame: PresentedFrame) {
-        let replaced = self.shared.update(|pending| pending.frame.replace(frame));
+        let replaced = self.shared.arrive(frame);
 
         drop(replaced);
     }
@@ -186,6 +202,11 @@ impl StreamWindow {
         let display = display_for(config)?;
         let options = SurfaceOptions::choose(&surface, &adapter, config, &display)?;
         let shared = Arc::new(Shared::new(options.output.encoding.target));
+        let pacing = PacingOptions::from(&config.video);
+        shared
+            .presentation
+            .set_feedback(child.has_presentation_feedback());
+        shared.presentation.set_margin(pacing.margin);
         let presenter = Presenter {
             composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
             cursor_layer: CursorLayer::new(
@@ -206,6 +227,10 @@ impl StreamWindow {
             destination: None,
             mapped: false,
             frame: None,
+            fresh: false,
+            target: None,
+            pacer: Pacer::new(pacing),
+            paced: PacedQueue::new(PACED_FRAMES),
             cursor: None,
             overlay: None,
         };
@@ -361,6 +386,10 @@ impl StreamWindow {
         Ok(true)
     }
 
+    pub fn presentation(&self) -> PresentationStats {
+        self.shared.presentation.snapshot()
+    }
+
     pub fn cursors_skipped(&self) -> u64 {
         self.shared.cursors_skipped.get()
     }
@@ -495,6 +524,13 @@ fn wgpu_present_mode(mode: PresentMode) -> wgpu::PresentMode {
     }
 }
 
+struct Wake {
+    changed: bool,
+    arrived: Option<PresentedFrame>,
+    layout: Option<WindowLayout>,
+    display: Option<DisplayImage>,
+}
+
 struct Presenter {
     gpu: Gpu,
     surface: wgpu::Surface<'static>,
@@ -511,6 +547,10 @@ struct Presenter {
     destination: Option<(u32, u32)>,
     mapped: bool,
     frame: Option<PresentedFrame>,
+    fresh: bool,
+    target: Option<Instant>,
+    pacer: Pacer,
+    paced: PacedQueue<PresentedFrame>,
     cursor: Option<LatestCursor>,
     overlay: Option<Arc<OverlayText>>,
 }
@@ -518,36 +558,84 @@ struct Presenter {
 impl Presenter {
     fn run(mut self, shared: &Shared) -> Result<(), ClientError> {
         loop {
-            let (layout, display) = {
-                let mut pending = shared.pending.lock();
-                while !pending.dirty && !pending.stop {
-                    shared.wake.wait(&mut pending);
-                }
-                if pending.stop {
-                    break;
-                }
-
-                pending.dirty = false;
-                if let Some(frame) = pending.frame.take()
-                    && self.choice.accepts(frame.color)
-                {
-                    self.frame = Some(frame);
-                }
-                if let Some(cursor) = pending.cursor.take() {
-                    self.cursor = Some(cursor);
-                }
-                self.overlay.clone_from(&pending.overlay);
-                (pending.layout, pending.display.take())
+            let Some(wake) = self.wait(shared) else {
+                break;
             };
 
-            if let Some(image) = display {
+            self.collect_feedback(shared)?;
+            if let Some(frame) = wake.arrived
+                && self.choice.accepts(frame.color)
+            {
+                let slot = self.pacer.schedule(Instant::now(), frame.captured_at);
+                shared.presentation.coalesced(self.paced.push(slot, frame));
+            }
+
+            let (due, skipped) = self.paced.take_due(Instant::now());
+            shared.presentation.coalesced(skipped);
+            let drawn = due.is_some();
+            if let Some((slot, frame)) = due {
+                self.frame = Some(frame);
+                self.fresh = true;
+                self.target = slot.target;
+            }
+
+            if let Some(image) = wake.display {
                 self.follow(&image, shared);
             }
-            let gpu = self.gpu.clone();
-            gpu.guard(|| self.draw(layout))?;
+            if wake.changed || drawn {
+                let gpu = self.gpu.clone();
+                gpu.guard(|| self.draw(wake.layout))?;
+            }
         }
 
+        self.paced.clear();
         self.frame = None;
+        Ok(())
+    }
+
+    fn wait(&mut self, shared: &Shared) -> Option<Wake> {
+        let mut pending = shared.pending.lock();
+
+        loop {
+            if pending.stop {
+                return None;
+            }
+            if pending.dirty || pending.frame.is_some() {
+                break;
+            }
+            match self.paced.next_due() {
+                Some(due) if due <= Instant::now() => break,
+                Some(due) => {
+                    shared.wake.wait_until(&mut pending, due);
+                }
+                None => shared.wake.wait(&mut pending),
+            }
+        }
+
+        if let Some(cursor) = pending.cursor.take() {
+            self.cursor = Some(cursor);
+        }
+        self.overlay.clone_from(&pending.overlay);
+
+        Some(Wake {
+            changed: std::mem::take(&mut pending.dirty),
+            arrived: pending.frame.take(),
+            layout: pending.layout,
+            display: pending.display.take(),
+        })
+    }
+
+    fn collect_feedback(&mut self, shared: &Shared) -> Result<(), ClientError> {
+        self.child.dispatch()?;
+
+        for feedback in self.child.take_feedback() {
+            if let Feedback::Presented(presented) = &feedback {
+                self.pacer.observe(presented);
+            }
+            shared.presentation.record(&feedback);
+        }
+        shared.presentation.set_margin(self.pacer.margin());
+
         Ok(())
     }
 
@@ -666,6 +754,12 @@ impl Presenter {
         }
 
         self.gpu.queue.submit([encoder.finish()]);
+        self.child.request_feedback(Submission {
+            submitted_at: Instant::now(),
+            captured_at: frame.captured_at.filter(|_| self.fresh),
+            target: self.target.take(),
+        });
+        self.fresh = false;
         self.gpu.queue.present(texture);
         self.mapped = true;
 

@@ -95,7 +95,9 @@ paths:
 - Encoded frames carry the host's capture time (`VideoFrameHeader`, skipped by the receive
   stage through `FrameBytes::skipping`, so the reassembled frame is not moved) as their `Timestamp` and as `captured_micros` through `DecodedVideo` to
   `PresentedFrame::captured`. `PresentedFrame` also has `received_at`, `decoded_at` and
-  `submitted_at` instants.
+  `submitted_at` instants, and `captured_at`, the capture mapped onto the client's `Instant`
+  clock through `HostClock` at submission (`None` before the first pong); a re-scaled retained
+  frame keeps its original `captured_at`.
 - Latency (`clock.rs`): `ClockSync` (receive-owned, sans-IO) turns `ClockPong`s into a host minus
   client offset (`networking.md`) and publishes it in `HostClock`, which lives in `Counters` so the
   receive, decode and present threads read it. `HostClock::since_capture(captured, at)` maps a
@@ -130,8 +132,9 @@ paths:
   `submitted_at` new). It is not counted in `frames_presented`, so a static remote screen
   follows a resize, fullscreen or the header hiding without new video.
 - Output textures are `rgba16float` with `TEXTURE_BINDING | STORAGE_BINDING | COPY_SRC | COPY_DST`, pooled up
-  to four per target size as `Arc<wgpu::Texture>`; a texture is reused once only the pool holds it,
-  so the app may keep a `PresentedFrame` for as long as it displays it. If all four are held the
+  to six per target size as `Arc<wgpu::Texture>` (created only when every existing one is held:
+  the window's drawn frame, its two paced frames, the pending one and the retained one); a texture is reused once only the pool holds it,
+  so the app may keep a `PresentedFrame` for as long as it displays it. If all six are held the
   frame is skipped (`frames_unpresented`). The app's later submissions on the same queue are
   ordered after the present stage's, so no fence is needed.
 - The hand-off is `FrameSink` (`present(&mut self, PresentedFrame)` on the present thread, also
@@ -304,8 +307,11 @@ paths:
   next commit); the caller sets `ClientStream::set_target(layout.pixels)` so the present stage
   scales to exactly the swapchain size.
 - The `rusplay-client-window` thread waits on one condvar for a new frame, a layout change, a
-  cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message) or stop,
-  and keeps the last frame so a cursor move redraws without a new picture. It draws only a frame
+  cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message), stop,
+  or the due time of the earliest paced frame (`wait_until`, the one deliberate wait on the frame
+  path), and keeps the last drawn frame so a cursor move redraws without a new picture. A frame
+  arriving only wakes it (`Shared::arrive`, no `dirty`): it is scheduled and drawn when due, while
+  a layout, cursor, overlay or display change redraws the current frame at once. It draws only a frame
   whose texture size equals `layout.pixels`; anything else is a frame scaled for an older layout
   and is skipped; a `None` layout unmaps the subsurface (a null buffer attach and commit) and the
   next drawn frame maps it again. It (re)configures the swapchain to that size, sets the viewport destination to
@@ -353,9 +359,60 @@ paths:
   `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
   `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the
   Wayland objects are destroyed.
+- Presentation feedback (`window/surface.rs`, `window/presentation.rs`): `ChildSurface` binds
+  `wp_presentation` (versions 1 and 2) on its queue when the compositor offers it; it is optional
+  (`PresentationStats::feedback` says whether it exists). Right after `Queue::submit` and before
+  `Queue::present`, the window thread sends `wp_presentation.feedback` for the child surface
+  with a `Submission` (submit instant, `captured_at` for the first draw of a frame only, the
+  targeted vblank). The feedback request is double-buffered surface state applied by the next
+  `wl_surface.commit`, and the swapchain's present is what commits: Mesa's Vulkan WSI calls
+  `wl_surface_commit` inside `vkQueuePresentKHR` on the same `wl_display`, so the request is
+  marshalled ahead of that commit in the one libwayland buffer, the same ordering
+  `set_destination` already relies on. The only other commit on the surface is `unmap`, which
+  never follows a feedback request. Events are read by whoever reads the display (gpui's loop or
+  the output follower) and dispatched by the window thread on every wake (`ChildSurface::dispatch`,
+  then `take_feedback`, at most 64 outcomes kept). `presented` timestamps come in the clock the
+  compositor names in `clock_id` (realtime, monotonic, monotonic-raw or boottime are read with
+  `clock_gettime`; another clock drops the sample) and are mapped onto `Instant` by the distance
+  from that clock's now (`pacing::instant_of`). `StreamWindow::presentation()` returns
+  `PresentationStats`: presented, discarded and coalesced frame counts, smoothed submit-to-display
+  (`display_latency`) and capture-to-display latency, the last `refresh` (`None` for a variable or
+  unknown rate, which the protocol reports as 0), the current pacing margin and the last
+  `PresentationFlags` (`vsync`, `hw_clock`, `hw_completion`, `zero_copy`).
+- Pacing (`window/pacing.rs`, pure and unit tested with synthetic instants): `video.present_pacing`
+  is `off` (default: draw on arrival, the previous behaviour), `latency` or `smooth`, with
+  `video.present_margin_us` (3 ms) and `video.present_jitter_us` (8 ms). `VblankModel` takes its
+  phase from the last presented feedback with the `vsync` flag and its period from `refresh`; a
+  zero refresh marks the display variable, and a phase older than 2 s is unknown. `latency`
+  submits one margin before the first vblank that is still reachable (`next vblank at or after
+  arrival + margin`), so frames arriving before that deadline coalesce into one present; without
+  a known fixed refresh it submits on arrival. `smooth` keeps the minimum capture-to-arrival delay
+  over the last 120 frames and aims each frame at `captured_at + minimum + jitter` (never before
+  arrival, so late frames go at once): on a variable display it submits at that time, on a fixed
+  one it targets the vblank nearest it (not earlier than half a refresh before) and submits one
+  margin ahead; without `captured_at` it submits on arrival. The margin adapts: a frame shown more
+  than half a refresh after its targeted vblank widens it by a quarter refresh (at most one
+  refresh), every hit relaxes it by 1/16 of the excess back to the configured value.
+  `PacedQueue` holds at most two scheduled frames: a new one replaces any queued frame due no
+  earlier, a full queue drops its oldest, and of several frames due at once only the newest is
+  drawn; all three count in `frames_coalesced`.
+- What the stack does not expose, and so is not used: wgpu offers only the present modes (no
+  present timing, no target time, no VRR control); VRR is the compositor's and the display's
+  business, and a variable rate is only seen as `refresh = 0` in the feedback, on which pacing
+  presents at host cadence. `wp_commit_timing_v1` and `wp_fifo_v1` (staging, in the locked
+  wayland-protocols 0.32.13) cannot be used by Rusplay: a surface may carry only one
+  `wp_commit_timer_v1` and one `wp_fifo_v1` (a second is the `commit_timer_exists` /
+  `fifo_manager_already_exists` protocol error, fatal to the shared gpui connection), and Mesa's
+  Wayland WSI (Mesa 25 and later; the 26.2 radv driver references `wp_commit_timer_v1` and
+  `wp_fifo_v1`) creates its own on the swapchain's surface when the compositor offers them, for
+  its FIFO and present-timing paths, which wgpu does not drive with target times. Target
+  presentation times are therefore scheduled with the CPU timer.
 - `window/follow.rs` has an `#[ignore]`d test that follows a bound output against the running
   compositor and waits for its description; the follow policy and the stage/switch decisions
-  are unit tested in `window/choice.rs` without one.
+  are unit tested in `window/choice.rs` without one. `window/surface.rs` has an `#[ignore]`d test
+  that requests feedback for a commit of a role-less surface, destroys it and expects exactly one
+  outcome through `SurfaceEvents` with a readable presentation clock; it also prints whether the
+  compositor advertises `wp_commit_timing_manager_v1` and `wp_fifo_manager_v1`.
 - GPU tests (no compositor needed) compose into an offscreen texture: 1:1 copy, premultiplied
   blend inside the cursor rectangle only, clipping at the edge, the cursor layer's scaled size
   and origin, the overlay's pixels inside its rectangle only and nothing drawn without one, and the encodings and dithering listed in `color.md`. The subsurface and swapchain paths need a running compositor and are only checked

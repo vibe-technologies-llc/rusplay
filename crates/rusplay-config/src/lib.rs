@@ -34,9 +34,9 @@ pub use crate::{
     profile::HostProfile,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
-        EncoderParams, NvencConfig, NvencPreset, NvencTuning, PresentMode, RateControl,
-        SoftwarePreset, SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig, VideoEncoderConfig,
-        X264Config, X264Tune, X265Config, X265Tune,
+        EncoderParams, NvencConfig, NvencPreset, NvencTuning, PresentMode, PresentPacing,
+        RateControl, SoftwarePreset, SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig,
+        VideoEncoderConfig, X264Config, X264Tune, X265Config, X265Tune,
     },
 };
 
@@ -205,6 +205,8 @@ mod tests {
             ConfigError::MtuOutOfRange(1),
             ConfigError::EmptyRestoreTokenFile,
             ConfigError::PresentFrameLatencyOutOfRange(0),
+            ConfigError::PresentMarginOutOfRange(50_001),
+            ConfigError::PresentJitterOutOfRange(100_001),
         ];
 
         for error in errors {
