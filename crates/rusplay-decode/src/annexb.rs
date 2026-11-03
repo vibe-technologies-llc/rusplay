@@ -27,7 +27,15 @@ pub(crate) fn next_nalu<'a, H: Header + Debug>(
         return Ok(None);
     }
 
-    Nalu::next(cursor)
-        .map(Some)
-        .map_err(malformed(codec, BitstreamUnit::NalUnit))
+    let nalu: Nalu<'a, H> = Nalu::next(cursor).map_err(malformed(codec, BitstreamUnit::NalUnit))?;
+    if nalu.as_ref().len() < nalu.header.len() {
+        return Err(malformed(codec, BitstreamUnit::NalUnit)(String::from(
+            "nal unit shorter than its header",
+        )));
+    }
+
+    Ok(Some(nalu))
 }
+
+#[cfg(test)]
+mod tests;

@@ -182,7 +182,7 @@ pub(crate) fn av1_color(sequence: &SequenceHeaderObu) -> SignalledColor {
     )
 }
 
-fn unescape(payload: &[u8]) -> Vec<u8> {
+pub(crate) fn unescape(payload: &[u8]) -> Vec<u8> {
     let mut rbsp = Vec::with_capacity(payload.len());
     let mut zeros = 0;
 
