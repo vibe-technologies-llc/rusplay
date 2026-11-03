@@ -153,7 +153,12 @@ fn changes_state(event: &InputEvent) -> bool {
     match event {
         InputEvent::Key { .. } | InputEvent::PointerButton { .. } | InputEvent::Locks(_) => true,
         InputEvent::Touch { event, .. } => !matches!(event, TouchEvent::Motion { .. }),
-        InputEvent::Gamepad { event, .. } => !matches!(event, GamepadEvent::Axis { .. }),
+        InputEvent::Gamepad { event, .. } => !matches!(
+            event,
+            GamepadEvent::Axis { .. }
+                | GamepadEvent::Sensor { .. }
+                | GamepadEvent::TouchpadMotion { .. }
+        ),
         InputEvent::PointerMotion { .. }
         | InputEvent::PointerAbsolute { .. }
         | InputEvent::Scroll { .. } => false,
@@ -331,7 +336,7 @@ pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
 
 #[cfg(test)]
 mod tests {
-    use rusplay_input::{GamepadAxis, GamepadButton, LockState};
+    use rusplay_input::{GamepadAxis, GamepadButton, LockState, SensorKind};
     use rusplay_protocol::{InputAdmission, InputSequence, PacketHeader, StreamKind};
 
     use super::*;
@@ -484,7 +489,32 @@ mod tests {
             event: GamepadEvent::Connected,
         };
 
+        let sensor = InputEvent::Gamepad {
+            slot: 0,
+            event: GamepadEvent::Sensor {
+                sensor: SensorKind::Gyro,
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        };
+        let finger = |event| InputEvent::Gamepad { slot: 0, event };
+
         assert!(!changes_state(&axis));
+        assert!(!changes_state(&sensor));
+        assert!(!changes_state(&finger(GamepadEvent::TouchpadMotion {
+            finger: 0,
+            x: 0.5,
+            y: 0.5
+        })));
+        assert!(changes_state(&finger(GamepadEvent::TouchpadDown {
+            finger: 0,
+            x: 0.5,
+            y: 0.5
+        })));
+        assert!(changes_state(&finger(GamepadEvent::TouchpadUp {
+            finger: 0
+        })));
         assert!(changes_state(&press));
         assert!(changes_state(&connected));
         assert!(changes_state(&key(1, false)));

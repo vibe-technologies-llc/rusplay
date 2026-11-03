@@ -59,6 +59,7 @@ impl PadCaps {
 pub enum RawEvent {
     Key { code: u16, value: i32 },
     Abs { code: u16, value: i32 },
+    Sync,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,7 @@ impl PadTranslator {
         match raw {
             RawEvent::Key { code, value } => self.key(code, value, &mut events),
             RawEvent::Abs { code, value } => self.abs(code, value, &mut events),
+            RawEvent::Sync => {}
         }
 
         out.extend(

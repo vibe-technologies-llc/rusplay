@@ -1,10 +1,14 @@
 use crate::{
-    GamepadAxis, GamepadButton, GamepadEvent, InputEvent, LockState, StateRecord, TouchEvent,
+    GamepadAxis, GamepadButton, GamepadEvent, InputEvent, LockState, SensorKind, StateRecord,
+    TouchEvent,
 };
 
 pub const MAX_PADS: usize = 16;
 pub const PAD_AXES: usize = 6;
 pub const MAX_TOUCHES: usize = 16;
+pub const MAX_PAD_FINGERS: usize = 4;
+
+pub type PadFingers = [Option<(f32, f32)>; MAX_PAD_FINGERS];
 
 const KEY_SET_WORDS: usize = 12;
 const KEY_SET_WORDS_U32: u32 = 12;
@@ -117,6 +121,9 @@ impl TouchSet {
 pub struct PadState {
     pub buttons: u16,
     pub axes: [f32; PAD_AXES],
+    pub gyro: Option<[f32; 3]>,
+    pub accel: Option<[f32; 3]>,
+    pub fingers: Option<PadFingers>,
 }
 
 impl PadState {
@@ -144,6 +151,59 @@ impl PadState {
             *slot = value;
         }
     }
+
+    pub const fn sensor(&self, sensor: SensorKind) -> Option<[f32; 3]> {
+        match sensor {
+            SensorKind::Gyro => self.gyro,
+            SensorKind::Accel => self.accel,
+        }
+    }
+
+    fn set_sensor(&mut self, sensor: SensorKind, values: [f32; 3]) {
+        if !values.iter().all(|value| value.is_finite()) {
+            return;
+        }
+
+        match sensor {
+            SensorKind::Gyro => self.gyro = Some(values),
+            SensorKind::Accel => self.accel = Some(values),
+        }
+    }
+
+    fn finger_down(&mut self, finger: u8, x: f32, y: f32) {
+        let fingers = self.fingers.get_or_insert_default();
+        if let Some(entry) = fingers.get_mut(usize::from(finger))
+            && let Some(position) = unit_position(x, y)
+        {
+            *entry = Some(position);
+        }
+    }
+
+    fn finger_motion(&mut self, finger: u8, x: f32, y: f32) {
+        if let Some(entry) = self
+            .fingers
+            .as_mut()
+            .and_then(|fingers| fingers.get_mut(usize::from(finger)))
+            && entry.is_some()
+            && let Some(position) = unit_position(x, y)
+        {
+            *entry = Some(position);
+        }
+    }
+
+    fn finger_up(&mut self, finger: u8) {
+        if let Some(entry) = self
+            .fingers
+            .as_mut()
+            .and_then(|fingers| fingers.get_mut(usize::from(finger)))
+        {
+            *entry = None;
+        }
+    }
+}
+
+fn unit_position(x: f32, y: f32) -> Option<(f32, f32)> {
+    (x.is_finite() && y.is_finite()).then(|| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -222,6 +282,26 @@ impl HeldInput {
                     pad.set_axis(axis, value);
                 }
             }
+            GamepadEvent::Sensor { sensor, x, y, z } => {
+                if let Some(pad) = entry {
+                    pad.set_sensor(sensor, [x, y, z]);
+                }
+            }
+            GamepadEvent::TouchpadDown { finger, x, y } => {
+                if let Some(pad) = entry {
+                    pad.finger_down(finger, x, y);
+                }
+            }
+            GamepadEvent::TouchpadMotion { finger, x, y } => {
+                if let Some(pad) = entry {
+                    pad.finger_motion(finger, x, y);
+                }
+            }
+            GamepadEvent::TouchpadUp { finger } => {
+                if let Some(pad) = entry {
+                    pad.finger_up(finger);
+                }
+            }
         }
     }
 
@@ -238,6 +318,19 @@ impl HeldInput {
                     slot,
                     state: *state,
                 });
+
+                for sensor in [SensorKind::Gyro, SensorKind::Accel] {
+                    if let Some(values) = state.sensor(sensor) {
+                        out.push(StateRecord::PadSensor {
+                            slot,
+                            sensor,
+                            values,
+                        });
+                    }
+                }
+                if let Some(fingers) = state.fingers {
+                    out.push(StateRecord::PadTouchpad { slot, fingers });
+                }
             }
         }
     }
@@ -254,6 +347,14 @@ impl HeldInput {
             }
             StateRecord::Pads(mask) => self.reconcile_connections(*mask, out),
             StateRecord::Pad { slot, state } => self.reconcile_pad(*slot, state, out),
+            StateRecord::PadSensor {
+                slot,
+                sensor,
+                values,
+            } => self.reconcile_sensor(*slot, *sensor, *values, out),
+            StateRecord::PadTouchpad { slot, fingers } => {
+                self.reconcile_touchpad(*slot, fingers, out);
+            }
             StateRecord::Touches(target) => {
                 out.extend(
                     self.touches
@@ -319,6 +420,52 @@ impl HeldInput {
         }
     }
 
+    fn reconcile_sensor(
+        &self,
+        slot: u8,
+        sensor: SensorKind,
+        values: [f32; 3],
+        out: &mut Vec<InputEvent>,
+    ) {
+        let Some(pad) = self.pad(slot) else {
+            return;
+        };
+
+        if pad.sensor(sensor).map(bits) != Some(bits(values)) {
+            let [x, y, z] = values;
+            out.push(pad_event(slot, GamepadEvent::Sensor { sensor, x, y, z }));
+        }
+    }
+
+    fn reconcile_touchpad(&self, slot: u8, target: &PadFingers, out: &mut Vec<InputEvent>) {
+        let Some(pad) = self.pad(slot) else {
+            return;
+        };
+        let current = pad.fingers.unwrap_or_default();
+
+        for (finger, (have, want)) in (0u8..).zip(current.iter().zip(target)) {
+            if have.is_some() && want.is_none() {
+                out.push(pad_event(slot, GamepadEvent::TouchpadUp { finger }));
+            }
+        }
+        for (finger, (have, want)) in (0u8..).zip(current.iter().zip(target)) {
+            let Some((x, y)) = *want else {
+                continue;
+            };
+
+            match have {
+                None => out.push(pad_event(slot, GamepadEvent::TouchpadDown { finger, x, y })),
+                Some(held) if position_bits(*held) != position_bits((x, y)) => {
+                    out.push(pad_event(
+                        slot,
+                        GamepadEvent::TouchpadMotion { finger, x, y },
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
     fn reconcile_pad(&self, slot: u8, target: &PadState, out: &mut Vec<InputEvent>) {
         let Some(entry) = self.pads.get(usize::from(slot)) else {
             return;
@@ -359,6 +506,14 @@ impl HeldInput {
             }
         }
     }
+}
+
+fn bits(values: [f32; 3]) -> [u32; 3] {
+    values.map(f32::to_bits)
+}
+
+fn position_bits((x, y): (f32, f32)) -> (u32, u32) {
+    (x.to_bits(), y.to_bits())
 }
 
 fn diff_keys(
@@ -712,5 +867,163 @@ mod tests {
                 StateRecord::Touches(TouchSet::default()),
             ]
         );
+    }
+
+    fn motion(slot: u8, sensor: SensorKind, x: f32) -> InputEvent {
+        pad(
+            slot,
+            GamepadEvent::Sensor {
+                sensor,
+                x,
+                y: 0.0,
+                z: 0.0,
+            },
+        )
+    }
+
+    fn finger_down(slot: u8, finger: u8, x: f32, y: f32) -> InputEvent {
+        pad(slot, GamepadEvent::TouchpadDown { finger, x, y })
+    }
+
+    fn finger_move(slot: u8, finger: u8, x: f32, y: f32) -> InputEvent {
+        pad(slot, GamepadEvent::TouchpadMotion { finger, x, y })
+    }
+
+    fn finger_up(slot: u8, finger: u8) -> InputEvent {
+        pad(slot, GamepadEvent::TouchpadUp { finger })
+    }
+
+    #[test]
+    fn sensors_and_fingers_are_tracked_per_pad() {
+        let state = held(&[
+            pad(1, GamepadEvent::Connected),
+            motion(1, SensorKind::Gyro, 2.0),
+            motion(1, SensorKind::Accel, -9.0),
+            finger_down(1, 0, 0.25, 0.5),
+            finger_down(1, 2, 0.75, 0.5),
+            finger_move(1, 0, 0.5, 0.5),
+            finger_up(1, 2),
+        ]);
+
+        let pad = state.pad(1).unwrap();
+
+        assert_eq!(pad.gyro, Some([2.0, 0.0, 0.0]));
+        assert_eq!(pad.accel, Some([-9.0, 0.0, 0.0]));
+        assert_eq!(pad.fingers, Some([Some((0.5, 0.5)), None, None, None]));
+    }
+
+    #[test]
+    fn hostile_sensor_and_finger_values_are_not_tracked() {
+        let state = held(&[
+            pad(0, GamepadEvent::Connected),
+            motion(0, SensorKind::Gyro, f32::NAN),
+            finger_down(0, 0, f32::INFINITY, 0.0),
+            finger_down(0, 4, 0.5, 0.5),
+            finger_move(0, 1, 0.5, 0.5),
+            finger_down(0, 1, 7.0, -3.0),
+            motion(5, SensorKind::Gyro, 1.0),
+            finger_down(5, 0, 0.5, 0.5),
+        ]);
+
+        let pad = state.pad(0).unwrap();
+
+        assert_eq!(pad.gyro, None);
+        assert_eq!(pad.fingers, Some([None, Some((1.0, 0.0)), None, None]));
+        assert!(state.pad(5).is_none());
+    }
+
+    #[test]
+    fn disconnecting_a_pad_forgets_its_sensors_and_fingers() {
+        let state = held(&[
+            pad(0, GamepadEvent::Connected),
+            motion(0, SensorKind::Gyro, 1.0),
+            finger_down(0, 0, 0.5, 0.5),
+            pad(0, GamepadEvent::Disconnected),
+            pad(0, GamepadEvent::Connected),
+        ]);
+
+        assert_eq!(state.pad(0), Some(&PadState::default()));
+    }
+
+    #[test]
+    fn a_snapshot_repairs_sensors_and_lifts_fingers_the_client_no_longer_holds() {
+        let mut host = held(&[
+            pad(0, GamepadEvent::Connected),
+            motion(0, SensorKind::Gyro, 1.0),
+            finger_down(0, 0, 0.1, 0.1),
+            finger_down(0, 1, 0.2, 0.2),
+            finger_down(0, 3, 0.3, 0.3),
+        ]);
+        let client = held(&[
+            pad(0, GamepadEvent::Connected),
+            motion(0, SensorKind::Gyro, 5.0),
+            motion(0, SensorKind::Accel, 1.0),
+            finger_down(0, 1, 0.9, 0.2),
+            finger_down(0, 2, 0.4, 0.4),
+            finger_down(0, 3, 0.3, 0.3),
+            finger_up(0, 3),
+        ]);
+
+        let applied = converge(&mut host, &client);
+
+        assert_eq!(host, client);
+        assert!(applied.contains(&finger_up(0, 0)));
+        assert!(applied.contains(&finger_move(0, 1, 0.9, 0.2)));
+        assert!(applied.contains(&finger_down(0, 2, 0.4, 0.4)));
+        assert!(applied.contains(&motion(0, SensorKind::Gyro, 5.0)));
+        assert!(applied.contains(&motion(0, SensorKind::Accel, 1.0)));
+    }
+
+    #[test]
+    fn a_snapshot_that_matches_injects_no_sensor_or_finger_events() {
+        let mut host = held(&[
+            pad(0, GamepadEvent::Connected),
+            motion(0, SensorKind::Accel, 1.0),
+            finger_down(0, 0, 0.5, 0.5),
+        ]);
+        let client = host.clone();
+
+        assert_eq!(converge(&mut host, &client), Vec::new());
+    }
+
+    #[test]
+    fn a_touchpad_record_for_a_pad_that_is_not_connected_is_ignored() {
+        let host = HeldInput::new();
+        let mut events = Vec::new();
+
+        host.reconcile(
+            &StateRecord::PadTouchpad {
+                slot: 0,
+                fingers: [Some((0.5, 0.5)), None, None, None],
+            },
+            &mut events,
+        );
+        host.reconcile(
+            &StateRecord::PadSensor {
+                slot: 0,
+                sensor: SensorKind::Gyro,
+                values: [1.0; 3],
+            },
+            &mut events,
+        );
+
+        assert_eq!(events, Vec::new());
+    }
+
+    #[test]
+    fn a_lifted_touchpad_still_snapshots_so_a_lost_up_is_repaired() {
+        let client = held(&[
+            pad(0, GamepadEvent::Connected),
+            finger_down(0, 0, 0.5, 0.5),
+            finger_up(0, 0),
+        ]);
+        let mut records = Vec::new();
+
+        client.snapshot(&mut records);
+
+        assert!(records.contains(&StateRecord::PadTouchpad {
+            slot: 0,
+            fingers: PadFingers::default(),
+        }));
     }
 }

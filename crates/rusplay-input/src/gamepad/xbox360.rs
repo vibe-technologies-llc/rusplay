@@ -71,7 +71,16 @@ pub struct Xbox360Mapper {
 impl Xbox360Mapper {
     pub fn map(&mut self, event: GamepadEvent) -> Result<Option<Report>, InputError> {
         match event {
-            GamepadEvent::Connected | GamepadEvent::Disconnected => Ok(None),
+            GamepadEvent::Connected
+            | GamepadEvent::Disconnected
+            | GamepadEvent::Button {
+                button: GamepadButton::TOUCHPAD,
+                ..
+            }
+            | GamepadEvent::Sensor { .. }
+            | GamepadEvent::TouchpadDown { .. }
+            | GamepadEvent::TouchpadMotion { .. }
+            | GamepadEvent::TouchpadUp { .. } => Ok(None),
             GamepadEvent::Button { button, pressed } => self.map_button(button, pressed).map(Some),
             GamepadEvent::Axis { axis, value } => map_axis(axis, value).map(Some),
         }
@@ -260,6 +269,38 @@ mod tests {
 
         assert!(matches!(button, Err(InputError::GamepadButtonUnknown(99))));
         assert!(matches!(axis, Err(InputError::GamepadAxisUnknown(42))));
+    }
+
+    #[test]
+    fn sensors_and_the_touchpad_have_no_counterpart_on_a_360_pad() {
+        let mut mapper = Xbox360Mapper::default();
+        let events = [
+            GamepadEvent::Sensor {
+                sensor: crate::SensorKind::Gyro,
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            },
+            GamepadEvent::TouchpadDown {
+                finger: 0,
+                x: 0.5,
+                y: 0.5,
+            },
+            GamepadEvent::TouchpadMotion {
+                finger: 0,
+                x: 0.6,
+                y: 0.5,
+            },
+            GamepadEvent::TouchpadUp { finger: 0 },
+            GamepadEvent::Button {
+                button: GamepadButton::TOUCHPAD,
+                pressed: true,
+            },
+        ];
+
+        for event in events {
+            assert_eq!(mapper.map(event).unwrap(), None);
+        }
     }
 
     #[test]

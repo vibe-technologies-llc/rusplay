@@ -9,7 +9,8 @@ paths:
 - `InputEvent` is the wire-neutral model: keys by evdev keycode, pointer motion (relative) and
   position (absolute, normalised to the stream), buttons by evdev button code (`BTN_LEFT` is
   `0x110`), scroll in wheel notches (1.0 is one detent, positive is down and right),
-  gamepads by slot, and touches by slot (`Touch { slot, event }`; `TouchEvent` is `Down` and
+  gamepads by slot (buttons and axes, plus gyro and accelerometer samples and touchpad
+  contacts, below), and touches by slot (`Touch { slot, event }`; `TouchEvent` is `Down` and
   `Motion` with positions normalised to the stream like `PointerAbsolute`, `Up` and `Cancel`;
   slots are below `MAX_TOUCHES`, 16, and a larger one is `TouchSlotOutOfRange` on decode).
 - `InputError` carries typed data and is not `Copy`. Backend failures are their own variants
@@ -26,7 +27,8 @@ paths:
 - `wire` gives `InputEvent` a byte encoding for the protocol to carry: one tag byte, then
   little-endian fields, floats as raw IEEE bits, booleans as 0 or 1 (`encode_into` appends to a
   caller-owned buffer, `encoded_len` sizes it, `decode` takes exactly one event). Any other length,
-  tag or boolean value is its own `Wire*` error. Gamepad events nest a second tag. The protocol
+  tag or boolean value is its own `Wire*` error. Gamepad events nest a second tag (0 connected, 1
+  disconnected, 2 button, 3 axis, 4 sensor, 5 to 7 touchpad down, motion and up). The protocol
   crate wraps these bytes in a message and owns versioning; the layout changes only together with
   a protocol version bump. `record` adds the state records of the snapshot (below) and
   `InputRecord`, the decoder for either.
@@ -137,6 +139,16 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   re-creation cannot leave a held pad without a device), drops it on
   `Disconnected` (the kernel removes the pad) and rejects button and axis events for a slot that
   is not connected (`GamepadNotConnected`).
+- Pads also carry motion and a touchpad, which the Xbox 360 personality cannot show.
+  `GamepadEvent::Sensor { sensor, x, y, z }` is a gyroscope (`SensorKind::Gyro`, radians per
+  second) or accelerometer (`SensorKind::Accel`, metres per second squared) sample in the axes
+  the kernel reports for the source node, SI units after the client divided out the device's
+  evdev resolution. `TouchpadDown`, `TouchpadMotion` and `TouchpadUp` carry a finger below
+  `MAX_PAD_FINGERS` (4) with positions normalised 0.0..=1.0 over the pad, and the click is
+  `GamepadButton::TOUCHPAD` (15). Decoding rejects a finger at or above the limit
+  (`PadFingerOutOfRange`), an unknown sensor kind (`WireUnknownSensorKind`) and any non-finite
+  value (`NonFiniteValue`). `Xbox360Mapper` and so `GamepadPool` accept all of them and inject
+  nothing, rather than erroring on every sample a DualSense sends.
 - `SplitSink` routes `InputEvent::Gamepad` to the gamepad sink and everything else to the
   desktop sink, so the host holds one `InputSink` made of `LibeiInjector` and `UinputGamepads`.
 - Permissions: creating devices needs write access to `/dev/uinput`, and the `uinput` kernel
@@ -233,11 +245,35 @@ Live tests need a Wayland session with the portal and a person to confirm its di
 ### Physical gamepads (`gamepad` feature)
 
 - `PhysicalGamepads` scans `/dev/input` for `event*` nodes once a second (opening only new
-  ones, remembering non-gamepads, and dropping pads whose node vanished), accepts devices with
-  `BTN_SOUTH`, `ABS_X` and `ABS_Y`, and `poll`s all pad fds together with `rustix::event::poll`,
-  appending `Connected`, translated events and `Disconnected`. A read error removes the pad.
+  ones, remembering nodes that are neither pads nor siblings, and dropping pads whose node
+  vanished), accepts devices with `BTN_SOUTH`, `ABS_X` and `ABS_Y`, and `poll`s all pad fds
+  and sibling fds together with `rustix::event::poll`, appending `Connected`, translated events
+  and `Disconnected`. A read error removes the pad.
   `disconnect_all` removes every pad on shutdown. A host and a client on the same machine would
   capture the host's own virtual pads.
+- Sibling nodes: a DualSense, DS4 or Switch Pro pad is up to three evdev nodes, the pad itself,
+  a motion node (`INPUT_PROP_ACCELEROMETER`, `ABS_X/Y/Z` accelerometer and `ABS_RX/RY/RZ`
+  gyroscope, no `BTN_SOUTH`) and a touchpad node (multitouch `ABS_MT_POSITION_X/Y`). The scan
+  classifies every node (`NodeCaps::role`, pure) and keeps the pad, motion and touchpad ones with a
+  `NodeIdentity` (vendor, product, `uniq`, `phys` and the sysfs parent of
+  `/sys/class/input/eventN/device`, the HID device). `pair_siblings` (pure, tested with fake
+  descriptions) pairs a motion and a touchpad node with a pad in path order, each sibling to one pad:
+  vendor and product must match, a known parent on both sides decides alone, otherwise every
+  known one of `uniq` and `phys` must agree and at least one must be known on both sides, so two
+  identical pads, a laptop touchpad or a node with nothing in common never pair. Siblings
+  attach on any scan after their pad connected, because the nodes appear one after another, and
+  are dropped on their own when their node vanishes or fails to read (their held fingers and
+  click are lifted) while the pad stays. `PhysicalGamepads::in_directory` takes no sysfs root, so
+  tests pair on `uniq` and `phys` only.
+- `MotionTranslator` turns the motion node's `ABS_*` events into `Sensor` events on `SYN_REPORT`,
+  only once all three axes of a sensor reported, scaling by the node's evdev resolution (units
+  per g for the accelerometer, per degree per second for the gyroscope, as `hid-playstation` and
+  `hid-nintendo` declare) to metres per second squared and radians per second; a sensor whose
+  resolution is zero or absent is never reported. `TouchpadTranslator` follows the multitouch
+  slot protocol (`ABS_MT_SLOT`, `ABS_MT_TRACKING_ID`, position axes), reports a contact `Down`
+  once both coordinates are known, `Motion` on later changes and `Up` on a lift or a new tracking
+  id in the slot, ignores slots at or above `MAX_PAD_FINGERS`, normalises positions over the node's
+  axis range, and maps the node's `BTN_LEFT` click to `GamepadButton::TOUCHPAD`.
 - Rumble: `PhysicalGamepads::rumble` uploads one `FF_RUMBLE` effect per pad on first use, updates
   it in place afterwards and plays it once. `duration_ms == 0` and anything above
   `input.rumble_max_ms` are capped to that limit, so an infinite effect whose stop was lost ends
@@ -245,9 +281,16 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   command a no-op; a failed ioctl is `PhysicalGamepadRumble`. Dropping the pad erases the effect,
   which stops the motors.
 - Reading `/dev/input/event*` needs the usual device ACL (`uaccess` on gamepads) or the `input`
-  group; without it the pad is simply not found.
+  group; without it the pad is simply not found. The motion and touchpad nodes are not
+  joysticks to udev, so systemd's stock `uaccess` rule does not cover them: without a rule for
+  them (for example `KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*Motion Sensors",
+  TAG+="uaccess"` and the same for `*Touchpad`) or the `input` group the pad works and its
+  siblings are never opened or paired, and the next scan tries again.
 - Live tests (`#[ignore]`, need `/dev/uinput`) create a virtual pad, read it back through
-  `PhysicalGamepads` and round-trip a rumble effect through the host side.
+  `PhysicalGamepads` and round-trip a rumble effect through the host side, and create a pad with
+  a motion and a touchpad node under a fake sysfs parent and check both pair and report. It
+  skips visibly (`skipped <test>: ...` on stderr) when udev leaves those virtual nodes unreadable,
+  which it does on a stock setup, so the pairing wiring is exercised only where the ACL exists.
 
 ### Wayland capture (`wayland` feature)
 
@@ -328,11 +371,19 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   (default 1000, `0` disables) the client also sends its held state as `StateRecord`s in an
   ordinary datagram of the same sequence, repeated by the next datagram's `previous` section like
   any other. A record decodes through `InputRecord::decode`, which tells events from state by the
-  tag byte (events use 0 to 10, state records 16 to 21). Each state record replaces one whole
+  tag byte (events use 0 to 10, state records 16 to 23). Each state record replaces one whole
   scope, so a snapshot split across datagrams, or a lost half of it, never undoes the other half:
   `Keys` and `Buttons` carry a `KeySet` bitset (96 bytes over evdev codes below 768), `Pads`
   the mask of connected slots (disconnect the others, connect the missing) and one `Pad` per
-  connected slot its button mask and six axes (`PAD_AXES`). `HeldInput::snapshot` writes them,
+  connected slot its button mask and six axes (`PAD_AXES`), then for a pad that has reported them
+  a `PadSensor` (tag 22: slot, kind, three `f32`) per sensor kind and a `PadTouchpad` (tag 23:
+  slot, finger mask, then x and y per set finger). `PadState` holds them as `Option`s, and the
+  touchpad's `fingers` is `Some` from the first contact on, so an all-lifted `PadTouchpad` still
+  goes out and repairs a lost `TouchpadUp`. `reconcile` replays a differing sensor sample, lifts
+  held fingers the record lacks, puts down the ones it adds and moves the ones that differ, and
+  ignores both records for a slot that is not connected. Sensor and touchpad `Motion` events do
+  not ask for the extra repeat datagram, and the coalescer keeps the latest sample per slot and
+  sensor kind and the latest motion per slot and finger. `HeldInput::snapshot` writes them,
   from the events the client's input stage sent. The host applies a state record with
   `HeldInput::reconcile`, which turns the difference from what the host injected into events,
   releases before presses, and injects them like any other event (`input_events_repaired`
@@ -347,7 +398,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   alone because a lock is not a stuck key. `Touches` carries the `TouchSet` mask of held slots as
   a `u16`: `reconcile` lifts the held touches the record lacks and never invents a `Down` (the
   position is gone), so a lost `Up` is repaired. `ProtocolVersion::CURRENT` 16 added the lock and
-  touch records and events.
+  touch records and events, 22 the pad sensor and touchpad events and records.
 - Gamepad `Connected` and `Disconnected` events create and drop the host's virtual pads, so the
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,

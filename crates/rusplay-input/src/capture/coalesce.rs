@@ -67,6 +67,33 @@ impl EventCoalescer {
                 Some(index) => self.pending[index] = event,
                 None => self.pending.push(event),
             },
+            (
+                _,
+                InputEvent::Gamepad {
+                    slot,
+                    event: GamepadEvent::Sensor { sensor, .. },
+                },
+            ) => match self.superseded(slot, |pending| {
+                matches!(pending, GamepadEvent::Sensor { sensor: other, .. } if *other == sensor)
+            }) {
+                Some(index) => self.pending[index] = event,
+                None => self.pending.push(event),
+            },
+            (
+                _,
+                InputEvent::Gamepad {
+                    slot,
+                    event: GamepadEvent::TouchpadMotion { finger, .. },
+                },
+            ) => match self.superseded(slot, |pending| {
+                matches!(
+                    pending,
+                    GamepadEvent::TouchpadMotion { finger: other, .. } if *other == finger
+                )
+            }) {
+                Some(index) => self.pending[index] = event,
+                None => self.pending.push(event),
+            },
             _ => self.pending.push(event),
         }
     }
@@ -76,18 +103,26 @@ impl EventCoalescer {
     }
 
     fn superseded_axis(&self, slot: u8, axis: crate::GamepadAxis) -> Option<usize> {
+        self.superseded(
+            slot,
+            |pending| matches!(pending, GamepadEvent::Axis { axis: other, .. } if *other == axis),
+        )
+    }
+
+    fn superseded(&self, slot: u8, same: impl Fn(&GamepadEvent) -> bool) -> Option<usize> {
         for (index, pending) in self.pending.iter().enumerate().rev() {
             match pending {
                 InputEvent::Gamepad {
                     slot: pending_slot,
-                    event:
-                        GamepadEvent::Axis {
-                            axis: pending_axis, ..
-                        },
-                } if *pending_slot == slot && *pending_axis == axis => return Some(index),
+                    event,
+                } if *pending_slot == slot && same(event) => return Some(index),
                 InputEvent::Gamepad {
                     slot: pending_slot,
-                    event: GamepadEvent::Connected | GamepadEvent::Disconnected,
+                    event:
+                        GamepadEvent::Connected
+                        | GamepadEvent::Disconnected
+                        | GamepadEvent::TouchpadDown { .. }
+                        | GamepadEvent::TouchpadUp { .. },
                 } if *pending_slot == slot => return None,
                 InputEvent::Key { .. }
                 | InputEvent::PointerButton { .. }
@@ -106,7 +141,7 @@ impl EventCoalescer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GamepadAxis, GamepadButton};
+    use crate::{GamepadAxis, GamepadButton, SensorKind};
 
     fn drained(coalescer: &mut EventCoalescer) -> Vec<InputEvent> {
         let mut out = Vec::new();
@@ -306,5 +341,66 @@ mod tests {
         coalescer.push(axis(0, GamepadAxis::LEFT_X, 0.2));
 
         assert_eq!(coalescer.len(), 3);
+    }
+
+    fn pad(event: GamepadEvent) -> InputEvent {
+        InputEvent::Gamepad { slot: 0, event }
+    }
+
+    fn gyro(x: f32) -> InputEvent {
+        pad(GamepadEvent::Sensor {
+            sensor: SensorKind::Gyro,
+            x,
+            y: 0.0,
+            z: 0.0,
+        })
+    }
+
+    fn accel(x: f32) -> InputEvent {
+        pad(GamepadEvent::Sensor {
+            sensor: SensorKind::Accel,
+            x,
+            y: 0.0,
+            z: 0.0,
+        })
+    }
+
+    fn finger_motion(finger: u8, x: f32) -> InputEvent {
+        pad(GamepadEvent::TouchpadMotion { finger, x, y: 0.5 })
+    }
+
+    #[test]
+    fn a_sensor_keeps_only_its_latest_sample_per_kind() {
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(gyro(1.0));
+        coalescer.push(accel(1.0));
+        coalescer.push(gyro(2.0));
+        coalescer.push(accel(2.0));
+        coalescer.push(gyro(3.0));
+
+        assert_eq!(drained(&mut coalescer), vec![gyro(3.0), accel(2.0)]);
+    }
+
+    #[test]
+    fn touchpad_motion_keeps_the_latest_per_finger_and_stops_at_a_lift() {
+        let up = pad(GamepadEvent::TouchpadUp { finger: 0 });
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(finger_motion(0, 0.1));
+        coalescer.push(finger_motion(1, 0.2));
+        coalescer.push(finger_motion(0, 0.3));
+        coalescer.push(up);
+        coalescer.push(finger_motion(0, 0.4));
+
+        assert_eq!(
+            drained(&mut coalescer),
+            vec![
+                finger_motion(0, 0.3),
+                finger_motion(1, 0.2),
+                up,
+                finger_motion(0, 0.4),
+            ]
+        );
     }
 }
