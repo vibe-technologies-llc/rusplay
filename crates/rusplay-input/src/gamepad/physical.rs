@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -7,7 +7,7 @@ use std::{
 
 use evdev::{
     AbsoluteAxisCode, Device, EventSummary, FFEffect, FFEffectCode, FFEffectData, FFEffectKind,
-    FFReplay, FFTrigger, KeyCode,
+    FFReplay, FFTrigger, KeyCode, PropType, SynchronizationCode,
 };
 use rusplay_config::InputConfig;
 use rustix::{
@@ -17,10 +17,16 @@ use rustix::{
 
 use crate::{
     GamepadEvent, InputError, InputEvent, RumbleCommand,
-    capture::{FaceLayout, PadCaps, PadSlots, PadTranslator, RawAxis, RawEvent},
+    capture::{
+        FaceLayout, MotionCaps, MotionTranslator, NodeCaps, NodeDescription, NodeIdentity,
+        NodeRole, PadCaps, PadSlots, PadTranslator, RawAxis, RawEvent, SiblingTranslator,
+        TouchpadRange, TouchpadTranslator, non_empty, pair_siblings,
+    },
 };
 
 const INPUT_DIRECTORY: &str = "/dev/input";
+const SYSFS_INPUT_CLASS: &str = "/sys/class/input";
+const SYSFS_UINPUT_PARENT: &str = "/sys/devices/virtual/input";
 const EVENT_PREFIX: &str = "event";
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const VENDOR_SONY: u16 = 0x054c;
@@ -42,6 +48,71 @@ impl From<&InputConfig> for PhysicalOptions {
     }
 }
 
+fn drain(device: &mut Device, mut each: impl FnMut(RawEvent)) -> io::Result<()> {
+    loop {
+        let events: Vec<_> = match device.fetch_events() {
+            Ok(events) => events.collect(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error) => return Err(error),
+        };
+
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        for event in events {
+            match event.destructure() {
+                EventSummary::Key(_, code, value) => each(RawEvent::Key {
+                    code: code.0,
+                    value,
+                }),
+                EventSummary::AbsoluteAxis(_, code, value) => each(RawEvent::Abs {
+                    code: code.0,
+                    value,
+                }),
+                EventSummary::Synchronization(_, SynchronizationCode::SYN_REPORT, _) => {
+                    each(RawEvent::Sync);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+struct Sibling {
+    path: PathBuf,
+    role: NodeRole,
+    device: Device,
+    translator: SiblingTranslator,
+}
+
+impl Sibling {
+    fn read(&mut self, slot: u8, out: &mut Vec<InputEvent>) -> io::Result<()> {
+        let mut events = Vec::new();
+        let result = drain(&mut self.device, |raw| {
+            self.translator.translate(raw, &mut events);
+        });
+
+        out.extend(
+            events
+                .into_iter()
+                .map(|event| InputEvent::Gamepad { slot, event }),
+        );
+        result
+    }
+
+    fn release(&mut self, slot: u8, out: &mut Vec<InputEvent>) {
+        let mut events = Vec::new();
+        self.translator.release(&mut events);
+
+        out.extend(
+            events
+                .into_iter()
+                .map(|event| InputEvent::Gamepad { slot, event }),
+        );
+    }
+}
+
 struct Pad {
     path: PathBuf,
     slot: u8,
@@ -49,36 +120,18 @@ struct Pad {
     translator: PadTranslator,
     rumble_capable: bool,
     effect: Option<FFEffect>,
+    siblings: Vec<Sibling>,
 }
 
 impl Pad {
     fn read(&mut self, out: &mut Vec<InputEvent>) -> io::Result<()> {
-        loop {
-            let events: Vec<_> = match self.device.fetch_events() {
-                Ok(events) => events.collect(),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-                Err(error) => return Err(error),
-            };
+        drain(&mut self.device, |raw| {
+            self.translator.translate(self.slot, raw, out);
+        })
+    }
 
-            if events.is_empty() {
-                return Ok(());
-            }
-
-            for event in events {
-                let raw = match event.destructure() {
-                    EventSummary::Key(_, code, value) => RawEvent::Key {
-                        code: code.0,
-                        value,
-                    },
-                    EventSummary::AbsoluteAxis(_, code, value) => RawEvent::Abs {
-                        code: code.0,
-                        value,
-                    },
-                    _ => continue,
-                };
-                self.translator.translate(self.slot, raw, out);
-            }
-        }
+    fn has_sibling(&self, role: NodeRole) -> bool {
+        self.siblings.iter().any(|sibling| sibling.role == role)
     }
 
     fn play(&mut self, command: &RumbleCommand, limit_ms: u16) -> io::Result<()> {
@@ -118,23 +171,41 @@ impl Pad {
 pub struct PhysicalGamepads {
     options: PhysicalOptions,
     root: PathBuf,
+    sysfs: Option<PathBuf>,
     pads: Vec<Pad>,
     slots: PadSlots<PathBuf>,
+    known: BTreeMap<PathBuf, NodeDescription>,
     rejected: BTreeSet<PathBuf>,
     next_scan: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Source {
+    pad: usize,
+    sibling: Option<usize>,
+}
+
 impl PhysicalGamepads {
     pub fn new(options: PhysicalOptions) -> Self {
-        Self::in_directory(options, INPUT_DIRECTORY)
+        Self::with_roots(options, INPUT_DIRECTORY, Some(SYSFS_INPUT_CLASS.into()))
     }
 
     pub fn in_directory(options: PhysicalOptions, root: impl Into<PathBuf>) -> Self {
+        Self::with_roots(options, root, None)
+    }
+
+    pub fn with_roots(
+        options: PhysicalOptions,
+        root: impl Into<PathBuf>,
+        sysfs: Option<PathBuf>,
+    ) -> Self {
         Self {
             options,
             root: root.into(),
+            sysfs,
             pads: Vec::new(),
             slots: PadSlots::new(options.max_gamepads),
+            known: BTreeMap::new(),
             rejected: BTreeSet::new(),
             next_scan: Instant::now(),
         }
@@ -142,6 +213,13 @@ impl PhysicalGamepads {
 
     pub fn connected(&self) -> usize {
         self.pads.len()
+    }
+
+    pub fn siblings(&self, slot: u8) -> usize {
+        self.pads
+            .iter()
+            .find(|pad| pad.slot == slot)
+            .map_or(0, |pad| pad.siblings.len())
     }
 
     pub fn poll(&mut self, timeout: Duration, out: &mut Vec<InputEvent>) -> Result<(), InputError> {
@@ -154,14 +232,31 @@ impl PhysicalGamepads {
         let wait = timeout.min(self.next_scan.saturating_duration_since(now));
         let ready = self.wait(wait)?;
 
-        let mut gone = Vec::new();
-        for index in ready {
-            if self.pads[index].read(out).is_err() {
-                gone.push(index);
+        let mut gone_pads = Vec::new();
+        let mut gone_siblings = Vec::new();
+        for source in ready {
+            let pad = &mut self.pads[source.pad];
+            match source.sibling {
+                None => {
+                    if pad.read(out).is_err() {
+                        gone_pads.push(source.pad);
+                    }
+                }
+                Some(index) => {
+                    let slot = pad.slot;
+                    if pad.siblings[index].read(slot, out).is_err() {
+                        gone_siblings.push((source.pad, index));
+                    }
+                }
             }
         }
 
-        for index in gone.into_iter().rev() {
+        for (pad, index) in gone_siblings.into_iter().rev() {
+            if !gone_pads.contains(&pad) {
+                self.remove_sibling(pad, index, out);
+            }
+        }
+        for index in gone_pads.into_iter().rev() {
             self.remove(index, out);
         }
 
@@ -195,12 +290,25 @@ impl PhysicalGamepads {
         }
     }
 
-    fn wait(&mut self, timeout: Duration) -> Result<Vec<usize>, InputError> {
-        let mut fds: Vec<_> = self
-            .pads
-            .iter()
-            .map(|pad| PollFd::new(&pad.device, PollFlags::IN))
-            .collect();
+    fn wait(&mut self, timeout: Duration) -> Result<Vec<Source>, InputError> {
+        let mut sources = Vec::new();
+        let mut fds = Vec::new();
+        for (pad_index, pad) in self.pads.iter().enumerate() {
+            sources.push(Source {
+                pad: pad_index,
+                sibling: None,
+            });
+            fds.push(PollFd::new(&pad.device, PollFlags::IN));
+
+            for (sibling_index, sibling) in pad.siblings.iter().enumerate() {
+                sources.push(Source {
+                    pad: pad_index,
+                    sibling: Some(sibling_index),
+                });
+                fds.push(PollFd::new(&sibling.device, PollFlags::IN));
+            }
+        }
+
         let limit = Timespec {
             tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
             tv_nsec: i64::from(timeout.subsec_nanos()),
@@ -214,9 +322,9 @@ impl PhysicalGamepads {
 
         Ok(fds
             .iter()
-            .enumerate()
-            .filter(|(_, fd)| !fd.revents().is_empty())
-            .map(|(index, _)| index)
+            .zip(sources)
+            .filter(|(fd, _)| !fd.revents().is_empty())
+            .map(|(_, source)| source)
             .collect())
     }
 
@@ -230,9 +338,17 @@ impl PhysicalGamepads {
         });
     }
 
+    fn remove_sibling(&mut self, pad: usize, index: usize, out: &mut Vec<InputEvent>) {
+        let pad = &mut self.pads[pad];
+        let mut sibling = pad.siblings.remove(index);
+
+        sibling.release(pad.slot, out);
+    }
+
     fn scan(&mut self, out: &mut Vec<InputEvent>) {
         let present = event_nodes(&self.root);
         self.rejected.retain(|path| present.contains(path));
+        self.known.retain(|path, _| present.contains(path));
 
         let gone: Vec<usize> = self
             .pads
@@ -244,42 +360,106 @@ impl PhysicalGamepads {
         for index in gone.into_iter().rev() {
             self.remove(index, out);
         }
+        self.drop_vanished_siblings(&present, out);
 
         for path in present {
-            if self.rejected.contains(&path) || self.slots.slot_of(&path).is_some() {
+            if self.rejected.contains(&path) {
+                continue;
+            }
+
+            let settled = self.known.get(&path).is_some_and(|node| {
+                node.role != NodeRole::Pad || self.slots.slot_of(&path).is_some()
+            });
+            if settled {
                 continue;
             }
 
             let Ok(device) = Device::open(&path) else {
                 continue;
             };
-            let Some(caps) = gamepad_caps(&device) else {
+            let Some(description) = describe(&device, &path, self.sysfs.as_deref()) else {
                 self.rejected.insert(path);
                 continue;
             };
-            let Some(slot) = self.slots.assign(path.clone()) else {
-                break;
-            };
-            if device.set_nonblocking(true).is_err() {
-                self.slots.release(&path);
-                continue;
-            }
+            let role = description.role;
+            self.known.insert(path.clone(), description);
 
-            let rumble_capable = device
-                .supported_ff()
-                .is_some_and(|ff| ff.contains(FFEffectCode::FF_RUMBLE));
-            self.pads.push(Pad {
-                path,
-                slot,
-                device,
-                translator: PadTranslator::new(caps, self.options.deadzone),
-                rumble_capable,
-                effect: None,
-            });
-            out.push(InputEvent::Gamepad {
-                slot,
-                event: GamepadEvent::Connected,
-            });
+            if role == NodeRole::Pad && !self.connect(path, device, out) {
+                break;
+            }
+        }
+
+        self.attach_siblings();
+    }
+
+    fn connect(&mut self, path: PathBuf, device: Device, out: &mut Vec<InputEvent>) -> bool {
+        let Some(caps) = gamepad_caps(&device) else {
+            self.rejected.insert(path);
+            return true;
+        };
+        let Some(slot) = self.slots.assign(path.clone()) else {
+            return false;
+        };
+        if device.set_nonblocking(true).is_err() {
+            self.slots.release(&path);
+            return true;
+        }
+
+        let rumble_capable = device
+            .supported_ff()
+            .is_some_and(|ff| ff.contains(FFEffectCode::FF_RUMBLE));
+        self.pads.push(Pad {
+            path,
+            slot,
+            device,
+            translator: PadTranslator::new(caps, self.options.deadzone),
+            rumble_capable,
+            effect: None,
+            siblings: Vec::new(),
+        });
+        out.push(InputEvent::Gamepad {
+            slot,
+            event: GamepadEvent::Connected,
+        });
+
+        true
+    }
+
+    fn drop_vanished_siblings(&mut self, present: &BTreeSet<PathBuf>, out: &mut Vec<InputEvent>) {
+        for pad in 0..self.pads.len() {
+            let vanished: Vec<usize> = self.pads[pad]
+                .siblings
+                .iter()
+                .enumerate()
+                .filter(|(_, sibling)| !present.contains(&sibling.path))
+                .map(|(index, _)| index)
+                .collect();
+
+            for index in vanished.into_iter().rev() {
+                self.remove_sibling(pad, index, out);
+            }
+        }
+    }
+
+    fn attach_siblings(&mut self) {
+        let nodes: Vec<NodeDescription> = self.known.values().cloned().collect();
+
+        for pairing in pair_siblings(&nodes) {
+            let Some(pad) = self.pads.iter_mut().find(|pad| pad.path == pairing.pad) else {
+                continue;
+            };
+
+            for (role, path) in [
+                (NodeRole::Motion, pairing.motion),
+                (NodeRole::Touchpad, pairing.touchpad),
+            ] {
+                let Some(path) = path.filter(|_| !pad.has_sibling(role)) else {
+                    continue;
+                };
+                if let Some(sibling) = open_sibling(path, role) {
+                    pad.siblings.push(sibling);
+                }
+            }
         }
     }
 }
@@ -297,6 +477,107 @@ fn event_nodes(root: &Path) -> BTreeSet<PathBuf> {
         })
         .map(|entry| entry.path())
         .collect()
+}
+
+fn describe(device: &Device, path: &Path, sysfs: Option<&Path>) -> Option<NodeDescription> {
+    let caps = NodeCaps {
+        south_button: device
+            .supported_keys()
+            .is_some_and(|keys| keys.contains(KeyCode::BTN_SOUTH)),
+        accelerometer: device.properties().contains(PropType::ACCELEROMETER),
+        abs_axes: device
+            .supported_absolute_axes()
+            .map(|axes| axes.iter().map(|axis| axis.0).collect())
+            .unwrap_or_default(),
+    };
+    let role = caps.role()?;
+
+    let id = device.input_id();
+    Some(NodeDescription {
+        path: path.to_path_buf(),
+        role,
+        identity: NodeIdentity {
+            vendor: id.vendor(),
+            product: id.product(),
+            uniq: non_empty(device.unique_name()),
+            phys: non_empty(device.physical_path()),
+            parent: sysfs.and_then(|sysfs| sysfs_parent(sysfs, path)),
+        },
+    })
+}
+
+fn sysfs_parent(sysfs: &Path, node: &Path) -> Option<PathBuf> {
+    let input_device = fs::canonicalize(sysfs.join(node.file_name()?).join("device")).ok()?;
+
+    input_device
+        .parent()
+        .filter(|parent| *parent != Path::new(SYSFS_UINPUT_PARENT))
+        .map(Path::to_path_buf)
+}
+
+fn open_sibling(path: PathBuf, role: NodeRole) -> Option<Sibling> {
+    let device = Device::open(&path).ok()?;
+    let translator = match role {
+        NodeRole::Motion => SiblingTranslator::Motion(MotionTranslator::new(motion_caps(&device))),
+        NodeRole::Touchpad => {
+            let (x, y) = touchpad_ranges(&device)?;
+            SiblingTranslator::Touchpad(TouchpadTranslator::new(x, y))
+        }
+        NodeRole::Pad => return None,
+    };
+    device.set_nonblocking(true).ok()?;
+
+    Some(Sibling {
+        path,
+        role,
+        device,
+        translator,
+    })
+}
+
+fn absinfo(device: &Device, axis: AbsoluteAxisCode) -> Option<evdev::AbsInfo> {
+    device
+        .get_absinfo()
+        .ok()?
+        .find_map(|(code, info)| (code == axis).then_some(info))
+}
+
+fn motion_caps(device: &Device) -> MotionCaps {
+    let resolution = |first: AbsoluteAxisCode, others: [AbsoluteAxisCode; 2]| {
+        let present = device.supported_absolute_axes().is_some_and(|axes| {
+            axes.contains(first) && others.iter().all(|axis| axes.contains(*axis))
+        });
+
+        present
+            .then(|| absinfo(device, first))
+            .flatten()
+            .and_then(|info| u32::try_from(info.resolution()).ok())
+    };
+
+    MotionCaps {
+        accel_units_per_g: resolution(
+            AbsoluteAxisCode::ABS_X,
+            [AbsoluteAxisCode::ABS_Y, AbsoluteAxisCode::ABS_Z],
+        ),
+        gyro_units_per_degree_second: resolution(
+            AbsoluteAxisCode::ABS_RX,
+            [AbsoluteAxisCode::ABS_RY, AbsoluteAxisCode::ABS_RZ],
+        ),
+    }
+}
+
+fn touchpad_ranges(device: &Device) -> Option<(TouchpadRange, TouchpadRange)> {
+    let range = |axis| {
+        absinfo(device, axis).map(|info| TouchpadRange {
+            min: info.minimum(),
+            max: info.maximum(),
+        })
+    };
+
+    Some((
+        range(AbsoluteAxisCode::ABS_MT_POSITION_X)?,
+        range(AbsoluteAxisCode::ABS_MT_POSITION_Y)?,
+    ))
 }
 
 fn gamepad_caps(device: &Device) -> Option<PadCaps> {
@@ -398,6 +679,23 @@ mod tests {
     }
 
     #[test]
+    fn the_sysfs_parent_is_the_directory_holding_the_input_device() {
+        let directory = tempfile::tempdir().unwrap();
+        let hid = directory.path().join("devices/hid0");
+        let input = hid.join("input3");
+        let class = directory.path().join("class");
+        fs::create_dir_all(&input).unwrap();
+        fs::create_dir_all(class.join("event9")).unwrap();
+        symlink(&input, class.join("event9/device")).unwrap();
+
+        let parent = sysfs_parent(&class, Path::new("/dev/input/event9"));
+        let missing = sysfs_parent(&class, Path::new("/dev/input/event10"));
+
+        assert_eq!(parent, Some(fs::canonicalize(hid).unwrap()));
+        assert_eq!(missing, None);
+    }
+
+    #[test]
     fn rumble_for_an_unknown_slot_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let mut pads = PhysicalGamepads::in_directory(options(), directory.path());
@@ -481,5 +779,192 @@ mod tests {
         drop(host);
 
         assert_eq!(commands, vec![start, RumbleCommand::stop(0)]);
+    }
+
+    const SIBLING_VENDOR: u16 = 0x045e;
+    const SIBLING_PRODUCT: u16 = 0x028e;
+
+    fn sibling_builder(name: &str) -> evdev::uinput::VirtualDeviceBuilder<'_> {
+        evdev::uinput::VirtualDevice::builder()
+            .unwrap()
+            .name(name)
+            .input_id(evdev::InputId::new(
+                evdev::BusType::BUS_USB,
+                SIBLING_VENDOR,
+                SIBLING_PRODUCT,
+                1,
+            ))
+    }
+
+    fn abs_setup(
+        code: AbsoluteAxisCode,
+        min: i32,
+        max: i32,
+        resolution: i32,
+    ) -> evdev::UinputAbsSetup {
+        evdev::UinputAbsSetup::new(code, evdev::AbsInfo::new(0, min, max, 0, 0, resolution))
+    }
+
+    fn readable_soon(node: &Path) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if Device::open(node).is_ok() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        false
+    }
+
+    fn first_node(device: &mut evdev::uinput::VirtualDevice) -> PathBuf {
+        device
+            .enumerate_dev_nodes_blocking()
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(EVENT_PREFIX))
+            })
+            .unwrap()
+    }
+
+    fn virtual_motion() -> evdev::uinput::VirtualDevice {
+        let mut properties = evdev::AttributeSet::<PropType>::new();
+        properties.insert(PropType::ACCELEROMETER);
+        let mut builder = sibling_builder("rusplay test motion")
+            .with_properties(&properties)
+            .unwrap();
+        for (axis, resolution) in [
+            (AbsoluteAxisCode::ABS_X, 8192),
+            (AbsoluteAxisCode::ABS_Y, 8192),
+            (AbsoluteAxisCode::ABS_Z, 8192),
+            (AbsoluteAxisCode::ABS_RX, 1024),
+            (AbsoluteAxisCode::ABS_RY, 1024),
+            (AbsoluteAxisCode::ABS_RZ, 1024),
+        ] {
+            builder = builder
+                .with_absolute_axis(&abs_setup(axis, -32768, 32767, resolution))
+                .unwrap();
+        }
+
+        builder.build().unwrap()
+    }
+
+    fn virtual_touchpad() -> evdev::uinput::VirtualDevice {
+        let mut keys = evdev::AttributeSet::<KeyCode>::new();
+        keys.insert(KeyCode::BTN_LEFT);
+        let mut builder = sibling_builder("rusplay test touchpad")
+            .with_keys(&keys)
+            .unwrap();
+        for (axis, max) in [
+            (AbsoluteAxisCode::ABS_MT_SLOT, 1),
+            (AbsoluteAxisCode::ABS_MT_TRACKING_ID, 65535),
+            (AbsoluteAxisCode::ABS_MT_POSITION_X, 1000),
+            (AbsoluteAxisCode::ABS_MT_POSITION_Y, 1000),
+        ] {
+            builder = builder
+                .with_absolute_axis(&abs_setup(axis, 0, max, 0))
+                .unwrap();
+        }
+
+        builder.build().unwrap()
+    }
+
+    #[test]
+    #[ignore = "needs write access to /dev/uinput and /dev/input"]
+    fn live_motion_and_touchpad_nodes_pair_with_their_pad() {
+        let mut pad = UinputGamepad::create(0).unwrap();
+
+        let mut motion = virtual_motion();
+        let mut touchpad = virtual_touchpad();
+
+        let directory = tempfile::tempdir().unwrap();
+        let nodes = directory.path().join("dev");
+        let sysfs = directory.path().join("class");
+        let hid = directory.path().join("devices/hid0");
+        fs::create_dir_all(&nodes).unwrap();
+        for (index, device) in [pad.device_mut(), &mut touchpad, &mut motion]
+            .into_iter()
+            .enumerate()
+        {
+            let name = format!("event{}", 10 + index);
+            let input = hid.join(format!("input{index}"));
+            fs::create_dir_all(&input).unwrap();
+            fs::create_dir_all(sysfs.join(&name)).unwrap();
+            symlink(&input, sysfs.join(&name).join("device")).unwrap();
+            let node = first_node(device);
+            if index > 0 && !readable_soon(&node) {
+                eprintln!(
+                    "skipped live_motion_and_touchpad_nodes_pair_with_their_pad: {} is not readable, sibling nodes need their own uaccess rule",
+                    node.display()
+                );
+                return;
+            }
+            symlink(node, nodes.join(name)).unwrap();
+        }
+        let mut pads = PhysicalGamepads::with_roots(options(), &nodes, Some(sysfs));
+        let mut events = Vec::new();
+
+        poll_until(&mut pads, &mut events, |events| !events.is_empty());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while pads.siblings(0) < 2 && Instant::now() < deadline {
+            pads.next_scan = Instant::now();
+            pads.poll(Duration::from_millis(20), &mut events).unwrap();
+        }
+
+        assert_eq!(pads.siblings(0), 2);
+
+        events.clear();
+        let emit = |device: &mut evdev::uinput::VirtualDevice, codes: &[(u16, i32)]| {
+            let mut batch: Vec<_> = codes
+                .iter()
+                .map(|(code, value)| {
+                    evdev::InputEvent::new(evdev::EventType::ABSOLUTE.0, *code, *value)
+                })
+                .collect();
+            batch.push(evdev::InputEvent::new(
+                evdev::EventType::SYNCHRONIZATION.0,
+                0,
+                0,
+            ));
+            device.emit(&batch).unwrap();
+        };
+        emit(
+            &mut motion,
+            &[
+                (AbsoluteAxisCode::ABS_X.0, 0),
+                (AbsoluteAxisCode::ABS_Y.0, 8192),
+                (AbsoluteAxisCode::ABS_Z.0, 0),
+            ],
+        );
+        emit(
+            &mut touchpad,
+            &[
+                (AbsoluteAxisCode::ABS_MT_SLOT.0, 0),
+                (AbsoluteAxisCode::ABS_MT_TRACKING_ID.0, 5),
+                (AbsoluteAxisCode::ABS_MT_POSITION_X.0, 250),
+                (AbsoluteAxisCode::ABS_MT_POSITION_Y.0, 750),
+            ],
+        );
+        poll_until(&mut pads, &mut events, |events| events.len() >= 2);
+
+        assert!(events.contains(&InputEvent::Gamepad {
+            slot: 0,
+            event: GamepadEvent::Sensor {
+                sensor: crate::SensorKind::Accel,
+                x: 0.0,
+                y: 9.80665,
+                z: 0.0,
+            },
+        }));
+        assert!(events.contains(&InputEvent::Gamepad {
+            slot: 0,
+            event: GamepadEvent::TouchpadDown {
+                finger: 0,
+                x: 0.25,
+                y: 0.75,
+            },
+        }));
     }
 }

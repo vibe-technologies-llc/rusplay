@@ -245,11 +245,35 @@ Live tests need a Wayland session with the portal and a person to confirm its di
 ### Physical gamepads (`gamepad` feature)
 
 - `PhysicalGamepads` scans `/dev/input` for `event*` nodes once a second (opening only new
-  ones, remembering non-gamepads, and dropping pads whose node vanished), accepts devices with
-  `BTN_SOUTH`, `ABS_X` and `ABS_Y`, and `poll`s all pad fds together with `rustix::event::poll`,
-  appending `Connected`, translated events and `Disconnected`. A read error removes the pad.
+  ones, remembering nodes that are neither pads nor siblings, and dropping pads whose node
+  vanished), accepts devices with `BTN_SOUTH`, `ABS_X` and `ABS_Y`, and `poll`s all pad fds
+  and sibling fds together with `rustix::event::poll`, appending `Connected`, translated events
+  and `Disconnected`. A read error removes the pad.
   `disconnect_all` removes every pad on shutdown. A host and a client on the same machine would
   capture the host's own virtual pads.
+- Sibling nodes: a DualSense, DS4 or Switch Pro pad is up to three evdev nodes, the pad itself,
+  a motion node (`INPUT_PROP_ACCELEROMETER`, `ABS_X/Y/Z` accelerometer and `ABS_RX/RY/RZ`
+  gyroscope, no `BTN_SOUTH`) and a touchpad node (multitouch `ABS_MT_POSITION_X/Y`). The scan
+  classifies every node (`NodeCaps::role`, pure) and keeps the pad, motion and touchpad ones with a
+  `NodeIdentity` (vendor, product, `uniq`, `phys` and the sysfs parent of
+  `/sys/class/input/eventN/device`, the HID device). `pair_siblings` (pure, tested with fake
+  descriptions) pairs a motion and a touchpad node with a pad in path order, each sibling to one pad:
+  vendor and product must match, a known parent on both sides decides alone, otherwise every
+  known one of `uniq` and `phys` must agree and at least one must be known on both sides, so two
+  identical pads, a laptop touchpad or a node with nothing in common never pair. Siblings
+  attach on any scan after their pad connected, because the nodes appear one after another, and
+  are dropped on their own when their node vanishes or fails to read (their held fingers and
+  click are lifted) while the pad stays. `PhysicalGamepads::in_directory` takes no sysfs root, so
+  tests pair on `uniq` and `phys` only.
+- `MotionTranslator` turns the motion node's `ABS_*` events into `Sensor` events on `SYN_REPORT`,
+  only once all three axes of a sensor reported, scaling by the node's evdev resolution (units
+  per g for the accelerometer, per degree per second for the gyroscope, as `hid-playstation` and
+  `hid-nintendo` declare) to metres per second squared and radians per second; a sensor whose
+  resolution is zero or absent is never reported. `TouchpadTranslator` follows the multitouch
+  slot protocol (`ABS_MT_SLOT`, `ABS_MT_TRACKING_ID`, position axes), reports a contact `Down`
+  once both coordinates are known, `Motion` on later changes and `Up` on a lift or a new tracking
+  id in the slot, ignores slots at or above `MAX_PAD_FINGERS`, normalises positions over the node's
+  axis range, and maps the node's `BTN_LEFT` click to `GamepadButton::TOUCHPAD`.
 - Rumble: `PhysicalGamepads::rumble` uploads one `FF_RUMBLE` effect per pad on first use, updates
   it in place afterwards and plays it once. `duration_ms == 0` and anything above
   `input.rumble_max_ms` are capped to that limit, so an infinite effect whose stop was lost ends
@@ -257,9 +281,16 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   command a no-op; a failed ioctl is `PhysicalGamepadRumble`. Dropping the pad erases the effect,
   which stops the motors.
 - Reading `/dev/input/event*` needs the usual device ACL (`uaccess` on gamepads) or the `input`
-  group; without it the pad is simply not found.
+  group; without it the pad is simply not found. The motion and touchpad nodes are not
+  joysticks to udev, so systemd's stock `uaccess` rule does not cover them: without a rule for
+  them (for example `KERNEL=="event*", SUBSYSTEM=="input", ATTRS{name}=="*Motion Sensors",
+  TAG+="uaccess"` and the same for `*Touchpad`) or the `input` group the pad works and its
+  siblings are never opened or paired, and the next scan tries again.
 - Live tests (`#[ignore]`, need `/dev/uinput`) create a virtual pad, read it back through
-  `PhysicalGamepads` and round-trip a rumble effect through the host side.
+  `PhysicalGamepads` and round-trip a rumble effect through the host side, and create a pad with
+  a motion and a touchpad node under a fake sysfs parent and check both pair and report. It
+  skips visibly (`skipped <test>: ...` on stderr) when udev leaves those virtual nodes unreadable,
+  which it does on a stock setup, so the pairing wiring is exercised only where the ACL exists.
 
 ### Wayland capture (`wayland` feature)
 
