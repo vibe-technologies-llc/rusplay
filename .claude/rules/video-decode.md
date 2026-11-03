@@ -170,12 +170,28 @@ paths:
   lacks is `ChromaUnsupported` (chroma above 4:2:0), `BitDepthUnsupported` (more than 8 bits) or
   `ProfileUnsupported`, checked with `vaGetConfigAttributes`, never downgraded.
 - `annexb::next_nalu` rejects a NAL unit shorter than its header (the HEVC slice and parameter set
-  parsers slice past it). `src/hevc.rs` scans HEVC VPS, SPS and PPS bits (emulation prevention
-  removed) before `cros-codecs` parses them, and rejects what would index out of range there: a
-  sub-layer count of 7 (the profile tier level arrays hold 6) and a scaling list predicted from a
-  matrix id that does not precede it. A truncated parameter set passes the scan so the parser
-  reports it. Release builds are `panic = "abort"`, so `catch_unwind` around `cros-codecs` is not
-  available and every parse panic has to be pre-validated or recorded in `docs/BUGS.md`.
+  parsers slice past it). `src/hevc.rs` (`hevc::ParameterSets`, one per decoder and per colour
+  probe) mirrors the `cros-codecs` HEVC syntax in `src/hevc/` and runs before every `parse_*` call,
+  because that parser indexes fixed arrays with counts it reads from hostile headers, in release
+  builds too. It keeps what later checks need per id (the SPS fields per SPS id, the PPS fields and
+  the SPS it was parsed against per PPS id) and commits them only after `cros-codecs` accepted the
+  unit (`keep_*` after `parse_*`), so both hold the same sets. It rejects with `Malformed`: a
+  sub-layer count of 7 (the profile tier level arrays hold 6), a scaling list predicted from a
+  matrix id that does not precede it, a short-term reference picture set predicted from one of 64
+  or more pictures, a palette predictor initializer count past the 128 slots, more than 19 tile
+  columns or 21 tile rows (the arrays are one short of the spec's 20 and 22), explicit tile column
+  widths or row heights that do not fit the picture in CTBs, a slice header with more than 16
+  long-term pictures or more than 32 entry points, and a slice of a PPS the checks never accepted.
+  The slice scan (`src/hevc/slice.rs`) follows 7.3.6.1 up to the entry point count, including
+  short-term set prediction, long-term pictures, reference list modification and the prediction
+  weight tables, because the entry point count depends on all of them. The scans copy the parser's
+  layout, not the spec's, wherever the two differ (a sub-layer's profile and level are both read
+  only when its level flag is set; the chroma weight flags of list 1 follow `chroma_format_idc`,
+  list 0's follow `chroma_array_type`), since a scan that desyncs from the parser misses what it
+  looks for. A unit the scan cannot finish (truncated, or a value the parser rejects) passes the
+  scan with nothing kept, and the parser reports it. Release builds are `panic = "abort"`, so
+  `catch_unwind` around `cros-codecs` is not available and every parse panic has to be
+  pre-validated or recorded in `docs/BUGS.md`.
 - Hostile headers are rejected before `cros-codecs` computes on them. An H.264 SPS above level
   6.2's 139264 macroblocks, or 1055 macroblocks in either dimension, is `ResolutionUnsupported`
   (the DPB size divides by the macroblock count). Picture order count arithmetic on SPS and slice

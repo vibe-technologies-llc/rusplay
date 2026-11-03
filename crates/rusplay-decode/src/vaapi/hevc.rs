@@ -84,6 +84,7 @@ impl ReferenceSet {
 
 pub(super) struct HevcDecoder {
     parser: Parser,
+    checks: hevc::ParameterSets,
     stream: Option<Stream>,
     references: Vec<Reference>,
     previous_tid0_poc: i32,
@@ -98,6 +99,7 @@ impl HevcDecoder {
     pub(super) fn new() -> Self {
         Self {
             parser: Parser::default(),
+            checks: hevc::ParameterSets::default(),
             stream: None,
             references: Vec::new(),
             previous_tid0_poc: 0,
@@ -130,16 +132,18 @@ impl HevcDecoder {
                         .map_err(malformed(BitstreamUnit::VideoParameterSet))?;
                 }
                 NaluType::SpsNut => {
-                    hevc::check_sequence_parameter_set(nalu.as_ref())?;
+                    let checked = hevc::check_sequence_parameter_set(nalu.as_ref())?;
                     self.parser
                         .parse_sps(&nalu)
                         .map_err(malformed(BitstreamUnit::SequenceParameterSet))?;
+                    self.checks.keep_sequence_parameter_set(checked);
                 }
                 NaluType::PpsNut => {
-                    hevc::check_picture_parameter_set(nalu.as_ref())?;
+                    let checked = self.checks.check_picture_parameter_set(nalu.as_ref())?;
                     self.parser
                         .parse_pps(&nalu)
                         .map_err(malformed(BitstreamUnit::PictureParameterSet))?;
+                    self.checks.keep_picture_parameter_set(checked);
                 }
                 NaluType::PrefixSeiNut => {
                     if let Some(payload) = nalu.as_ref().get(NAL_HEADER_LEN..) {
@@ -165,6 +169,8 @@ impl HevcDecoder {
                 | NaluType::IdrWRadl
                 | NaluType::IdrNLp
                 | NaluType::CraNut => {
+                    self.checks
+                        .check_slice_header(nalu.as_ref(), nalu.header.type_)?;
                     let mut slice = self
                         .parser
                         .parse_slice_header(nalu)
