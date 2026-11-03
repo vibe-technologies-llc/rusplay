@@ -1,8 +1,10 @@
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod annexb;
+#[cfg(any(feature = "software", feature = "vaapi", feature = "nvdec"))]
+mod av1;
 mod capabilities;
 mod error;
-#[cfg(all(test, any(feature = "vaapi", feature = "nvdec")))]
+#[cfg(all(test, any(feature = "software", feature = "vaapi", feature = "nvdec")))]
 #[path = "../tests/common/mod.rs"]
 mod fixtures;
 mod frame;
@@ -41,7 +43,7 @@ pub use crate::software::Rav1dDecoder;
 pub use crate::vaapi::VaapiDecoder;
 pub use crate::{
     capabilities::{Capabilities, capabilities},
-    error::{BitstreamUnit, DecodeError},
+    error::{Av1SyntaxError, BitstreamUnit, DecodeError},
     frame::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
         DmaBufPlane, DrmFourcc,

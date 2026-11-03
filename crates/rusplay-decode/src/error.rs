@@ -83,6 +83,61 @@ pub enum DecodeError {
     },
     #[error("the nvdec parser delivered a {codec} picture before its sequence")]
     PictureBeforeSequence { codec: Codec },
+    #[error(transparent)]
+    Av1Syntax(#[from] Av1SyntaxError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum Av1SyntaxError {
+    #[error("the av1 {unit} ends before its last syntax element")]
+    Truncated { unit: BitstreamUnit },
+    #[error("av1 sequence profile {0} is reserved")]
+    ReservedProfile(u32),
+    #[error("an av1 frame header arrived before any sequence header")]
+    FrameBeforeSequenceHeader,
+    #[error("the av1 frame header uses reference slot {slot}, which holds no known frame")]
+    EmptyReferenceSlot { slot: u8 },
+    #[error(
+        "av1 short reference signalling names slot {slot}, which is not before the current frame"
+    )]
+    ShortSignalledReferenceNotPast { slot: u8 },
+    #[error("the av1 frame uses superres on a {width} pixel wide frame without downscaling it")]
+    SuperresWithoutDownscale { width: u32 },
+    #[error("{0} av1 tile columns is more than the 64 the format allows")]
+    TileColumnsOutOfRange(u32),
+    #[error("{0} av1 tile rows is more than the 64 the format allows")]
+    TileRowsOutOfRange(u32),
+    #[error("av1 context_update_tile_id {tile} is not one of the frame's {tiles} tiles")]
+    ContextUpdateTileOutOfRange { tile: u32, tiles: u32 },
+    #[error("an av1 frame obu signals show_existing_frame")]
+    ShowExistingFrameInFrameObu,
+    #[error("a new av1 frame header arrived before the previous frame's last tile")]
+    FrameHeaderDuringFrame,
+    #[error("an av1 redundant frame header arrived without the frame it repeats")]
+    RedundantFrameHeaderWithoutFrame,
+    #[error("an av1 tile group arrived without a frame header")]
+    TileGroupWithoutFrameHeader,
+    #[error(
+        "av1 tile group covers tiles {start} to {end}, but the frame expects tile {expected} next of {tiles}"
+    )]
+    TileGroupOutOfOrder {
+        start: u32,
+        end: u32,
+        expected: u32,
+        tiles: u32,
+    },
+    #[error("av1 tile {tile} claims {size} bytes, but only {remaining} remain in its tile group")]
+    TileSizePastData {
+        tile: u32,
+        size: u64,
+        remaining: u64,
+    },
+    #[error("av1 tile {tile} has no data")]
+    EmptyTile { tile: u32 },
+    #[error(
+        "cros-codecs misreads the frame headers of av1 sequences that carry decoder model info"
+    )]
+    DecoderModelUnsupported,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

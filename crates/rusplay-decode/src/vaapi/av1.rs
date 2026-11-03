@@ -10,8 +10,8 @@ use rusplay_core::{
 };
 
 use crate::{
-    Backend, BitstreamUnit, DecodeError, DecodedFrame,
-    obu::{self, ObuParser},
+    Backend, BitstreamUnit, DecodeError, DecodedFrame, av1,
+    obu::ObuParser,
     signal::{self, HdrTracker},
     vaapi::{
         Stream, StreamFormat, ffi,
@@ -61,7 +61,7 @@ impl Av1Decoder {
         display: &Rc<Display>,
         frame: &EncodedFrame,
     ) -> Result<Option<DecodedFrame>, DecodeError> {
-        obu::check_framing(&frame.data)?;
+        av1::check_framing(&frame.data)?;
 
         let mut data = frame.data.as_slice();
         let mut pending: Option<Pending> = None;

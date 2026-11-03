@@ -1,19 +1,19 @@
 use cros_codecs::codec::av1::parser::{
-    FrameHeaderObu, FrameType, Obu, ObuAction, ObuType, ParsedObu, Parser,
+    FrameHeaderObu, FrameType, Obu, ObuAction, ObuType, ParsedObu, Parser, SEG_LVL_ALT_Q,
 };
 use rusplay_core::Codec;
 
-use crate::{BitstreamUnit, DecodeError};
+use crate::{
+    Av1SyntaxError, BitstreamUnit, DecodeError,
+    av1::{self, Av1Syntax, Layer, ObuKind, Progress, Refresh, SlotFrame, Unit},
+};
 
 const CODEC: Codec = Codec::Av1;
 const KEY_FRAME: u8 = 0;
 const TEMPORAL_DELIMITER: [u8; 2] = [0x12, 0x00];
-const RESERVED_BIT: u8 = 0x01;
-const HAS_SIZE_FIELD: u8 = 0x02;
-const EXTENSION_FLAG: u8 = 0x04;
-const LEB128_MAX_BYTES: usize = 8;
-const LEB128_PAYLOAD_BITS: usize = 7;
-const LEB128_PAYLOAD_MASK: u8 = 0x7f;
+const SEQUENCE_HEADER_WITH_SIZE: u8 = 0x0a;
+const LEB128_PAYLOAD_BITS: u32 = 7;
+const LEB128_PAYLOAD_MASK: usize = 0x7f;
 const LEB128_CONTINUATION: u8 = 0x80;
 
 const ALL_REFERENCE_SLOTS: u32 = 0xff;
@@ -24,37 +24,60 @@ const SHOW_FRAME: u8 = 0x10;
 
 pub(crate) struct ObuParser {
     parser: Parser,
+    syntax: Av1Syntax,
+    sequence_payload: Option<Vec<u8>>,
     references_valid: bool,
 }
 
 impl ObuParser {
     pub(crate) fn new() -> Self {
-        let mut parser = Parser::default();
-        let _ = parser.read_obu(&TEMPORAL_DELIMITER);
-
         Self {
-            parser,
+            parser: primed_parser(),
+            syntax: Av1Syntax::default(),
+            sequence_payload: None,
             references_valid: false,
         }
     }
 
     pub(crate) fn read_obu<'a>(&mut self, data: &'a [u8]) -> Result<ObuAction<'a>, DecodeError> {
-        self.parser.read_obu(data).map_err(obu_error)
+        match self.parser.read_obu(data).map_err(obu_error)? {
+            ObuAction::Drop(_) => {
+                let length = av1::obu_length(data)?;
+                Ok(ObuAction::Drop(u32::try_from(length).unwrap_or(u32::MAX)))
+            }
+            process @ ObuAction::Process(_) => Ok(process),
+        }
     }
 
     pub(crate) fn parse<'a>(&mut self, obu: Obu<'a>) -> Result<ParsedObu<'a>, DecodeError> {
         let kind = obu.header.obu_type;
 
-        if kind == ObuType::TileGroup && self.parser.last_frame_header.is_none() {
-            return Err(malformed("tile group without a frame header"));
-        }
         if matches!(kind, ObuType::FrameHeader | ObuType::Frame) {
             self.admit_frame_header(obu.as_ref())?;
         }
+        if kind == ObuType::SequenceHeader && av1::decoder_model_present(obu.as_ref())? {
+            return Err(Av1SyntaxError::DecoderModelUnsupported.into());
+        }
+
+        let unit = Unit {
+            kind: obu_kind(kind),
+            layer: obu.header.extension_flag.then(|| Layer {
+                temporal_id: u8::try_from(obu.header.temporal_id).unwrap_or_default(),
+                spatial_id: u8::try_from(obu.header.spatial_id).unwrap_or_default(),
+            }),
+            payload: obu.as_ref(),
+        };
+        if self.syntax.obu(&unit)? == Progress::SequenceChanged {
+            self.parser = primed_parser();
+            self.references_valid = false;
+        }
+        let payload = (kind == ObuType::SequenceHeader).then(|| obu.as_ref().to_vec());
 
         let parsed = self.parser.parse_obu(obu).map_err(obu_error);
-        if parsed.is_err() {
-            self.references_valid = false;
+        match &parsed {
+            Ok(ParsedObu::SequenceHeader(_)) => self.sequence_payload = payload,
+            Err(_) => self.recover(),
+            Ok(_) => {}
         }
 
         parsed
@@ -69,11 +92,36 @@ impl ObuParser {
                 reason,
             })?;
 
+        if let Some(refresh) = refresh_of(header) {
+            self.syntax.refresh(&refresh);
+        }
+
         let refreshes_every_slot = header.frame_type == FrameType::KeyFrame
             && header.refresh_frame_flags == ALL_REFERENCE_SLOTS;
         self.references_valid |= refreshes_every_slot;
 
         Ok(())
+    }
+
+    fn recover(&mut self) {
+        self.references_valid = false;
+        self.parser = primed_parser();
+        self.syntax = Av1Syntax::default();
+
+        let Some(payload) = &self.sequence_payload else {
+            return;
+        };
+        let unit = Unit {
+            kind: ObuKind::SequenceHeader,
+            layer: None,
+            payload,
+        };
+        let _ = self.syntax.obu(&unit);
+
+        let bytes = sequence_obu(payload);
+        if let Ok(ObuAction::Process(obu)) = self.parser.read_obu(&bytes) {
+            let _ = self.parser.parse_obu(obu);
+        }
     }
 
     fn admit_frame_header(&mut self, payload: &[u8]) -> Result<(), DecodeError> {
@@ -101,60 +149,68 @@ impl ObuParser {
     }
 }
 
+fn primed_parser() -> Parser {
+    let mut parser = Parser::default();
+    let _ = parser.read_obu(&TEMPORAL_DELIMITER);
+    parser
+}
+
+fn sequence_obu(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![SEQUENCE_HEADER_WITH_SIZE];
+    let mut size = payload.len();
+    loop {
+        let byte = u8::try_from(size & LEB128_PAYLOAD_MASK).unwrap_or_default();
+        size >>= LEB128_PAYLOAD_BITS;
+        if size == 0 {
+            bytes.push(byte);
+            break;
+        }
+        bytes.push(byte | LEB128_CONTINUATION);
+    }
+    bytes.extend_from_slice(payload);
+    bytes
+}
+
+fn obu_kind(kind: ObuType) -> ObuKind {
+    match kind {
+        ObuType::SequenceHeader => ObuKind::SequenceHeader,
+        ObuType::TemporalDelimiter => ObuKind::TemporalDelimiter,
+        ObuType::FrameHeader => ObuKind::FrameHeader,
+        ObuType::TileGroup => ObuKind::TileGroup,
+        ObuType::Frame => ObuKind::Frame,
+        ObuType::RedundantFrameHeader => ObuKind::RedundantFrameHeader,
+        _ => ObuKind::Other,
+    }
+}
+
+fn refresh_of(header: &FrameHeaderObu) -> Option<Refresh> {
+    let key = header.frame_type == FrameType::KeyFrame;
+    if header.show_existing_frame && !key {
+        return None;
+    }
+
+    let segmentation = &header.segmentation_params;
+    Some(Refresh {
+        flags: u8::try_from(header.refresh_frame_flags & ALL_REFERENCE_SLOTS).unwrap_or_default(),
+        order_hint: header.order_hint,
+        frame: SlotFrame {
+            key,
+            upscaled_width: header.upscaled_width,
+            frame_height: header.frame_height,
+            alt_q: std::array::from_fn(|segment| {
+                segmentation.feature_enabled[segment][SEG_LVL_ALT_Q]
+                    .then(|| i32::from(segmentation.feature_data[segment][SEG_LVL_ALT_Q]))
+            }),
+        },
+    })
+}
+
 fn obu_error(reason: String) -> DecodeError {
     DecodeError::Malformed {
         codec: CODEC,
         unit: BitstreamUnit::Obu,
         reason,
     }
-}
-
-pub(crate) fn check_framing(data: &[u8]) -> Result<(), DecodeError> {
-    let mut rest = data;
-
-    while !rest.is_empty() {
-        rest = rest
-            .get(unit_length(rest)?..)
-            .ok_or_else(|| malformed("obu runs past the end of the packet"))?;
-    }
-
-    Ok(())
-}
-
-fn unit_length(data: &[u8]) -> Result<usize, DecodeError> {
-    let header = data[0];
-    if header & RESERVED_BIT != 0 {
-        return Err(malformed("reserved bit set in the obu header"));
-    }
-    if header & HAS_SIZE_FIELD == 0 {
-        return Err(malformed("obu without a size field"));
-    }
-
-    let header_length = if header & EXTENSION_FLAG != 0 { 2 } else { 1 };
-    let (size, size_length) = leb128(data.get(header_length..).unwrap_or_default())?;
-    let payload_start = header_length + size_length;
-    let remaining = data.len() - payload_start;
-
-    match usize::try_from(size) {
-        Ok(size) if size <= remaining => Ok(payload_start + size),
-        _ => Err(malformed("obu size runs past the end of the packet")),
-    }
-}
-
-fn leb128(data: &[u8]) -> Result<(u64, usize), DecodeError> {
-    let mut value = 0u64;
-
-    for (index, shift) in (0..LEB128_MAX_BYTES).zip((0..).step_by(LEB128_PAYLOAD_BITS)) {
-        let byte = *data
-            .get(index)
-            .ok_or_else(|| malformed("truncated obu size"))?;
-        value |= u64::from(byte & LEB128_PAYLOAD_MASK) << shift;
-        if byte & LEB128_CONTINUATION == 0 {
-            return Ok((value, index + 1));
-        }
-    }
-
-    Err(malformed("unterminated obu size"))
 }
 
 fn malformed(reason: &str) -> DecodeError {

@@ -10,8 +10,8 @@ use rusplay_core::{Codec, SignalledColor};
 use crate::{
     BitstreamUnit, DecodeError,
     annexb::{malformed, next_nalu},
-    hevc,
-    obu::{self, ObuParser},
+    av1, hevc,
+    obu::ObuParser,
     signal::{self, HdrTracker},
 };
 
@@ -207,7 +207,7 @@ fn read_av1(
     mut data: &[u8],
 ) -> Result<Picture, DecodeError> {
     const CODEC: Codec = Codec::Av1;
-    obu::check_framing(data)?;
+    av1::check_framing(data)?;
 
     let mut picture: Picture = None;
 
