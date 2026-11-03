@@ -27,13 +27,13 @@ use rusplay_core::{
 use rusplay_va::ffi;
 
 use crate::{
-    Backend, Capabilities, EncodeError, VideoEncoder,
+    Backend, Capabilities, EncodeError, OutputIndex, Recovery, VideoEncoder,
     device::VAAPI_CODED_ALIGNMENT,
     input::YuvFrame,
     pool::FramePool,
     rate::vbv_buffer_kbit,
     vaapi::{
-        av1::{Av1Profile, Av1Stream},
+        av1::{Av1Profile, Av1Stream, RECONSTRUCTED_SURFACES},
         format::{
             coded_bytes_per_pixel_x2, dma_buf_fourcc, dma_buf_planes, rt_format, surface_format,
         },
@@ -514,6 +514,23 @@ impl Stream {
             Self::Av1(stream) => stream.buffers(context, picture),
         }
     }
+
+    const fn reconstructed_surfaces(profile: CodecProfile) -> usize {
+        match profile {
+            CodecProfile::Av1(_) => RECONSTRUCTED_SURFACES,
+            CodecProfile::H264(_) | CodecProfile::Hevc(_) => 2,
+        }
+    }
+
+    fn reconstruction<'a>(&self, surfaces: &'a [Surface], current: usize) -> &'a Surface {
+        match self {
+            Self::Av1(stream) => surfaces
+                .iter()
+                .find(|surface| !stream.holds(surface.id()))
+                .unwrap_or(&surfaces[current % surfaces.len()]),
+            Self::H264(_) | Self::Hevc(_) => &surfaces[current % surfaces.len()],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,7 +554,7 @@ struct Session {
     context: Context,
     upload: Option<Upload>,
     imports: Vec<(ImportKey, Surface)>,
-    recon: [Surface; 2],
+    recon: Vec<Surface>,
     resolution: Resolution,
     current: usize,
     index: u64,
@@ -560,16 +577,11 @@ impl Session {
 
         let aligned = coded_extent(resolution);
         let format = surface_format(settings.format);
-        let recon = [
-            encoder_surface(&device.display, format, aligned)?,
-            encoder_surface(&device.display, format, aligned)?,
-        ];
-        let context = Context::new(
-            &device.config,
-            aligned.width,
-            aligned.height,
-            &[recon[0].id(), recon[1].id()],
-        )?;
+        let recon = (0..Stream::reconstructed_surfaces(device.selection.profile))
+            .map(|_| encoder_surface(&device.display, format, aligned))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ids: Vec<_> = recon.iter().map(Surface::id).collect();
+        let context = Context::new(&device.config, aligned.width, aligned.height, &ids)?;
         let capacity = aligned.pixel_count() * coded_bytes_per_pixel_x2(settings.format) / 2
             + CODED_BUFFER_HEADROOM;
         let coded = context.coded(usize::try_from(capacity).unwrap_or(usize::MAX))?;
@@ -926,7 +938,10 @@ impl VideoEncoder for VaapiEncoder {
         let picture = Picture {
             keyframe,
             index: session.index,
-            recon: session.recon[session.current].id(),
+            recon: session
+                .stream
+                .reconstruction(&session.recon, session.current)
+                .id(),
             coded: session.coded.id(),
             bits_per_second: settings.bits_per_second(),
             packed_headers: device.packed_headers,
@@ -977,6 +992,34 @@ impl VideoEncoder for VaapiEncoder {
 
     fn request_keyframe(&mut self) {
         self.keyframe_requested = true;
+    }
+
+    fn acknowledge(&mut self, output: OutputIndex) {
+        if let Some(Session {
+            stream: Stream::Av1(stream),
+            ..
+        }) = &mut self.session
+        {
+            stream.acknowledge(output);
+        }
+    }
+
+    fn recover(&mut self, last_good: OutputIndex) -> Recovery {
+        let reference = match &mut self.session {
+            Some(Session {
+                stream: Stream::Av1(stream),
+                ..
+            }) if !self.keyframe_requested => stream.recover(last_good),
+            _ => None,
+        };
+
+        reference.map_or_else(
+            || {
+                self.keyframe_requested = true;
+                Recovery::Keyframe
+            },
+            Recovery::Reference,
+        )
     }
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), EncodeError> {

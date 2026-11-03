@@ -8,6 +8,7 @@ use rusplay_core::{BitDepth, ChromaSubsampling, FrameRate, PixelFormat, Resoluti
 
 use super::{bits_at, color_cases, every_format, frame_rates, picture, pixel, stream_info};
 use crate::{
+    OutputIndex,
     obu::temporal_delimiter,
     vaapi::{
         Picture,
@@ -553,6 +554,7 @@ fn picture_parameters_follow_the_stream_state() {
                 info.qp = qp;
                 let mut stream = Av1Stream::new(case.profile, info);
                 let mut previous: Option<Picture> = None;
+                let mut last_key: Option<Picture> = None;
 
                 for (position, (index, keyframe)) in gop.into_iter().enumerate() {
                     let picture = Picture {
@@ -617,16 +619,139 @@ fn picture_parameters_follow_the_stream_state() {
                         assert_eq!(unsafe { parameters.ref_frame_ctrl_l0.value }, 0);
                     } else {
                         let previous = previous.unwrap();
+                        let key = last_key.unwrap().recon;
 
                         assert_eq!(parameters.reference_frames[0], previous.recon);
-                        assert_eq!(parameters.reference_frames[1..], [INVALID_SURFACE; 7]);
+                        assert_eq!(parameters.reference_frames[1..3], [key, key]);
+                        assert_eq!(parameters.reference_frames[3..], [INVALID_SURFACE; 5]);
+                        assert_eq!(parameters.ref_frame_idx, [0; 7]);
                         assert_eq!(unsafe { parameters.ref_frame_ctrl_l0.value }, 1);
                     }
 
                     stream.commit(&picture);
+                    if keyframe {
+                        last_key = Some(picture);
+                    }
                     previous = Some(picture);
                 }
             }
         }
     }
+}
+
+fn encode_headers(
+    stream: &mut Av1Stream,
+    parser: &mut Parser,
+    picture: &Picture,
+) -> FrameHeaderObu {
+    stream.begin(picture);
+    let order_hint = Av1Stream::order_hint(picture);
+    let mut data = if picture.keyframe {
+        stream.sequence_header()
+    } else {
+        temporal_delimiter()
+    };
+    data.extend(stream.frame_header(picture.keyframe, order_hint).0);
+    let header = feed(parser, &data).1.unwrap();
+    stream.commit(picture);
+
+    header
+}
+
+#[test]
+fn a_recovery_frame_references_only_a_long_term_slot_at_or_before_the_last_good_frame() {
+    let mut stream = Av1Stream::new(
+        Av1Profile::Main,
+        stream_info(
+            pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+            RESOLUTIONS[3],
+        ),
+    );
+    let mut parser = Parser::default();
+    let mut refreshes = Vec::new();
+
+    for index in 0..20 {
+        let header = encode_headers(&mut stream, &mut parser, &picture(index, index == 0));
+        refreshes.push(header.refresh_frame_flags);
+    }
+    let reference = stream.recover(OutputIndex(14));
+    let recovery = picture(20, false);
+    stream.begin(&recovery);
+    let order_hint = Av1Stream::order_hint(&recovery);
+    let (bytes, offsets) = stream.frame_header(false, order_hint);
+    let parameters = stream.picture_parameters(&recovery, order_hint, offsets);
+    let mut data = temporal_delimiter();
+    data.extend(bytes);
+    let header = feed(&mut parser, &data).1.unwrap();
+    stream.commit(&recovery);
+    let after = encode_headers(&mut stream, &mut parser, &picture(21, false));
+
+    assert_eq!(refreshes[0], 0xff);
+    assert_eq!(refreshes[8], 0b011);
+    assert_eq!(refreshes[16], 0b101);
+    assert!(refreshes[1..8].iter().all(|&flags| flags == 1));
+    assert_eq!(reference, Some(OutputIndex(8)));
+    assert_eq!(header.ref_frame_idx, [1; 7]);
+    assert_eq!(header.refresh_frame_flags, 1);
+    assert_eq!(header.primary_ref_frame, 0);
+    assert_eq!(parameters.ref_frame_idx, [1; 7]);
+    assert_eq!(parameters.refresh_frame_flags, 1);
+    assert_eq!(parameters.reference_frames[1], picture(8, false).recon);
+    assert!(stream.holds(picture(8, false).recon));
+    assert!(!stream.holds(picture(16, false).recon));
+    assert!(!stream.holds(picture(19, false).recon));
+    assert_eq!(after.ref_frame_idx, [0; 7]);
+}
+
+#[test]
+fn recovery_needs_a_held_frame_no_newer_than_the_last_good_one() {
+    let mut stream = Av1Stream::new(
+        Av1Profile::Main,
+        stream_info(
+            pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+            RESOLUTIONS[3],
+        ),
+    );
+    let mut parser = Parser::default();
+
+    let before = stream.recover(OutputIndex(0));
+    for index in 0..200 {
+        encode_headers(&mut stream, &mut parser, &picture(index, index == 0));
+    }
+    let stale = stream.recover(OutputIndex(10));
+    let newest = stream.recover(OutputIndex(199));
+
+    assert_eq!(before, None);
+    assert_eq!(stale, None);
+    assert_eq!(newest, Some(OutputIndex(199)));
+}
+
+#[test]
+fn an_acknowledged_long_term_frame_is_kept_while_the_other_slot_waits_for_its_ack() {
+    let mut stream = Av1Stream::new(
+        Av1Profile::Main,
+        stream_info(
+            pixel(ChromaSubsampling::Yuv420, BitDepth::Eight),
+            RESOLUTIONS[3],
+        ),
+    );
+    let mut parser = Parser::default();
+    let mut refreshes = Vec::new();
+
+    for index in 0..10 {
+        encode_headers(&mut stream, &mut parser, &picture(index, index == 0));
+    }
+    stream.acknowledge(OutputIndex(8));
+    for index in 10..40 {
+        let header = encode_headers(&mut stream, &mut parser, &picture(index, false));
+        refreshes.push((index, header.refresh_frame_flags));
+    }
+    let long_term: Vec<_> = refreshes
+        .iter()
+        .filter(|(_, flags)| *flags != 1)
+        .copied()
+        .collect();
+
+    assert_eq!(long_term, [(16, 0b101)]);
+    assert_eq!(stream.recover(OutputIndex(39)), Some(OutputIndex(39)));
 }

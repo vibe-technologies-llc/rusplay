@@ -38,9 +38,10 @@ paths:
   reference); `recover(last_good)` asks that the next output reference nothing newer than
   `last_good` and returns `Recovery::Reference(index)` naming the output it will reference
   (at or before `last_good`), after which no output between that one and the recovery frame is
-  referenced again. The default implementation, which every backend uses today (x264, x265,
-  SVT-AV1, VAAPI, NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays
-  that of a keyframe request; the software backends' tests hold it (`check_recovery_falls_back_to_a_keyframe`).
+  referenced again. VAAPI AV1 implements it with its long-term slots (below); the default
+  implementation, which every other backend uses today (x264, x265, SVT-AV1, VAAPI H.264/HEVC,
+  NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays that of a
+  keyframe request; the software backends' tests hold it (`check_recovery_falls_back_to_a_keyframe`).
   Per-backend reference recovery is in `docs/FEATURES.md` (`video-ltr-*`).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.
 - The software encoders expose every library parameter: typed config fields for the common ones,
@@ -167,14 +168,31 @@ paths:
   because radeonsi pads the coded frame (to 8x2 on VCN 5, 64x16 on VCN 4) and keeps the captured
   size only as the render size.
 - Stream structure: P frames with a single reference, the previous frame, over two reconstructed
-  surfaces used alternately; a keyframe on the first frame and on `request_keyframe` only. Intra
+  surfaces used alternately (AV1: four, see the AV1 reference slots below); a keyframe on the first frame and on `request_keyframe` only. Intra
   periods in the sequence parameters are `0xffff`, since the picture type of every frame is set by
   Rusplay. H.264 uses POC type 2, a 16-bit `frame_num`, `max_num_reorder_frames` 0 and
   `max_dec_frame_buffering` 1; HEVC uses 64x64 CTBs, 8x8 minimum CBs, a single SPS short-term RPS
   {-1} and no temporal MVP (the VA parameters carry the unwrapped picture order count since the
   last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 16-bit
   LSB; radeonsi decodes identically across the 65536th frame either way); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
-  (`primary_ref_frame` 0) and one tile unless the size forces more. A temporal delimiter is
+  (`primary_ref_frame` 0) and one tile unless the size forces more.
+- AV1 reference slots (`vaapi/av1.rs`, `Av1Stream`): slot 0 holds the previous frame, slots 1 and 2
+  are long-term slots, and the stream tracks each slot's surface and `OutputIndex`; a keyframe
+  fills all three. Every 8 frames (`LONG_TERM_INTERVAL`, counted from the newest long-term slot)
+  one long-term slot is refreshed alongside slot 0 (`refresh_frame_flags`): the slot that is not
+  the newest acknowledged one, and only when its frame is acknowledged already, no ack has come at
+  all, or it waited 60 frames (`LONG_TERM_STALE`) for one. `recover(last_good)` picks the newest
+  held slot at or before `last_good` within 120 frames (`MAX_RECOVERY_DISTANCE`, below the 8-bit
+  order hint's half range) and codes the next frame with every `ref_frame_idx` on it and only slot
+  0 refreshed; slots holding a frame newer than the reference are forgotten. With nothing held it
+  returns `None` and the encoder forces a keyframe. Each reconstruction uses the first of four
+  surfaces no slot holds, and `reference_frames` lists every held slot, because Mesa's VA frontend
+  evicts DPB entries missing from it. Mesa maps `reference_frames`/`ref_frame_idx` and
+  `ref_frame_ctrl_l0` onto the VCN DPB, and radeonsi rewrites the frame header with the
+  `refresh_frame_flags` and `ref_frame_idx` it parsed from Rusplay's, so the reference structure is
+  Rusplay's on radeonsi. The hardware tests (`av1_recovers_*`, checked on Mesa 26.2.5, RX 9070)
+  decode through rav1d a stream with the frames between the reference and the recovery frame
+  dropped; the same stream without the recovery frame does not decode. A temporal delimiter is
   prepended when the driver output lacks one, so every AV1 packet is a temporal unit.
 - The header writers are tested without a device in `src/vaapi/header_tests/`: every packed header
   (H.264 SPS/PPS/slice, HEVC VPS/SPS/PPS/slice, AV1 sequence and frame header) is parsed back with

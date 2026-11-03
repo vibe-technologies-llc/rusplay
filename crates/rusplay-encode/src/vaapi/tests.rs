@@ -22,7 +22,7 @@ use rusplay_core::{
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
 
 use crate::{
-    EncodeError, VideoEncoder, capabilities, hardware,
+    EncodeError, OutputIndex, Recovery, VideoEncoder, capabilities, hardware,
     hdr::fixtures::{hdr10_color, signalled},
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
@@ -286,14 +286,14 @@ fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<Picture>> {
     Some(pictures)
 }
 
-fn decode_rav1d(frames: &[EncodedFrame]) -> Vec<Picture> {
+fn decode_rav1d<'a>(frames: impl IntoIterator<Item = &'a EncodedFrame>) -> Vec<Picture> {
     let config = SoftwareDecoderConfig {
         threads: NonZeroU32::new(1),
     };
     let mut decoder = Rav1dDecoder::new(&config).unwrap();
 
     frames
-        .iter()
+        .into_iter()
         .map(|frame| {
             let output = decoder
                 .decode(frame)
@@ -594,6 +594,96 @@ fn keyframe_is_produced_on_request() {
         assert!(is_key(&forced.data), "{codec}");
         assert!(!after.keyframe);
         assert!(!is_key(&after.data), "{codec}");
+    }
+}
+
+fn recover_after_a_loss(acknowledged: Option<u64>) {
+    const LAST_GOOD: u64 = 14;
+    const RESUMED: u64 = 20;
+    const COUNT: u64 = 30;
+
+    let format = yuv420(BitDepth::Eight);
+    let Some(mut encoder) = try_open(&video(Codec::Av1, format, RESOLUTION)) else {
+        return;
+    };
+    let frames = pattern_frames(format, RESOLUTION, COUNT);
+    let split = usize::try_from(RESUMED).unwrap();
+
+    let mut packets = encode_all(encoder.as_mut(), &frames[..split]);
+    if let Some(output) = acknowledged {
+        encoder.acknowledge(OutputIndex(output));
+    }
+    let recovery = encoder.recover(OutputIndex(LAST_GOOD));
+    packets.extend(encode_all(encoder.as_mut(), &frames[split..]));
+    let received: Vec<u64> = (0..=LAST_GOOD).chain(RESUMED..COUNT).collect();
+    let pictures = decode_rav1d(
+        received
+            .iter()
+            .map(|&index| &packets[usize::try_from(index).unwrap()]),
+    );
+
+    let Recovery::Reference(OutputIndex(reference)) = recovery else {
+        panic!("vaapi av1 fell back to a keyframe: {recovery:?}");
+    };
+    assert!(reference <= LAST_GOOD);
+    assert!(LAST_GOOD - reference < 16);
+    assert!(!packets[split].keyframe);
+    assert!(!is_av1_key(&packets[split].data));
+    assert!(packets[split + 1..].iter().all(|frame| !frame.keyframe));
+    for (index, picture) in received.iter().zip(&pictures) {
+        let source = &pattern_planes(format, RESOLUTION, *index)[0];
+        let quality = psnr(source, &picture.luma, format.depth);
+
+        assert!(
+            quality >= PSNR_FLOOR_DB,
+            "frame {index} after recovering from {reference} decodes at {quality:.1} dB"
+        );
+    }
+}
+
+#[test]
+fn av1_recovers_against_an_acknowledged_reference_without_a_keyframe() {
+    recover_after_a_loss(Some(12));
+}
+
+#[test]
+fn av1_recovers_against_the_last_good_frame_without_acknowledgements() {
+    recover_after_a_loss(None);
+}
+
+#[test]
+fn recovery_before_any_frame_or_on_h26x_is_a_keyframe() {
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        let format = yuv420(BitDepth::Eight);
+        let Some(mut encoder) = try_open(&video(codec, format, RESOLUTION)) else {
+            continue;
+        };
+
+        let early = encoder.recover(OutputIndex(0));
+        let first = encoder
+            .encode(&pattern_frame(format, RESOLUTION, 0))
+            .unwrap()
+            .unwrap();
+        for index in 1..4 {
+            encoder
+                .encode(&pattern_frame(format, RESOLUTION, index))
+                .unwrap();
+        }
+        let later = encoder.recover(OutputIndex(2));
+        let answered = encoder
+            .encode(&pattern_frame(format, RESOLUTION, 4))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(early, Recovery::Keyframe, "{codec}");
+        assert!(first.keyframe);
+        if codec == Codec::Av1 {
+            assert!(matches!(later, Recovery::Reference(OutputIndex(0..=2))));
+            assert!(!answered.keyframe);
+        } else {
+            assert_eq!(later, Recovery::Keyframe, "{codec}");
+            assert!(answered.keyframe, "{codec}");
+        }
     }
 }
 
