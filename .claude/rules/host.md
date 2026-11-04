@@ -53,13 +53,17 @@ paths:
   (a `HostError::is_session_failure`, after which the next window opens) and `Stopped(Option<HostError>)`
   for any other error, which ends the loop. `renew_pin` raises the cancel flag `accept` polls, and
   the flag is cleared again when the next window opens, so a request made while a client streams
-  is dropped and never cancels a window it was not meant for. `stop` raises the stop flag and the
+  is dropped and never cancels a window it was not meant for. `disconnect` ends the streaming client
+  without stopping the host: the watch loop sees the flag (cleared when a watch starts, so a request
+  made while no client streams does nothing), stops the `HostStream` (the client gets a `Goodbye`),
+  and the loop emits `ClientLeft` and opens the next pairing window as when a client leaves. `stop` raises the stop flag and the
   cancel flag, joins the thread (which stops the `HostStream` and drops the responder), and
   returns the events still queued, with `Stopped(Some(ServicePanicked))` added if the thread
   panicked; dropping the service does the same. The loop is generic over the `serve` call so
   its tests (`service::tests`) run it over loopback with no GPU and no portal; they cover the
-  window events, timeout renewal, `renew_pin` and `stop`. A client that streams is driven end to end
-  only by `src/tests.rs` against `serve_with`, not through `HostService`.
+  window events, timeout renewal, `renew_pin` and `stop`; `src/tests/service.rs` drives a paired
+  client through a service whose `serve` is `serve_with` over the loopback test host (the
+  disconnect and the reconnect after it).
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across

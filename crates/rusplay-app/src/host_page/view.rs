@@ -203,6 +203,17 @@ impl HostPageView {
         cx.notify();
     }
 
+    fn disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.model.client().is_none() {
+            return;
+        }
+
+        if let Some(handle) = &self.handle {
+            handle.disconnect();
+        }
+        cx.notify();
+    }
+
     fn revoke(&mut self, id: PeerId, name: &str, cx: &mut Context<Self>) {
         let Some(clients) = &self.clients else {
             return;
@@ -369,7 +380,7 @@ impl HostPageView {
             .child(body)
     }
 
-    fn render_client(&self) -> impl IntoElement + use<> {
+    fn render_client(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let heading = match self.model.client() {
             Some(client) => card_heading(
                 if client.name.is_empty() {
@@ -399,9 +410,17 @@ impl HostPageView {
             div().flex().pb_3().child(badge(label, tone))
         });
 
+        let disconnect = self.model.client().map(|_| {
+            div().flex().pb_3().child(
+                button("disconnect-client", "Disconnect", ButtonStyle::Danger, true)
+                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+            )
+        });
+
         card()
             .child(heading)
             .children(badges)
+            .children(disconnect)
             .child(
                 div()
                     .flex()
@@ -497,7 +516,7 @@ impl Render for HostPageView {
             .min_w_0()
             .gap_5()
             .child(self.render_pairing(cx))
-            .child(self.render_client());
+            .child(self.render_client(cx));
 
         div().id("host-page").size_full().overflow_y_scroll().child(
             div()

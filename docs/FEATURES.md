@@ -10,7 +10,6 @@
 
 # Client app
 - [S] `app-host-live-check`: run the Host this PC page on a live Wayland session and fix what the compile-only work missed: the portal permission dialog while `Starting`, the PIN, countdown and `New PIN`, a PIN pairing and a reconnect from a second machine, the streaming stats, `Revoke`, and `Stop hosting` and quit while streaming (`HostService::stop` joins every stage, so check the window does not freeze)
-- [S] `app-host-disconnect`: a `Disconnect` button on the connected client card that ends the streaming client without stopping the host (a `HostService` method that stops the current `HostStream`, then the loop opens the next pairing window as when a client leaves)
 
 # Session
 - [L] `capture-virtual-output`: stream a virtual output sized to the client. Add `SourceKind::Virtual` (ashpd 0.13 offers `SourceType::Virtual`; `portal_sources` maps only monitor and window), send the client's swapchain size, refresh rate and colour volume in the handshake, and use them for `video.resolution`/`frame_rate`; later resize live through the encoder reopen path. Removes the host downscale and client upscale and makes a monitorless host work. Start with a per-compositor spike (Mutter, KWin), since sizing virtual streams is compositor specific

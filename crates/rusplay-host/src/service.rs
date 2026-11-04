@@ -54,6 +54,7 @@ pub struct StreamSnapshot {
 struct Control {
     stop: AtomicBool,
     cancel: AtomicBool,
+    disconnect: AtomicBool,
     snapshot: Mutex<Option<StreamSnapshot>>,
 }
 
@@ -69,6 +70,14 @@ impl Control {
 
     fn request_new_pin(&self) {
         self.cancel.store(true, Ordering::Release);
+    }
+
+    fn request_disconnect(&self) {
+        self.disconnect.store(true, Ordering::Release);
+    }
+
+    fn disconnecting(&self) -> bool {
+        self.disconnect.load(Ordering::Acquire)
     }
 
     fn begin_window(&self) {
@@ -118,7 +127,7 @@ impl HostService {
         Self::spawn(host, serve, Some(responder))
     }
 
-    fn spawn<S>(
+    pub(crate) fn spawn<S>(
         host: HostSession,
         serve: S,
         responder: Option<Responder>,
@@ -169,6 +178,10 @@ impl HostService {
 
     pub fn renew_pin(&self) {
         self.control.request_new_pin();
+    }
+
+    pub fn disconnect(&self) {
+        self.control.request_disconnect();
     }
 
     pub fn is_finished(&self) -> bool {
@@ -279,7 +292,9 @@ where
     }
 
     fn watch(&self, stream: HostStream) -> Result<(), HostError> {
-        while !stream.is_finished() && !self.control.stopping() {
+        self.control.disconnect.store(false, Ordering::Release);
+
+        while !stream.is_finished() && !self.control.stopping() && !self.control.disconnecting() {
             *self.control.snapshot.lock() = Some(StreamSnapshot {
                 client: stream.client(),
                 stats: stream.stats(),
@@ -290,7 +305,8 @@ where
 
         self.control.snapshot.lock().take();
 
-        if self.control.stopping() {
+        if self.control.stopping() || self.control.disconnecting() {
+            self.control.disconnect.store(false, Ordering::Release);
             stream.stop()
         } else {
             stream.wait()

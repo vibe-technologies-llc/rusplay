@@ -115,6 +115,10 @@ impl HostHandle {
         self.service.renew_pin();
     }
 
+    pub fn disconnect(&self) {
+        self.service.disconnect();
+    }
+
     pub fn is_finished(&self) -> bool {
         self.service.is_finished()
     }

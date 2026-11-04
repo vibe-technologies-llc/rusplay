@@ -1,6 +1,7 @@
 mod input;
 mod media;
 mod microphone;
+mod service;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -415,11 +416,15 @@ impl TestClient {
     }
 
     fn pair(host: SocketAddr) -> (Self, PeerRecord) {
+        Self::pair_with(host, &pin())
+    }
+
+    fn pair_with(host: SocketAddr, pin: &Pin) -> (Self, PeerRecord) {
         let client = Self::bind(host);
         let outcome = pair_as_client(
             &client.transport,
             host,
-            &pin(),
+            pin,
             ClientName::new(CLIENT_NAME).unwrap(),
             PairingTiming::from(&network()),
         )
