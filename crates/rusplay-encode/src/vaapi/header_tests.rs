@@ -176,6 +176,7 @@ pub(super) fn stream_info(format: PixelFormat, resolution: Resolution) -> Stream
         peak_kbps: PEAK_KBPS,
         qp: None,
         siting: ChromaSiting::default(),
+        long_term_references: true,
     }
 }
 

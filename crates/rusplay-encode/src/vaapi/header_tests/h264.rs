@@ -6,9 +6,12 @@ use rusplay_core::{BitDepth, ChromaSubsampling, FrameRate, Resolution};
 use super::{
     assert_no_start_code_emulation, color_cases, frame_rates, picture, pixel, stream_info,
 };
-use crate::vaapi::{
-    Picture, ffi,
-    h264::{H264Profile, H264Stream},
+use crate::{
+    OutputIndex,
+    vaapi::{
+        Picture, StreamInfo, ffi,
+        h264::{H264Profile, H264Stream, LEVELS, LONG_TERM_REFERENCE_FRAMES},
+    },
 };
 
 const PROFILES: [H264Profile; 3] = [
@@ -160,8 +163,8 @@ fn sps_carries_every_field_the_writer_sets() {
             assert!(!sps.seq_scaling_matrix_present_flag);
             assert_eq!(sps.log2_max_frame_num_minus4, 12);
             assert_eq!(sps.pic_order_cnt_type, 2);
-            assert_eq!(sps.max_num_ref_frames, 1);
-            assert!(!sps.gaps_in_frame_num_value_allowed_flag);
+            assert_eq!(sps.max_num_ref_frames, 2);
+            assert!(sps.gaps_in_frame_num_value_allowed_flag);
             assert_eq!(
                 u32::from(sps.pic_width_in_mbs_minus1) + 1,
                 geometry.width_mbs
@@ -228,7 +231,7 @@ fn vui_signals_colour_timing_and_restrictions() {
                 assert_eq!(vui.log2_max_mv_length_horizontal, 15);
                 assert_eq!(vui.log2_max_mv_length_vertical, 15);
                 assert_eq!(vui.max_num_reorder_frames, 0);
-                assert_eq!(vui.max_dec_frame_buffering, 1);
+                assert_eq!(vui.max_dec_frame_buffering, 2);
             }
         }
     }
@@ -303,6 +306,7 @@ fn pps_carries_profile_tools_and_the_initial_qp() {
 struct Step {
     picture: Picture,
     previous: Option<Picture>,
+    long_term: Option<Picture>,
     order: i32,
     frame_num: usize,
     idr_pic_id: usize,
@@ -322,6 +326,7 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
     let mut stream = stream(profile, Resolution::new(402, 226));
     let parsed = parse(&stream);
     let mut previous: Option<Picture> = None;
+    let mut long_term: Option<Picture> = None;
 
     for (position, (index, keyframe, frame_num, idr_pic_id)) in gop.into_iter().enumerate() {
         let picture = Picture {
@@ -334,6 +339,7 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
         let step = Step {
             picture,
             previous,
+            long_term,
             order,
             frame_num,
             idr_pic_id,
@@ -342,6 +348,9 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
 
         stream.commit(&picture, order);
         previous = Some(picture);
+        if keyframe {
+            long_term = Some(picture);
+        }
     }
 }
 
@@ -362,7 +371,10 @@ fn slice_headers_follow_the_stream_state() {
             assert_eq!(usize::from(header.frame_num), step.frame_num);
             assert!(!header.field_pic_flag);
             assert!(!header.num_ref_idx_active_override_flag);
-            assert!(!header.ref_pic_list_modification_flag_l0);
+            assert_eq!(
+                header.ref_pic_list_modification_flag_l0,
+                !keyframe && step.frame_num == 1
+            );
             assert_eq!(header.slice_qp_delta, 0);
             assert_eq!(header.disable_deblocking_filter_idc, 0);
             assert_eq!(header.slice_alpha_c0_offset_div2, 0);
@@ -373,7 +385,7 @@ fn slice_headers_follow_the_stream_state() {
                 assert_eq!(slice.nal_type, NaluType::SliceIdr);
                 assert_eq!(usize::from(header.idr_pic_id), step.idr_pic_id);
                 assert!(!header.dec_ref_pic_marking.no_output_of_prior_pics_flag);
-                assert!(!header.dec_ref_pic_marking.long_term_reference_flag);
+                assert!(header.dec_ref_pic_marking.long_term_reference_flag);
             } else {
                 assert_eq!(slice.nal_type, NaluType::Slice);
                 assert!(
@@ -433,9 +445,10 @@ fn va_picture_and_slice_parameters_follow_the_stream_state() {
             );
             assert_eq!(slice_parameters.macroblock_info, ffi::VA_INVALID_ID);
             assert_eq!(
-                picture_parameters.ReferenceFrames[1].flags,
+                picture_parameters.ReferenceFrames[2].flags,
                 ffi::VA_PICTURE_H264_INVALID
             );
+            assert_eq!(current.flags != 0, picture.keyframe);
 
             if picture.keyframe {
                 assert_eq!(usize::from(slice_parameters.idr_pic_id), step.idr_pic_id);
@@ -444,18 +457,248 @@ fn va_picture_and_slice_parameters_follow_the_stream_state() {
                 assert_eq!(listed.flags, ffi::VA_PICTURE_H264_INVALID);
             } else {
                 let previous = step.previous.unwrap();
+                let (flags, frame_idx) = if step.frame_num == 1 {
+                    (ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE, 0)
+                } else {
+                    (
+                        ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE,
+                        step.frame_num - 1,
+                    )
+                };
+                let kept = picture_parameters.ReferenceFrames[1];
 
                 assert_eq!(reference.picture_id, previous.recon);
-                assert_eq!(reference.flags, ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE);
-                assert_eq!(
-                    usize::try_from(reference.frame_idx).unwrap(),
-                    step.frame_num - 1
-                );
+                assert_eq!(reference.flags, flags);
+                assert_eq!(usize::try_from(reference.frame_idx).unwrap(), frame_idx);
                 assert_eq!(reference.TopFieldOrderCnt, step.order - 2);
                 assert_eq!(listed.picture_id, previous.recon);
-                assert_eq!(listed.flags, ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE);
+                assert_eq!(listed.flags, flags);
+                if step.frame_num == 1 {
+                    assert_eq!(kept.flags, ffi::VA_PICTURE_H264_INVALID);
+                } else {
+                    assert_eq!(kept.picture_id, step.long_term.unwrap().recon);
+                    assert_eq!(kept.flags, ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE);
+                    assert_eq!(kept.frame_idx, 0);
+                }
             }
         });
+    }
+}
+
+fn modifications(header: &SliceHeader) -> Vec<(u8, u32)> {
+    header
+        .ref_pic_list_modification_l0
+        .iter()
+        .map(|entry| (entry.modification_of_pic_nums_idc, entry.long_term_pic_num))
+        .collect()
+}
+
+fn marking_operations(header: &SliceHeader) -> Vec<(u8, u32)> {
+    header
+        .dec_ref_pic_marking
+        .inner
+        .iter()
+        .map(|entry| {
+            (
+                entry.memory_management_control_operation,
+                entry.long_term_frame_idx,
+            )
+        })
+        .collect()
+}
+
+fn long_term_walk(
+    stream: &mut H264Stream,
+    count: u64,
+    mut check: impl FnMut(&H264Stream, u64, &Picture),
+) {
+    for index in 0..count {
+        let picture = picture(index, index == 0);
+        let order = H264Stream::order(&picture);
+
+        stream.begin(&picture);
+        check(stream, index, &picture);
+        stream.commit(&picture, order);
+    }
+}
+
+#[test]
+fn candidates_carry_mmco_and_the_next_frame_references_them_long_term() {
+    let mut stream = stream(H264Profile::High, Resolution::new(402, 226));
+    let mut walked = 0;
+
+    long_term_walk(&mut stream, 20, |stream, index, picture| {
+        let order = H264Stream::order(picture);
+        let header = parse_slice(stream, index == 0).header;
+        let parameters = stream.picture_parameters(picture, order);
+        let slice = stream.slice_parameters(picture);
+        let candidate = index == 8 || index == 16;
+        let follows_candidate = index == 1 || index == 9 || index == 17;
+        let expected_marking = if candidate { vec![(6, 0)] } else { Vec::new() };
+        let expected_modification = if follows_candidate {
+            vec![(2, 0), (3, 0)]
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!(
+            marking_operations(&header),
+            expected_marking,
+            "frame {index}"
+        );
+        assert_eq!(
+            modifications(&header),
+            expected_modification,
+            "frame {index}"
+        );
+        assert_eq!(
+            header
+                .dec_ref_pic_marking
+                .adaptive_ref_pic_marking_mode_flag,
+            candidate
+        );
+        assert_eq!(
+            parameters.CurrPic.flags,
+            if candidate || index == 0 {
+                ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE
+            } else {
+                0
+            }
+        );
+        assert_eq!(
+            parameters.CurrPic.frame_idx,
+            if candidate {
+                0
+            } else {
+                u32::try_from(index).unwrap()
+            }
+        );
+        if follows_candidate {
+            assert_eq!(
+                slice.RefPicList0[0].flags,
+                ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE
+            );
+            assert_eq!(slice.RefPicList0[0].frame_idx, 0);
+            assert_eq!(
+                parameters.ReferenceFrames[1].flags,
+                ffi::VA_PICTURE_H264_INVALID,
+                "only the long-term frame stays held"
+            );
+        } else if index > 0 {
+            assert_eq!(
+                slice.RefPicList0[0].flags,
+                ffi::VA_PICTURE_H264_SHORT_TERM_REFERENCE
+            );
+            assert_eq!(
+                parameters.ReferenceFrames[1].flags,
+                ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE
+            );
+        }
+        walked += 1;
+    });
+
+    assert_eq!(walked, 20);
+}
+
+#[test]
+fn a_recovery_frame_references_the_long_term_frame_and_marks_nothing() {
+    let mut stream = stream(H264Profile::High, Resolution::new(402, 226));
+
+    long_term_walk(&mut stream, 13, |_, _, _| {});
+    let reference = stream.recover(OutputIndex(10));
+    let recovery = picture(13, false);
+    let order = H264Stream::order(&recovery);
+    stream.begin(&recovery);
+    let header = parse_slice(&stream, false).header;
+    let parameters = stream.picture_parameters(&recovery, order);
+    let slice = stream.slice_parameters(&recovery);
+
+    assert_eq!(reference, Some(OutputIndex(8)));
+    assert_eq!(header.frame_num, 13);
+    assert_eq!(modifications(&header), vec![(2, 0), (3, 0)]);
+    assert!(
+        !header
+            .dec_ref_pic_marking
+            .adaptive_ref_pic_marking_mode_flag
+    );
+    assert_eq!(
+        parameters.ReferenceFrames[0].picture_id,
+        picture(8, false).recon
+    );
+    assert_eq!(parameters.ReferenceFrames[0].TopFieldOrderCnt, 16);
+    assert_eq!(
+        parameters.ReferenceFrames[1].flags,
+        ffi::VA_PICTURE_H264_INVALID
+    );
+    assert_eq!(slice.RefPicList0[0].picture_id, picture(8, false).recon);
+}
+
+#[test]
+fn an_unverified_driver_keeps_one_short_term_reference() {
+    let info = StreamInfo {
+        long_term_references: false,
+        ..stream_info(yuv420(), Resolution::new(402, 226))
+    };
+    let mut stream = H264Stream::new(H264Profile::High, info);
+    let sps = parse(&stream).sps;
+
+    assert_eq!(sps.max_num_ref_frames, 1);
+    assert!(!sps.gaps_in_frame_num_value_allowed_flag);
+    assert_eq!(sps.vui_parameters.max_dec_frame_buffering, 1);
+    assert_eq!(stream.sequence_parameters(0).max_num_ref_frames, 1);
+    long_term_walk(&mut stream, 20, |stream, index, picture| {
+        let header = parse_slice(stream, index == 0).header;
+        let parameters = stream.picture_parameters(picture, H264Stream::order(picture));
+
+        assert!(!header.dec_ref_pic_marking.long_term_reference_flag);
+        assert!(
+            !header
+                .dec_ref_pic_marking
+                .adaptive_ref_pic_marking_mode_flag
+        );
+        assert!(!header.ref_pic_list_modification_flag_l0);
+        assert_eq!(parameters.CurrPic.flags, 0);
+        assert_eq!(
+            parameters.ReferenceFrames[1].flags,
+            ffi::VA_PICTURE_H264_INVALID
+        );
+    });
+
+    assert_eq!(stream.recover(OutputIndex(19)), None);
+}
+
+#[test]
+fn every_level_holds_the_reference_frames_at_its_largest_picture() {
+    const MAX_DPB_MBS: [(u8, u64); 19] = [
+        (10, 396),
+        (11, 900),
+        (12, 2_376),
+        (13, 2_376),
+        (20, 2_376),
+        (21, 4_752),
+        (22, 8_100),
+        (30, 8_100),
+        (31, 18_000),
+        (32, 20_480),
+        (40, 32_768),
+        (41, 32_768),
+        (42, 34_816),
+        (50, 110_400),
+        (51, 184_320),
+        (52, 184_320),
+        (60, 696_320),
+        (61, 696_320),
+        (62, 696_320),
+    ];
+
+    for (level, (id, max_dpb_mbs)) in LEVELS.iter().zip(MAX_DPB_MBS) {
+        let largest_frame_mbs = level.max_picture_samples / (16 * 16);
+
+        assert_eq!(level.id, id);
+        assert!(
+            max_dpb_mbs / largest_frame_mbs >= u64::from(LONG_TERM_REFERENCE_FRAMES),
+            "level {id}"
+        );
     }
 }
 

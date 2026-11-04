@@ -1,10 +1,12 @@
 use std::{
     fs::File,
-    io::Cursor,
+    io::{Cursor, Write},
     num::NonZeroU32,
     os::fd::{AsFd, OwnedFd},
     path::Path,
+    process::{Command, Stdio},
     rc::Rc,
+    thread,
 };
 
 use cros_codecs::codec::{
@@ -28,6 +30,7 @@ use crate::{
     open,
     vaapi::{
         format::{pack, surface_format},
+        long_term::driver_honours_long_term,
         va::{
             Display, DmaBufImport, Image, Surface, export_surface, exportable_surface,
             imported_surface,
@@ -597,62 +600,404 @@ fn keyframe_is_produced_on_request() {
     }
 }
 
-fn recover_after_a_loss(acknowledged: Option<u64>) {
-    const LAST_GOOD: u64 = 14;
-    const RESUMED: u64 = 20;
-    const COUNT: u64 = 30;
+fn pick(packets: &[EncodedFrame], received: &[u64]) -> Vec<EncodedFrame> {
+    received
+        .iter()
+        .map(|&index| packets[usize::try_from(index).unwrap()].clone())
+        .collect()
+}
 
-    let format = yuv420(BitDepth::Eight);
-    let Some(mut encoder) = try_open(&video(Codec::Av1, format, RESOLUTION)) else {
-        return;
+fn lumas(pictures: Vec<Picture>) -> Vec<Vec<u16>> {
+    pictures.into_iter().map(|picture| picture.luma).collect()
+}
+
+struct Ffmpeg {
+    lumas: Vec<Vec<u16>>,
+    errors: String,
+}
+
+fn decode_ffmpeg(codec: Codec, format: PixelFormat, frames: &[EncodedFrame]) -> Option<Ffmpeg> {
+    let demuxer = if codec == Codec::H264 { "h264" } else { "hevc" };
+    let (planar, sample) = if format.depth == BitDepth::Eight {
+        ("yuv420p", 1)
+    } else {
+        ("yuv420p10le", 2)
     };
-    let frames = pattern_frames(format, RESOLUTION, COUNT);
-    let split = usize::try_from(RESUMED).unwrap();
-
-    let mut packets = encode_all(encoder.as_mut(), &frames[..split]);
-    if let Some(output) = acknowledged {
-        encoder.acknowledge(OutputIndex(output));
-    }
-    let recovery = encoder.recover(OutputIndex(LAST_GOOD));
-    packets.extend(encode_all(encoder.as_mut(), &frames[split..]));
-    let received: Vec<u64> = (0..=LAST_GOOD).chain(RESUMED..COUNT).collect();
-    let pictures = decode_rav1d(
-        received
-            .iter()
-            .map(|&index| &packets[usize::try_from(index).unwrap()]),
-    );
-
-    let Recovery::Reference(OutputIndex(reference)) = recovery else {
-        panic!("vaapi av1 fell back to a keyframe: {recovery:?}");
+    let child = Command::new("ffmpeg")
+        .args(["-hide_banner", "-v", "error", "-f", demuxer, "-i", "pipe:0"])
+        .args(["-fps_mode", "passthrough", "-pix_fmt", planar])
+        .args(["-f", "rawvideo", "pipe:1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            hardware::unsupported(format_args!("the ffmpeg binary: {error}"));
+            return None;
+        }
     };
-    assert!(reference <= LAST_GOOD);
-    assert!(LAST_GOOD - reference < 16);
-    assert!(!packets[split].keyframe);
-    assert!(!is_av1_key(&packets[split].data));
-    assert!(packets[split + 1..].iter().all(|frame| !frame.keyframe));
-    for (index, picture) in received.iter().zip(&pictures) {
+
+    let stream: Vec<u8> = frames
+        .iter()
+        .flat_map(|frame| frame.data.iter().copied())
+        .collect();
+    let mut input = child.stdin.take().unwrap();
+    let writer = thread::spawn(move || {
+        let _ = input.write_all(&stream);
+    });
+    let output = child.wait_with_output().unwrap();
+    writer.join().unwrap();
+
+    let luma_size = usize::try_from(RESOLUTION.pixel_count()).unwrap() * sample;
+    let lumas = output
+        .stdout
+        .chunks_exact(luma_size * 3 / 2)
+        .map(|frame| {
+            frame[..luma_size]
+                .chunks_exact(sample)
+                .map(|bytes| {
+                    if sample == 2 {
+                        u16::from_le_bytes([bytes[0], bytes[1]])
+                    } else {
+                        u16::from(bytes[0])
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    Some(Ffmpeg {
+        lumas,
+        errors: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+fn check_received(
+    codec: Codec,
+    received: &[u64],
+    pictures: &[Vec<u16>],
+    format: PixelFormat,
+    through: &str,
+) {
+    assert_eq!(pictures.len(), received.len(), "{codec} through {through}");
+    for (index, luma) in received.iter().zip(pictures) {
         let source = &pattern_planes(format, RESOLUTION, *index)[0];
-        let quality = psnr(source, &picture.luma, format.depth);
+        let quality = psnr(source, luma, format.depth);
 
         assert!(
             quality >= PSNR_FLOOR_DB,
-            "frame {index} after recovering from {reference} decodes at {quality:.1} dB"
+            "{codec} frame {index} through {through} decodes at {quality:.1} dB"
         );
+    }
+}
+
+fn check_every_decoder(
+    codec: Codec,
+    format: PixelFormat,
+    received: &[u64],
+    packets: &[EncodedFrame],
+) {
+    let survivors = pick(packets, received);
+
+    if codec == Codec::Av1 {
+        let decoded = lumas(decode_rav1d(&survivors));
+        check_received(codec, received, &decoded, format, "rav1d");
+        return;
+    }
+    if let Some(pictures) = decode_vaapi(codec, &survivors) {
+        check_received(codec, received, &lumas(pictures), format, "vaapi");
+    }
+    if let Some(ffmpeg) = decode_ffmpeg(codec, format, &survivors) {
+        assert_eq!(ffmpeg.errors, "", "{codec} through ffmpeg");
+        check_received(codec, received, &ffmpeg.lumas, format, "ffmpeg");
+    }
+}
+
+fn long_term_verified() -> bool {
+    let vendor = Display::open(&VaapiConfig::default().device)
+        .ok()
+        .and_then(|display| display.vendor())
+        .unwrap_or_default();
+    let verified = driver_honours_long_term(&vendor);
+    if !verified {
+        hardware::unsupported(format_args!(
+            "long-term reference recovery is unverified on {vendor}"
+        ));
+    }
+
+    verified
+}
+
+fn without_intra_refresh(config: VideoConfig) -> VideoConfig {
+    with_vaapi(config, |vaapi| {
+        vaapi.params = [("intra-refresh-frames".to_owned(), "0".to_owned())].into();
+    })
+}
+
+struct LossCase {
+    codec: Codec,
+    format: PixelFormat,
+    acknowledged: Option<u64>,
+    last_good: u64,
+    resumed: u64,
+    count: u64,
+}
+
+fn recover_after_a_loss(case: &LossCase, config: &VideoConfig) {
+    let format = case.format;
+    let codec = case.codec;
+    let Some(mut encoder) = try_open(config) else {
+        return;
+    };
+    let frames = pattern_frames(format, RESOLUTION, case.count);
+    let split = usize::try_from(case.resumed).unwrap();
+
+    let mut packets = encode_all(encoder.as_mut(), &frames[..split]);
+    if let Some(output) = case.acknowledged {
+        encoder.acknowledge(OutputIndex(output));
+    }
+    let recovery = encoder.recover(OutputIndex(case.last_good));
+    packets.extend(encode_all(encoder.as_mut(), &frames[split..]));
+    let received: Vec<u64> = (0..=case.last_good)
+        .chain(case.resumed..case.count)
+        .collect();
+
+    let Recovery::Reference(OutputIndex(reference)) = recovery else {
+        panic!("vaapi {codec} fell back to a keyframe: {recovery:?}");
+    };
+    assert!(reference <= case.last_good);
+    assert!(case.last_good - reference < 16);
+    assert!(!packets[split].keyframe);
+    assert!(!keyframe_check(codec)(&packets[split].data));
+    assert!(packets[split + 1..].iter().all(|frame| !frame.keyframe));
+    check_every_decoder(codec, format, &received, &packets);
+}
+
+fn av1_case(acknowledged: Option<u64>) -> LossCase {
+    LossCase {
+        codec: Codec::Av1,
+        format: yuv420(BitDepth::Eight),
+        acknowledged,
+        last_good: 14,
+        resumed: 20,
+        count: 30,
     }
 }
 
 #[test]
 fn av1_recovers_against_an_acknowledged_reference_without_a_keyframe() {
-    recover_after_a_loss(Some(12));
+    let case = av1_case(Some(12));
+
+    recover_after_a_loss(&case, &video(case.codec, case.format, RESOLUTION));
 }
 
 #[test]
 fn av1_recovers_against_the_last_good_frame_without_acknowledgements() {
-    recover_after_a_loss(None);
+    let case = av1_case(None);
+
+    recover_after_a_loss(&case, &video(case.codec, case.format, RESOLUTION));
+}
+
+fn h26x_cases() -> Vec<(Codec, PixelFormat)> {
+    vec![
+        (Codec::H264, yuv420(BitDepth::Eight)),
+        (Codec::Hevc, yuv420(BitDepth::Eight)),
+        (Codec::Hevc, yuv420(BitDepth::Ten)),
+    ]
 }
 
 #[test]
-fn recovery_before_any_frame_or_on_h26x_is_a_keyframe() {
+fn h26x_recovers_against_the_long_term_frame_without_a_keyframe() {
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        for acknowledged in [Some(16), None] {
+            let case = LossCase {
+                codec,
+                format,
+                acknowledged,
+                last_good: 18,
+                resumed: 23,
+                count: 32,
+            };
+            let config = video(codec, format, RESOLUTION);
+
+            recover_after_a_loss(&case, &config);
+            recover_after_a_loss(&case, &without_intra_refresh(config));
+        }
+    }
+}
+
+#[test]
+fn h26x_recovers_from_the_candidate_right_after_marking_it() {
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        let case = LossCase {
+            codec,
+            format,
+            acknowledged: None,
+            last_good: 16,
+            resumed: 20,
+            count: 30,
+        };
+
+        recover_after_a_loss(
+            &case,
+            &without_intra_refresh(video(codec, format, RESOLUTION)),
+        );
+    }
+}
+
+#[test]
+fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
+    const LAST_GOOD: u64 = 18;
+    const RESUMED: u64 = 23;
+    const COUNT: u64 = 32;
+    const CORRUPT_CEILING_DB: f64 = 30.0;
+
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        let config = without_intra_refresh(video(codec, format, RESOLUTION));
+        let Some(mut encoder) = try_open(&config) else {
+            continue;
+        };
+        let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, COUNT));
+        let received: Vec<u64> = (0..=LAST_GOOD).chain(RESUMED..COUNT).collect();
+        let Some(pictures) = decode_vaapi(codec, &pick(&packets, &received)) else {
+            continue;
+        };
+
+        let source = &pattern_planes(format, RESOLUTION, RESUMED)[0];
+        let at_resume = usize::try_from(LAST_GOOD + 1).unwrap();
+        let quality = psnr(source, &pictures[at_resume].luma, format.depth);
+
+        assert!(
+            quality < CORRUPT_CEILING_DB,
+            "{codec} decodes the frame after the loss at {quality:.1} dB without a recovery frame"
+        );
+    }
+}
+
+struct LossEvent {
+    first_lost: u64,
+    resumed: u64,
+    recovers: bool,
+}
+
+const ACK_DELAY: u64 = 2;
+
+fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConfig) {
+    const COUNT: u64 = 90;
+    let events = [
+        LossEvent {
+            first_lost: 19,
+            resumed: 23,
+            recovers: true,
+        },
+        LossEvent {
+            first_lost: 24,
+            resumed: 26,
+            recovers: false,
+        },
+        LossEvent {
+            first_lost: 35,
+            resumed: 37,
+            recovers: true,
+        },
+        LossEvent {
+            first_lost: 42,
+            resumed: 43,
+            recovers: false,
+        },
+        LossEvent {
+            first_lost: 52,
+            resumed: 53,
+            recovers: true,
+        },
+        LossEvent {
+            first_lost: 60,
+            resumed: 61,
+            recovers: true,
+        },
+        LossEvent {
+            first_lost: 72,
+            resumed: 75,
+            recovers: true,
+        },
+    ];
+
+    let Some(mut encoder) = try_open(config) else {
+        return;
+    };
+    let mut packets = Vec::new();
+    let mut received = Vec::new();
+
+    for index in 0..COUNT {
+        let lost = events
+            .iter()
+            .any(|event| (event.first_lost..event.resumed).contains(&index));
+        let acknowledged = received
+            .iter()
+            .rev()
+            .find(|&&frame| frame + ACK_DELAY <= index)
+            .copied();
+        if let Some(frame) = acknowledged {
+            encoder.acknowledge(OutputIndex(frame));
+        }
+        if let Some(event) = events.iter().find(|event| event.resumed == index) {
+            let last_good = event.first_lost - 1;
+            let recovery = encoder.recover(OutputIndex(last_good));
+
+            assert_eq!(
+                matches!(recovery, Recovery::Reference(_)),
+                event.recovers,
+                "{codec} at frame {index}: {recovery:?}"
+            );
+            if let Recovery::Reference(OutputIndex(reference)) = recovery {
+                assert!(reference <= last_good, "{codec} at frame {index}");
+            }
+        }
+
+        let frame = pattern_frame(format, RESOLUTION, index);
+        let packet = encoder.encode(&frame).unwrap().unwrap();
+        if let Some(event) = events.iter().find(|event| event.resumed == index) {
+            assert_eq!(packet.keyframe, !event.recovers, "{codec} at frame {index}");
+        }
+        packets.push(packet);
+        if !lost {
+            received.push(index);
+        }
+    }
+
+    check_every_decoder(codec, format, &received, &packets);
+}
+
+#[test]
+fn h26x_survives_repeated_losses_with_acknowledgements() {
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        let config = video(codec, format, RESOLUTION);
+
+        survive_repeated_losses(codec, format, &config);
+        survive_repeated_losses(codec, format, &without_intra_refresh(config));
+    }
+}
+
+#[test]
+fn recovery_before_any_frame_is_a_keyframe() {
     for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
         let format = yuv420(BitDepth::Eight);
         let Some(mut encoder) = try_open(&video(codec, format, RESOLUTION)) else {
@@ -677,7 +1022,7 @@ fn recovery_before_any_frame_or_on_h26x_is_a_keyframe() {
 
         assert_eq!(early, Recovery::Keyframe, "{codec}");
         assert!(first.keyframe);
-        if codec == Codec::Av1 {
+        if codec == Codec::Av1 || long_term_verified() {
             assert!(matches!(later, Recovery::Reference(OutputIndex(0..=2))));
             assert!(!answered.keyframe);
         } else {

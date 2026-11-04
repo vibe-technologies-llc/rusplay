@@ -7,6 +7,7 @@ mod hdr;
 mod header_tests;
 mod hevc;
 mod level;
+mod long_term;
 mod params;
 #[cfg(test)]
 mod tests;
@@ -33,12 +34,13 @@ use crate::{
     pool::FramePool,
     rate::vbv_buffer_kbit,
     vaapi::{
-        av1::{Av1Profile, Av1Stream, RECONSTRUCTED_SURFACES},
+        av1::{Av1Profile, Av1Stream},
         format::{
             coded_bytes_per_pixel_x2, dma_buf_fourcc, dma_buf_planes, rt_format, surface_format,
         },
         h264::{H264Profile, H264Stream},
         hevc::{HevcProfile, HevcStream},
+        long_term::driver_honours_long_term,
         params::VaapiParams,
         va::{
             Buffer, CodedBuffer, Config, Context, Display, DmaBufImport, DmaBufPlaneLayout,
@@ -71,6 +73,7 @@ struct StreamInfo {
     frame_rate: FrameRate,
     peak_kbps: u32,
     qp: Option<u8>,
+    long_term_references: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -331,6 +334,7 @@ struct Device {
     limits: SizeLimits,
     packed_headers: u32,
     intra_refresh: Option<IntraRefresh>,
+    long_term_references: bool,
 }
 
 impl Device {
@@ -417,6 +421,10 @@ impl Device {
             limits.max.height = limits.max.height.min(height);
         }
 
+        let long_term_references = display
+            .vendor()
+            .is_some_and(|vendor| driver_honours_long_term(&vendor));
+
         Ok(Self {
             selection,
             config,
@@ -424,6 +432,7 @@ impl Device {
             limits,
             packed_headers,
             intra_refresh,
+            long_term_references,
         })
     }
 }
@@ -468,7 +477,7 @@ impl Settings {
         }
     }
 
-    fn info(&self, resolution: Resolution) -> StreamInfo {
+    fn info(&self, resolution: Resolution, long_term_references: bool) -> StreamInfo {
         StreamInfo {
             resolution,
             format: self.format,
@@ -477,6 +486,7 @@ impl Settings {
             frame_rate: self.frame_rate,
             peak_kbps: self.peak_kbps(),
             qp: self.qp(),
+            long_term_references,
         }
     }
 }
@@ -517,18 +527,39 @@ impl Stream {
 
     const fn reconstructed_surfaces(profile: CodecProfile) -> usize {
         match profile {
-            CodecProfile::Av1(_) => RECONSTRUCTED_SURFACES,
-            CodecProfile::H264(_) | CodecProfile::Hevc(_) => 2,
+            CodecProfile::Av1(_) => av1::RECONSTRUCTED_SURFACES,
+            CodecProfile::H264(_) | CodecProfile::Hevc(_) => long_term::RECONSTRUCTED_SURFACES,
+        }
+    }
+
+    fn holds(&self, surface: SurfaceId) -> bool {
+        match self {
+            Self::H264(stream) => stream.holds(surface),
+            Self::Hevc(stream) => stream.holds(surface),
+            Self::Av1(stream) => stream.holds(surface),
         }
     }
 
     fn reconstruction<'a>(&self, surfaces: &'a [Surface], current: usize) -> &'a Surface {
+        surfaces
+            .iter()
+            .find(|surface| !self.holds(surface.id()))
+            .unwrap_or(&surfaces[current % surfaces.len()])
+    }
+
+    fn acknowledge(&mut self, output: OutputIndex) {
         match self {
-            Self::Av1(stream) => surfaces
-                .iter()
-                .find(|surface| !stream.holds(surface.id()))
-                .unwrap_or(&surfaces[current % surfaces.len()]),
-            Self::H264(_) | Self::Hevc(_) => &surfaces[current % surfaces.len()],
+            Self::H264(stream) => stream.acknowledge(output),
+            Self::Hevc(stream) => stream.acknowledge(output),
+            Self::Av1(stream) => stream.acknowledge(output),
+        }
+    }
+
+    fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
+        match self {
+            Self::H264(stream) => stream.recover(last_good),
+            Self::Hevc(stream) => stream.recover(last_good),
+            Self::Av1(stream) => stream.recover(last_good),
         }
     }
 }
@@ -587,7 +618,10 @@ impl Session {
         let coded = context.coded(usize::try_from(capacity).unwrap_or(usize::MAX))?;
 
         Ok(Self {
-            stream: Stream::new(device.selection.profile, settings.info(resolution)),
+            stream: Stream::new(
+                device.selection.profile,
+                settings.info(resolution, device.long_term_references),
+            ),
             coded,
             pool: FramePool::default(),
             context,
@@ -1033,21 +1067,14 @@ impl VideoEncoder for VaapiEncoder {
     }
 
     fn acknowledge(&mut self, output: OutputIndex) {
-        if let Some(Session {
-            stream: Stream::Av1(stream),
-            ..
-        }) = &mut self.session
-        {
-            stream.acknowledge(output);
+        if let Some(session) = &mut self.session {
+            session.stream.acknowledge(output);
         }
     }
 
     fn recover(&mut self, last_good: OutputIndex) -> Recovery {
         let reference = match &mut self.session {
-            Some(Session {
-                stream: Stream::Av1(stream),
-                ..
-            }) if !self.keyframe_requested => stream.recover(last_good),
+            Some(session) if !self.keyframe_requested => session.stream.recover(last_good),
             _ => None,
         };
 

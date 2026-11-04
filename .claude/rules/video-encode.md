@@ -42,9 +42,9 @@ paths:
   reference); `recover(last_good)` asks that the next output reference nothing newer than
   `last_good` and returns `Recovery::Reference(index)` naming the output it will reference
   (at or before `last_good`), after which no output between that one and the recovery frame is
-  referenced again. VAAPI AV1 implements it with its long-term slots (below); the default
-  implementation, which every other backend uses today (x264, x265, SVT-AV1, VAAPI H.264/HEVC,
-  NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays that of a
+  referenced again. VAAPI AV1 implements it with its long-term slots and VAAPI H.264/HEVC with one
+  long-term picture on the drivers it is verified on (both below); the default implementation,
+  which every other backend uses today (x264, x265, SVT-AV1, NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays that of a
   keyframe request; the software backends' tests hold it (`check_recovery_falls_back_to_a_keyframe`).
   Per-backend reference recovery is in `docs/FEATURES.md` (`video-ltr-*`).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.
@@ -171,12 +171,14 @@ paths:
   in place (Intel); radeonsi parses it and writes its own. The AV1 render size is always coded,
   because radeonsi pads the coded frame (to 8x2 on VCN 5, 64x16 on VCN 4) and keeps the captured
   size only as the render size.
-- Stream structure: P frames with a single reference, the previous frame, over two reconstructed
-  surfaces used alternately (AV1: four, see the AV1 reference slots below); a keyframe on the first frame and on `request_keyframe` only. Intra
+- Stream structure: P frames with a single active reference (the previous frame, the long-term
+  frame right after it was marked or on a recovery frame), over three reconstructed surfaces, each
+  picture taking the first one no reference holds (AV1: four, see the AV1 reference slots below); a keyframe on the first frame and on `request_keyframe` only. Intra
   periods in the sequence parameters are `0xffff`, since the picture type of every frame is set by
   Rusplay. H.264 uses POC type 2, a 16-bit `frame_num`, `max_num_reorder_frames` 0 and
-  `max_dec_frame_buffering` 1; HEVC uses 64x64 CTBs, 8x8 minimum CBs, a single SPS short-term RPS
-  {-1} and no temporal MVP (the VA parameters carry the unwrapped picture order count since the
+  `max_num_ref_frames` = `max_dec_frame_buffering` = 2; HEVC uses 64x64 CTBs, 8x8 minimum CBs,
+  `sps_max_dec_pic_buffering_minus1` 2, two SPS short-term RPSs ({-1} and the empty set) and no
+  temporal MVP (the VA parameters carry the unwrapped picture order count since the
   last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 16-bit
   LSB; radeonsi decodes identically across the 65536th frame either way); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
   (`primary_ref_frame` 0) and one tile unless the size forces more.
@@ -198,6 +200,53 @@ paths:
   decode through rav1d a stream with the frames between the reference and the recovery frame
   dropped; the same stream without the recovery frame does not decode. A temporal delimiter is
   prepended when the driver output lacks one, so every AV1 packet is a temporal unit.
+- H.264/HEVC long-term reference (`vaapi/long_term.rs`, `LongTermReferences`, shared by both
+  streams): the stream holds the previous frame and one long-term frame. A keyframe is long-term
+  at once. Every 8 frames (`LONG_TERM_INTERVAL`) the current frame replaces it, when the held one
+  is acknowledged, no ack has come at all, or it waited 60 frames (`LONG_TERM_STALE`), the AV1
+  rule. The frame after a candidate references it as long-term, and `recover(last_good)` picks the
+  long-term frame when it is at or before `last_good` within 120 frames
+  (`MAX_RECOVERY_DISTANCE`), forgets the previous frame and codes the next frame against it, not
+  marked; otherwise `None` and the encoder forces a keyframe. With one slot a loss reported while
+  the newest candidate is unacknowledged and newer than `last_good` costs a keyframe (feedback
+  delay / interval of losses); a second slot (`max_num_ref_frames` 3, which level 1.1 at its
+  largest picture cannot hold) is the outstanding `video-ltr-vaapi-h26x` follow-up.
+  - H.264: the IDR sets `long_term_reference_flag` (so `MaxLongTermFrameIdx` is 0 without an MMCO
+    4), a candidate sets `adaptive_ref_pic_marking_mode_flag` with MMCO 6 index 0, which frees the
+    old long-term frame, and a frame referencing the long-term frame writes
+    `ref_pic_list_modification` idc 2 `long_term_pic_num` 0 because the initial list starts with
+    short-term frames. Non-candidates use the sliding window, which keeps long-term frames.
+    `gaps_in_frame_num_value_allowed_flag` is 1 so a recovery frame's `frame_num` jump over the
+    lost frames conforms; the numbers keep counting through a loss, so `frame_num` and POC stay
+    the encoder's. MaxDpbFrames is at least 2 at every level at its largest picture (level 1.1 is
+    the tightest, 900/396), so the level computation does not change.
+  - HEVC: every P slice carries `num_long_term_pics` 1 with `poc_lsb_lt` (no SPS candidates,
+    `num_long_term_ref_pics_sps` 0, and no `delta_poc_msb` because the frame is far younger than
+    the 16-bit LSB range) and `used_by_curr_pic_lt_flag` 0, or 1 with `short_term_ref_pic_set_idx`
+    1 (the empty set) when it references the long-term frame. A decoder that missed the frames
+    after a candidate still finds it, since the long-term lookup matches any reference picture.
+    A decoded picture buffer of 3 is below the smallest level limit of 6.
+  - The VA parameters list exactly the frames kept (`ReferenceFrames`/`reference_frames`), since
+    Mesa evicts the others, with `CurrPic` flagged long-term on a marked frame (H.264 `frame_idx`
+    the long-term index).
+  - radeonsi follows this: Mesa parses the packed slice header, including MMCO, list modification,
+    the long-term RPS and the SPS gaps flag, and rewrites them verbatim
+    (`frontends/va/picture_h264_enc.c`, `picture_hevc_enc.c`, `radeon_enc_slice_header*`), and
+    the firmware predicts from the `reference_picture_index` Mesa takes from `RefPicList0`; its own
+    marking does not get in the way on the encode side. Checked on Mesa 26.2.6, RX 9070 (VCN 5):
+    `ffmpeg -bsf:v trace_headers` shows Rusplay's marking in the driver's output, and the
+    `h26x_*` hardware tests drop frames, recover and decode the survivors through `VaapiDecoder`
+    and through the `ffmpeg` binary (which must report no error) at 34 dB against the source, with
+    intra refresh on and off, H.264 High, HEVC Main and Main10, repeated losses and acknowledgements
+    included. The recovery frame decodes at 54 dB (H.264) and 61 dB (HEVC); the control stream
+    without a recovery frame decodes that frame at 18 and 13 dB. Not checked: NVDEC as the client
+    decoder.
+  - `driver_honours_long_term` (the `vaQueryVendorString` text) gates all of it to what was
+    verified: radeonsi, `gfx12`, Mesa 26.2 or newer. Another driver, GPU generation or older Mesa
+    gets the former stream structure, one short-term reference (`max_num_ref_frames` 1, no
+    long-term syntax), and `recover` is a keyframe, so a driver that rewrites or ignores the
+    marking cannot produce a silently corrupt stream. `StreamInfo::long_term_references` carries
+    the answer into the writers. AV1 is not gated.
 - The header writers are tested without a device in `src/vaapi/header_tests/`: every packed header
   (H.264 SPS/PPS/slice, HEVC VPS/SPS/PPS/slice, AV1 sequence and frame header) is parsed back with
   `cros-codecs` across profiles, chroma, depth, resolutions, colour descriptions, frame rates and

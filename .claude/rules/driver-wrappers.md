@@ -18,7 +18,7 @@ paths:
   libva bindings with bindgen from the headers `pkg-config` finds for `libva` and `libva-drm`
   (macro constants unsigned) into `OUT_DIR/va.rs`, and `ffi` is the public module that includes
   them; the backends re-export it as their local `ffi`. The crate owns `Display` (open, profile,
-  entry point and attribute queries, sync), `Config`, `Context` (parameter, data and empty
+  entry point and attribute queries, vendor string, sync), `Config`, `Context` (parameter, data and empty
   buffers, `render`), `Buffer` (id, map, unmap), `Surface` (create with a usage hint and pixel
   format, import from DMA-BUF objects and planes, export read-only or read-write), `Image` (create,
   write, put, get) and `SizeLimits`. Objects share an `Rc<Display>`, so none is `Send`; the
