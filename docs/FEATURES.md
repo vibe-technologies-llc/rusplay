@@ -21,7 +21,6 @@
 # Scaling
 
 # Headless host
-- [M] `hostd-host-service`: run `rusplay-hostd`'s accept and serve loop on `rusplay_host::HostService` instead of its own copy in `main.rs`, which the desktop app already uses. The daemon's pin file, control socket (`new-pin` through `HostService::renew_pin`, `forget` through its shared `PeerStore`, `status` from the events) and stats lines then read the service's events and snapshots; `PinWindow` and the cancel flag go away
 
 # Input
 - [L] `input-gamepad-uhid-dualsense`: a selectable `/dev/uhid` DualSense/DS4 personality on the host next to the 360 pad (a new `input` config choice per pad), with the HID report descriptor, the feature reports `hid-playstation` probes for (calibration, firmware, pairing info) so the kernel driver binds and creates the real sensor and touchpad nodes, input reports carrying sticks, buttons, the `PadState` sensors and touchpad contacts, and rumble from output reports. The sensor events and snapshot state it consumes exist. `/dev/uhid` is root-only on a stock system (a udev `uaccess` rule is needed like for `/dev/uinput`), and it can only be validated by a kernel `hid-playstation` or SDL binding, so its tests skip visibly without access

@@ -17,7 +17,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, RwLock};
-use rusplay_host::{PeerStore, Pin};
+use rusplay_host::{HostError, PeerStore, Pin};
 
 use crate::{
     control::{self, ControlError, Refusal, Request},
@@ -39,89 +39,38 @@ pub enum Phase {
     Streaming { client: SocketAddr },
 }
 
-#[derive(Debug)]
-struct WindowState {
-    phase: Phase,
-    requested: Option<Pin>,
-}
+#[derive(Debug, Clone)]
+pub struct SharedPhase(Arc<Mutex<Phase>>);
 
-#[derive(Debug)]
-pub struct PinWindow {
-    state: Mutex<WindowState>,
-    cancel: AtomicBool,
-}
-
-impl PinWindow {
+impl SharedPhase {
     pub fn new() -> Self {
-        Self {
-            state: Mutex::new(WindowState {
-                phase: Phase::Starting,
-                requested: None,
-            }),
-            cancel: AtomicBool::new(false),
-        }
+        Self(Arc::new(Mutex::new(Phase::Starting)))
     }
 
-    pub fn cancel_flag(&self) -> &AtomicBool {
-        &self.cancel
+    pub fn get(&self) -> Phase {
+        *self.0.lock()
     }
 
-    pub fn phase(&self) -> Phase {
-        self.state.lock().phase
-    }
-
-    pub fn open<E>(
-        &self,
-        timeout: Duration,
-        generate: impl FnOnce() -> Result<Pin, E>,
-    ) -> Result<Pin, E> {
-        let mut state = self.state.lock();
-        self.cancel.store(false, Ordering::Release);
-        let pin = match state.requested.take() {
-            Some(pin) => pin,
-            None => generate()?,
-        };
-        state.phase = Phase::Pairing {
-            opened: Instant::now(),
-            timeout,
-        };
-
-        Ok(pin)
-    }
-
-    pub fn stream(&self, client: SocketAddr) {
-        self.state.lock().phase = Phase::Streaming { client };
-    }
-
-    pub fn request_new_pin<E>(
-        &self,
-        generate: impl FnOnce() -> Result<Pin, E>,
-    ) -> Result<Pin, Refusal> {
-        let mut state = self.state.lock();
-        if matches!(state.phase, Phase::Streaming { .. }) {
-            return Err(Refusal::Streaming);
-        }
-
-        let pin = generate().map_err(|_| Refusal::PinUnavailable)?;
-        state.requested = Some(pin.clone());
-        self.cancel.store(true, Ordering::Release);
-
-        Ok(pin)
+    pub fn set(&self, phase: Phase) {
+        *self.0.lock() = phase;
     }
 }
 
-impl Default for PinWindow {
+impl Default for SharedPhase {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[derive(Debug, Clone)]
+pub type PinRequest = Arc<dyn Fn(Pin) -> Result<(), HostError> + Send + Sync>;
+
+#[derive(Clone)]
 pub struct ControlContext {
     pub peers: Arc<RwLock<PeerStore>>,
     pub address: SocketAddr,
     pub pin_digits: u8,
-    pub window: Arc<PinWindow>,
+    pub phase: SharedPhase,
+    pub request_pin: PinRequest,
 }
 
 impl ControlContext {
@@ -137,7 +86,7 @@ impl ControlContext {
         let mut body = String::new();
         writeln!(body, "listening {}", self.address).ok();
 
-        match self.window.phase() {
+        match self.phase.get() {
             Phase::Starting => writeln!(body, "state starting").ok(),
             Phase::Pairing { opened, timeout } => {
                 let remaining = timeout.saturating_sub(opened.elapsed());
@@ -153,9 +102,11 @@ impl ControlContext {
     }
 
     fn new_pin(&self) -> Result<String, Refusal> {
-        let pin = self
-            .window
-            .request_new_pin(|| Pin::generate(self.pin_digits))?;
+        let pin = Pin::generate(self.pin_digits).map_err(|_| Refusal::PinUnavailable)?;
+        (self.request_pin)(pin.clone()).map_err(|error| match error {
+            HostError::StreamActive => Refusal::Streaming,
+            _ => Refusal::PinUnavailable,
+        })?;
 
         Ok(format!("{}\n", pin.as_str()))
     }
@@ -311,7 +262,9 @@ mod tests {
     struct Fixture {
         _directory: TempDir,
         socket: PathBuf,
-        window: Arc<PinWindow>,
+        phase: SharedPhase,
+        requested: Arc<Mutex<Vec<Pin>>>,
+        streaming: Arc<AtomicBool>,
         peers: Arc<RwLock<PeerStore>>,
         server: ControlServer,
     }
@@ -325,7 +278,9 @@ mod tests {
                 store.remember(record).unwrap();
             }
             let peers = Arc::new(RwLock::new(store));
-            let window = Arc::new(PinWindow::new());
+            let phase = SharedPhase::new();
+            let requested = Arc::new(Mutex::new(Vec::new()));
+            let streaming = Arc::new(AtomicBool::new(false));
             let socket = directory.path().join("run").join("control.sock");
             let server = ControlServer::start(
                 &socket,
@@ -333,7 +288,8 @@ mod tests {
                     peers: Arc::clone(&peers),
                     address: "127.0.0.1:47990".parse().unwrap(),
                     pin_digits: 6,
-                    window: Arc::clone(&window),
+                    phase: phase.clone(),
+                    request_pin: recording(&requested, &streaming),
                 },
             )
             .unwrap();
@@ -341,11 +297,27 @@ mod tests {
             Self {
                 _directory: directory,
                 socket,
-                window,
+                phase,
+                requested,
+                streaming,
                 peers,
                 server,
             }
         }
+    }
+
+    fn recording(requested: &Arc<Mutex<Vec<Pin>>>, streaming: &Arc<AtomicBool>) -> PinRequest {
+        let requested = Arc::clone(requested);
+        let streaming = Arc::clone(streaming);
+
+        Arc::new(move |pin| {
+            if streaming.load(Ordering::Acquire) {
+                return Err(HostError::StreamActive);
+            }
+            requested.lock().push(pin);
+
+            Ok(())
+        })
     }
 
     fn mode(path: &Path) -> u32 {
@@ -365,12 +337,14 @@ mod tests {
         let fixture = Fixture::new(&[("laptop", 1), ("desk pc", 2)]);
 
         let starting = send(&fixture.socket, &Request::Status).unwrap();
-        fixture
-            .window
-            .open(Duration::from_secs(60), || Pin::generate(6))
-            .unwrap();
+        fixture.phase.set(Phase::Pairing {
+            opened: Instant::now(),
+            timeout: Duration::from_secs(60),
+        });
         let pairing = send(&fixture.socket, &Request::Status).unwrap();
-        fixture.window.stream("10.0.0.2:5000".parse().unwrap());
+        fixture.phase.set(Phase::Streaming {
+            client: "10.0.0.2:5000".parse().unwrap(),
+        });
         let streaming = send(&fixture.socket, &Request::Status).unwrap();
 
         assert_eq!(
@@ -382,31 +356,24 @@ mod tests {
     }
 
     #[test]
-    fn a_new_pin_is_returned_cancels_the_open_window_and_is_used_by_the_next_one() {
+    fn a_new_pin_is_generated_handed_to_the_host_and_returned() {
         let fixture = Fixture::new(&[]);
-        let first = fixture
-            .window
-            .open(Duration::from_secs(60), || Pin::generate(6))
-            .unwrap();
 
         let reply = send(&fixture.socket, &Request::NewPin).unwrap();
-        let cancelled = fixture.window.cancel_flag().load(Ordering::Acquire);
-        let second = fixture
-            .window
-            .open(Duration::from_secs(60), || Pin::generate(6))
-            .unwrap();
+        let second = send(&fixture.socket, &Request::NewPin).unwrap();
 
-        assert!(cancelled);
-        assert!(!fixture.window.cancel_flag().load(Ordering::Acquire));
-        assert_eq!(reply.trim(), second.as_str());
+        let requested = fixture.requested.lock();
+        assert_eq!(requested.len(), 2);
+        assert_eq!(reply.trim(), requested[0].as_str());
+        assert_eq!(second.trim(), requested[1].as_str());
         assert_eq!(reply.trim().len(), 6);
-        assert_ne!(first.as_str(), second.as_str());
+        assert_ne!(requested[0], requested[1]);
     }
 
     #[test]
     fn a_new_pin_is_refused_while_a_client_streams() {
         let fixture = Fixture::new(&[]);
-        fixture.window.stream("10.0.0.2:5000".parse().unwrap());
+        fixture.streaming.store(true, Ordering::Release);
 
         let result = send(&fixture.socket, &Request::NewPin);
 
@@ -414,7 +381,7 @@ mod tests {
             result,
             Err(ControlError::Refused(Refusal::Streaming))
         ));
-        assert!(!fixture.window.cancel_flag().load(Ordering::Acquire));
+        assert!(fixture.requested.lock().is_empty());
     }
 
     #[test]
@@ -488,7 +455,8 @@ mod tests {
             peers: Arc::clone(&fixture.peers),
             address: "127.0.0.1:1".parse().unwrap(),
             pin_digits: 6,
-            window: Arc::clone(&fixture.window),
+            phase: fixture.phase.clone(),
+            request_pin: recording(&fixture.requested, &fixture.streaming),
         };
 
         let second = ControlServer::start(&socket, context.clone());

@@ -89,6 +89,8 @@ pub enum HostError {
     SpawnService(#[source] io::Error),
     #[error("the host service thread panicked")]
     ServicePanicked,
+    #[error("a client is streaming, so no new pairing pin can be set")]
+    StreamActive,
     #[error("failed to bind the discovery responder")]
     DiscoveryBind(#[source] NetError),
     #[error("failed to spawn the discovery thread")]

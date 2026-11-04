@@ -51,11 +51,19 @@ pub struct StreamSnapshot {
 }
 
 #[derive(Debug, Default)]
+struct Requests {
+    streaming: bool,
+    pin: Option<Pin>,
+}
+
+#[derive(Debug, Default)]
 struct Control {
     stop: AtomicBool,
     cancel: AtomicBool,
     disconnect: AtomicBool,
+    requests: Mutex<Requests>,
     snapshot: Mutex<Option<StreamSnapshot>>,
+    ended: Mutex<Option<StreamSnapshot>>,
 }
 
 impl Control {
@@ -80,8 +88,27 @@ impl Control {
         self.disconnect.load(Ordering::Acquire)
     }
 
-    fn begin_window(&self) {
+    fn begin_window(&self) -> Option<Pin> {
+        let mut requests = self.requests.lock();
         self.cancel.store(self.stopping(), Ordering::Release);
+
+        requests.pin.take()
+    }
+
+    fn request_pin(&self, pin: Pin) -> Result<(), HostError> {
+        let mut requests = self.requests.lock();
+        if requests.streaming {
+            return Err(HostError::StreamActive);
+        }
+
+        requests.pin = Some(pin);
+        self.cancel.store(true, Ordering::Release);
+
+        Ok(())
+    }
+
+    fn set_streaming(&self, streaming: bool) {
+        self.requests.lock().streaming = streaming;
     }
 }
 
@@ -91,6 +118,17 @@ struct Worker<S> {
     control: Arc<Control>,
     events: Sender<HostEvent>,
     _responder: Option<Responder>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PinRenewer {
+    control: Arc<Control>,
+}
+
+impl PinRenewer {
+    pub fn renew(&self, pin: Pin) -> Result<(), HostError> {
+        self.control.request_pin(pin)
+    }
 }
 
 #[derive(Debug)]
@@ -180,6 +218,16 @@ impl HostService {
         self.control.request_new_pin();
     }
 
+    pub fn pin_renewer(&self) -> PinRenewer {
+        PinRenewer {
+            control: Arc::clone(&self.control),
+        }
+    }
+
+    pub fn ended_stream(&self) -> Option<StreamSnapshot> {
+        *self.control.ended.lock()
+    }
+
     pub fn disconnect(&self) {
         self.control.request_disconnect();
     }
@@ -248,9 +296,11 @@ where
     fn serve_next(&self) -> Result<(), HostError> {
         let network = &self.host.config().network;
         let window = Duration::from_millis(u64::from(network.pairing_timeout_ms));
-        let pin = Pin::generate(network.pairing_pin_digits)?;
+        let pin = match self.control.begin_window() {
+            Some(pin) => pin,
+            None => Pin::generate(network.pairing_pin_digits)?,
+        };
 
-        self.control.begin_window();
         self.emit(HostEvent::PairingOpened {
             pin: pin.clone(),
             window,
@@ -284,9 +334,20 @@ where
             admission: client.admission(),
         });
 
-        let stream = (self.serve)(&self.host, &client)?;
+        self.control.ended.lock().take();
+        self.control.set_streaming(true);
+        let finished = self.stream(&client);
+        self.control.set_streaming(false);
+
+        finished
+    }
+
+    fn stream(&self, client: &Client) -> Result<(), HostError> {
+        let stream = (self.serve)(&self.host, client)?;
         let finished = self.watch(stream);
-        self.emit(HostEvent::ClientLeft { address });
+        self.emit(HostEvent::ClientLeft {
+            address: client.address(),
+        });
 
         finished
     }
@@ -295,14 +356,11 @@ where
         self.control.disconnect.store(false, Ordering::Release);
 
         while !stream.is_finished() && !self.control.stopping() && !self.control.disconnecting() {
-            *self.control.snapshot.lock() = Some(StreamSnapshot {
-                client: stream.client(),
-                stats: stream.stats(),
-                format: stream.format(),
-            });
+            *self.control.snapshot.lock() = Some(snapshot_of(&stream));
             thread::sleep(WATCH_POLL);
         }
 
+        *self.control.ended.lock() = Some(snapshot_of(&stream));
         self.control.snapshot.lock().take();
 
         if self.control.stopping() || self.control.disconnecting() {
@@ -311,6 +369,14 @@ where
         } else {
             stream.wait()
         }
+    }
+}
+
+fn snapshot_of(stream: &HostStream) -> StreamSnapshot {
+    StreamSnapshot {
+        client: stream.client(),
+        stats: stream.stats(),
+        format: stream.format(),
     }
 }
 
@@ -445,5 +511,34 @@ mod tests {
         control.begin_window();
 
         assert!(!control.cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_requested_pin_is_taken_by_the_next_window_and_cancels_the_open_one() {
+        let control = Control::default();
+        let requested = Pin::parse("123456").unwrap();
+
+        control.request_pin(requested.clone()).unwrap();
+        let cancelled = control.cancel.load(Ordering::Acquire);
+        let taken = control.begin_window();
+        let again = control.begin_window();
+
+        assert!(cancelled);
+        assert_eq!(taken, Some(requested));
+        assert_eq!(again, None);
+        assert!(!control.cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_requested_pin_is_refused_while_a_client_streams() {
+        let control = Control::default();
+        control.set_streaming(true);
+
+        let refused = control.request_pin(Pin::parse("123456").unwrap());
+        control.set_streaming(false);
+
+        assert!(matches!(refused, Err(HostError::StreamActive)));
+        assert!(!control.cancel.load(Ordering::Acquire));
+        assert_eq!(control.begin_window(), None);
     }
 }
