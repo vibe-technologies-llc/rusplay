@@ -122,7 +122,11 @@ fn pattern_value(
     }
 }
 
-fn pattern_planes(format: PixelFormat, resolution: Resolution, index: u64) -> Vec<Vec<u16>> {
+pub(crate) fn pattern_planes(
+    format: PixelFormat,
+    resolution: Resolution,
+    index: u64,
+) -> Vec<Vec<u16>> {
     let width = resolution.width as usize;
     let height = resolution.height as usize;
     let (chroma_width, chroma_height) = match format.chroma {
@@ -172,7 +176,7 @@ fn pattern_frame(format: PixelFormat, resolution: Resolution, index: u64) -> Fra
     }
 }
 
-fn encode_all(encoder: &mut dyn VideoEncoder, frames: &[Frame]) -> Vec<EncodedFrame> {
+pub(crate) fn encode_all(encoder: &mut dyn VideoEncoder, frames: &[Frame]) -> Vec<EncodedFrame> {
     frames
         .iter()
         .map(|frame| {
@@ -184,17 +188,21 @@ fn encode_all(encoder: &mut dyn VideoEncoder, frames: &[Frame]) -> Vec<EncodedFr
         .collect()
 }
 
-fn pattern_frames(format: PixelFormat, resolution: Resolution, count: u64) -> Vec<Frame> {
+pub(crate) fn pattern_frames(
+    format: PixelFormat,
+    resolution: Resolution,
+    count: u64,
+) -> Vec<Frame> {
     (0..count)
         .map(|index| pattern_frame(format, resolution, index))
         .collect()
 }
 
 #[derive(Debug)]
-struct Picture {
-    resolution: Resolution,
-    format: PixelFormat,
-    luma: Vec<u16>,
+pub(crate) struct Picture {
+    pub(crate) resolution: Resolution,
+    pub(crate) format: PixelFormat,
+    pub(crate) luma: Vec<u16>,
 }
 
 fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
@@ -259,7 +267,7 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
     }
 }
 
-fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<Picture>> {
+pub(crate) fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<Picture>> {
     let mut decoder = match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
         Ok(decoder) => decoder,
         Err(error @ rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
@@ -329,7 +337,7 @@ fn decode_rav1d<'a>(frames: impl IntoIterator<Item = &'a EncodedFrame>) -> Vec<P
         .collect()
 }
 
-fn psnr(source: &[u16], output: &[u16], depth: BitDepth) -> f64 {
+pub(crate) fn psnr(source: &[u16], output: &[u16], depth: BitDepth) -> f64 {
     let max = f64::from((1_u32 << depth.bits()) - 1);
     let squared: f64 = source
         .iter()

@@ -42,11 +42,15 @@ paths:
   reference); `recover(last_good)` asks that the next output reference nothing newer than
   `last_good` and returns `Recovery::Reference(index)` naming the output it will reference
   (at or before `last_good`), after which no output between that one and the recovery frame is
-  referenced again. VAAPI AV1 implements it with its long-term slots and VAAPI H.264/HEVC with two
-  long-term pictures on the drivers it is verified on (both below); the default implementation,
-  which every other backend uses today (x264, x265, SVT-AV1, NVENC), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays that of a
-  keyframe request; the software backends' tests hold it (`check_recovery_falls_back_to_a_keyframe`).
-  Per-backend reference recovery is in `docs/FEATURES.md` (`video-ltr-*`).
+  referenced again. VAAPI AV1 implements it with its long-term slots, VAAPI H.264/HEVC with two
+  long-term pictures on the drivers it is verified on (both below), and x264 with
+  `x264_encoder_invalidate_reference` (under Software encoders); the default implementation,
+  which every other backend uses today (x265, SVT-AV1, NVENC, and x264 when its configuration
+  does not allow it), requests a keyframe and returns `Recovery::Keyframe`, so behaviour stays
+  that of a keyframe request; the software backends' tests hold it
+  (`check_recovery_falls_back_to_a_keyframe`). A recovery is also a keyframe request while one is
+  already pending. Remaining per-backend reference recovery is in `docs/FEATURES.md`
+  (`video-ltr-*`).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.
 - The software encoders expose every library parameter: typed config fields for the common ones,
   plus `params` passed verbatim (`x264_param_parse`, `x265_param_parse`, SVT-AV1's
@@ -123,6 +127,45 @@ paths:
   `debug` output needs that variable set by the user. `force_key_frames` is set only outside
   `low_latency` (the library warns and clears it there), and dropping an initialised handle sends
   EOS and drains the encoder first, because `svt_av1_enc_deinit` logs an error otherwise.
+- x264 reference recovery (`x264.rs`): `recover(last_good)` calls
+  `x264_encoder_invalidate_reference(pts)` with the pts of the output after `last_good`, which
+  makes x264 forget that frame and every later one and reference what is left of its DPB; it
+  forces an IDR only when nothing is left, which the encoder avoids by checking first.
+  The header says the call is incompatible with B-frames and intra refresh, and recommends
+  `i_dpb_size`. The encoder offers it (`recovery_frames`) only when the effective parameters
+  have no B-frames, no intra refresh, no lookahead (`rc-lookahead`, `sync-lookahead`) and no
+  frame threading (sliced threads or one thread, which the low-latency defaults give), and
+  then raises `i_dpb_size` to 8 frames (`RECOVERY_DPB_FRAMES`, fewer when the level's DPB
+  limit in macroblocks leaves less, 5.1 when the level is auto, never below `ref`), so the
+  reference needs no `ref` above 1 and motion estimation is not slowed. The default
+  configuration has intra refresh on, so it keeps the IDR fallback; recovery is turned on with
+  `params = { intra-refresh = "0" }`. `ReferenceWindow` mirrors the DPB: the pts of the last
+  `frames` outputs and the output index of the last keyframe; `last_good` outside that window
+  (older than the DPB, or before an IDR, which empties it) is refused and answered by a
+  keyframe. `acknowledge` is a no-op (x264 keeps a sliding window, no long-term slots). The
+  hardware test `a_stream_with_dropped_packets_decodes_after_recovery_without_an_idr` drops
+  packets after output 14 and 12, decodes the rest through `rusplay-decode`'s VAAPI decoder
+  (needs the `vaapi` feature and a render node) and checks 34 dB luma PSNR and no IDR, and
+  `the_same_loss_without_recovery_does_not_decode` shows the stream without `recover` fails.
+- SVT-AV1 keeps the keyframe fallback. 4.2.0 has a managed reference API (`EbSvtAv1.h`):
+  `max_managed_refs` (1 to 4) with the `REF_STORE_EVENT`, `REF_CLEAR_EVENT` and `REF_USE_EVENT`
+  private-data nodes (`SvtAv1RefFrameCmd { pic_id }`), where STORE locks the current
+  reconstruction in the DPB under a non-zero id, USE predicts the current frame from that anchor
+  only, CLEAR releases it and a keyframe releases all. It needs `LOW_DELAY`, CBR and events on
+  base-layer pictures: at `hierarchical_levels` 1 and 2 the library logs "ignoring events on
+  non-base frame" and a later USE is a no-op, so the structure must be flat (level 0), and
+  low-latency mode leaves the level unset (the library resolves it to 2). An implementation with
+  the VAAPI AV1 anchor policy decoded correctly through rav1d with the packets after the loss
+  dropped, but level 0 hangs `svt_av1_enc_get_packet` under CPU starvation
+  (`encode-svt-av1-flat-hang` in `docs/BUGS.md`, all library threads idle, reproduced without any
+  event), which would freeze a host, so it was removed; `video-ltr-svt-av1` in
+  `docs/FEATURES.md` holds what to redo once the library is fixed.
+- x265 has no reference recovery. The public API (`x265.h`, 4.3) offers `x265_encoder_intra_refresh`
+  (starts a new intra refresh sweep, which needs `bIntraRefresh` and heals the picture over a
+  whole sweep rather than at the next frame, so it cannot honour the contract that the next
+  output references only frames at or before `last_good`) and no call that invalidates
+  references or pins a long-term picture; `x265_get_ref_frame_list` and `x265_set_analysis_data`
+  are for analysis reuse. x265 keeps the keyframe fallback.
 - Bindings are generated at build time from the system headers (see
   `.claude/rules/dependencies.md`). Each library handle lives in a safe wrapper with a `Drop`
   that closes it, and the only `unsafe` blocks are the FFI calls inside those wrappers.
@@ -317,7 +360,8 @@ paths:
   hardware; on hardware the output is decoded with `rusplay-decode`'s `VaapiDecoder` (and rav1d for
   AV1, on one thread because of `decode-rav1d-cdef-overlap` in `docs/BUGS.md`), the decoded DMA-BUF is read back with `vaGetImage`, and every frame of a smooth moving
   pattern must reach 34 dB luma PSNR, at 400x216 and at 402x226 for cropping. DMA-BUF input comes
-  from exported VA surfaces. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
+  from exported VA surfaces. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
+  this file's pattern frames, PSNR and VAAPI decode for the x264 recovery tests. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
   the format is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing.
 
 ## NVENC (`nvenc` feature)

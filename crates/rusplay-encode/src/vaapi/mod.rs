@@ -10,7 +10,7 @@ mod level;
 mod long_term;
 mod params;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod va;
 
 use std::{
