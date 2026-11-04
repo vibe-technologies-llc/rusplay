@@ -3,4 +3,5 @@
 
 # Host
 - [L, blocked by: encode-vaapi-rext-hardware] `perf-vaapi-packed-handoff`: VAAPI 4:2:2/4:4:4 always takes the readback because `ColorConverter` does not write the packed `YUYV`/`AYUV`/`Y410` family (`host.md`), so a 4K 10-bit 4:4:4 frame is still read back (49.8 MB, `GpuPipeline::encode_mapped` in `rusplay-host/src/pipeline.rs`) and packed on the CPU into the `VAImage` (`pack` in `rusplay-encode/src/vaapi/format.rs`, 3.0 ms at 4K 4:4:4 10-bit, 5.2 ms at 12-bit), serial with the encode, on a path `CLAUDE.md` calls first class. Write the packed layouts on the GPU and export them as a DMA-BUF through `Handoff::plan`, which removes the readback and the pack
+- [S] `perf-virtual-connect-extra-resize`: every stream from a virtual source resizes once shortly after connect, reopening the encoder and sending a second keyframe, because the connect-time `Display` is the window viewport and the first layout then announces the canvas below the header (`client.md`). Announce the canvas size at connect, or hold the connect `Display` until the first layout, so the first keyframe is already at the final size
 
