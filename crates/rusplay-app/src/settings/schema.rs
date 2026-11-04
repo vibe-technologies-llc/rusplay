@@ -158,7 +158,7 @@ const CHANNEL_LAYOUTS: &[&str] = &["mono", "stereo", "5.1", "7.1"];
 const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
 const POINTER_MODES: &[&str] = &["absolute", "relative", "auto"];
-const GAMEPAD_PERSONALITIES: &[&str] = &["xbox360", "dualsense"];
+const GAMEPAD_PERSONALITIES: &[&str] = &["xbox360", "dualsense", "dualshock4"];
 const CLIPBOARD_DIRECTIONS: &[&str] = &["off", "client-to-host", "host-to-client", "both"];
 const CLIPBOARD_BYTES: Kind = Kind::Integer {
     min: 1,

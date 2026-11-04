@@ -20,7 +20,7 @@ mod wire;
 pub use crate::{
     error::InputError,
     event::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, SensorKind, TouchEvent},
-    feedback::{PadFeedback, TRIGGER_EFFECT_LEN},
+    feedback::{FeedbackOutcome, PadFeedback, TRIGGER_EFFECT_LEN},
     held::{
         HeldInput, KeySet, MAX_PAD_FINGERS, MAX_PADS, MAX_TOUCHES, PAD_AXES, PadFingers, PadState,
         TouchSet,

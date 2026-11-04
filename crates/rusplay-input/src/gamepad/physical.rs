@@ -16,18 +16,21 @@ use rustix::{
 };
 
 use crate::{
-    GamepadEvent, InputError, InputEvent, PadFeedback, RumbleCommand,
+    FeedbackOutcome, GamepadEvent, InputError, InputEvent, PadFeedback, RumbleCommand,
+    TRIGGER_EFFECT_LEN,
     capture::{
         FaceLayout, MotionCaps, MotionTranslator, NodeCaps, NodeDescription, NodeIdentity,
         NodeRole, PadCaps, PadSlots, PadTranslator, RawAxis, RawEvent, SiblingTranslator,
         TouchpadRange, TouchpadTranslator, non_empty, pair_siblings,
     },
+    gamepad::hidraw,
 };
 
 const INPUT_DIRECTORY: &str = "/dev/input";
 const SYSFS_INPUT_CLASS: &str = "/sys/class/input";
 const SYSFS_UINPUT_PARENT: &str = "/sys/devices/virtual/input";
 const SYSFS_LEDS_CLASS: &str = "/sys/class/leds";
+const DEV_DIRECTORY: &str = "/dev";
 const LIGHTBAR_SUFFIX: &str = "rgb:indicator";
 const PLAYER_LED_SUFFIX: &str = "white:player-";
 const PLAYER_LED_COUNT: u8 = 5;
@@ -125,6 +128,7 @@ struct Pad {
     translator: PadTranslator,
     rumble_capable: bool,
     effect: Option<FFEffect>,
+    trigger_sequence: u8,
     siblings: Vec<Sibling>,
 }
 
@@ -178,6 +182,7 @@ pub struct PhysicalGamepads {
     root: PathBuf,
     sysfs: Option<PathBuf>,
     leds: Option<PathBuf>,
+    hidraw: Option<PathBuf>,
     pads: Vec<Pad>,
     slots: PadSlots<PathBuf>,
     known: BTreeMap<PathBuf, NodeDescription>,
@@ -195,6 +200,7 @@ impl PhysicalGamepads {
     pub fn new(options: PhysicalOptions) -> Self {
         Self {
             leds: Some(SYSFS_LEDS_CLASS.into()),
+            hidraw: Some(DEV_DIRECTORY.into()),
             ..Self::with_roots(options, INPUT_DIRECTORY, Some(SYSFS_INPUT_CLASS.into()))
         }
     }
@@ -202,6 +208,12 @@ impl PhysicalGamepads {
     #[must_use]
     pub fn with_leds_root(mut self, leds: impl Into<PathBuf>) -> Self {
         self.leds = Some(leds.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_hidraw_root(mut self, hidraw: impl Into<PathBuf>) -> Self {
+        self.hidraw = Some(hidraw.into());
         self
     }
 
@@ -219,6 +231,7 @@ impl PhysicalGamepads {
             root: root.into(),
             sysfs,
             leds: None,
+            hidraw: None,
             pads: Vec::new(),
             slots: PadSlots::new(options.max_gamepads),
             known: BTreeMap::new(),
@@ -300,9 +313,11 @@ impl PhysicalGamepads {
             })
     }
 
-    pub fn apply(&mut self, feedback: &PadFeedback) -> Result<(), InputError> {
+    pub fn apply(&mut self, feedback: &PadFeedback) -> Result<FeedbackOutcome, InputError> {
         match *feedback {
-            PadFeedback::Rumble(command) => self.rumble(&command),
+            PadFeedback::Rumble(command) => {
+                self.rumble(&command).map(|()| FeedbackOutcome::Applied)
+            }
             PadFeedback::Lightbar {
                 slot,
                 red,
@@ -314,7 +329,11 @@ impl PhysicalGamepads {
             PadFeedback::PlayerLeds { slot, mask } => {
                 self.set_leds(slot, |leds, input| write_player_leds(leds, input, mask))
             }
-            PadFeedback::TriggerEffect { .. } => Ok(()),
+            PadFeedback::TriggerEffect {
+                slot,
+                right,
+                effect,
+            } => self.set_trigger(slot, right, effect),
         }
     }
 
@@ -322,9 +341,9 @@ impl PhysicalGamepads {
         &self,
         slot: u8,
         write: impl FnOnce(&Path, &str) -> io::Result<()>,
-    ) -> Result<(), InputError> {
+    ) -> Result<FeedbackOutcome, InputError> {
         let (Some(leds), Some(sysfs)) = (&self.leds, &self.sysfs) else {
-            return Ok(());
+            return Ok(FeedbackOutcome::Dropped);
         };
         let Some(input) = self
             .pads
@@ -332,10 +351,36 @@ impl PhysicalGamepads {
             .find(|pad| pad.slot == slot)
             .and_then(|pad| input_name(sysfs, &pad.path))
         else {
-            return Ok(());
+            return Ok(FeedbackOutcome::Dropped);
         };
 
-        write(leds, &input).map_err(|source| InputError::PhysicalGamepadLed { slot, source })
+        write(leds, &input)
+            .map(|()| FeedbackOutcome::Applied)
+            .map_err(|source| InputError::PhysicalGamepadLed { slot, source })
+    }
+
+    fn set_trigger(
+        &mut self,
+        slot: u8,
+        right: bool,
+        effect: [u8; TRIGGER_EFFECT_LEN],
+    ) -> Result<FeedbackOutcome, InputError> {
+        let (Some(sysfs), Some(dev)) = (&self.sysfs, &self.hidraw) else {
+            return Ok(FeedbackOutcome::Dropped);
+        };
+        let Some(pad) = self.pads.iter_mut().find(|pad| pad.slot == slot) else {
+            return Ok(FeedbackOutcome::Dropped);
+        };
+
+        write_trigger(
+            sysfs,
+            dev,
+            &pad.path,
+            right,
+            effect,
+            &mut pad.trigger_sequence,
+        )
+        .map_err(|source| InputError::PhysicalGamepadTrigger { slot, source })
     }
 
     pub fn disconnect_all(&mut self, out: &mut Vec<InputEvent>) {
@@ -469,6 +514,7 @@ impl PhysicalGamepads {
             translator: PadTranslator::new(caps, self.options.deadzone),
             rumble_capable,
             effect: None,
+            trigger_sequence: 0,
             siblings: Vec::new(),
         });
         out.push(InputEvent::Gamepad {
@@ -610,6 +656,31 @@ fn write_player_leds(leds: &Path, input: &str, mask: u8) -> io::Result<()> {
     }
 
     result
+}
+
+fn write_trigger(
+    sysfs: &Path,
+    dev: &Path,
+    node: &Path,
+    right: bool,
+    effect: [u8; TRIGGER_EFFECT_LEN],
+    sequence: &mut u8,
+) -> io::Result<FeedbackOutcome> {
+    let Some(hid_directory) = sysfs_parent(sysfs, node) else {
+        return Ok(FeedbackOutcome::Dropped);
+    };
+    let (Some(bus), Some(hidraw_node)) = (
+        hidraw::hid_device_bus(&hid_directory),
+        hidraw::hidraw_node(&hid_directory, dev),
+    ) else {
+        return Ok(FeedbackOutcome::Dropped);
+    };
+
+    let report = hidraw::trigger_report(bus, right, effect, *sequence);
+    hidraw::send(&hidraw_node, &report)?;
+    *sequence = sequence.wrapping_add(1);
+
+    Ok(FeedbackOutcome::Applied)
 }
 
 fn open_sibling(path: PathBuf, role: NodeRole) -> Option<Sibling> {
@@ -879,7 +950,136 @@ mod tests {
         let leds = pads.apply(&PadFeedback::PlayerLeds { slot: 2, mask: 1 });
         let rumble = pads.apply(&PadFeedback::Rumble(RumbleCommand::stop(2)));
 
-        assert!(trigger.is_ok() && lightbar.is_ok() && leds.is_ok() && rumble.is_ok());
+        assert!(matches!(trigger, Ok(FeedbackOutcome::Dropped)));
+        assert!(matches!(lightbar, Ok(FeedbackOutcome::Dropped)));
+        assert!(matches!(leds, Ok(FeedbackOutcome::Dropped)));
+        assert!(matches!(rumble, Ok(FeedbackOutcome::Applied)));
+    }
+
+    struct FakePad {
+        _directory: tempfile::TempDir,
+        sysfs: PathBuf,
+        dev: PathBuf,
+        node: PathBuf,
+    }
+
+    fn fake_pad(hid_name: &str, hidraw: Option<&str>) -> FakePad {
+        let directory = tempfile::tempdir().unwrap();
+        let hid = directory.path().join("devices").join(hid_name);
+        let input = hid.join("input3");
+        let sysfs = directory.path().join("class");
+        let dev = directory.path().join("dev");
+        fs::create_dir_all(&input).unwrap();
+        fs::create_dir_all(&dev).unwrap();
+        fs::create_dir_all(sysfs.join("event9")).unwrap();
+        symlink(&input, sysfs.join("event9/device")).unwrap();
+        if let Some(name) = hidraw {
+            fs::create_dir_all(hid.join("hidraw").join(name)).unwrap();
+            fs::write(dev.join(name), []).unwrap();
+        }
+
+        FakePad {
+            _directory: directory,
+            sysfs,
+            dev,
+            node: PathBuf::from("/dev/input/event9"),
+        }
+    }
+
+    const EFFECT: [u8; TRIGGER_EFFECT_LEN] = [2, 9, 8, 7, 0, 0, 0, 0, 0, 0, 1];
+
+    #[test]
+    fn a_trigger_effect_reaches_the_hidraw_node_of_the_pads_hid_device() {
+        let pad = fake_pad("0003:054C:0CE6.0005", Some("hidraw4"));
+        let mut sequence = 0;
+
+        let outcome = write_trigger(&pad.sysfs, &pad.dev, &pad.node, true, EFFECT, &mut sequence);
+
+        let written = fs::read(pad.dev.join("hidraw4")).unwrap();
+        assert!(matches!(outcome, Ok(FeedbackOutcome::Applied)));
+        assert_eq!(written.len(), 63);
+        assert_eq!(&written[..2], &[0x02, 0x04]);
+        assert_eq!(&written[11..22], &EFFECT);
+        assert_eq!(sequence, 1);
+    }
+
+    #[test]
+    fn a_bluetooth_pad_gets_the_0x31_report_with_an_advancing_sequence() {
+        let pad = fake_pad("0005:054C:0CE6.0005", Some("hidraw4"));
+        let mut sequence = 15;
+
+        let first = write_trigger(
+            &pad.sysfs,
+            &pad.dev,
+            &pad.node,
+            false,
+            EFFECT,
+            &mut sequence,
+        );
+        let written = fs::read(pad.dev.join("hidraw4")).unwrap();
+
+        assert!(matches!(first, Ok(FeedbackOutcome::Applied)));
+        assert_eq!(written.len(), 78);
+        assert_eq!(&written[..3], &[0x31, 0xf0, 0x10]);
+        assert_eq!(written[3], 0x08);
+        assert_eq!(sequence, 16);
+    }
+
+    #[test]
+    fn a_pad_that_is_not_a_dualsense_or_has_no_hidraw_node_is_dropped_untouched() {
+        let other = fake_pad("0003:054C:09CC.0001", Some("hidraw4"));
+        let without = fake_pad("0003:054C:0CE6.0001", None);
+        let mut sequence = 0;
+
+        let other_result = write_trigger(
+            &other.sysfs,
+            &other.dev,
+            &other.node,
+            true,
+            EFFECT,
+            &mut sequence,
+        );
+        let without_result = write_trigger(
+            &without.sysfs,
+            &without.dev,
+            &without.node,
+            true,
+            EFFECT,
+            &mut sequence,
+        );
+
+        assert!(matches!(other_result, Ok(FeedbackOutcome::Dropped)));
+        assert!(matches!(without_result, Ok(FeedbackOutcome::Dropped)));
+        assert_eq!(fs::metadata(other.dev.join("hidraw4")).unwrap().len(), 0);
+        assert_eq!(sequence, 0);
+    }
+
+    #[test]
+    fn a_node_that_exists_but_cannot_be_written_is_an_error() {
+        let pad = fake_pad("0003:054C:0CE6.0005", Some("hidraw4"));
+        fs::remove_file(pad.dev.join("hidraw4")).unwrap();
+        fs::create_dir(pad.dev.join("hidraw4")).unwrap();
+        let mut sequence = 0;
+
+        let result = write_trigger(&pad.sysfs, &pad.dev, &pad.node, true, EFFECT, &mut sequence);
+
+        assert!(result.is_err());
+        assert_eq!(sequence, 0);
+    }
+
+    #[test]
+    fn a_trigger_effect_for_a_slot_without_a_pad_is_dropped_not_applied() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut pads = PhysicalGamepads::in_directory(options(), directory.path())
+            .with_hidraw_root(directory.path());
+
+        let outcome = pads.apply(&PadFeedback::TriggerEffect {
+            slot: 1,
+            right: false,
+            effect: EFFECT,
+        });
+
+        assert!(matches!(outcome, Ok(FeedbackOutcome::Dropped)));
     }
 
     #[test]

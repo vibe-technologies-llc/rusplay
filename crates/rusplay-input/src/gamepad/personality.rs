@@ -12,20 +12,21 @@ use crate::{
 pub enum VirtualGamepad {
     Xbox360(UinputGamepad),
     DualSense(UhidGamepad),
+    DualShock4(UhidGamepad),
 }
 
 impl GamepadDevice for VirtualGamepad {
     fn handle(&mut self, event: GamepadEvent) -> Result<(), InputError> {
         match self {
             Self::Xbox360(device) => device.handle(event),
-            Self::DualSense(device) => device.handle(event),
+            Self::DualSense(device) | Self::DualShock4(device) => device.handle(event),
         }
     }
 
     fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         match self {
             Self::Xbox360(device) => device.poll_feedback(out),
-            Self::DualSense(device) => device.poll_feedback(out),
+            Self::DualSense(device) | Self::DualShock4(device) => device.poll_feedback(out),
         }
     }
 }
@@ -48,7 +49,10 @@ impl GamepadFactory for PersonalityFactory {
         match self.personality {
             GamepadPersonality::Xbox360 => UinputGamepad::create(slot).map(VirtualGamepad::Xbox360),
             GamepadPersonality::DualSense => {
-                UhidGamepad::create(slot).map(VirtualGamepad::DualSense)
+                UhidGamepad::dualsense(slot).map(VirtualGamepad::DualSense)
+            }
+            GamepadPersonality::DualShock4 => {
+                UhidGamepad::dualshock4(slot).map(VirtualGamepad::DualShock4)
             }
         }
     }

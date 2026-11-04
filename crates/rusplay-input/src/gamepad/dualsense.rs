@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::{
     GamepadAxis, GamepadButton, GamepadEvent, InputError, PadFeedback, RumbleCommand, SensorKind,
     TRIGGER_EFFECT_LEN,
@@ -24,7 +26,7 @@ const FIRMWARE_REPORT_LEN: usize = 64;
 
 const TOUCHPAD_WIDTH: u16 = 1920;
 const TOUCHPAD_HEIGHT: u16 = 1080;
-const TOUCH_POINTS: usize = 2;
+pub(super) const TOUCH_POINTS: usize = 2;
 const TOUCH_INACTIVE: u8 = 0x80;
 const TOUCH_ID_MASK: u8 = 0x7f;
 
@@ -35,6 +37,7 @@ const GYRO_SPEED_HALF_RANGE: i16 = 540;
 const GYRO_RAW_HALF_RANGE: i16 = GYRO_SPEED_HALF_RANGE * 16;
 const ACCEL_RAW_ONE_G: i16 = 8192;
 
+const SENSOR_UNITS_PER_MICROSECOND: u128 = 3;
 const TRIGGER_BUTTON_THRESHOLD: u8 = 32;
 const BATTERY_FULL: u8 = 0x2a;
 const FIRMWARE_UPDATE_VERSION: u16 = 0x0224;
@@ -200,8 +203,12 @@ pub(super) fn feature_report(id: u8, mac: [u8; 6]) -> Option<Vec<u8>> {
 }
 
 fn calibration_report() -> Vec<u8> {
-    let mut report = vec![0; CALIBRATION_REPORT_LEN];
-    report[0] = CALIBRATION_REPORT_ID;
+    calibration_report_for(CALIBRATION_REPORT_ID, CALIBRATION_REPORT_LEN)
+}
+
+pub(super) fn calibration_report_for(id: u8, len: usize) -> Vec<u8> {
+    let mut report = vec![0; len];
+    report[0] = id;
 
     let gyro_bias = [0i16; 3];
     for (axis, bias) in gyro_bias.into_iter().enumerate() {
@@ -222,8 +229,12 @@ fn calibration_report() -> Vec<u8> {
 }
 
 fn pairing_report(mac: [u8; 6]) -> Vec<u8> {
-    let mut report = vec![0; PAIRING_REPORT_LEN];
-    report[0] = PAIRING_REPORT_ID;
+    pairing_report_for(PAIRING_REPORT_ID, PAIRING_REPORT_LEN, mac)
+}
+
+pub(super) fn pairing_report_for(id: u8, len: usize, mac: [u8; 6]) -> Vec<u8> {
+    let mut report = vec![0; len];
+    report[0] = id;
     report[1..7].copy_from_slice(&mac);
 
     report
@@ -239,19 +250,19 @@ fn firmware_report() -> Vec<u8> {
     report
 }
 
-fn put_i16(report: &mut [u8], offset: usize, value: i16) {
+pub(super) fn put_i16(report: &mut [u8], offset: usize, value: i16) {
     report[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Contact {
+pub(super) struct Contact {
     id: u8,
     x: u16,
     y: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct DualSenseState {
+pub(super) struct PadReportState {
     sticks: [u8; 4],
     triggers: [u8; 2],
     held: u16,
@@ -259,10 +270,17 @@ pub(super) struct DualSenseState {
     accel: [i16; 3],
     contacts: [Option<Contact>; TOUCH_POINTS],
     next_contact_id: u8,
+    touchpad_height: u16,
 }
 
-impl Default for DualSenseState {
+impl Default for PadReportState {
     fn default() -> Self {
+        Self::with_touchpad_height(TOUCHPAD_HEIGHT)
+    }
+}
+
+impl PadReportState {
+    pub fn with_touchpad_height(touchpad_height: u16) -> Self {
         Self {
             sticks: [stick_byte(0.0); 4],
             triggers: [0; 2],
@@ -271,11 +289,30 @@ impl Default for DualSenseState {
             accel: [0; 3],
             contacts: [None; TOUCH_POINTS],
             next_contact_id: 0,
+            touchpad_height,
         }
     }
-}
 
-impl DualSenseState {
+    pub fn sticks(&self) -> [u8; 4] {
+        self.sticks
+    }
+
+    pub fn triggers(&self) -> [u8; 2] {
+        self.triggers
+    }
+
+    pub fn gyro(&self) -> [i16; 3] {
+        self.gyro
+    }
+
+    pub fn accel(&self) -> [i16; 3] {
+        self.accel
+    }
+
+    pub fn contacts(&self) -> [Option<Contact>; TOUCH_POINTS] {
+        self.contacts
+    }
+
     pub fn apply(&mut self, event: GamepadEvent) -> Result<bool, InputError> {
         match event {
             GamepadEvent::Connected | GamepadEvent::Disconnected => Ok(false),
@@ -356,7 +393,7 @@ impl DualSenseState {
         *slot = Some(Contact {
             id,
             x: touch_coordinate(x, TOUCHPAD_WIDTH),
-            y: touch_coordinate(y, TOUCHPAD_HEIGHT),
+            y: touch_coordinate(y, self.touchpad_height),
         });
 
         Ok(true)
@@ -393,7 +430,7 @@ impl DualSenseState {
         }
     }
 
-    fn button_bytes(&self) -> [u8; 3] {
+    pub fn button_bytes(&self) -> [u8; 3] {
         let face = [
             (GamepadButton::WEST, BUTTONS0_SQUARE),
             (GamepadButton::SOUTH, BUTTONS0_CROSS),
@@ -456,7 +493,7 @@ impl DualSenseState {
     }
 }
 
-fn touch_point(contact: Option<Contact>) -> [u8; 4] {
+pub(super) fn touch_point(contact: Option<Contact>) -> [u8; 4] {
     match contact {
         Some(Contact { id, x, y }) => {
             let [x_low, x_high] = x.to_le_bytes();
@@ -471,6 +508,12 @@ fn touch_point(contact: Option<Contact>) -> [u8; 4] {
         }
         None => [TOUCH_INACTIVE, 0, 0, 0],
     }
+}
+
+pub(super) fn sensor_timestamp(elapsed: Duration) -> u32 {
+    let units = elapsed.as_micros() * SENSOR_UNITS_PER_MICROSECOND;
+
+    u32::try_from(units % (1 << 32)).unwrap_or(0)
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -505,66 +548,21 @@ fn accel_raw(metres_per_second_squared: f32) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
+    use crate::gamepad::descriptor_walk::walk;
 
-    fn press(state: &mut DualSenseState, button: GamepadButton, pressed: bool) {
+    fn press(state: &mut PadReportState, button: GamepadButton, pressed: bool) {
         state
             .apply(GamepadEvent::Button { button, pressed })
             .unwrap();
     }
 
-    fn report(state: &DualSenseState) -> [u8; INPUT_REPORT_LEN] {
+    fn report(state: &PadReportState) -> [u8; INPUT_REPORT_LEN] {
         state.input_report(0, 0)
     }
 
     fn le16(report: &[u8], offset: usize) -> i16 {
         i16::from_le_bytes([report[offset], report[offset + 1]])
-    }
-
-    #[derive(Default)]
-    struct Walk {
-        bits: BTreeMap<(char, u8), usize>,
-        depth: i32,
-        minimum_depth: i32,
-    }
-
-    fn walk(descriptor: &[u8]) -> Walk {
-        let mut walk = Walk::default();
-        let (mut id, mut size, mut count) = (0u8, 0usize, 0usize);
-        let mut position = 0;
-
-        while position < descriptor.len() {
-            let prefix = descriptor[position];
-            let length = match prefix & 3 {
-                3 => 4,
-                other => usize::from(other),
-            };
-            let data = &descriptor[position + 1..position + 1 + length];
-            let value = data
-                .iter()
-                .rev()
-                .fold(0usize, |value, byte| (value << 8) | usize::from(*byte));
-            position += 1 + length;
-
-            match (prefix >> 2 & 3, prefix >> 4) {
-                (1, 7) => size = value,
-                (1, 8) => id = u8::try_from(value).unwrap(),
-                (1, 9) => count = value,
-                (0, 8) => *walk.bits.entry(('i', id)).or_default() += size * count,
-                (0, 9) => *walk.bits.entry(('o', id)).or_default() += size * count,
-                (0, 11) => *walk.bits.entry(('f', id)).or_default() += size * count,
-                (0, 10) => walk.depth += 1,
-                (0, 12) => {
-                    walk.depth -= 1;
-                    walk.minimum_depth = walk.minimum_depth.min(walk.depth);
-                }
-                _ => {}
-            }
-        }
-
-        walk
     }
 
     #[test]
@@ -598,7 +596,7 @@ mod tests {
 
     #[test]
     fn a_fresh_report_is_centred_released_and_untouched() {
-        let state = DualSenseState::default();
+        let state = PadReportState::default();
 
         let report = state.input_report(7, 0x0102_0304);
 
@@ -617,7 +615,7 @@ mod tests {
 
     #[test]
     fn sticks_span_the_full_byte_range_with_positive_down() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
         let mut set = |axis, value| {
             state.apply(GamepadEvent::Axis { axis, value }).unwrap();
         };
@@ -632,8 +630,8 @@ mod tests {
 
     #[test]
     fn triggers_span_zero_to_full_and_raise_the_digital_bits_past_the_threshold() {
-        let mut state = DualSenseState::default();
-        let set = |state: &mut DualSenseState, axis, value| {
+        let mut state = PadReportState::default();
+        let set = |state: &mut PadReportState, axis, value| {
             state.apply(GamepadEvent::Axis { axis, value }).unwrap();
         };
 
@@ -652,8 +650,8 @@ mod tests {
 
     #[test]
     fn dpad_buttons_fold_into_the_eight_way_hat() {
-        let mut state = DualSenseState::default();
-        let hat = |state: &DualSenseState| report(state)[8] & 0x0f;
+        let mut state = PadReportState::default();
+        let hat = |state: &PadReportState| report(state)[8] & 0x0f;
         let cases = [
             (vec![GamepadButton::DPAD_UP], 0),
             (vec![GamepadButton::DPAD_UP, GamepadButton::DPAD_RIGHT], 1),
@@ -693,7 +691,7 @@ mod tests {
 
     #[test]
     fn face_shoulder_and_system_buttons_land_on_the_documented_bits() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
         let cases = [
             (GamepadButton::WEST, 8, 0x10),
             (GamepadButton::SOUTH, 8, 0x20),
@@ -723,7 +721,7 @@ mod tests {
 
     #[test]
     fn unknown_buttons_and_axes_and_non_finite_values_are_errors() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
 
         let button = state.apply(GamepadEvent::Button {
             button: GamepadButton(16),
@@ -758,7 +756,7 @@ mod tests {
 
     #[test]
     fn unchanged_buttons_and_axes_ask_for_no_report() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
         let press_south = GamepadEvent::Button {
             button: GamepadButton::SOUTH,
             pressed: true,
@@ -776,7 +774,7 @@ mod tests {
 
     #[test]
     fn accelerometer_scales_to_8192_counts_per_g() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
 
         state
             .apply(GamepadEvent::Sensor {
@@ -795,7 +793,7 @@ mod tests {
 
     #[test]
     fn gyroscope_scales_to_16_counts_per_degree_per_second() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
 
         state
             .apply(GamepadEvent::Sensor {
@@ -842,7 +840,7 @@ mod tests {
 
     #[test]
     fn touch_contacts_encode_twelve_bit_coordinates_with_an_inactive_flag() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
 
         state
             .apply(GamepadEvent::TouchpadDown {
@@ -869,7 +867,7 @@ mod tests {
 
     #[test]
     fn a_new_touch_takes_the_next_contact_id_and_a_lift_marks_the_point_inactive() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
         let down = GamepadEvent::TouchpadDown {
             finger: 0,
             x: 0.0,
@@ -897,7 +895,7 @@ mod tests {
 
     #[test]
     fn fingers_beyond_the_two_contact_points_are_not_shown() {
-        let mut state = DualSenseState::default();
+        let mut state = PadReportState::default();
 
         let shown = state
             .apply(GamepadEvent::TouchpadDown {
@@ -915,9 +913,9 @@ mod tests {
 
     #[test]
     fn contact_id_wraps_inside_seven_bits() {
-        let mut state = DualSenseState {
+        let mut state = PadReportState {
             next_contact_id: 127,
-            ..DualSenseState::default()
+            ..PadReportState::default()
         };
         let down = GamepadEvent::TouchpadDown {
             finger: 0,
@@ -932,6 +930,15 @@ mod tests {
         let second = report(&state)[33];
 
         assert_eq!((first, second), (127, 0));
+    }
+
+    #[test]
+    fn sensor_timestamps_run_at_three_units_per_microsecond_and_wrap() {
+        assert_eq!(sensor_timestamp(Duration::from_micros(10)), 30);
+        assert_eq!(
+            sensor_timestamp(Duration::from_micros((1 << 32) / 3 + 1)),
+            2
+        );
     }
 
     #[test]

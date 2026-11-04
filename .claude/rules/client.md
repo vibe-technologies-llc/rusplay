@@ -244,12 +244,15 @@ paths:
 - The gamepad stage drives `PhysicalGamepads` (5 ms poll, which also bounds how long a rumble
   command or a stop waits), sends its events through the same `InputHandle`, and applies
   `PadFeedback`s from a channel. The receive stage fills that channel from
-  `ControlMessage::Rumble`, `Lightbar`, `PlayerLeds` and `TriggerEffect`. Failures are counted
-  (`rumble_failures` for rumble, `feedback_failures` for the rest, `gamepad_failures`), never
+  `ControlMessage::Rumble`, `Lightbar`, `PlayerLeds` and `TriggerEffect`. Rumble counts in
+  `rumble_commands` and `rumble_failures`; any other feedback counts in `feedback_commands` only
+  when `PhysicalGamepads::apply` applied it, in `feedback_dropped` when it had nowhere to go (no
+  such LED, hidraw node or pad), and in `feedback_failures` when it failed; `gamepad_failures`
+  counts the stage's own poll failure. None is
   fatal to the stream. On the way out it sends `Disconnected` for every pad, and the input stage
   waits for it (`gamepads_done`) before its final drain so the host's virtual pads go away.
   `ClientStats` gains `input_packets_sent`, `input_events_sent`, `rumble_commands`,
-  `rumble_failures`, `feedback_commands`, `feedback_failures` and `gamepad_failures`.
+  `rumble_failures`, `feedback_commands`, `feedback_dropped`, `feedback_failures` and `gamepad_failures`.
 - `ClientStats` copies the output's `underruns`, `trims` and `overflows` after every packet.
 - Cursor (`cursor.rs`): `StreamKind::Cursor` has its own `Reassembler` (a shape image is larger
   than a datagram) and each completed frame is decoded as a `CursorMessage` on the receive

@@ -32,3 +32,9 @@ impl PadFeedback {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedbackOutcome {
+    Applied,
+    Dropped,
+}
