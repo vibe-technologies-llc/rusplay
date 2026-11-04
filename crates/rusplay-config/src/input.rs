@@ -24,6 +24,8 @@ pub enum GamepadPersonality {
     Xbox360,
     #[serde(rename = "dualsense")]
     DualSense,
+    #[serde(rename = "dualshock4")]
+    DualShock4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -290,14 +292,20 @@ mod tests {
     }
 
     #[test]
-    fn gamepad_personality_defaults_to_the_xbox_360_pad_and_accepts_the_dualsense() {
+    fn gamepad_personality_defaults_to_the_xbox_360_pad_and_accepts_the_dualsense_and_dualshock4() {
         let default: InputConfig = toml::from_str("").unwrap();
         let dualsense: InputConfig = toml::from_str("gamepad_personality = \"dualsense\"").unwrap();
         let xbox: InputConfig = toml::from_str("gamepad_personality = \"xbox360\"").unwrap();
+        let dualshock4: InputConfig =
+            toml::from_str("gamepad_personality = \"dualshock4\"").unwrap();
 
         assert_eq!(default.gamepad_personality, GamepadPersonality::Xbox360);
         assert_eq!(dualsense.gamepad_personality, GamepadPersonality::DualSense);
         assert_eq!(xbox.gamepad_personality, GamepadPersonality::Xbox360);
+        assert_eq!(
+            dualshock4.gamepad_personality,
+            GamepadPersonality::DualShock4
+        );
         assert!(toml::from_str::<InputConfig>("gamepad_personality = \"ds4\"").is_err());
     }
 

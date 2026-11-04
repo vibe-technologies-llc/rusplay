@@ -140,9 +140,10 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   re-creation cannot leave a held pad without a device), drops it on
   `Disconnected` (the kernel removes the pad) and rejects button and axis events for a slot that
   is not connected (`GamepadNotConnected`).
-- The pad type is `input.gamepad_personality` (`xbox360`, the default, or `dualsense`), applied to
-  every pad the host creates: `PersonalityFactory` makes a `UinputGamepad` or a `UhidGamepad` and
-  `VirtualGamepad` is the enum of the two. A DS4 personality is not implemented.
+- The pad type is `input.gamepad_personality` (`xbox360`, the default, `dualsense` or
+  `dualshock4`), applied to every pad the host creates: `PersonalityFactory` makes a
+  `UinputGamepad` or a `UhidGamepad` (`UhidGamepad::dualsense` or `::dualshock4`) and
+  `VirtualGamepad` is the enum of the three.
 - Pads also carry motion and a touchpad, which the Xbox 360 personality cannot show.
   `GamepadEvent::Sensor { sensor, x, y, z }` is a gyroscope (`SensorKind::Gyro`, radians per
   second) or accelerometer (`SensorKind::Accel`, metres per second squared) sample in the axes
@@ -169,6 +170,28 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   bytes, whose MAC is unique per slot and process because the driver refuses a duplicate; 0x20
   firmware info, 64 bytes, hardware version at 24, firmware at 28 and update version at 44
   (0x0224, which selects the second vibration flag). Anything else is an `EIO` reply.
+- `gamepad/model.rs` `PadModel` (`DualSense`, `DualShock4`) is everything `uhid.rs` needs to know
+  about the pad it presents: name, vendor, product, version, report descriptor, the shared
+  `PadReportState` (`dualsense.rs`: the held buttons, sticks, triggers, sensors and two touch
+  contacts, with the touchpad height as its only per-model parameter), the input report builder,
+  the feature report answers and the output report parser. `UhidDevice::service` takes the model
+  to answer `UHID_GET_REPORT`; `descriptor_walk` (test only) sums report sizes for both
+  descriptors.
+- DualShock 4 personality (`gamepad/dualshock4.rs`, pure): a USB DS4 v2 (`054c:09cc`, name `Sony
+  Interactive Entertainment Wireless Controller`). Input report `0x01`, 64 bytes: sticks at 1 to
+  4, buttons at 5 to 7 (the same bits as the DualSense: hat and face, shoulders and
+  create/options/L3/R3, PS and touchpad click, with a 6-bit report counter in the top bits of byte
+  7), the triggers at 8 and 9 (after the buttons, unlike the DualSense), a `u16` sensor
+  timestamp at 10 (3 units per 16 microseconds), gyroscope at 13 and accelerometer at 19 (the same
+  `i16` counts as the DualSense, so its calibration numbers are reused), status at 30 (cable
+  connected, battery full), one touch report at 33 (count 1, a byte of timestamp, two 4-byte
+  contact points encoded like the DualSense's) over a 1920 by 942 pad. Output report `0x05`, 32
+  bytes: flag byte 1 bit 0 for the motors (right and weak at 4, left and strong at 5) and bit 1
+  for the lightbar (6 to 8); there are no player LEDs or adaptive triggers, so those feedback
+  variants never appear. Feature reports: `0x02` calibration (37 bytes, the DualSense's field
+  layout), `0x12` pairing info (16, the MAC at 1) and `0xa3` firmware info (49, hardware version
+  at 35 and firmware at 41). The 138-byte descriptor declares those five reports. Like the
+  DualSense one it was written from the driver's semantics and never bound by the real driver.
 - Presenting as USB means no CRC32 anywhere: input reports are `0x01`, 64 bytes, and the driver's
   output reports are `0x02`, 63 bytes, sent as `UHID_OUTPUT`. `DualSenseState::apply` folds a
   `GamepadEvent` into the state and says whether the report changed; the host writes the whole

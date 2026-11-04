@@ -70,7 +70,8 @@ Start the host first, then connect from the client app.
   desktop user needs the udev rule `KERNEL=="uhid", SUBSYSTEM=="misc", OPTIONS+="static_node=uhid",
   TAG+="uaccess"`. Without it every gamepad connect fails and the host prints that access was
   denied once per session. Games then reach the pad like a real DualSense, so the usual Sony
-  hidraw and gamepad rules apply to it.
+  hidraw and gamepad rules apply to it. `"dualshock4"` does the same as a USB DualShock 4
+  (`054c:09cc`) with its rumble and lightbar but without player LEDs or adaptive triggers.
 
 ## License
 

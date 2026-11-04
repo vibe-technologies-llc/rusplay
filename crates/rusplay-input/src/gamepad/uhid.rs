@@ -1,9 +1,4 @@
-use std::{
-    io,
-    os::fd::OwnedFd,
-    process,
-    time::{Duration, Instant},
-};
+use std::{io, os::fd::OwnedFd, process, time::Instant};
 
 use rustix::{
     fs::{Mode, OFlags, open},
@@ -13,10 +8,8 @@ use rustix::{
 use crate::{
     GamepadEvent, InputError, PadFeedback,
     gamepad::{
-        dualsense::{
-            self, DualSenseState, NAME, PRODUCT_DUALSENSE, REPORT_DESCRIPTOR, VENDOR_SONY,
-            VERSION_DUALSENSE,
-        },
+        dualsense::{PadReportState, VENDOR_SONY},
+        model::PadModel,
         pool::GamepadDevice,
     },
 };
@@ -28,7 +21,6 @@ const BUS_USB: u16 = 3;
 const OUTPUT_REPORT_TYPE: u8 = 1;
 const REPLY_OK: u16 = 0;
 const REPLY_IO_ERROR: u16 = 5;
-const SENSOR_UNITS_PER_MICROSECOND: u128 = 3;
 
 const EVENT_DESTROY: u32 = 1;
 const EVENT_START: u32 = 2;
@@ -293,7 +285,11 @@ impl UhidDevice {
         }
     }
 
-    pub fn service(&mut self, mac: [u8; 6]) -> Result<Vec<KernelEvent>, InputError> {
+    pub fn service(
+        &mut self,
+        model: PadModel,
+        mac: [u8; 6],
+    ) -> Result<Vec<KernelEvent>, InputError> {
         let mut events = Vec::new();
 
         loop {
@@ -314,15 +310,15 @@ impl UhidDevice {
                     slot: self.slot,
                     len,
                 })?;
-            self.answer(&event, mac)?;
+            self.answer(&event, model, mac)?;
             events.push(event);
         }
     }
 
-    fn answer(&self, event: &KernelEvent, mac: [u8; 6]) -> Result<(), InputError> {
+    fn answer(&self, event: &KernelEvent, model: PadModel, mac: [u8; 6]) -> Result<(), InputError> {
         match event {
             KernelEvent::GetReport { id, number, .. } => {
-                let report = dualsense::feature_report(*number, mac);
+                let report = model.feature_report(*number, mac);
 
                 self.send(&get_report_reply(*id, report.as_deref()))
             }
@@ -344,64 +340,69 @@ fn mac_for(slot: u8) -> [u8; 6] {
     [0x02, b'r', b'p', high, low, slot]
 }
 
-fn sensor_timestamp(elapsed: Duration) -> u32 {
-    let units = elapsed.as_micros() * SENSOR_UNITS_PER_MICROSECOND;
-
-    u32::try_from(units % (1 << 32)).unwrap_or(0)
-}
-
 pub struct UhidGamepad {
     slot: u8,
+    model: PadModel,
     device: UhidDevice,
     mac: [u8; 6],
-    state: DualSenseState,
+    state: PadReportState,
     sequence: u8,
     epoch: Instant,
 }
 
 impl UhidGamepad {
-    pub fn create(slot: u8) -> Result<Self, InputError> {
-        let device = UhidDevice::open(slot)?;
-
-        Self::with_device(slot, device)
+    pub fn dualsense(slot: u8) -> Result<Self, InputError> {
+        Self::create(slot, PadModel::DualSense)
     }
 
-    fn with_device(slot: u8, device: UhidDevice) -> Result<Self, InputError> {
+    pub fn dualshock4(slot: u8) -> Result<Self, InputError> {
+        Self::create(slot, PadModel::DualShock4)
+    }
+
+    fn create(slot: u8, model: PadModel) -> Result<Self, InputError> {
+        let device = UhidDevice::open(slot)?;
+
+        Self::with_device(slot, model, device)
+    }
+
+    fn with_device(slot: u8, model: PadModel, device: UhidDevice) -> Result<Self, InputError> {
         let mac = mac_for(slot);
         let uniq = mac.map(|byte| format!("{byte:02x}")).join(":");
         let phys = format!("rusplay/uhid{slot}");
 
         device.send(&create2(&Identity {
-            name: NAME,
+            name: model.name(),
             phys: &phys,
             uniq: &uniq,
             bus: BUS_USB,
             vendor: VENDOR_SONY,
-            product: PRODUCT_DUALSENSE,
-            version: VERSION_DUALSENSE,
-            descriptor: &REPORT_DESCRIPTOR,
+            product: model.product(),
+            version: model.version(),
+            descriptor: model.descriptor(),
         }))?;
 
         Ok(Self {
             slot,
+            model,
             device,
             mac,
-            state: DualSenseState::default(),
+            state: model.new_state(),
             sequence: 0,
             epoch: Instant::now(),
         })
     }
 
     fn send_report(&mut self) -> Result<(), InputError> {
-        let timestamp = sensor_timestamp(self.epoch.elapsed());
-        let report = self.state.input_report(self.sequence, timestamp);
+        let report = self
+            .model
+            .input_report(&self.state, self.sequence, self.epoch.elapsed());
         self.sequence = self.sequence.wrapping_add(1);
 
         self.device.send(&input2(&report))
     }
 
     fn service(&mut self) -> Result<Vec<KernelEvent>, InputError> {
-        self.device.service(self.mac)
+        self.device.service(self.model, self.mac)
     }
 }
 
@@ -418,7 +419,7 @@ impl GamepadDevice for UhidGamepad {
         for event in self.service()? {
             if let KernelEvent::Output { report_type, data } = event
                 && report_type == OUTPUT_REPORT_TYPE
-                && let Some(report) = dualsense::parse_output(&data)
+                && let Some(report) = self.model.parse_output(&data)
             {
                 report.feedback(self.slot, out);
             }
@@ -438,10 +439,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        GamepadButton, RumbleCommand,
-        gamepad::dualsense::{
-            CALIBRATION_REPORT_ID, FIRMWARE_REPORT_ID, INPUT_REPORT_ID, INPUT_REPORT_LEN,
-            OUTPUT_REPORT_ID, OUTPUT_REPORT_LEN, PAIRING_REPORT_ID,
+        GamepadAxis, GamepadButton, RumbleCommand,
+        gamepad::{
+            dualsense::{
+                CALIBRATION_REPORT_ID, FIRMWARE_REPORT_ID, INPUT_REPORT_ID, INPUT_REPORT_LEN,
+                OUTPUT_REPORT_ID, OUTPUT_REPORT_LEN, PAIRING_REPORT_ID,
+            },
+            dualshock4,
         },
         hardware,
     };
@@ -543,23 +547,24 @@ mod tests {
     }
 
     #[test]
-    fn the_dualsense_descriptor_fits_the_create2_buffer() {
-        let event = create2(&Identity {
-            name: NAME,
-            phys: "",
-            uniq: "",
-            bus: BUS_USB,
-            vendor: VENDOR_SONY,
-            product: PRODUCT_DUALSENSE,
-            version: VERSION_DUALSENSE,
-            descriptor: &REPORT_DESCRIPTOR,
-        });
+    fn every_models_descriptor_fits_the_create2_buffer() {
+        for model in [PadModel::DualSense, PadModel::DualShock4] {
+            let descriptor = model.descriptor();
 
-        assert_eq!(usize::from(u16_at(&event, 260)), REPORT_DESCRIPTOR.len());
-        assert_eq!(
-            &event[280..280 + REPORT_DESCRIPTOR.len()],
-            &REPORT_DESCRIPTOR
-        );
+            let event = create2(&Identity {
+                name: model.name(),
+                phys: "",
+                uniq: "",
+                bus: BUS_USB,
+                vendor: VENDOR_SONY,
+                product: model.product(),
+                version: model.version(),
+                descriptor,
+            });
+
+            assert_eq!(usize::from(u16_at(&event, 260)), descriptor.len());
+            assert_eq!(&event[280..280 + descriptor.len()], descriptor);
+        }
     }
 
     #[test]
@@ -639,7 +644,7 @@ mod tests {
         kernel.send(&get_report(12, CALIBRATION_REPORT_ID)).unwrap();
         kernel.send(&get_report(13, FIRMWARE_REPORT_ID)).unwrap();
         kernel.send(&get_report(14, 0x81)).unwrap();
-        let events = device.service(mac).unwrap();
+        let events = device.service(PadModel::DualSense, mac).unwrap();
 
         let pairing = receive(&kernel);
         let calibration = receive(&kernel);
@@ -663,7 +668,7 @@ mod tests {
         request[REPORT_ID..REPORT_ID + 4].copy_from_slice(&21u32.to_ne_bytes());
 
         kernel.send(&request).unwrap();
-        device.service([0; 6]).unwrap();
+        device.service(PadModel::DualSense, [0; 6]).unwrap();
 
         let reply = receive(&kernel);
         assert_eq!(u32_at(&reply, 0), 14);
@@ -674,7 +679,7 @@ mod tests {
     fn service_with_nothing_pending_returns_no_events() {
         let (mut device, _kernel) = pair();
 
-        let events = device.service([0; 6]).unwrap();
+        let events = device.service(PadModel::DualSense, [0; 6]).unwrap();
 
         assert_eq!(events.len(), 0);
     }
@@ -684,7 +689,7 @@ mod tests {
         let (mut device, kernel) = pair();
 
         kernel.send(&[1, 2]).unwrap();
-        let result = device.service([0; 6]);
+        let result = device.service(PadModel::DualSense, [0; 6]);
 
         assert!(matches!(
             result,
@@ -701,11 +706,15 @@ mod tests {
         assert_eq!(u32_at(&receive(&kernel), 0), 1);
     }
 
-    fn gamepad() -> (UhidGamepad, UnixDatagram) {
+    fn gamepad_of(model: PadModel) -> (UhidGamepad, UnixDatagram) {
         let (device, kernel) = pair();
-        let gamepad = UhidGamepad::with_device(3, device).unwrap();
+        let gamepad = UhidGamepad::with_device(3, model, device).unwrap();
 
         (gamepad, kernel)
+    }
+
+    fn gamepad() -> (UhidGamepad, UnixDatagram) {
+        gamepad_of(PadModel::DualSense)
     }
 
     #[test]
@@ -715,12 +724,103 @@ mod tests {
         let event = receive(&kernel);
 
         assert_eq!(u32_at(&event, 0), 11);
-        assert!(event[4..].starts_with(NAME.as_bytes()));
+        assert!(event[4..].starts_with(PadModel::DualSense.name().as_bytes()));
         assert_eq!(u16_at(&event, 262), 3);
         assert_eq!(u32_at(&event, 264), 0x054c);
         assert_eq!(u32_at(&event, 268), 0x0ce6);
         assert!(event[196..].starts_with(b"02:72:70:"));
         assert!(event[196..].windows(3).any(|window| window == b":03"));
+    }
+
+    #[test]
+    fn creating_a_dualshock_four_announces_a_usb_dualshock_four() {
+        let (_gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+
+        let event = receive(&kernel);
+
+        assert_eq!(u32_at(&event, 0), 11);
+        assert!(event[4..].starts_with(PadModel::DualShock4.name().as_bytes()));
+        assert_eq!(u16_at(&event, 262), 3);
+        assert_eq!(u32_at(&event, 264), 0x054c);
+        assert_eq!(u32_at(&event, 268), 0x09cc);
+        assert_eq!(
+            usize::from(u16_at(&event, 260)),
+            dualshock4::REPORT_DESCRIPTOR.len()
+        );
+    }
+
+    #[test]
+    fn a_dualshock_four_event_sends_its_own_input_report() {
+        let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+        receive(&kernel);
+
+        gamepad
+            .handle(GamepadEvent::Axis {
+                axis: GamepadAxis::LEFT_TRIGGER,
+                value: 1.0,
+            })
+            .unwrap();
+
+        let event = receive(&kernel);
+        assert_eq!(u32_at(&event, 0), 12);
+        assert_eq!(usize::from(u16_at(&event, 4)), dualshock4::INPUT_REPORT_LEN);
+        assert_eq!(event[6], dualshock4::INPUT_REPORT_ID);
+        assert_eq!(event[6 + 8], 255);
+        assert_eq!(event[6 + 6] & 0x04, 0x04);
+    }
+
+    #[test]
+    fn a_dualshock_four_answers_its_three_feature_reports_and_nothing_else() {
+        let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+        receive(&kernel);
+
+        for (id, number) in [(1, 0x12), (2, 0x02), (3, 0xa3), (4, 0x05)] {
+            kernel.send(&get_report(id, number)).unwrap();
+        }
+        gamepad.service().unwrap();
+
+        let sizes: Vec<_> = (0..4)
+            .map(|_| {
+                let reply = receive(&kernel);
+                (u16_at(&reply, 8), u16_at(&reply, 10))
+            })
+            .collect();
+        assert_eq!(sizes, vec![(0, 16), (0, 37), (0, 49), (5, 0)]);
+    }
+
+    #[test]
+    fn dualshock_four_output_reports_become_feedback_for_the_slot() {
+        let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+        let mut report = vec![0; dualshock4::OUTPUT_REPORT_LEN];
+        report[0] = dualshock4::OUTPUT_REPORT_ID;
+        report[1] = 0x03;
+        report[4] = 0x80;
+        report[5] = 0xff;
+        report[6..9].copy_from_slice(&[9, 8, 7]);
+        let mut out = Vec::new();
+
+        kernel.send(&output_event(1, &report)).unwrap();
+        kernel.send(&output_event(1, &report[..1])).unwrap();
+        gamepad.poll_feedback(&mut out).unwrap();
+
+        assert_eq!(
+            out,
+            vec![
+                PadFeedback::Rumble(RumbleCommand {
+                    slot: 3,
+                    strong: 0xffff,
+                    weak: 0x8080,
+                    delay_ms: 0,
+                    duration_ms: 0
+                }),
+                PadFeedback::Lightbar {
+                    slot: 3,
+                    red: 9,
+                    green: 8,
+                    blue: 7
+                },
+            ]
+        );
     }
 
     #[test]
@@ -805,23 +905,13 @@ mod tests {
     }
 
     #[test]
-    fn sensor_timestamps_run_at_three_units_per_microsecond_and_wrap() {
-        assert_eq!(sensor_timestamp(Duration::from_micros(10)), 30);
-        assert_eq!(
-            sensor_timestamp(Duration::from_micros((1 << 32) / 3 + 1)),
-            2
-        );
-    }
-
-    #[test]
     fn the_mac_differs_per_slot_and_is_locally_administered() {
         assert_ne!(mac_for(0), mac_for(1));
         assert_eq!(mac_for(5)[0] & 0x03, 0x02);
         assert_eq!(mac_for(5)[5], 5);
     }
 
-    #[test]
-    fn live_kernel_driver_probes_the_three_feature_reports() {
+    fn probe_live_feature_requests(model: PadModel, expected: [u8; 3]) {
         let device = match UhidDevice::open(0) {
             Ok(device) => device,
             Err(error) => {
@@ -832,7 +922,7 @@ mod tests {
         if !hardware::has_module("hid_playstation") {
             return;
         }
-        let mut pad = UhidGamepad::with_device(0, device).unwrap();
+        let mut pad = UhidGamepad::with_device(0, model, device).unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut requested = Vec::new();
 
@@ -846,9 +936,26 @@ mod tests {
         }
         requested.sort_unstable();
 
-        assert_eq!(
-            requested,
-            vec![CALIBRATION_REPORT_ID, PAIRING_REPORT_ID, FIRMWARE_REPORT_ID]
+        assert_eq!(requested, expected.to_vec());
+    }
+
+    #[test]
+    fn live_kernel_driver_probes_the_three_feature_reports() {
+        probe_live_feature_requests(
+            PadModel::DualSense,
+            [CALIBRATION_REPORT_ID, PAIRING_REPORT_ID, FIRMWARE_REPORT_ID],
+        );
+    }
+
+    #[test]
+    fn live_kernel_driver_probes_the_three_dualshock_four_feature_reports() {
+        probe_live_feature_requests(
+            PadModel::DualShock4,
+            [
+                dualshock4::CALIBRATION_REPORT_ID,
+                dualshock4::PAIRING_REPORT_ID,
+                dualshock4::FIRMWARE_REPORT_ID,
+            ],
         );
     }
 }

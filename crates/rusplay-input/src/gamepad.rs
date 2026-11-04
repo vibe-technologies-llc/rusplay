@@ -1,4 +1,8 @@
+#[cfg(test)]
+mod descriptor_walk;
 mod dualsense;
+mod dualshock4;
+mod model;
 mod personality;
 mod physical;
 mod pool;
