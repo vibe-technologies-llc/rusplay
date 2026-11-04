@@ -6,17 +6,19 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Size, Subscription,
-    Task, Window, canvas, div, prelude::*, px,
+    Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Size,
+    Subscription, Task, Window, canvas, div, prelude::*, px,
 };
 use rusplay_client::{
-    ActivePointer, ClientAction, ClientError, ClientStream, ClipboardState, Credentials,
-    LogicalArea, PeerRecord, StreamWindow, WindowLayout, announced_display,
+    ActivePointer, BackendKind, ClientAction, ClientError, ClientStream, ClipboardState,
+    Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
+    announced_display,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 use rusplay_core::Resolution;
 
 use crate::{
+    clipboard::{self, FocusSlot},
     hosts::{HostEntry, HostId},
     notice::{Notice, error_chain},
     session::{self, SessionError},
@@ -102,6 +104,8 @@ pub struct StreamView {
     input: InputConfig,
     engaged: bool,
     pointer: Option<(PointerMode, ActivePointer)>,
+    clipboard_slot: FocusSlot,
+    clipboard: Option<FocusClipboardHandle>,
     show_stats: bool,
     stats_overlay: bool,
     sampler: StatsSampler,
@@ -138,8 +142,19 @@ impl StreamView {
         )
         .ok();
 
+        let clipboard_slot = FocusSlot::default();
+        let clipboard_opener = clipboard::session_opener(Arc::clone(&clipboard_slot));
+
         let connecting = cx.background_spawn(async move {
-            session::connect(config, address, &credentials, gpu, sink, display)
+            session::connect(
+                config,
+                address,
+                &credentials,
+                gpu,
+                sink,
+                display,
+                clipboard_opener,
+            )
         });
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = connecting.await;
@@ -158,6 +173,8 @@ impl StreamView {
             input,
             engaged: false,
             pointer: None,
+            clipboard_slot,
+            clipboard: None,
             show_stats: true,
             stats_overlay,
             sampler: StatsSampler::new(timings),
@@ -166,7 +183,9 @@ impl StreamView {
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
             _activation: cx.observe_window_activation(window, |this, window, cx| {
-                if !window.is_window_active() {
+                if window.is_window_active() {
+                    this.focus_gained(cx);
+                } else {
                     this.release(cx);
                 }
             }),
@@ -266,6 +285,12 @@ impl StreamView {
 
         self.report_pairing(&stream, cx);
         Self::report_clipboard(&stream, cx);
+        if matches!(
+            stream.clipboard(),
+            ClipboardState::Active(BackendKind::Focus)
+        ) {
+            self.clipboard = self.clipboard_slot.lock().take();
+        }
 
         let captured = {
             let mut live = self.live.borrow_mut();
@@ -299,11 +324,32 @@ impl StreamView {
     }
 
     fn report_clipboard(stream: &ClientStream, cx: &mut Context<Self>) {
-        if let ClipboardState::Unavailable(error) = stream.clipboard() {
-            cx.emit(StreamEvent::Notice(Notice::Info(format!(
-                "Clipboard sharing is off for this session: {}",
-                error_chain(&**error)
-            ))));
+        if let Some(text) = clipboard::notice_text(stream.clipboard()) {
+            cx.emit(StreamEvent::Notice(Notice::Info(text)));
+        }
+    }
+
+    fn focus_gained(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = &mut self.clipboard else {
+            return;
+        };
+        if !handle.reads_on_focus() {
+            return;
+        }
+
+        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+            handle.offer(text);
+        }
+    }
+
+    fn apply_incoming_clipboard(&mut self, cx: &mut Context<Self>) {
+        let incoming = self
+            .clipboard
+            .as_mut()
+            .and_then(FocusClipboardHandle::take_incoming);
+
+        if let Some(text) = incoming {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
@@ -333,6 +379,8 @@ impl StreamView {
             self.finish(cx);
             return false;
         }
+
+        self.apply_incoming_clipboard(cx);
 
         let actions = self
             .live
@@ -416,6 +464,8 @@ impl StreamView {
         if let (Some(_), Some(stats)) = (&self.json_reporter, &last) {
             JsonReporter::report_final(stats);
         }
+
+        self.clipboard = None;
 
         let result = self.live.borrow_mut().stop();
         self.phase = Phase::Ended;

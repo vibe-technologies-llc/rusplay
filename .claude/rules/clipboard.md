@@ -4,6 +4,7 @@ paths:
   - "crates/rusplay-host/src/clipboard.rs"
   - "crates/rusplay-client/src/clipboard.rs"
   - "crates/rusplay-protocol/src/clipboard.rs"
+  - "crates/rusplay-app/src/clipboard.rs"
 ---
 
 # Clipboard sync
@@ -70,15 +71,35 @@ paths:
   listen for `SelectionOwnerChanged` and `SelectionTransfer` and issue `SetSelection`;
   `PortalClipboard::link` hands each client session its own backend over the one portal session.
   A failure to request or start it is `ClipboardError::PortalSetup`, reported as unavailable.
+- `focus` is the client fallback for a compositor with no data-control protocol (GNOME), where
+  gpui offers no clipboard change notification. `FocusClipboard::pair(policy)` returns a
+  `FocusClipboardHandle` for gpui's main thread and a `FocusClipboard` backend (`BackendKind::Focus`)
+  for the `ClipboardLink`, joined by two `mpsc` channels so neither the receive stage nor the frame
+  path ever calls into gpui. `poll_change` drains what the handle offered and `set_text` forwards
+  incoming text to the handle; a dropped end is `BackendStopped`. `rusplay-app`
+  (`clipboard.rs`) wraps the data-control opener: when `DataControl::open` fails it builds the
+  pair, parks the handle in a `FocusSlot` and returns the backend, and `StreamView` takes the
+  handle once the session reports `Active(Focus)`.
+- The fallback is focus based and the limit is part of the design: the stream window reads
+  `cx.read_from_clipboard()` only when it gains focus (`observe_window_activation`) and only when
+  the direction lets the client send (`reads_on_focus`), so a copy made on the client while the
+  stream window is focused is not seen until focus leaves and returns, and a clipboard already
+  filled when the window opens is not read until the next focus gain. `offer` drops empty,
+  oversized and unchanged text (unchanged against the last text offered or applied, so text just
+  applied from the host is not echoed and copying an older value again still sends); the
+  `ClipboardLink` then applies the same direction, size limit and `last_synced` echo suppression
+  as for any backend. Incoming text is written with `cx.write_to_clipboard` from the 50 ms
+  `StreamView::poll`, only the latest of a burst. The state is reported as a notice
+  (`clipboard::notice_text`) that states the focus limit.
 - Host choice: data-control when the compositor has it (KWin: `ext-data-control-v1`, wlroots:
   either), else the portal clipboard, else unavailable (plain GNOME without the portal's
-  clipboard). Client choice: data-control only. gpui has no clipboard change notification, so a
-  client on a compositor without data-control (GNOME) cannot watch its clipboard and reports
-  unavailable.
+  clipboard). Client choice: data-control, else the focus fallback.
 
 ## Tests
 
-- Pure logic (wire, limits, echo, direction gating, `ReadJob`) has unit tests. The host and client
+- Pure logic (wire, limits, echo, direction gating, `ReadJob`, the focus backend and handle, the
+  app's fallback opener and notice) has unit tests. The gpui reads and writes in `StreamView` are
+  compile-checked only. The host and client
   crates run the real control stages against `MemoryClipboard`, and `rusplay-host/tests/loopback.rs`
   runs a real `HostSession` and `ClientSession` over loopback with one `MemoryClipboard` each.
 - `rusplay-clipboard/tests/nested.rs` runs the data-control backend against a nested, headless

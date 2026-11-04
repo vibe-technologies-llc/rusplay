@@ -27,7 +27,12 @@ mod testing;
 mod window;
 
 pub use rusplay_audio::{AudioInput, AudioOutput, AudioOutputStats};
-pub use rusplay_clipboard::{BackendKind, ClipboardError, ClipboardState};
+pub use rusplay_clipboard::{
+    BackendKind, ClipboardBackend, ClipboardError, ClipboardPolicy, ClipboardState, FocusClipboard,
+    FocusClipboardHandle, MemoryClipboard,
+};
+#[cfg(feature = "window")]
+pub use rusplay_clipboard::{DataControl, DataControlOptions};
 pub use rusplay_core::{StatsPhase, StatsSchedule, unix_millis_now};
 #[cfg(feature = "window")]
 pub use rusplay_input::capture::{ActivePointer, ClientAction};

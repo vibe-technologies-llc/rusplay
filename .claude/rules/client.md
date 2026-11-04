@@ -58,7 +58,8 @@ paths:
   `FecHeader::protects`. Control events of a batch are handled before its video events, so a
   `StreamFormat` that arrived together with the keyframe it describes is applied first.
 - Clipboard: `ClientSession::with_clipboard` / `without_clipboard` and the `window` feature's
-  default data-control opener, exactly like the host's (`clipboard.md`). `connect_stream` opens a
+  default data-control opener, exactly like the host's (`clipboard.md`); the app passes its own
+  opener with the focus fallback. `connect_stream` opens a
   `ClipboardLink` when `input.clipboard` is not `off` and hands it to the receive stage in
   `Links::clipboard`; the receive stage passes `ControlMessage::Clipboard` chunks to it once the
   handshake is done and calls `service` once per loop pass, never on the frame path.

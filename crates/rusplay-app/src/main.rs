@@ -1,6 +1,7 @@
 mod app;
 mod chrome;
 mod cli;
+mod clipboard;
 mod host_page;
 mod hosting;
 mod hosts;
