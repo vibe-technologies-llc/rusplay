@@ -138,12 +138,15 @@ paths:
   stream description's resolution, calls `ClientStream::set_target` with the device size and
   `StreamWindow::set_layout` with the rectangle. Doing it in prepaint means the subsurface
   position (applied on the parent's commit) lands with the frame gpui is drawing.
-- Clipboard: the app opens no clipboard itself. The client library's data-control backend does the
-  work, because gpui has no clipboard change notification (only `read_from_clipboard`, which the
-  `TextField` uses for paste), so the app could not tell when the user copied. After connecting,
-  `StreamView::report_clipboard` shows an info notice when `ClientStream::clipboard()` is
-  `Unavailable`, and the host page shows `HostEvent::ClipboardUnavailable` the same way. The
-  `input.clipboard` direction and size limit are in Settings, Input, Clipboard.
+- Clipboard: the client library's data-control backend does the work, because gpui has no
+  clipboard change notification (only `read_from_clipboard`, which the `TextField` uses for paste).
+  `clipboard::session_opener` wraps it: where data-control cannot open (GNOME) it falls back to the
+  focus backend of `clipboard.md`, and `StreamView` reads gpui's clipboard on a window focus gain
+  and writes incoming text from `poll`. After connecting, `StreamView::report_clipboard` shows an
+  info notice (`clipboard::notice_text`) when `ClientStream::clipboard()` is `Unavailable` or the
+  focus fallback, and the notice says the fallback is focus based. The host page shows
+  `HostEvent::ClipboardUnavailable` the same way. The `input.clipboard` direction and size limit
+  are in Settings, Input, Clipboard.
 - Input: once connected, `StreamView` calls `StreamWindow::capture_input` with the config's
   `input` section; a failure there is reported as a notice and the stream continues without
   input. A click on the picture or the release chord engages, the chord releases again; the

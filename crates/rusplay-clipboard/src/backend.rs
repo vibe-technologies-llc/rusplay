@@ -7,6 +7,7 @@ pub enum BackendKind {
     ExtDataControl,
     WlrDataControl,
     Portal,
+    Focus,
     Memory,
 }
 
@@ -16,6 +17,7 @@ impl BackendKind {
             Self::ExtDataControl => "ext-data-control",
             Self::WlrDataControl => "wlr-data-control",
             Self::Portal => "portal",
+            Self::Focus => "focus",
             Self::Memory => "memory",
         }
     }
