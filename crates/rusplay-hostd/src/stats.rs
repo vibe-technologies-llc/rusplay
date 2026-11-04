@@ -1,16 +1,10 @@
-use std::{
-    fmt::Write,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fmt::Write, time::Instant};
 
 use rusplay_host::{
-    HostError, HostStats, HostStream, NegotiatedFormat, StatsPhase, StatsSchedule, unix_millis_now,
+    HostStats, NegotiatedFormat, StatsPhase, StatsSchedule, StreamSnapshot, unix_millis_now,
 };
 
 use crate::stats_json;
-
-const POLL: Duration = Duration::from_millis(100);
 
 pub fn summary(stats: &HostStats) -> String {
     let mut line = String::new();
@@ -71,37 +65,49 @@ fn emit_json(phase: StatsPhase, stats: &HostStats) {
     println!("{}", stats_json::line(phase, unix_millis_now(), stats));
 }
 
-pub fn wait_logging(stream: HostStream, interval_ms: u32, json: bool) -> Result<(), HostError> {
-    let mut schedule = StatsSchedule::new(interval_ms, Instant::now());
-    let mut format_reported = false;
+#[derive(Debug)]
+pub struct StreamLog {
+    schedule: StatsSchedule,
+    json: bool,
+    format_reported: bool,
+}
 
-    while !stream.is_finished() {
-        thread::sleep(POLL);
-        if !format_reported && let Some(format) = stream.format() {
-            format_reported = true;
+impl StreamLog {
+    pub fn new(interval_ms: u32, json: bool, now: Instant) -> Self {
+        Self {
+            schedule: StatsSchedule::new(interval_ms, now),
+            json,
+            format_reported: false,
+        }
+    }
+
+    pub fn observe(&mut self, snapshot: &StreamSnapshot, now: Instant) {
+        if !self.format_reported
+            && let Some(format) = snapshot.format
+        {
+            self.format_reported = true;
             eprintln!("rusplay-hostd: {}", format_line(format));
         }
-        if schedule.take_due(Instant::now()) {
-            let stats = stream.stats();
-            eprintln!("rusplay-hostd: stats {}", summary(&stats));
-            if json {
-                emit_json(StatsPhase::Interval, &stats);
+        if self.schedule.take_due(now) {
+            eprintln!("rusplay-hostd: stats {}", summary(&snapshot.stats));
+            if self.json {
+                emit_json(StatsPhase::Interval, &snapshot.stats);
             }
         }
     }
 
-    let last = stream.stats();
-    let result = stream.wait();
-    eprintln!("rusplay-hostd: session summary {}", summary(&last));
-    if json {
-        emit_json(StatsPhase::Final, &last);
+    pub fn finish(&self, stats: &HostStats) {
+        eprintln!("rusplay-hostd: session summary {}", summary(stats));
+        if self.json {
+            emit_json(StatsPhase::Final, stats);
+        }
     }
-
-    result
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use rusplay_host::CodecFormat;
 
     use super::*;

@@ -50,7 +50,7 @@ pub use crate::{
     negotiate::NegotiatedFormat,
     portal::{PortalHost, open_portal},
     responder::Responder,
-    service::{HostEvent, HostService, StreamSnapshot},
+    service::{HostEvent, HostService, PinRenewer, StreamSnapshot},
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},
     stats::HostStats,

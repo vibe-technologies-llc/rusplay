@@ -211,7 +211,8 @@ paths:
   PIN at once); no PIN is shown while a client streams. The connected client card shows its name,
   address, whether it just paired or reconnected, the stream format (and that it is a fallback when
   it is) and the rates (sent and encoded frame rate, round trip, dropped frames, lost packets,
-  keyframes, bitrate target). The paired clients card lists the host peer store with `Revoke`.
+  keyframes, bitrate target) and a `Disconnect` button (`HostService::disconnect`), which ends the
+  streaming client without stopping the host, so the loop opens the next pairing window. The paired clients card lists the host peer store with `Revoke`.
 - Revoking edits the store file through the same `Arc<RwLock<PeerStore>>` the running host uses
   (refreshed first when stale, like `rusplay-hostd peers forget`), so the host refuses the client
   at its next reconnect; a client already streaming stays until it leaves, and the notice says so.
