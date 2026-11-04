@@ -9,7 +9,8 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_input::{
-    GamepadButton, GamepadEvent, HeldInput, InputError, InputEvent, InputRecord, RumbleCommand,
+    GamepadButton, GamepadEvent, HeldInput, InputError, InputEvent, InputRecord, PadFeedback,
+    RumbleCommand,
 };
 use rusplay_protocol::{ControlMessage, InputPacket, push_input_record};
 
@@ -21,7 +22,7 @@ use crate::{InputFeed, InputTarget};
 #[derive(Clone, Default)]
 struct SharedTarget {
     events: Arc<Mutex<Vec<InputEvent>>>,
-    rumble: Arc<Mutex<Vec<RumbleCommand>>>,
+    rumble: Arc<Mutex<Vec<PadFeedback>>>,
     failing: Arc<Mutex<bool>>,
 }
 
@@ -34,7 +35,7 @@ impl InputTarget for SharedTarget {
         Ok(())
     }
 
-    fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn service(&mut self, rumble: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         rumble.append(&mut self.rumble.lock());
         Ok(())
     }
@@ -69,7 +70,7 @@ impl InputTarget for GatedTarget {
         Ok(())
     }
 
-    fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn service(&mut self, _rumble: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         Ok(())
     }
 }
@@ -214,10 +215,10 @@ fn rumble_from_the_target_reaches_the_client_on_the_control_channel() {
         delay_ms: 5,
         duration_ms: 300,
     };
-    target
-        .rumble
-        .lock()
-        .extend([command, RumbleCommand::stop(2)]);
+    target.rumble.lock().extend([
+        PadFeedback::Rumble(command),
+        PadFeedback::Rumble(RumbleCommand::stop(2)),
+    ]);
 
     let both = client.pump_until(|client| {
         client.has(ControlMessage::Rumble {
@@ -237,6 +238,53 @@ fn rumble_from_the_target_reaches_the_client_on_the_control_channel() {
 
     assert!(both);
     assert_eq!(stream.stats().rumble_sent, 2);
+    assert_eq!(stream.stats().feedback_sent, 0);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn lightbar_leds_and_trigger_effects_reach_the_client_on_the_control_channel() {
+    let target = SharedTarget::default();
+    let fixture = fixture(&target);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert!(client.pump_until(TestClient::has_hello));
+    target.rumble.lock().extend([
+        PadFeedback::Lightbar {
+            slot: 1,
+            red: 10,
+            green: 20,
+            blue: 30,
+        },
+        PadFeedback::PlayerLeds { slot: 1, mask: 5 },
+        PadFeedback::TriggerEffect {
+            slot: 1,
+            right: true,
+            effect: [2; 11],
+        },
+    ]);
+
+    let all = client.pump_until(|client| {
+        client.has(ControlMessage::Lightbar {
+            slot: 1,
+            red: 10,
+            green: 20,
+            blue: 30,
+        }) && client.has(ControlMessage::PlayerLeds { slot: 1, mask: 5 })
+            && client.has(ControlMessage::TriggerEffect {
+                slot: 1,
+                right: true,
+                effect: [2; 11],
+            })
+    });
+
+    assert!(all);
+    assert_eq!(stream.stats().feedback_sent, 3);
+    assert_eq!(stream.stats().rumble_sent, 0);
     stream.stop().unwrap();
 }
 

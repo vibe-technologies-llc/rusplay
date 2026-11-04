@@ -45,6 +45,8 @@ pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) ->
         .number("input_snapshots_sent", stats.input_snapshots_sent)
         .number("rumble_commands", stats.rumble_commands)
         .number("rumble_failures", stats.rumble_failures)
+        .number("feedback_commands", stats.feedback_commands)
+        .number("feedback_failures", stats.feedback_failures)
         .number("gamepad_failures", stats.gamepad_failures)
         .number("thread_priority_failures", stats.thread_priority_failures)
         .number("bitrate_hints_sent", stats.bitrate_hints_sent)

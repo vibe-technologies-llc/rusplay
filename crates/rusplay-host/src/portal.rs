@@ -30,7 +30,7 @@ mod shared {
     };
     use rusplay_config::Config;
     use rusplay_input::{
-        InputError, InputEvent, InputSink, RumbleCommand, SplitSink,
+        InputError, InputEvent, InputSink, PadFeedback, SplitSink,
         gamepad::VirtualGamepads,
         libei::{
             AbsoluteTarget, LibeiInjector, LibeiOptions, PortalInputOptions, RemoteDesktopSession,
@@ -57,9 +57,9 @@ mod shared {
             InputSink::inject_batch(self, events, results);
         }
 
-        fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        fn service(&mut self, feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
             let desktop = self.desktop.service();
-            let gamepads = self.gamepads.poll_rumble(rumble);
+            let gamepads = self.gamepads.poll_feedback(feedback);
 
             desktop.and(gamepads)
         }

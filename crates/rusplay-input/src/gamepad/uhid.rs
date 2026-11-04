@@ -11,7 +11,7 @@ use rustix::{
 };
 
 use crate::{
-    GamepadEvent, InputError, RumbleCommand,
+    GamepadEvent, InputError, PadFeedback,
     gamepad::{
         dualsense::{
             self, DualSenseState, NAME, PRODUCT_DUALSENSE, REPORT_DESCRIPTOR, VENDOR_SONY,
@@ -350,18 +350,6 @@ fn sensor_timestamp(elapsed: Duration) -> u32 {
     u32::try_from(units % (1 << 32)).unwrap_or(0)
 }
 
-fn rumble_command(slot: u8, rumble: dualsense::Rumble) -> RumbleCommand {
-    let widen = |magnitude: u8| u16::from(magnitude) * 257;
-
-    RumbleCommand {
-        slot,
-        strong: widen(rumble.strong),
-        weak: widen(rumble.weak),
-        delay_ms: 0,
-        duration_ms: RumbleCommand::UNTIL_REPLACED,
-    }
-}
-
 pub struct UhidGamepad {
     slot: u8,
     device: UhidDevice,
@@ -426,14 +414,13 @@ impl GamepadDevice for UhidGamepad {
         }
     }
 
-    fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         for event in self.service()? {
             if let KernelEvent::Output { report_type, data } = event
                 && report_type == OUTPUT_REPORT_TYPE
                 && let Some(report) = dualsense::parse_output(&data)
-                && let Some(rumble) = report.rumble
             {
-                out.push(rumble_command(self.slot, rumble));
+                report.feedback(self.slot, out);
             }
         }
 
@@ -451,7 +438,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        GamepadButton,
+        GamepadButton, RumbleCommand,
         gamepad::dualsense::{
             CALIBRATION_REPORT_ID, FIRMWARE_REPORT_ID, INPUT_REPORT_ID, INPUT_REPORT_LEN,
             OUTPUT_REPORT_ID, OUTPUT_REPORT_LEN, PAIRING_REPORT_ID,
@@ -765,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn output_reports_become_rumble_commands() {
+    fn output_reports_become_feedback_for_the_slot() {
         let (mut gamepad, kernel) = gamepad();
         let mut report = vec![0; OUTPUT_REPORT_LEN];
         report[0] = OUTPUT_REPORT_ID;
@@ -775,22 +762,31 @@ mod tests {
         let mut lightbar_only = vec![0; OUTPUT_REPORT_LEN];
         lightbar_only[0] = OUTPUT_REPORT_ID;
         lightbar_only[2] = 0x04;
+        lightbar_only[45..48].copy_from_slice(&[0, 0, 128]);
         let mut out = Vec::new();
 
         kernel.send(&output_event(1, &report)).unwrap();
         kernel.send(&output_event(1, &lightbar_only)).unwrap();
         kernel.send(&output_event(0, &report)).unwrap();
-        gamepad.poll_rumble(&mut out).unwrap();
+        gamepad.poll_feedback(&mut out).unwrap();
 
         assert_eq!(
             out,
-            vec![RumbleCommand {
-                slot: 3,
-                strong: 0xffff,
-                weak: 0x8080,
-                delay_ms: 0,
-                duration_ms: 0
-            }]
+            vec![
+                PadFeedback::Rumble(RumbleCommand {
+                    slot: 3,
+                    strong: 0xffff,
+                    weak: 0x8080,
+                    delay_ms: 0,
+                    duration_ms: 0
+                }),
+                PadFeedback::Lightbar {
+                    slot: 3,
+                    red: 0,
+                    green: 0,
+                    blue: 128
+                },
+            ]
         );
     }
 
@@ -803,9 +799,9 @@ mod tests {
         let mut out = Vec::new();
 
         kernel.send(&output_event(1, &report)).unwrap();
-        gamepad.poll_rumble(&mut out).unwrap();
+        gamepad.poll_feedback(&mut out).unwrap();
 
-        assert_eq!(out, vec![RumbleCommand::stop(3)]);
+        assert_eq!(out, vec![PadFeedback::Rumble(RumbleCommand::stop(3))]);
     }
 
     #[test]

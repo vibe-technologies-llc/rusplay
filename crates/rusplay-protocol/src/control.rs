@@ -17,6 +17,11 @@ const TAG_CLOCK_PING: u8 = 8;
 const TAG_CLOCK_PONG: u8 = 9;
 const TAG_ACKNOWLEDGE_FRAME: u8 = 10;
 const TAG_REQUEST_RECOVERY: u8 = 11;
+const TAG_LIGHTBAR: u8 = 12;
+const TAG_PLAYER_LEDS: u8 = 13;
+const TAG_TRIGGER_EFFECT: u8 = 14;
+
+pub const TRIGGER_EFFECT_LEN: usize = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -58,6 +63,21 @@ pub enum ControlMessage {
         frame: u32,
         last_good: u32,
     },
+    Lightbar {
+        slot: u8,
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
+    PlayerLeds {
+        slot: u8,
+        mask: u8,
+    },
+    TriggerEffect {
+        slot: u8,
+        right: bool,
+        effect: [u8; TRIGGER_EFFECT_LEN],
+    },
 }
 
 impl ControlMessage {
@@ -67,13 +87,16 @@ impl ControlMessage {
         match self {
             Self::RequestKeyframe { .. }
             | Self::BitrateHint { .. }
-            | Self::AcknowledgeFrame { .. } => 5,
+            | Self::AcknowledgeFrame { .. }
+            | Self::Lightbar { .. } => 5,
             Self::Hello { .. } | Self::ReportLoss { .. } => 7,
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
             Self::ClockPing { .. } | Self::RequestRecovery { .. } => 9,
             Self::ClockPong { .. } => 17,
+            Self::PlayerLeds { .. } => 3,
+            Self::TriggerEffect { .. } => 3 + TRIGGER_EFFECT_LEN,
         }
     }
 
@@ -146,6 +169,25 @@ impl ControlMessage {
                 out[1..5].copy_from_slice(&frame.to_be_bytes());
                 out[5..9].copy_from_slice(&last_good.to_be_bytes());
             }
+            Self::Lightbar {
+                slot,
+                red,
+                green,
+                blue,
+            } => out.copy_from_slice(&[TAG_LIGHTBAR, *slot, *red, *green, *blue]),
+            Self::PlayerLeds { slot, mask } => {
+                out.copy_from_slice(&[TAG_PLAYER_LEDS, *slot, *mask]);
+            }
+            Self::TriggerEffect {
+                slot,
+                right,
+                effect,
+            } => {
+                out[0] = TAG_TRIGGER_EFFECT;
+                out[1] = *slot;
+                out[2] = u8::from(*right);
+                out[3..].copy_from_slice(effect);
+            }
             Self::StreamFormat(description) => {
                 let mut body = Vec::with_capacity(len);
                 body.push(TAG_STREAM_FORMAT);
@@ -172,6 +214,10 @@ impl ControlMessage {
                 0 => Ok(Self::StreamFormat(description)),
                 extra => Err(ProtocolError::TrailingBytes { extra }),
             };
+        }
+
+        if let Some(decoded) = Self::decode_pad_feedback(tag, body) {
+            return decoded;
         }
 
         let body_len = match tag {
@@ -256,6 +302,60 @@ impl ControlMessage {
     }
 }
 
+impl ControlMessage {
+    fn decode_pad_feedback(tag: u8, body: &[u8]) -> Option<Result<Self, ProtocolError>> {
+        let expected = match tag {
+            TAG_LIGHTBAR => 4,
+            TAG_PLAYER_LEDS => 2,
+            TAG_TRIGGER_EFFECT => 2 + TRIGGER_EFFECT_LEN,
+            _ => return None,
+        };
+
+        if body.len() < expected {
+            return Some(Err(ProtocolError::BufferTooShort {
+                needed: 1 + expected,
+                available: 1 + body.len(),
+            }));
+        }
+
+        if body.len() > expected {
+            return Some(Err(ProtocolError::TrailingBytes {
+                extra: body.len() - expected,
+            }));
+        }
+
+        Some(match tag {
+            TAG_LIGHTBAR => Ok(Self::Lightbar {
+                slot: body[0],
+                red: body[1],
+                green: body[2],
+                blue: body[3],
+            }),
+            TAG_PLAYER_LEDS => Ok(Self::PlayerLeds {
+                slot: body[0],
+                mask: body[1],
+            }),
+            _ => Self::decode_trigger_effect(body),
+        })
+    }
+
+    fn decode_trigger_effect(body: &[u8]) -> Result<Self, ProtocolError> {
+        let right = match body[1] {
+            0 => false,
+            1 => true,
+            other => return Err(ProtocolError::UnknownTriggerSide(other)),
+        };
+        let mut effect = [0; TRIGGER_EFFECT_LEN];
+        effect.copy_from_slice(&body[2..]);
+
+        Ok(Self::TriggerEffect {
+            slot: body[0],
+            right,
+            effect,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlPacket {
     Message { id: u32, message: ControlMessage },
@@ -334,7 +434,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 12] {
+    fn every_message() -> [ControlMessage; 15] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -367,6 +467,21 @@ mod tests {
             ControlMessage::RequestRecovery {
                 frame: 0x0102_0304,
                 last_good: 0x0102_0300,
+            },
+            ControlMessage::Lightbar {
+                slot: 1,
+                red: 255,
+                green: 0,
+                blue: 128,
+            },
+            ControlMessage::PlayerLeds {
+                slot: 2,
+                mask: 0x15,
+            },
+            ControlMessage::TriggerEffect {
+                slot: 3,
+                right: true,
+                effect: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             },
         ]
     }
@@ -423,6 +538,60 @@ mod tests {
         .unwrap();
 
         assert_eq!(&buf[..len], [6, 2, 1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn pad_feedback_messages_have_fixed_layouts() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let lightbar = ControlMessage::Lightbar {
+            slot: 1,
+            red: 2,
+            green: 3,
+            blue: 4,
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(&buf[..lightbar], [12, 1, 2, 3, 4]);
+
+        let leds = ControlMessage::PlayerLeds { slot: 5, mask: 6 }
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..leds], [13, 5, 6]);
+
+        let trigger = ControlMessage::TriggerEffect {
+            slot: 7,
+            right: false,
+            effect: [9; TRIGGER_EFFECT_LEN],
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(&buf[..trigger], [14, 7, 0, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn a_trigger_side_other_than_left_or_right_is_rejected() {
+        let mut bytes = [14, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        assert_eq!(
+            ControlMessage::decode(&bytes),
+            Err(ProtocolError::UnknownTriggerSide(2))
+        );
+
+        bytes[2] = 1;
+        assert!(ControlMessage::decode(&bytes).is_ok());
+    }
+
+    #[test]
+    fn pad_feedback_messages_with_trailing_or_missing_bytes_are_rejected() {
+        let lightbar = [12, 0, 0, 0, 0];
+        let leds = [13, 0, 0];
+
+        assert!(ControlMessage::decode(&[lightbar.as_slice(), &[0]].concat()).is_err());
+        assert!(ControlMessage::decode(&lightbar[..4]).is_err());
+        assert!(ControlMessage::decode(&[leds.as_slice(), &[0]].concat()).is_err());
+        assert!(ControlMessage::decode(&leds[..2]).is_err());
+        assert!(ControlMessage::decode(&[14, 0, 0]).is_err());
     }
 
     #[test]

@@ -131,6 +131,13 @@ pub enum InputError {
         source: io::Error,
     },
     #[cfg(feature = "gamepad")]
+    #[error("setting an led of the physical gamepad in slot {slot} failed")]
+    PhysicalGamepadLed {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
     #[error("writing to the uinput device of gamepad slot {slot} failed")]
     UinputEmit {
         slot: u8,

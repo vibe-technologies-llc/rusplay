@@ -16,7 +16,7 @@ use rustix::{
 };
 
 use crate::{
-    GamepadEvent, InputError, InputEvent, RumbleCommand,
+    GamepadEvent, InputError, InputEvent, PadFeedback, RumbleCommand,
     capture::{
         FaceLayout, MotionCaps, MotionTranslator, NodeCaps, NodeDescription, NodeIdentity,
         NodeRole, PadCaps, PadSlots, PadTranslator, RawAxis, RawEvent, SiblingTranslator,
@@ -27,6 +27,11 @@ use crate::{
 const INPUT_DIRECTORY: &str = "/dev/input";
 const SYSFS_INPUT_CLASS: &str = "/sys/class/input";
 const SYSFS_UINPUT_PARENT: &str = "/sys/devices/virtual/input";
+const SYSFS_LEDS_CLASS: &str = "/sys/class/leds";
+const LIGHTBAR_SUFFIX: &str = "rgb:indicator";
+const PLAYER_LED_SUFFIX: &str = "white:player-";
+const PLAYER_LED_COUNT: u8 = 5;
+const LED_MAX_BRIGHTNESS: &str = "255";
 const EVENT_PREFIX: &str = "event";
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const VENDOR_SONY: u16 = 0x054c;
@@ -172,6 +177,7 @@ pub struct PhysicalGamepads {
     options: PhysicalOptions,
     root: PathBuf,
     sysfs: Option<PathBuf>,
+    leds: Option<PathBuf>,
     pads: Vec<Pad>,
     slots: PadSlots<PathBuf>,
     known: BTreeMap<PathBuf, NodeDescription>,
@@ -187,7 +193,16 @@ struct Source {
 
 impl PhysicalGamepads {
     pub fn new(options: PhysicalOptions) -> Self {
-        Self::with_roots(options, INPUT_DIRECTORY, Some(SYSFS_INPUT_CLASS.into()))
+        Self {
+            leds: Some(SYSFS_LEDS_CLASS.into()),
+            ..Self::with_roots(options, INPUT_DIRECTORY, Some(SYSFS_INPUT_CLASS.into()))
+        }
+    }
+
+    #[must_use]
+    pub fn with_leds_root(mut self, leds: impl Into<PathBuf>) -> Self {
+        self.leds = Some(leds.into());
+        self
     }
 
     pub fn in_directory(options: PhysicalOptions, root: impl Into<PathBuf>) -> Self {
@@ -203,6 +218,7 @@ impl PhysicalGamepads {
             options,
             root: root.into(),
             sysfs,
+            leds: None,
             pads: Vec::new(),
             slots: PadSlots::new(options.max_gamepads),
             known: BTreeMap::new(),
@@ -282,6 +298,44 @@ impl PhysicalGamepads {
                 slot: command.slot,
                 source,
             })
+    }
+
+    pub fn apply(&mut self, feedback: &PadFeedback) -> Result<(), InputError> {
+        match *feedback {
+            PadFeedback::Rumble(command) => self.rumble(&command),
+            PadFeedback::Lightbar {
+                slot,
+                red,
+                green,
+                blue,
+            } => self.set_leds(slot, |leds, input| {
+                write_lightbar(leds, input, [red, green, blue])
+            }),
+            PadFeedback::PlayerLeds { slot, mask } => {
+                self.set_leds(slot, |leds, input| write_player_leds(leds, input, mask))
+            }
+            PadFeedback::TriggerEffect { .. } => Ok(()),
+        }
+    }
+
+    fn set_leds(
+        &self,
+        slot: u8,
+        write: impl FnOnce(&Path, &str) -> io::Result<()>,
+    ) -> Result<(), InputError> {
+        let (Some(leds), Some(sysfs)) = (&self.leds, &self.sysfs) else {
+            return Ok(());
+        };
+        let Some(input) = self
+            .pads
+            .iter()
+            .find(|pad| pad.slot == slot)
+            .and_then(|pad| input_name(sysfs, &pad.path))
+        else {
+            return Ok(());
+        };
+
+        write(leds, &input).map_err(|source| InputError::PhysicalGamepadLed { slot, source })
     }
 
     pub fn disconnect_all(&mut self, out: &mut Vec<InputEvent>) {
@@ -515,6 +569,49 @@ fn sysfs_parent(sysfs: &Path, node: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+fn input_name(sysfs: &Path, node: &Path) -> Option<String> {
+    let input_device = fs::canonicalize(sysfs.join(node.file_name()?).join("device")).ok()?;
+
+    Some(input_device.file_name()?.to_string_lossy().into_owned())
+}
+
+fn led_write(directory: &Path, file: &str, value: &str) -> io::Result<()> {
+    fs::write(directory.join(file), value)
+}
+
+fn write_lightbar(leds: &Path, input: &str, [red, green, blue]: [u8; 3]) -> io::Result<()> {
+    let directory = leds.join(format!("{input}:{LIGHTBAR_SUFFIX}"));
+    if !directory.is_dir() {
+        return Ok(());
+    }
+
+    let lit = red | green | blue != 0;
+    led_write(
+        &directory,
+        "multi_intensity",
+        &format!("{red} {green} {blue}"),
+    )?;
+    led_write(
+        &directory,
+        "brightness",
+        if lit { LED_MAX_BRIGHTNESS } else { "0" },
+    )
+}
+
+fn write_player_leds(leds: &Path, input: &str, mask: u8) -> io::Result<()> {
+    let mut result = Ok(());
+
+    for index in 0..PLAYER_LED_COUNT {
+        let directory = leds.join(format!("{input}:{PLAYER_LED_SUFFIX}{}", index + 1));
+        if directory.is_dir() {
+            let value = if mask & (1 << index) != 0 { "1" } else { "0" };
+            result = result.and(led_write(&directory, "brightness", value));
+        }
+    }
+
+    result
+}
+
 fn open_sibling(path: PathBuf, role: NodeRole) -> Option<Sibling> {
     let device = Device::open(&path).ok()?;
     let translator = match role {
@@ -631,7 +728,7 @@ mod tests {
     use super::*;
     use crate::{
         GamepadAxis, GamepadButton,
-        gamepad::{GamepadDevice, Report, UinputGamepad},
+        gamepad::{Report, UinputGamepad},
     };
 
     fn options() -> PhysicalOptions {
@@ -676,6 +773,113 @@ mod tests {
 
         assert_eq!(out, Vec::new());
         assert_eq!(pads.connected(), 0);
+    }
+
+    fn led_tree(directory: &Path, names: &[&str]) -> PathBuf {
+        let leds = directory.join("leds");
+        for name in names {
+            fs::create_dir_all(leds.join(name)).unwrap();
+        }
+
+        leds
+    }
+
+    fn read(path: &Path) -> String {
+        fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn the_input_name_is_the_directory_the_device_link_points_at() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("hid/input/input9");
+        fs::create_dir_all(&input).unwrap();
+        let class = directory.path().join("class");
+        fs::create_dir_all(class.join("event7")).unwrap();
+        symlink(&input, class.join("event7/device")).unwrap();
+
+        assert_eq!(
+            input_name(&class, Path::new("/dev/input/event7")),
+            Some("input9".to_owned())
+        );
+        assert_eq!(input_name(&class, Path::new("/dev/input/event8")), None);
+    }
+
+    #[test]
+    fn the_lightbar_writes_its_colour_then_its_brightness() {
+        let directory = tempfile::tempdir().unwrap();
+        let leds = led_tree(directory.path(), &["input9:rgb:indicator"]);
+        let bar = leds.join("input9:rgb:indicator");
+
+        write_lightbar(&leds, "input9", [1, 20, 255]).unwrap();
+        assert_eq!(read(&bar.join("multi_intensity")), "1 20 255");
+        assert_eq!(read(&bar.join("brightness")), "255");
+
+        write_lightbar(&leds, "input9", [0, 0, 0]).unwrap();
+        assert_eq!(read(&bar.join("multi_intensity")), "0 0 0");
+        assert_eq!(read(&bar.join("brightness")), "0");
+    }
+
+    #[test]
+    fn a_pad_without_a_lightbar_or_player_leds_drops_them_without_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let leds = led_tree(directory.path(), &["input3:rgb:indicator"]);
+
+        assert!(write_lightbar(&leds, "input9", [1, 2, 3]).is_ok());
+        assert!(write_player_leds(&leds, "input9", 0x1f).is_ok());
+        assert!(!leds.join("input9:rgb:indicator").exists());
+    }
+
+    #[test]
+    fn player_leds_follow_the_mask_bit_for_bit() {
+        let directory = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (1..=5)
+            .map(|n| format!("input9:white:player-{n}"))
+            .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let leds = led_tree(directory.path(), &names);
+
+        write_player_leds(&leds, "input9", 0b10101).unwrap();
+
+        let lit: Vec<String> = names
+            .iter()
+            .map(|name| read(&leds.join(name).join("brightness")))
+            .collect();
+        assert_eq!(lit, ["1", "0", "1", "0", "1"]);
+    }
+
+    #[test]
+    fn a_failed_led_write_is_reported_after_the_other_leds_were_tried() {
+        let directory = tempfile::tempdir().unwrap();
+        let leds = led_tree(directory.path(), &["input9:white:player-2"]);
+        fs::create_dir_all(leds.join("input9:white:player-1/brightness")).unwrap();
+
+        let result = write_player_leds(&leds, "input9", 0b11);
+
+        assert!(result.is_err());
+        assert_eq!(read(&leds.join("input9:white:player-2/brightness")), "1");
+    }
+
+    #[test]
+    fn trigger_effects_and_feedback_for_an_unknown_slot_are_dropped_without_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut pads = PhysicalGamepads::in_directory(options(), directory.path())
+            .with_leds_root(directory.path());
+
+        let trigger = pads.apply(&PadFeedback::TriggerEffect {
+            slot: 0,
+            right: true,
+            effect: [0; 11],
+        });
+        let lightbar = pads.apply(&PadFeedback::Lightbar {
+            slot: 2,
+            red: 1,
+            green: 2,
+            blue: 3,
+        });
+        let leds = pads.apply(&PadFeedback::PlayerLeds { slot: 2, mask: 1 });
+        let rumble = pads.apply(&PadFeedback::Rumble(RumbleCommand::stop(2)));
+
+        assert!(trigger.is_ok() && lightbar.is_ok() && leds.is_ok() && rumble.is_ok());
     }
 
     #[test]

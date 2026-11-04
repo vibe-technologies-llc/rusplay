@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use rusplay_audio::{AudioInput, CODEC_THREAD_STACK_BYTES};
 use rusplay_config::{AudioConfig, Config, InputConfig};
 use rusplay_core::Resolution;
-use rusplay_input::{InputEvent, RumbleCommand, gamepad::PhysicalOptions};
+use rusplay_input::{InputEvent, PadFeedback, gamepad::PhysicalOptions};
 use rusplay_net::{
     PairingTiming, PeerRecord, PeerSecret, Pin, ReconnectTiming, Transport, TransportOptions,
     pair_as_client, reconnect_as_client,
@@ -189,13 +189,13 @@ impl ClientSession {
             None => None,
         };
 
-        let (rumble, rumble_commands) = mpsc::channel();
+        let (pad_feedback, pad_feedback_commands) = mpsc::channel();
 
         let (handshake, handshake_done) = mpsc::channel();
         let links = Links {
             decode_queue: queue,
             audio_queue,
-            rumble: self.config.input.gamepads.then_some(rumble),
+            pad_feedback: self.config.input.gamepads.then_some(pad_feedback),
             cursor: stream.cursor.clone(),
             format: Arc::clone(&stream.format),
             feedback,
@@ -218,7 +218,7 @@ impl ClientSession {
         match handshake_done.recv_timeout(timeout) {
             Ok(()) => {
                 if self.config.input.gamepads {
-                    stream.spawn_gamepads(&self.config.input, rumble_commands)?;
+                    stream.spawn_gamepads(&self.config.input, pad_feedback_commands)?;
                 }
                 if self.config.audio.microphone.enabled
                     && let Some(source) = open_microphone(&self.config.audio)?
@@ -448,11 +448,11 @@ impl ClientStream {
     fn spawn_gamepads(
         &mut self,
         config: &InputConfig,
-        commands: mpsc::Receiver<RumbleCommand>,
+        commands: mpsc::Receiver<PadFeedback>,
     ) -> Result<(), ClientError> {
         let options = PhysicalOptions::from(config);
         let links = GamepadLinks {
-            rumble: commands,
+            pad_feedback: commands,
             input: self.input.clone(),
             done: Arc::clone(&self.gamepads_done),
             stop: Arc::clone(&self.stop),

@@ -161,7 +161,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   buffer a whole event. The report descriptor (`REPORT_DESCRIPTOR`, checked by a test that sums
   its report sizes) declares input report 1 (64 bytes with the id), output report 2 (63) and
   feature reports 5, 9 and 32. `hid_add_device` runs in a kernel worker after `CREATE2`, so the
-  driver's probe asks for the feature reports while the host keeps calling `poll_rumble`, whose
+  driver's probe asks for the feature reports while the host keeps calling `poll_feedback`, whose
   `UhidDevice::service` answers each `UHID_GET_REPORT` at once (the kernel waits 5 seconds per
   request) and acknowledges `UHID_SET_REPORT`. The answers: 0x05 calibration, 41 bytes, with every
   denominator the driver divides by non-zero and chosen so calibrated values equal the raw counts
@@ -182,7 +182,27 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   contact point and are dropped. The output report's rumble is read when either vibration
   flag (flag byte 1 bit 0, flag byte 39 bit 2) is set and becomes a `RumbleCommand` with
   `duration_ms` 0 (the client's `input.rumble_max_ms` ends it), the left motor strong and the right
-  weak, each byte times 257; other flags are not read yet.
+  weak, each byte times 257. The same report's lightbar colour (flag byte 2 bit 2, bytes 45 to 47),
+  player LEDs (bit 4, low five bits of byte 44) and adaptive trigger effects (flag byte 1 bits 2
+  and 3, 11 bytes at 11 for the right trigger and 22 for the left) become the other
+  `PadFeedback` variants; the lightbar brightness and setup bytes and the audio and mute fields are
+  ignored.
+- `PadFeedback` (`Rumble(RumbleCommand)`, `Lightbar`, `PlayerLeds`, `TriggerEffect`, each with its
+  slot) is what `GamepadDevice::poll_feedback` yields and what the host turns into control
+  messages and the client applies. `UinputGamepad` only yields rumble. `PhysicalGamepads::apply`
+  routes it: rumble to `rumble` (above); the lightbar and player LEDs through the kernel LED class
+  that `hid-playstation` registers per pad, found from the pad's `/sys/class/input/eventN/device`
+  link (`inputM`): `/sys/class/leds/inputM:rgb:indicator/multi_intensity` gets `r g b` and
+  `brightness` 255 (0 for black), and `inputM:white:player-1` to `-5` get 1 or 0 from mask bits 0
+  to 4. A pad without those LEDs (an Xbox pad, a DS4, which registers separate
+  `red`/`green`/`blue` LEDs instead, a slot with no pad) drops the message with no error, so
+  does a client without `sysfs`. A write that fails on an LED that exists, normally because the
+  LED files are root-only, is `PhysicalGamepadLed` and counts in the client's `feedback_failures`;
+  a udev rule that gives the desktop user write access to `brightness` and `multi_intensity` of
+  `SUBSYSTEM=="leds"` Sony pads is needed. Adaptive trigger effects are always dropped without an
+  error: neither evdev nor the kernel's LED class has an API for them (`hid-playstation` does not
+  expose them, only a raw hidraw output report could), and the dropped message is still counted
+  as applied.
 - A failure to open `/dev/uhid` is `UhidPermissionDenied` (carrying the `PermissionDenied`
   source, and a message naming the udev rule) or `UhidOpen`, and the host handles it exactly like a
   uinput one: the `Connected` injection fails and counts in `input_failures`, with no fallback to
@@ -205,8 +225,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   it `Connected` fails with `UinputCreate` carrying the `PermissionDenied` source. The live tests
   are `#[ignore]`d and need that access.
 - Each virtual pad advertises `FF_RUMBLE` only (like `xpad`) and `ff_effects_max` of
-  `MAX_RUMBLE_EFFECTS` (16). The uinput fd is non-blocking. `GamepadPool::poll_rumble` (also
-  `VirtualGamepads::poll_rumble`) drains every connected pad's fd and appends `RumbleCommand`s; the
+  `MAX_RUMBLE_EFFECTS` (16). The uinput fd is non-blocking. `GamepadPool::poll_feedback` (also
+  `VirtualGamepads::poll_feedback`) drains every connected pad's fd and appends `RumbleCommand`s; the
   host calls it from its input loop every few milliseconds, because the kernel blocks the game's
   `EVIOCSFF` upload until the owner answers it (30 s timeout, then the game sees an error).
 - `RumbleTracker` (pure, one per pad, tested without hardware) holds the uploaded effects by the
@@ -216,7 +236,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   emits nothing. Uploading over the active effect restarts it with the new strength. Unknown ids
   and non-rumble effect kinds are rejected to the game with `EINVAL`, or ignored for plays and
   erases, as the kernel would.
-- `RumbleCommand { slot, strong, weak, delay_ms, duration_ms }` is what leaves `rusplay-input`:
+- `RumbleCommand { slot, strong, weak, delay_ms, duration_ms }` is what a rumble leaves `rusplay-input`
+  as, wrapped in `PadFeedback::Rumble` (below):
   magnitudes are the kernel's `u16`, `duration_ms` is the effect length times the play count
   saturated at `u16::MAX`, and `0` means "until the next command for this slot" (the kernel's
   length `0`). A command with both magnitudes `0` is a stop (`RumbleCommand::stop`). FF gain and
@@ -449,13 +470,13 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   client only starts sending after the handshake.
 - Rumble goes back on the control channel as `ControlMessage::Rumble { slot, strong, weak,
   delay_ms, duration_ms }`, a one-to-one copy of `RumbleCommand`, reliable and acknowledged so
-  a stop is not lost. The host sends one per `poll_rumble` command. Messages are unordered, which
+  a stop is not lost. The host sends one per `PadFeedback::Rumble` that `poll_feedback` yields. Messages are unordered, which
   is why the client caps every effect at `input.rumble_max_ms`.
 - The host applies this in its input stage (`host.md`): one `HostSession` input stage per client
   session, fed the `StreamKind::Input` datagrams the control stage routes to it once the `Hello`
   is answered. Its target is the `SplitSink` of `LibeiInjector` and `VirtualGamepads`, whose
-  `service` drives the injector's connection and `VirtualGamepads::poll_rumble` every 4 ms, and
-  every `RumbleCommand` leaves as one `ControlMessage::Rumble`. `HeldInput` tracks what the host
+  `service` drives the injector's connection and `VirtualGamepads::poll_feedback` every 4 ms, and
+  every `PadFeedback` leaves as one `ControlMessage`. `HeldInput` tracks what the host
   injected successfully (the client's input stage tracks what it sent the same way; keys and
   buttons are `KeySet` bitsets over evdev codes below 768, pads are `PadState`, touches a
   `TouchSet`), so that when the session ends for any reason `HeldInput::release_all` lifts every

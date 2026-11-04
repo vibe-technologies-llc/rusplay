@@ -1,4 +1,7 @@
-use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputError, SensorKind};
+use crate::{
+    GamepadAxis, GamepadButton, GamepadEvent, InputError, PadFeedback, RumbleCommand, SensorKind,
+    TRIGGER_EFFECT_LEN,
+};
 
 pub(super) const VENDOR_SONY: u16 = 0x054c;
 pub(super) const PRODUCT_DUALSENSE: u16 = 0x0ce6;
@@ -55,7 +58,17 @@ const VALID2_COMPATIBLE_VIBRATION2: u8 = 0x04;
 const OUTPUT_OFFSET_VALID0: usize = 1;
 const OUTPUT_OFFSET_MOTOR_WEAK: usize = 3;
 const OUTPUT_OFFSET_MOTOR_STRONG: usize = 4;
+const OUTPUT_OFFSET_VALID1: usize = 2;
+const OUTPUT_OFFSET_RIGHT_TRIGGER: usize = 11;
+const OUTPUT_OFFSET_LEFT_TRIGGER: usize = 22;
 const OUTPUT_OFFSET_VALID2: usize = 39;
+const OUTPUT_OFFSET_PLAYER_LEDS: usize = 44;
+const OUTPUT_OFFSET_LIGHTBAR: usize = 45;
+const VALID0_RIGHT_TRIGGER: u8 = 0x04;
+const VALID0_LEFT_TRIGGER: u8 = 0x08;
+const VALID1_LIGHTBAR: u8 = 0x04;
+const VALID1_PLAYER_LEDS: u8 = 0x10;
+const PLAYER_LED_MASK: u8 = 0x1f;
 
 const BUTTONS0_SQUARE: u8 = 0x10;
 const BUTTONS0_CROSS: u8 = 0x20;
@@ -93,6 +106,55 @@ pub(super) struct Rumble {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct OutputReport {
     pub rumble: Option<Rumble>,
+    pub lightbar: Option<[u8; 3]>,
+    pub player_leds: Option<u8>,
+    pub right_trigger: Option<[u8; TRIGGER_EFFECT_LEN]>,
+    pub left_trigger: Option<[u8; TRIGGER_EFFECT_LEN]>,
+}
+
+impl OutputReport {
+    pub fn feedback(&self, slot: u8, out: &mut Vec<PadFeedback>) {
+        let widen = |magnitude: u8| u16::from(magnitude) * 257;
+
+        if let Some(rumble) = self.rumble {
+            out.push(PadFeedback::Rumble(RumbleCommand {
+                slot,
+                strong: widen(rumble.strong),
+                weak: widen(rumble.weak),
+                delay_ms: 0,
+                duration_ms: RumbleCommand::UNTIL_REPLACED,
+            }));
+        }
+
+        if let Some([red, green, blue]) = self.lightbar {
+            out.push(PadFeedback::Lightbar {
+                slot,
+                red,
+                green,
+                blue,
+            });
+        }
+
+        if let Some(mask) = self.player_leds {
+            out.push(PadFeedback::PlayerLeds { slot, mask });
+        }
+
+        for (right, effect) in [(false, self.left_trigger), (true, self.right_trigger)] {
+            if let Some(effect) = effect {
+                out.push(PadFeedback::TriggerEffect {
+                    slot,
+                    right,
+                    effect,
+                });
+            }
+        }
+    }
+}
+
+fn trigger_effect(data: &[u8], offset: usize) -> Option<[u8; TRIGGER_EFFECT_LEN]> {
+    data.get(offset..offset + TRIGGER_EFFECT_LEN)?
+        .try_into()
+        .ok()
 }
 
 pub(super) fn parse_output(data: &[u8]) -> Option<OutputReport> {
@@ -100,14 +162,32 @@ pub(super) fn parse_output(data: &[u8]) -> Option<OutputReport> {
         return None;
     }
 
-    let compatible = data[OUTPUT_OFFSET_VALID0] & VALID0_COMPATIBLE_VIBRATION != 0
+    let valid0 = data[OUTPUT_OFFSET_VALID0];
+    let valid1 = data[OUTPUT_OFFSET_VALID1];
+    let compatible = valid0 & VALID0_COMPATIBLE_VIBRATION != 0
         || data[OUTPUT_OFFSET_VALID2] & VALID2_COMPATIBLE_VIBRATION2 != 0;
-    let rumble = compatible.then(|| Rumble {
-        strong: data[OUTPUT_OFFSET_MOTOR_STRONG],
-        weak: data[OUTPUT_OFFSET_MOTOR_WEAK],
-    });
 
-    Some(OutputReport { rumble })
+    Some(OutputReport {
+        rumble: compatible.then(|| Rumble {
+            strong: data[OUTPUT_OFFSET_MOTOR_STRONG],
+            weak: data[OUTPUT_OFFSET_MOTOR_WEAK],
+        }),
+        lightbar: (valid1 & VALID1_LIGHTBAR != 0).then(|| {
+            [
+                data[OUTPUT_OFFSET_LIGHTBAR],
+                data[OUTPUT_OFFSET_LIGHTBAR + 1],
+                data[OUTPUT_OFFSET_LIGHTBAR + 2],
+            ]
+        }),
+        player_leds: (valid1 & VALID1_PLAYER_LEDS != 0)
+            .then(|| data[OUTPUT_OFFSET_PLAYER_LEDS] & PLAYER_LED_MASK),
+        right_trigger: (valid0 & VALID0_RIGHT_TRIGGER != 0)
+            .then(|| trigger_effect(data, OUTPUT_OFFSET_RIGHT_TRIGGER))
+            .flatten(),
+        left_trigger: (valid0 & VALID0_LEFT_TRIGGER != 0)
+            .then(|| trigger_effect(data, OUTPUT_OFFSET_LEFT_TRIGGER))
+            .flatten(),
+    })
 }
 
 pub(super) fn feature_report(id: u8, mac: [u8; 6]) -> Option<Vec<u8>> {
@@ -921,10 +1001,19 @@ mod tests {
     }
 
     #[test]
-    fn output_report_without_a_vibration_flag_carries_no_rumble() {
+    fn output_report_without_any_flag_carries_nothing() {
         let parsed = parse_output(&output(0x02, 0x02, 200, 100)).unwrap();
 
-        assert_eq!(parsed.rumble, None);
+        assert_eq!(
+            parsed,
+            OutputReport {
+                rumble: None,
+                lightbar: None,
+                player_leds: None,
+                right_trigger: None,
+                left_trigger: None
+            }
+        );
     }
 
     #[test]
@@ -935,5 +1024,84 @@ mod tests {
         assert!(parse_output(&output(0x03, 0, 1, 1)[..47]).is_none());
         assert!(parse_output(&other).is_none());
         assert!(parse_output(&[]).is_none());
+    }
+
+    #[test]
+    fn lightbar_and_player_leds_are_read_when_their_flags_are_set() {
+        let mut data = output(0, 0, 0, 0);
+        data[2] = 0x04 | 0x10;
+        data[44] = 0xff;
+        data[45..48].copy_from_slice(&[10, 20, 30]);
+
+        let parsed = parse_output(&data).unwrap();
+
+        assert_eq!(parsed.lightbar, Some([10, 20, 30]));
+        assert_eq!(parsed.player_leds, Some(0x1f));
+
+        data[2] = 0x10;
+        let leds_only = parse_output(&data).unwrap();
+        assert_eq!(leds_only.lightbar, None);
+        data[2] = 0x04;
+        let bar_only = parse_output(&data).unwrap();
+        assert_eq!(bar_only.player_leds, None);
+    }
+
+    #[test]
+    fn trigger_effects_are_read_from_their_own_offsets_and_flags() {
+        let mut data = output(0x04, 0, 0, 0);
+        data[11..22].copy_from_slice(&[1; 11]);
+        data[22..33].copy_from_slice(&[2; 11]);
+
+        let right_only = parse_output(&data).unwrap();
+        data[1] = 0x08;
+        let left_only = parse_output(&data).unwrap();
+
+        assert_eq!(right_only.right_trigger, Some([1; 11]));
+        assert_eq!(right_only.left_trigger, None);
+        assert_eq!(left_only.left_trigger, Some([2; 11]));
+        assert_eq!(left_only.right_trigger, None);
+    }
+
+    #[test]
+    fn feedback_lists_every_present_field_for_the_slot() {
+        let mut data = output(0x01 | 0x04 | 0x08, 0, 255, 128);
+        data[2] = 0x04 | 0x10;
+        data[44] = 3;
+        data[45..48].copy_from_slice(&[1, 2, 3]);
+        data[11] = 9;
+        data[22] = 8;
+        let mut out = Vec::new();
+
+        parse_output(&data).unwrap().feedback(6, &mut out);
+
+        assert_eq!(
+            out,
+            vec![
+                PadFeedback::Rumble(RumbleCommand {
+                    slot: 6,
+                    strong: 0xffff,
+                    weak: 0x8080,
+                    delay_ms: 0,
+                    duration_ms: 0
+                }),
+                PadFeedback::Lightbar {
+                    slot: 6,
+                    red: 1,
+                    green: 2,
+                    blue: 3
+                },
+                PadFeedback::PlayerLeds { slot: 6, mask: 3 },
+                PadFeedback::TriggerEffect {
+                    slot: 6,
+                    right: false,
+                    effect: [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                },
+                PadFeedback::TriggerEffect {
+                    slot: 6,
+                    right: true,
+                    effect: [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                },
+            ]
+        );
     }
 }

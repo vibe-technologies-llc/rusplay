@@ -1,7 +1,7 @@
 use rusplay_config::{GamepadPersonality, InputConfig};
 
 use crate::{
-    GamepadEvent, InputError, RumbleCommand,
+    GamepadEvent, InputError, PadFeedback,
     gamepad::{
         pool::{GamepadDevice, GamepadFactory, GamepadPool},
         uhid::UhidGamepad,
@@ -22,10 +22,10 @@ impl GamepadDevice for VirtualGamepad {
         }
     }
 
-    fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         match self {
-            Self::Xbox360(device) => device.poll_rumble(out),
-            Self::DualSense(device) => device.poll_rumble(out),
+            Self::Xbox360(device) => device.poll_feedback(out),
+            Self::DualSense(device) => device.poll_feedback(out),
         }
     }
 }

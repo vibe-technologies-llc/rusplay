@@ -11,7 +11,8 @@ use rustix::{
 };
 
 use crate::{
-    GamepadEvent, InputError, MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker,
+    GamepadEvent, InputError, MAX_RUMBLE_EFFECTS, PadFeedback, RumbleCommand, RumbleEffect,
+    RumbleTracker,
     gamepad::{
         pool::{GamepadDevice, GamepadFactory},
         xbox360::{HAT_MAX, KEYS, Report, STICK_MAX, STICK_MIN, TRIGGER_MAX, Xbox360Mapper},
@@ -157,7 +158,17 @@ impl GamepadDevice for UinputGamepad {
         }
     }
 
-    fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
+        let mut commands = Vec::new();
+        let result = self.poll_rumble(&mut commands);
+        out.extend(commands.into_iter().map(PadFeedback::Rumble));
+
+        result
+    }
+}
+
+impl UinputGamepad {
+    pub(super) fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
         loop {
             let events: Vec<EvdevEvent> = match self.device.fetch_events() {
                 Ok(events) => events.collect(),

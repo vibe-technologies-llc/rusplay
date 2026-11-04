@@ -1,9 +1,9 @@
-use crate::{GamepadEvent, InputError, InputEvent, InputSink, RumbleCommand};
+use crate::{GamepadEvent, InputError, InputEvent, InputSink, PadFeedback};
 
 pub trait GamepadDevice {
     fn handle(&mut self, event: GamepadEvent) -> Result<(), InputError>;
 
-    fn poll_rumble(&mut self, _out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn poll_feedback(&mut self, _out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         Ok(())
     }
 }
@@ -37,11 +37,11 @@ impl<F: GamepadFactory> GamepadPool<F> {
             .is_some_and(Option::is_some)
     }
 
-    pub fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    pub fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         self.slots
             .iter_mut()
             .flatten()
-            .try_for_each(|device| device.poll_rumble(out))
+            .try_for_each(|device| device.poll_feedback(out))
     }
 
     pub fn handle(&mut self, slot: u8, event: GamepadEvent) -> Result<(), InputError> {
@@ -82,7 +82,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::{GamepadAxis, GamepadButton};
+    use crate::{GamepadAxis, GamepadButton, RumbleCommand};
 
     type Log = Rc<RefCell<Vec<(u8, GamepadEvent)>>>;
 
@@ -97,11 +97,11 @@ mod tests {
             Ok(())
         }
 
-        fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
-            out.push(RumbleCommand {
+        fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
+            out.push(PadFeedback::Rumble(RumbleCommand {
                 strong: 1,
                 ..RumbleCommand::stop(self.slot)
-            });
+            }));
             Ok(())
         }
     }
@@ -237,10 +237,10 @@ mod tests {
         pool.handle(1, GamepadEvent::Disconnected).unwrap();
         let mut out = Vec::new();
 
-        pool.poll_rumble(&mut out).unwrap();
+        pool.poll_feedback(&mut out).unwrap();
 
         assert_eq!(
-            out.iter().map(|command| command.slot).collect::<Vec<_>>(),
+            out.iter().map(PadFeedback::slot).collect::<Vec<_>>(),
             vec![3]
         );
     }

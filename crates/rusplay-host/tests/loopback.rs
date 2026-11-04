@@ -27,7 +27,7 @@ use rusplay_host::{
     AudioSource, CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostError,
     HostSession, HostStats, InputFeed, InputTarget, PeerStore, Pin,
 };
-use rusplay_input::{InputError, InputEvent, RumbleCommand};
+use rusplay_input::{InputError, InputEvent, PadFeedback};
 use tempfile::TempDir;
 
 const PIN: &str = "771205";
@@ -60,7 +60,7 @@ impl InputTarget for RecordedInput {
         Ok(())
     }
 
-    fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         Ok(())
     }
 }
