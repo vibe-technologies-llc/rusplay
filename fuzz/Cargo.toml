@@ -117,6 +117,9 @@ test = false
 doc = false
 bench = false
 
+[patch.crates-io]
+rav1d.path = "../vendor/rav1d"
+
 [profile.release.package.cros-codecs]
 debug-assertions = true
 overflow-checks = false

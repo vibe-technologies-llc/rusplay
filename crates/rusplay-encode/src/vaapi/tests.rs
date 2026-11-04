@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{Cursor, Write},
-    num::NonZeroU32,
     os::fd::{AsFd, OwnedFd},
     path::Path,
     process::{Command, Stdio},
@@ -298,10 +297,7 @@ pub(crate) fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<
 }
 
 fn decode_rav1d<'a>(frames: impl IntoIterator<Item = &'a EncodedFrame>) -> Vec<Picture> {
-    let config = SoftwareDecoderConfig {
-        threads: NonZeroU32::new(1),
-    };
-    let mut decoder = Rav1dDecoder::new(&config).unwrap();
+    let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig::default()).unwrap();
 
     frames
         .into_iter()
@@ -546,10 +542,7 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
             Err(error) => panic!("opening the {codec} vaapi decoder: {error}"),
         }
         if codec == Codec::Av1 {
-            let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig {
-                threads: NonZeroU32::new(1),
-            })
-            .unwrap();
+            let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig::default()).unwrap();
             for packet in &packets {
                 let output = decoder.decode(packet).unwrap().unwrap();
                 assert_eq!(output.color, expected, "av1 through rav1d");

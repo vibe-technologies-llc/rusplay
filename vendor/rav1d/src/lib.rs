@@ -826,11 +826,10 @@ pub unsafe extern "C" fn dav1d_picture_unref(p: Option<NonNull<Dav1dPicture>>) {
     };
     // SAFETY: `p` is safe to read from.
     let p_c = unsafe { p.as_ptr().read() };
-    let mut p_rust = p_c.to::<Rav1dPicture>();
-    let _ = mem::take(&mut p_rust);
-    let p_c = p_rust.into();
+    let p_rust = p_c.to::<Rav1dPicture>();
+    drop(p_rust);
     // SAFETY: `p` is safe to write to.
-    unsafe { p.as_ptr().write(p_c) };
+    unsafe { p.as_ptr().write(Dav1dPicture::default()) };
 }
 
 /// # Safety
