@@ -134,3 +134,22 @@ paths:
   without `pipewire` the daemon stops at start with `CaptureNotCompiled`, and without `input` with
   `InputNotCompiled` unless `input.accept_remote` is off. Virtual gamepads need access to
   `/dev/uinput` (`input.md`).
+- `tests/nested/` is the live check against a real compositor and portals without touching the
+  user's session. It is the `nested` test target (`required-features = ["pipewire", "svt-av1"]`),
+  every test `#[ignore]`d and serialised, skipping visibly through `src/hardware.rs` when a tool,
+  the PipeWire socket or a GPU adapter is missing. `Stack` runs `dbus-run-session` (a private bus
+  whose address must differ from the caller's) and a `kwin_wayland --virtual` on its own socket,
+  with `XDG_*_HOME` in a temp directory and `WAYLAND_DISPLAY` and `DISPLAY` set by the harness
+  for every child; the portal frontend and backend are activated on that bus, and PipeWire is the
+  shared user instance. Nothing opens the user's compositor, bus, `/dev/uinput` or any config.
+  The portal dialog is answered inside the nested compositor with `org_kde_kwin_fake_input` (a
+  pointer move and Enter, repeated until hostd prints its PIN), `Painter` draws on the virtual
+  output (an `xdg_toplevel` made fullscreen on the output that is not `Virtual-0`) so it has
+  damage, and the client is `rusplay-client` with the software AV1 decoder against SVT-AV1 on
+  loopback. `offer.rs` holds the KWin findings of `capture.md`, `service.rs` the pairing, `pin`,
+  `new-pin`, `status`, `peers list`, `forget`, stats line and reconnect run and a restart with the
+  restore token. Run them with
+  `cargo test -p rusplay-hostd --features pipewire,svt-av1 --test nested -- --ignored --test-threads=1`.
+  `rusplay-client`, `wayland-client` and the Plasma and xdg protocol bindings are dev-dependencies
+  of the daemon for these tests only. They show a nested virtual backend over loopback; none of it
+  is a second machine or a real display (`hostd-service-live-check`).

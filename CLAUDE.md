@@ -64,6 +64,7 @@ the `decode` bitstream parsers (through its `fuzzing` feature).
 | Format | `rust-formatter` (never `cargo fmt`/`rustfmt`) |
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
+| Nested KWin run | `cargo test -p rusplay-hostd --features pipewire,svt-av1 --test nested -- --ignored --test-threads=1` |
 | Hardware test run | `RUSPLAY_REQUIRE_HW=1 cargo test --workspace --all-features` |
 | Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `clipboard`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) and `decode_software` with `ASAN_OPTIONS=detect_leaks=0` (see `decode-rav1d-picture-unref-leak`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
