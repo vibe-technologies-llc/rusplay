@@ -8,7 +8,12 @@ publish.workspace = true
 [features]
 flac = ["rusplay-audio/flac"]
 nvenc = ["rusplay-encode/nvenc"]
-input = ["rusplay-input/gamepad", "rusplay-input/libei"]
+input = [
+    "rusplay-clipboard/portal",
+    "rusplay-clipboard/wayland",
+    "rusplay-input/gamepad",
+    "rusplay-input/libei"
+]
 pipewire = ["rusplay-audio/pipewire", "rusplay-capture/pipewire"]
 software-encoders = ["svt-av1", "x264", "x265"]
 svt-av1 = ["rusplay-encode/svt-av1"]
@@ -21,6 +26,7 @@ parking_lot.workspace = true
 pollster.workspace = true
 rusplay-audio.workspace = true
 rusplay-capture.workspace = true
+rusplay-clipboard.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
 rusplay-encode.workspace = true

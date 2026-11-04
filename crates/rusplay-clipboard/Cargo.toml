@@ -1,0 +1,46 @@
+[package]
+name = "rusplay-clipboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+portal = [
+    "dep:ashpd",
+    "dep:futures-util",
+    "dep:pollster",
+    "dep:rusplay-input",
+    "dep:rustix",
+    "rusplay-input/libei"
+]
+wayland = [
+    "dep:rustix",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr"
+]
+
+[dependencies]
+ashpd = {
+    workspace = true,
+    features = ["async-io", "clipboard", "remote_desktop"],
+    optional = true
+}
+futures-util = { workspace = true, optional = true }
+parking_lot.workspace = true
+pollster = { workspace = true, optional = true }
+rusplay-config.workspace = true
+rusplay-input = { workspace = true, optional = true }
+rusplay-protocol.workspace = true
+rustix = { workspace = true, features = ["event", "fs", "pipe"], optional = true }
+thiserror.workspace = true
+wayland-client = { workspace = true, features = ["dlopen", "system"], optional = true }
+wayland-protocols = { workspace = true, features = ["client", "staging"], optional = true }
+wayland-protocols-wlr = { workspace = true, features = ["client"], optional = true }
+
+[dev-dependencies]
+rustix = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true

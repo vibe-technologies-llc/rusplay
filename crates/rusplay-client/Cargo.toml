@@ -16,6 +16,7 @@ window = [
     "dep:half",
     "dep:pollster",
     "dep:rustix",
+    "rusplay-clipboard/wayland",
     "rusplay-input/wayland",
     "wayland-client/dlopen",
     "wayland-client/system"
@@ -26,6 +27,7 @@ half = { workspace = true, optional = true }
 parking_lot.workspace = true
 pollster = { workspace = true, optional = true }
 rusplay-audio.workspace = true
+rusplay-clipboard.workspace = true
 rusplay-config.workspace = true
 rusplay-core.workspace = true
 rusplay-decode.workspace = true

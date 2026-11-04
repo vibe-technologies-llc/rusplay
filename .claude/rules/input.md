@@ -91,6 +91,12 @@ paths:
 
 ### Sharing one portal session with ScreenCast
 
+`LibeiInjector::attach_session` takes `impl Into<Arc<RemoteDesktopSession>>`, because the portal
+clipboard backend (`clipboard.md`) uses the same session object from its own threads; the host
+wraps the session in an `Arc` after `start_selected`. The clipboard is requested on the session
+before `Start` (`rusplay_clipboard::request_clipboard`), in the same permission dialog, and only
+when clipboard sync is on and the compositor offers no data-control protocol.
+
 The RemoteDesktop session type also implements ashpd's `IsScreencastSession`, so the host can ask
 for screen and input in a single portal session and a single permission dialog:
 

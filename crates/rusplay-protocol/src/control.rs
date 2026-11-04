@@ -1,8 +1,8 @@
 use rusplay_core::FormatSet;
 
 use crate::{
-    PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription, StreamKind,
-    stream::Reader,
+    ClipboardChunk, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription,
+    StreamKind, stream::Reader,
 };
 
 const TAG_HELLO: u8 = 0;
@@ -17,6 +17,7 @@ const TAG_CLOCK_PING: u8 = 8;
 const TAG_CLOCK_PONG: u8 = 9;
 const TAG_ACKNOWLEDGE_FRAME: u8 = 10;
 const TAG_REQUEST_RECOVERY: u8 = 11;
+const TAG_CLIPBOARD: u8 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -58,10 +59,16 @@ pub enum ControlMessage {
         frame: u32,
         last_good: u32,
     },
+    Clipboard(ClipboardChunk),
 }
 
 impl ControlMessage {
-    pub const MAX_ENCODED_LEN: usize = 1 + StreamDescription::MAX_ENCODED_LEN;
+    pub const MAX_ENCODED_LEN: usize =
+        1 + if StreamDescription::MAX_ENCODED_LEN > ClipboardChunk::MAX_ENCODED_LEN {
+            StreamDescription::MAX_ENCODED_LEN
+        } else {
+            ClipboardChunk::MAX_ENCODED_LEN
+        };
 
     pub const fn encoded_len(&self) -> usize {
         match self {
@@ -74,6 +81,7 @@ impl ControlMessage {
             Self::StreamFormat(description) => 1 + description.encoded_len(),
             Self::ClockPing { .. } | Self::RequestRecovery { .. } => 9,
             Self::ClockPong { .. } => 17,
+            Self::Clipboard(chunk) => 1 + chunk.encoded_len(),
         }
     }
 
@@ -152,6 +160,10 @@ impl ControlMessage {
                 description.write(&mut body);
                 out.copy_from_slice(&body);
             }
+            Self::Clipboard(chunk) => {
+                out[0] = TAG_CLIPBOARD;
+                chunk.write(&mut out[1..]);
+            }
         }
 
         Ok(len)
@@ -172,6 +184,10 @@ impl ControlMessage {
                 0 => Ok(Self::StreamFormat(description)),
                 extra => Err(ProtocolError::TrailingBytes { extra }),
             };
+        }
+
+        if tag == TAG_CLIPBOARD {
+            return ClipboardChunk::read(body).map(Self::Clipboard);
         }
 
         let body_len = match tag {
@@ -257,6 +273,7 @@ impl ControlMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ControlPacket {
     Message { id: u32, message: ControlMessage },
     Ack { id: u32 },
@@ -334,7 +351,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 12] {
+    fn every_message() -> [ControlMessage; 13] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -368,6 +385,9 @@ mod tests {
                 frame: 0x0102_0304,
                 last_good: 0x0102_0300,
             },
+            ControlMessage::Clipboard(
+                ClipboardChunk::new(9, 0, 1, &[b'x'; ClipboardChunk::MAX_DATA]).unwrap(),
+            ),
         ]
     }
 
@@ -471,6 +491,20 @@ mod tests {
         assert_eq!(
             ControlMessage::decode(&[TAG_REQUEST_RECOVERY, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
             Err(ProtocolError::TrailingBytes { extra: 1 })
+        );
+    }
+
+    #[test]
+    fn clipboard_chunk_follows_its_tag_and_decodes_validated() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+        let chunk = ClipboardChunk::new(1, 0, 1, b"hi").unwrap();
+
+        let len = ControlMessage::Clipboard(chunk).encode(&mut buf).unwrap();
+
+        assert_eq!(&buf[..len], [20, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, b'h', b'i']);
+        assert_eq!(
+            ControlMessage::decode(&[20, 0, 0, 0, 1, 0, 5, 0, 1, 0, 1, b'h']),
+            Err(ProtocolError::ClipboardChunkIndex { index: 5, count: 1 })
         );
     }
 

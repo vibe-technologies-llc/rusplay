@@ -10,8 +10,8 @@ use gpui::{
     Window, canvas, div, prelude::*, px,
 };
 use rusplay_client::{
-    ActivePointer, ClientAction, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord,
-    StreamWindow, WindowLayout,
+    ActivePointer, ClientAction, ClientError, ClientStream, ClipboardState, Credentials,
+    LogicalArea, PeerRecord, StreamWindow, WindowLayout,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 
@@ -257,6 +257,7 @@ impl StreamView {
         };
 
         self.report_pairing(&stream, cx);
+        Self::report_clipboard(&stream, cx);
 
         let captured = {
             let mut live = self.live.borrow_mut();
@@ -287,6 +288,15 @@ impl StreamView {
             }
         }));
         cx.notify();
+    }
+
+    fn report_clipboard(stream: &ClientStream, cx: &mut Context<Self>) {
+        if let ClipboardState::Unavailable(error) = stream.clipboard() {
+            cx.emit(StreamEvent::Notice(Notice::Info(format!(
+                "Clipboard sharing is off for this session: {}",
+                error_chain(&**error)
+            ))));
+        }
     }
 
     fn report_pairing(&self, stream: &ClientStream, cx: &mut Context<Self>) {

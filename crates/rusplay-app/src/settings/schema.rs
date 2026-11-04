@@ -158,6 +158,11 @@ const CHANNEL_LAYOUTS: &[&str] = &["mono", "stereo", "5.1", "7.1"];
 const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
 const POINTER_MODES: &[&str] = &["absolute", "relative", "auto"];
+const CLIPBOARD_DIRECTIONS: &[&str] = &["off", "client-to-host", "host-to-client", "both"];
+const CLIPBOARD_BYTES: Kind = Kind::Integer {
+    min: 1,
+    max: 1_048_576,
+};
 const RELEASE_CHORDS: &[&str] = &["ctrl-alt", "ctrl-shift", "alt-shift", "ctrl-alt-shift"];
 const HOTKEY_KEYS: &[&str] = &[
     "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
@@ -1325,6 +1330,21 @@ pub static FIELDS: &[Field] = &[
         "Inject the client's input on the host",
         Kind::Flag,
     ),
+    field(
+        Section::Input,
+        "Clipboard",
+        "input.clipboard",
+        "Share the text clipboard",
+        Kind::Choice(CLIPBOARD_DIRECTIONS),
+    ),
+    field(
+        Section::Input,
+        "Clipboard",
+        "input.clipboard_max_bytes",
+        "Largest clipboard text shared",
+        CLIPBOARD_BYTES,
+    )
+    .unit("bytes"),
     field(
         Section::Capture,
         "Source",

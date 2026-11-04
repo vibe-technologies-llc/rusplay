@@ -9,6 +9,7 @@ use std::{
 };
 
 use parking_lot::RwLock;
+use rusplay_clipboard::{ClipboardError, ClipboardLink};
 use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{CodecFormat, FormatSet};
 use rusplay_net::{
@@ -16,7 +17,7 @@ use rusplay_net::{
     busy_reply,
 };
 use rusplay_protocol::{
-    ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
+    ClipboardChunk, ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
 };
 
 use crate::{
@@ -101,6 +102,7 @@ pub(crate) struct ControlLinks {
     pub input: Option<SyncSender<ForwardedDatagram>>,
     pub microphone: Option<SyncSender<ForwardedDatagram>>,
     pub configured: CodecFormat,
+    pub clipboard: Option<ClipboardLink>,
 }
 
 pub(crate) struct ControlStage {
@@ -183,6 +185,7 @@ impl ControlStage {
             }
             self.answer_hello(now)?;
             self.keep_alive(now)?;
+            self.service_clipboard(now);
 
             self.links.outbox.send_announcement(now)?;
             self.links.outbox.flush()?;
@@ -304,6 +307,9 @@ impl ControlStage {
 
         events.clear();
         self.links.replay = replay;
+        if let Some(link) = &mut self.links.clipboard {
+            link.reset();
+        }
         self.streaming = false;
         self.unanswered_hello = None;
         self.started = now;
@@ -455,6 +461,9 @@ impl ControlStage {
                     self.send(pong, now)?;
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
+                ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
+                    self.receive_clipboard(&chunk);
+                }
                 ControlEvent::Undeliverable {
                     message: ControlMessage::Hello { .. },
                     ..
@@ -480,6 +489,43 @@ impl ControlStage {
         }
 
         Ok(flow)
+    }
+
+    fn receive_clipboard(&mut self, chunk: &ClipboardChunk) {
+        if !self.streaming {
+            return;
+        }
+        let Some(link) = &mut self.links.clipboard else {
+            return;
+        };
+
+        match link.receive(chunk) {
+            Ok(()) => {}
+            Err(ClipboardError::Protocol(_)) => {
+                self.links.shared.counters.malformed_datagrams.increment();
+            }
+            Err(_) => self.links.clipboard = None,
+        }
+    }
+
+    fn service_clipboard(&mut self, now: Instant) {
+        if !self.streaming {
+            return;
+        }
+        let Some(link) = &mut self.links.clipboard else {
+            return;
+        };
+
+        let outbox = &self.links.outbox;
+        let serviced = link.service(|chunk| {
+            outbox
+                .channel()
+                .send(ControlMessage::Clipboard(chunk), now)
+                .is_ok()
+        });
+        if serviced.is_err() {
+            self.links.clipboard = None;
+        }
     }
 
     fn answer_hello(&mut self, now: Instant) -> Result<(), HostError> {

@@ -128,7 +128,7 @@ paths:
   still answers the `Hello` with its set before its `Goodbye`, and the client computes the same
   empty intersection from it. The order is unit tested in `rusplay-core/src/format.rs`.
 - The control channel (hello, keyframe and recovery requests, frame acknowledgements, loss
-  reports, bitrate hints, keepalives, stream format, clock ping and pong, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+  reports, bitrate hints, keepalives, stream format, clock ping and pong, clipboard text, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.
 
 ## Control channel
@@ -151,6 +151,24 @@ paths:
 - `ControlMessage::Rumble { slot, strong, weak, delay_ms, duration_ms }` (tag 6, host to client, 10
   bytes) carries gamepad force feedback; reliable delivery keeps a stop from being lost, and the
   client caps every effect length so reordering cannot leave a motor running.
+- Clipboard text rides the same reliable channel as `ControlMessage::Clipboard(ClipboardChunk)`
+  (tag 20, host to client or client to host): a text never fits one datagram, so a transfer is
+  `count` chunks sharing a `transfer` number (u32, serial arithmetic). A chunk is
+  `[transfer u32][index u16][count u16][len u16][bytes]`, big-endian, at most
+  `ClipboardChunk::MAX_DATA` (192) bytes, so with the headers and the seal it fits the smallest
+  MTU (576). Decoding enforces `1 <= count`, `index < count`, a full 192 bytes on every chunk but
+  the last, 1 to 192 on the last, and an exact body length, each failure its own `ProtocolError`.
+  `ClipboardReassembler::new(max_bytes)` refuses a transfer whose chunk count already implies more
+  than `max_bytes` (`ClipboardTooLarge`) before allocating, keeps one pending transfer (a newer
+  number replaces it, an older or finished one is ignored), refuses a chunk that changes the
+  count mid-transfer, and on completion refuses text over the limit or not valid UTF-8
+  (`ClipboardNotUtf8`). `ClipboardChunk::split` refuses empty text. `ProtocolVersion::CURRENT` 24
+  added it; `ControlMessage::MAX_ENCODED_LEN` is now set by the chunk (the chunk size keeps `ControlMessage`
+  under clippy's 256 byte by-value limit; `ControlPacket` carries `#[allow(clippy::large_enum_variant)]`
+  for its header-only `Ack`). The `clipboard`
+  fuzz target decodes arbitrary bodies, round-trips what decodes and feeds the reassembler. A sender
+  with more chunks than the 64-id window leaves the rest queued until acknowledgements free ids
+  (`clipboard.md`).
 - `ControlChannel` keeps a smoothed RTT (`rtt`, `rtt_variation`; RFC 6298: the first sample seeds
   it, later ones use gains 1/8 and 1/4) from the time a message was sent to its acknowledgement.
   A message that was retransmitted never samples (Karn), so an ambiguous ack cannot skew it.

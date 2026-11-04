@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 rusplay-audio.path = "crates/rusplay-audio"
 rusplay-capture.path = "crates/rusplay-capture"
+rusplay-clipboard.path = "crates/rusplay-clipboard"
 rusplay-client.path = "crates/rusplay-client"
 rusplay-config.path = "crates/rusplay-config"
 rusplay-core.path = "crates/rusplay-core"
@@ -43,6 +44,7 @@ gpui_platform = {
     rev = "a5c4ca8bf6c4717a328a4a61b42d6d1d38949bcc",
     default-features = false
 }
+futures-util = { version = "0.3.34", default-features = false }
 half = { version = "2.7.1", default-features = false }
 hkdf = { version = "0.13.0", default-features = false }
 lexopt = "0.3.2"
@@ -72,6 +74,7 @@ unicode-segmentation = "1.13.3"
 wayland-backend = { version = "0.3.17", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
 wayland-protocols = { version = "0.32.13", default-features = false }
+wayland-protocols-wlr = { version = "0.3.12", default-features = false }
 wgpu = { version = "30.0.1", default-features = false }
 zbus = { version = "5.19.0", default-features = false }
 zeroize = { version = "1.9.1", default-features = false }

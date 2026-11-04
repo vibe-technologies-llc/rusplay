@@ -1,5 +1,6 @@
 mod audio;
 mod bitrate;
+mod clipboard;
 mod clock;
 mod color;
 mod cursor;
@@ -25,6 +26,7 @@ mod testing;
 mod window;
 
 pub use rusplay_audio::{AudioInput, AudioOutput, AudioOutputStats};
+pub use rusplay_clipboard::{BackendKind, ClipboardError, ClipboardState};
 pub use rusplay_core::{StatsPhase, StatsSchedule, unix_millis_now};
 #[cfg(feature = "window")]
 pub use rusplay_input::capture::{ActivePointer, ClientAction};
@@ -42,6 +44,7 @@ pub use crate::window::{
 };
 pub use crate::{
     audio::default_audio_output,
+    clipboard::ClipboardOpener,
     color::FrameColor,
     cursor::{CursorState, LatestCursor},
     display::{

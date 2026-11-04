@@ -95,6 +95,10 @@ impl Supervisor {
                 }
                 eprintln!("rusplay-hostd: {address} left");
             }
+            HostEvent::ClipboardUnavailable(error) => {
+                eprintln!("rusplay-hostd: clipboard sharing is off for this session");
+                report(&*error);
+            }
             HostEvent::SessionFailed(error) => {
                 self.clear_pin_file();
                 self.stream = None;

@@ -10,6 +10,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, RwLock};
+use rusplay_clipboard::{ClipboardError, ClipboardState};
 use rusplay_config::Config;
 use rusplay_net::{NetError, PeerStore, Pin, load_or_create_host_id};
 use rusplay_protocol::PeerId;
@@ -39,6 +40,7 @@ pub enum HostEvent {
     ClientLeft {
         address: SocketAddr,
     },
+    ClipboardUnavailable(Arc<ClipboardError>),
     SessionFailed(HostError),
     Stopped(Option<HostError>),
 }
@@ -149,6 +151,9 @@ impl HostService {
         let mut host = HostSession::bind_shared(config, Arc::clone(peers))?;
         if let Some(input) = portal.input {
             host = host.with_input(input);
+        }
+        if let Some(clipboard) = portal.clipboard {
+            host = host.with_clipboard(clipboard);
         }
 
         let address = host.local_addr()?;
@@ -344,6 +349,9 @@ where
 
     fn stream(&self, client: &Client) -> Result<(), HostError> {
         let stream = (self.serve)(&self.host, client)?;
+        if let ClipboardState::Unavailable(error) = stream.clipboard() {
+            self.emit(HostEvent::ClipboardUnavailable(Arc::clone(error)));
+        }
         let finished = self.watch(stream);
         self.emit(HostEvent::ClientLeft {
             address: client.address(),

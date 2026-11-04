@@ -28,6 +28,7 @@ paths:
   | x264 | system `libx264` through own bindgen bindings | `rusplay-encode/x264` |
   | x265 | system `libx265` through own bindgen bindings | `rusplay-encode/x265` |
   | SVT-AV1 | system `libSvtAv1Enc` through own bindgen bindings | `rusplay-encode/svt-av1` |
+  | Clipboard data-control on its own connection | `wayland-client` (`system` and `dlopen`), `wayland-protocols` (`ext-data-control-v1`, staging) and `wayland-protocols-wlr` (`wlr-data-control`), the same run-time libwayland loading | `rusplay-clipboard/wayland`, enabled by `rusplay-host/input` and `rusplay-client/window` |
   | Wayland input capture on gpui's connection | `wayland-client` and `wayland-backend` (`system` and `dlopen`: libwayland-client is loaded at run time, as gpui does) | `rusplay-input/wayland` |
   | Stream subsurface on gpui's connection | the same `wayland-client` `system` and `dlopen` features | `rusplay-client/window` |
   | rav1d SIMD | rav1d's hand-written x86/ARM assembly (`nasm` at build time on x86_64, the C compiler's assembler on aarch64) | `rusplay-decode/software-asm`, `rusplay-client/software-asm` |

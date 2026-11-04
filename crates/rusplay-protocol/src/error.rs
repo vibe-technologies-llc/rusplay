@@ -104,4 +104,18 @@ pub enum ProtocolError {
     UnknownVideoFrameFlags(u8),
     #[error("video frame names reference frame {0} without the recovery flag")]
     ReferenceWithoutRecovery(u32),
+    #[error("clipboard transfer declares {0} chunks, which is outside 1..=65535")]
+    ClipboardChunkCount(u16),
+    #[error("clipboard chunk {index} is outside the chunk count {count}")]
+    ClipboardChunkIndex { index: u16, count: u16 },
+    #[error("clipboard chunk {index} of {count} carries {len} bytes")]
+    ClipboardChunkLength { len: usize, index: u16, count: u16 },
+    #[error("clipboard text of {len} bytes exceeds the limit of {max}")]
+    ClipboardTooLarge { len: usize, max: usize },
+    #[error("clipboard text is not valid utf-8")]
+    ClipboardNotUtf8,
+    #[error("clipboard text is empty")]
+    ClipboardTextEmpty,
+    #[error("clipboard text of {len} bytes exceeds what the wire format can number ({max})")]
+    ClipboardTextTooLong { len: usize, max: usize },
 }
