@@ -359,7 +359,7 @@ paths:
   more is `CodedBufferOverflow`.
 - Tests (`src/vaapi/tests.rs`): headers parse back through the `cros-codecs` parsers without
   hardware; on hardware the output is decoded with `rusplay-decode`'s `VaapiDecoder` (and rav1d for
-  AV1, on one thread because of `decode-rav1d-cdef-overlap` in `docs/BUGS.md`), the decoded DMA-BUF is read back with `vaGetImage`, and every frame of a smooth moving
+  AV1), the decoded DMA-BUF is read back with `vaGetImage`, and every frame of a smooth moving
   pattern must reach 34 dB luma PSNR, at 400x216 and at 402x226 for cropping. DMA-BUF input comes
   from exported VA surfaces. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
   this file's pattern frames, PSNR and VAAPI decode for the x264 recovery tests. Every hardware test skips visibly (`src/hardware.rs`) when the codec or

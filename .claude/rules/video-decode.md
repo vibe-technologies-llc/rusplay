@@ -80,8 +80,9 @@ paths:
   still fails a checked packet, the slots are forgotten (and the sequence header too when the
   packet carried one), since rav1d may not have refreshed them. Errors inside the tile data
   (symbol decoder overread, an invalid 4:2:2 partition, an intra block copy vector into the
-  current superblock) cannot be seen without decoding and still abort
-  (`decode-rav1d-error-path-panic`).
+  current superblock) cannot be seen without decoding; rav1d reports them as a failed send
+  (`DecodeError::Rav1dSendData`) and the decoder stays usable (`tests/rav1d.rs` cuts tile data
+  short). That relies on the vendored rav1d (`.claude/rules/dependencies.md`).
 - rav1d is built with `default-features = false` plus `bitdepth_8` and `bitdepth_16`. Its `asm`
   feature (hand-written SIMD, several times faster) is behind `software-asm`, which implies
   `software` and is forwarded as `rusplay-client/software-asm`. It needs `nasm` at build time on
@@ -177,8 +178,7 @@ paths:
   `DecoderModelUnsupported` on these paths (it would misparse every shown frame).
 - The AV1 syntax check (`src/av1/`, shared by VAAPI, NVDEC's colour reader and the software
   decoder) exists because the third-party parsers trust the tile layout: `cros-codecs` indexes
-  64-entry arrays with the tile column and row counters and wraps the tile group size, and rav1d
-  aborts the process (`decode-rav1d-error-path-panic`) on a tile size past the tile group data.
+  64-entry arrays with the tile column and row counters and wraps the tile group size.
   It parses the sequence header and the whole `uncompressed_header` (AV1 spec 5.5 and 5.9) with
   its own bit reader, keeping per reference slot the upscaled width, frame height, order hint,
   key-frame flag and segmentation `ALT_Q` features (all the header syntax depends on), and walks
@@ -322,8 +322,7 @@ paths:
   hostile headers where release wraps; the fuzz override also turns debug assertions on, so that
   cargo passes an explicit `-C overflow-checks=off` that outranks cargo-fuzz's
   `-Cdebug-assertions`. Seed a corpus from `tests/data` by splitting the
-  fixtures into packets. Open findings are in `docs/BUGS.md` (`decode-rav1d-*`,
-  `decode-cros-codecs-*`).
+  fixtures into packets. Open findings are in `docs/BUGS.md` (`decode-cros-codecs-*`).
 
 ## Test fixtures
 

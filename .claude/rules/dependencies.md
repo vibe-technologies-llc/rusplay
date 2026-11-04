@@ -91,6 +91,31 @@ paths:
   latest stable release; 0.5 is still a pre-release), `hkdf`, `sha2`, `chacha20poly1305`,
   `subtle` and `zeroize`. `libc` is allowed as bare syscall declarations only for what rustix
   lacks (`recvmmsg`); it links nothing std does not already.
+- **`vendor/rav1d` is rav1d 1.1.0 with three local fixes**, pointed at by `[patch.crates-io]` in
+  the root manifest and in `fuzz/Cargo.toml`, and listed in the root `[workspace] exclude` so it
+  is not a member. It exists because rav1d 1.1.0 (the latest release, with no upstream fix) aborts
+  or leaks on hostile or ordinary input that the software decoder meets, and the fixes are small
+  enough to carry. The import is its own commit (`chore: vendor rav1d 1.1.0 unchanged`), so
+  `git diff` from it shows exactly what changed. The changes:
+  - `src/decode.rs`, `rav1d_submit_frame::on_error`: reads `frame_hdr` with `is_some_and`
+    instead of `unwrap`, because `rav1d_decode_frame_exit` has already cleared it when tile
+    decoding failed. A failing frame was a panic inside `dav1d_send_data` (an abort in release
+    builds); it is now an error from the send.
+  - `src/cdef.rs`, `padding`: the `top` and `bottom` windows start at `x_start` (length
+    `x_end - x_start`, indexed with `x - x_start`) instead of two samples left of the block.
+    The first block of a row never uses those two samples, but the `DisjointMut` guard covered
+    them and they belong to a line another superblock row's CDEF task writes, so debug builds
+    with many worker threads tripped the overlap check (a false positive, not a data race).
+  - `src/lib.rs`, `dav1d_picture_unref`: writes `Dav1dPicture::default()` back instead of
+    converting a default `Rav1dPicture`, whose conversion put one raw `Arc` (the empty
+    `itut_t35` list) into the struct that nothing released, leaking it for every picture.
+  - `rust-toolchain.toml` is deleted, since rustup would install its pinned old nightly from
+    inside the directory.
+  `vendor/` is excluded from `scripts/check-comments.sh` and from the `rust-edit.sh` hook, and
+  `rust-formatter` does not reach it (the manifest is not a workspace member), so the vendored
+  source keeps upstream's comments and style. The vendored copy and its `[patch]` entries go
+  away once an upstream release carries these fixes; update the `rav1d` version in
+  `[workspace.dependencies]` then, and check each fix against the release first.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.
   - Its Linux backend links C libraries through `xkbcommon` (system libxkbcommon) and
     `zed-font-kit` (`freetype-sys`, `yeslogic-fontconfig-sys`). That is accepted for gpui and

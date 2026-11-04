@@ -10,6 +10,7 @@ file=$(perl -MJSON::PP -e '
 ')
 
 case "$file" in
+    "$root"/vendor/*) exit 0 ;;
     *.rs) rust-formatter --quiet "$file" >/dev/null 2>&1 ;;
     *.wgsl | *.toml) ;;
     *) exit 0 ;;
