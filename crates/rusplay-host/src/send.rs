@@ -128,6 +128,9 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
 
     while !links.shared.stopped() {
         match links.queue.recv_timeout(IDLE_WAKE) {
+            Ok(outgoing) if links.shared.mailbox.suspensions() != outgoing.suspensions => {
+                links.shared.counters.frames_dropped.increment();
+            }
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
                 let output = links.shared.output();
@@ -174,8 +177,8 @@ fn send_frame(
     )?;
 
     match pacing {
-        Some(pacing) => send_paced(arena, pacing, links)?,
-        None => send_all(arena, 0..arena.len(), links)?,
+        Some(pacing) => send_paced(arena, pacing, outgoing.suspensions, links)?,
+        None => send_all(arena, 0..arena.len(), outgoing.suspensions, links)?,
     }
 
     let counters = &links.shared.counters;
@@ -191,6 +194,7 @@ fn send_frame(
 fn send_paced(
     arena: &mut DatagramArena,
     pacing: FramePacing,
+    suspensions: u32,
     links: &SendLinks,
 ) -> Result<(), HostError> {
     let count = arena.len();
@@ -208,7 +212,7 @@ fn send_paced(
         }
 
         let burst = first..count.min(first + plan.datagrams_per_burst);
-        send_all(arena, burst.clone(), links)?;
+        send_all(arena, burst.clone(), suspensions, links)?;
         sent_bytes += arena.plain_bytes(burst);
     }
 
@@ -218,15 +222,18 @@ fn send_paced(
 fn send_all(
     arena: &mut DatagramArena,
     range: Range<usize>,
+    suspensions: u32,
     links: &SendLinks,
 ) -> Result<(), HostError> {
     let mut sent = range.start;
 
     while sent < range.end {
-        let progress =
-            links
-                .transport
-                .send_arena(arena, sent..range.end, links.shared.client.address())?;
+        let client = links.shared.client.address();
+        if links.shared.mailbox.suspensions() != suspensions {
+            return Ok(());
+        }
+
+        let progress = links.transport.send_arena(arena, sent..range.end, client)?;
         if progress == 0 {
             thread::yield_now();
         }

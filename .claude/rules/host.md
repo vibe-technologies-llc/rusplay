@@ -26,7 +26,9 @@ paths:
     `Rejected(Busy)` and leaves the session as it is, never falling back to the old list).
     Only on the authenticated `Accepted` the stage installs the new session keys, answers, and
     restarts the session for the new client: `Shared::suspend` (streaming flag off, mailbox held
-    and a keyframe forced), `ClientLink::switch` (the shared client address every stage reads,
+    and a keyframe forced, its suspension count raised; every `Delivery` and `Outgoing` carries
+    that count, so the send stage drops what was encoded before the switch instead of handing the
+    new client a delta frame, and reads the client address before comparing it), `ClientLink::switch` (the shared client address every stage reads,
     plus an epoch), `ControlOutbox::reset` (a fresh `ControlChannel`), the `Replay` replaced by
     the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
     and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage

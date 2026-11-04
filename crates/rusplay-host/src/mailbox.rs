@@ -28,6 +28,7 @@ pub(crate) struct Delivery<T> {
     pub recovery_for: Option<RecoveryRequest>,
     pub acknowledged: Option<u32>,
     pub bitrate_kbps: Option<u32>,
+    pub suspensions: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,6 +46,7 @@ struct State<T> {
     recovery_for: Option<RecoveryRequest>,
     acknowledged: Option<u32>,
     bitrate_kbps: Option<u32>,
+    suspensions: u32,
     started: bool,
     closed: bool,
 }
@@ -67,6 +69,7 @@ impl<T> State<T> {
             recovery_for: self.recovery_for.take(),
             acknowledged: self.acknowledged.take(),
             bitrate_kbps: self.bitrate_kbps.take(),
+            suspensions: self.suspensions,
         }
     }
 }
@@ -87,6 +90,7 @@ impl<T> Mailbox<T> {
                 recovery_for: None,
                 acknowledged: None,
                 bitrate_kbps: None,
+                suspensions: 0,
                 started: false,
                 closed: false,
             }),
@@ -146,10 +150,15 @@ impl<T> Mailbox<T> {
     pub(crate) fn suspend(&self) {
         let mut state = self.state.lock();
         state.started = false;
+        state.suspensions = state.suspensions.wrapping_add(1);
         state.keyframe_for = None;
         state.recovery_for = None;
         state.acknowledged = None;
         state.keyframe_forced = true;
+    }
+
+    pub(crate) fn suspensions(&self) -> u32 {
+        self.state.lock().suspensions
     }
 
     pub(crate) fn start(&self) {
@@ -231,6 +240,7 @@ mod tests {
                 recovery_for: None,
                 acknowledged: None,
                 bitrate_kbps: None,
+                suspensions: 0,
             })
         );
     }
@@ -269,6 +279,7 @@ mod tests {
                 recovery_for: None,
                 acknowledged: None,
                 bitrate_kbps: None,
+                suspensions: 0,
             })
         );
     }
@@ -294,6 +305,7 @@ mod tests {
                 recovery_for: None,
                 acknowledged: None,
                 bitrate_kbps: None,
+                suspensions: 1,
             })
         );
     }

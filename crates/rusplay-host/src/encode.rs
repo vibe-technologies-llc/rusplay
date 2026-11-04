@@ -37,7 +37,15 @@ pub(crate) struct Outgoing {
     pub number: u32,
     pub captured_micros: u64,
     pub recovers_from: Option<u32>,
+    pub suspensions: u32,
     pub frame: EncodedFrame,
+}
+
+#[derive(Clone, Copy)]
+struct Origin {
+    captured_micros: u64,
+    suspensions: u32,
+    output: Option<OutputRef>,
 }
 
 pub(crate) struct EncodeLinks {
@@ -160,6 +168,7 @@ impl EncodeStage {
                 recovery_for,
                 acknowledged,
                 bitrate_kbps,
+                suspensions,
             } = delivery;
 
             if let Some(kbps) = bitrate_kbps {
@@ -211,7 +220,12 @@ impl EncodeStage {
                 continue;
             };
             self.announce(pipeline.stream_format(), negotiated.configured, links)?;
-            if !self.forward(encoded, captured_micros, pipeline.last_output(), links) {
+            let origin = Origin {
+                captured_micros,
+                suspensions,
+                output: pipeline.last_output(),
+            };
+            if !self.forward(encoded, origin, links) {
                 return Ok(());
             }
         }
@@ -287,13 +301,12 @@ impl EncodeStage {
         })
     }
 
-    fn forward(
-        &mut self,
-        frame: EncodedFrame,
-        captured_micros: u64,
-        output: Option<OutputRef>,
-        links: &EncodeLinks,
-    ) -> bool {
+    fn forward(&mut self, frame: EncodedFrame, origin: Origin, links: &EncodeLinks) -> bool {
+        let Origin {
+            captured_micros,
+            suspensions,
+            output,
+        } = origin;
         let number = self.next_number;
         let keyframe = frame.keyframe;
         let recovers_from = self.recovering.filter(|_| !keyframe);
@@ -302,6 +315,7 @@ impl EncodeStage {
             number,
             captured_micros,
             recovers_from,
+            suspensions,
             frame,
         }) {
             Ok(()) => {
