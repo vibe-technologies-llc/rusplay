@@ -472,6 +472,9 @@ impl ControlStage {
                 ControlEvent::Received(
                     ControlMessage::Keepalive
                     | ControlMessage::Rumble { .. }
+                    | ControlMessage::Lightbar { .. }
+                    | ControlMessage::PlayerLeds { .. }
+                    | ControlMessage::TriggerEffect { .. }
                     | ControlMessage::StreamFormat(_)
                     | ControlMessage::ClockPong { .. },
                 )

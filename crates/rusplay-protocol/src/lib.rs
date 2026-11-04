@@ -12,7 +12,7 @@ mod stream;
 mod video;
 
 pub use crate::{
-    control::{ControlMessage, ControlPacket},
+    control::{ControlMessage, ControlPacket, TRIGGER_EFFECT_LEN},
     cursor::{CursorImage, CursorMessage},
     discovery::{DiscoveryMessage, HostId},
     error::ProtocolError,

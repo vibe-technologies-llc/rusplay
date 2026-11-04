@@ -9,7 +9,7 @@ use std::{
 };
 
 use rusplay_input::{
-    GamepadEvent, HeldInput, InputEvent, InputRecord, RumbleCommand, StateRecord, TouchEvent,
+    GamepadEvent, HeldInput, InputEvent, InputRecord, PadFeedback, StateRecord, TouchEvent,
     capture::EventCoalescer,
     gamepad::{PhysicalGamepads, PhysicalOptions},
 };
@@ -302,7 +302,7 @@ impl Drop for DoneOnDrop {
 
 #[derive(Debug)]
 pub(crate) struct GamepadLinks {
-    pub rumble: Receiver<RumbleCommand>,
+    pub pad_feedback: Receiver<PadFeedback>,
     pub input: InputHandle,
     pub done: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
@@ -315,10 +315,20 @@ pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
     let mut events = Vec::new();
 
     while !links.stop.load(Ordering::Relaxed) {
-        while let Ok(command) = links.rumble.try_recv() {
-            links.counters.rumble_commands.increment();
-            if pads.rumble(&command).is_err() {
-                links.counters.rumble_failures.increment();
+        while let Ok(feedback) = links.pad_feedback.try_recv() {
+            let (commands, failures) = match feedback {
+                PadFeedback::Rumble(_) => (
+                    &links.counters.rumble_commands,
+                    &links.counters.rumble_failures,
+                ),
+                _ => (
+                    &links.counters.feedback_commands,
+                    &links.counters.feedback_failures,
+                ),
+            };
+            commands.increment();
+            if pads.apply(&feedback).is_err() {
+                failures.increment();
             }
         }
 

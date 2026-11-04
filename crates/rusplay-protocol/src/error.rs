@@ -23,6 +23,8 @@ pub enum ProtocolError {
     },
     #[error("unknown control message tag {0}")]
     UnknownControlTag(u8),
+    #[error("unknown adaptive trigger side {0}")]
+    UnknownTriggerSide(u8),
     #[error("{extra} unexpected bytes follow the message")]
     TrailingBytes { extra: usize },
     #[error("datagram belongs to stream {found:?}, expected {expected:?}")]

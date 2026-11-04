@@ -365,7 +365,7 @@ paths:
   it. Tests that enable the microphone must replace it or they publish a real PipeWire node.
 - Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
   `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
-  `inject_batch`, which defaults to `inject` per event, and `service(&mut Vec<RumbleCommand>)`)
+  `inject_batch`, which defaults to `inject` per event, and `service(&mut Vec<PadFeedback>)`)
   behind a mutex that the session's input stage holds for the
   session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
   `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
@@ -390,8 +390,10 @@ paths:
     counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
     in `input_failures` without ending the session, since a paused device or a closed compositor
     seat must not take the video down. Every 4 ms it calls `InputTarget::service` and sends each
-    `RumbleCommand` as a `ControlMessage::Rumble` through the `ControlOutbox`; a full control
-    window drops the command (`rumble_dropped`), because the client caps every effect length. On
+    `PadFeedback` as a `ControlMessage` (`Rumble`, `Lightbar`, `PlayerLeds`, `TriggerEffect`)
+    through the `ControlOutbox`; a full control window drops the message (`rumble_dropped` for
+    rumble, `feedback_dropped` for the rest; `rumble_sent` and `feedback_sent` count the sent
+    ones), because the client caps every effect length. On
     the way out it releases whatever `HeldInput` says the client still held.
     The portal's `InputTarget::service` always polls both halves, the libei connection and the
     virtual pads' rumble, and returns the first error, so a compositor that dropped EIS never leaves
@@ -399,7 +401,7 @@ paths:
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input }`; the GPU is needed for the
     capture's importable modifiers, so the GPU is opened before the portal. With `input.accept_remote` it
     opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over
-    `SplitSink<LibeiInjector, UinputGamepads>`; a build without the `input` feature (or without
+    `SplitSink<LibeiInjector, VirtualGamepads>`; a build without the `input` feature (or without
     `pipewire`) fails with `InputNotCompiled` (`CaptureNotCompiled`), and
     `input.accept_remote = false` opens the plain ScreenCast session with no feed.
     `open_portal_capture` stays for callers that want capture only.

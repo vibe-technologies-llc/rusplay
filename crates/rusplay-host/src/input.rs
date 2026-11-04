@@ -9,7 +9,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, RumbleCommand, StateRecord};
+use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, PadFeedback, StateRecord};
 use rusplay_net::NetError;
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
@@ -30,7 +30,7 @@ pub trait InputTarget {
         results.extend(events.iter().map(|event| self.inject(*event)));
     }
 
-    fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError>;
+    fn service(&mut self, feedback: &mut Vec<PadFeedback>) -> Result<(), InputError>;
 }
 
 pub struct InputFeed {
@@ -95,7 +95,7 @@ enum Request {
 enum Reply {
     Injected(Vec<Result<(), InputError>>),
     Serviced {
-        rumble: Vec<RumbleCommand>,
+        feedback: Vec<PadFeedback>,
         result: Result<(), InputError>,
     },
 }
@@ -144,17 +144,50 @@ impl InputTarget for RemoteTarget {
         }
     }
 
-    fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+    fn service(&mut self, feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         match self.call(Request::Service)? {
             Reply::Serviced {
-                rumble: commands,
+                feedback: commands,
                 result,
             } => {
-                rumble.extend(commands);
+                feedback.extend(commands);
                 result
             }
             Reply::Injected(_) => Err(InputError::SinkClosed),
         }
+    }
+}
+
+fn control_message(feedback: PadFeedback) -> ControlMessage {
+    match feedback {
+        PadFeedback::Rumble(command) => ControlMessage::Rumble {
+            slot: command.slot,
+            strong: command.strong,
+            weak: command.weak,
+            delay_ms: command.delay_ms,
+            duration_ms: command.duration_ms,
+        },
+        PadFeedback::Lightbar {
+            slot,
+            red,
+            green,
+            blue,
+        } => ControlMessage::Lightbar {
+            slot,
+            red,
+            green,
+            blue,
+        },
+        PadFeedback::PlayerLeds { slot, mask } => ControlMessage::PlayerLeds { slot, mask },
+        PadFeedback::TriggerEffect {
+            slot,
+            right,
+            effect,
+        } => ControlMessage::TriggerEffect {
+            slot,
+            right,
+            effect,
+        },
     }
 }
 
@@ -173,9 +206,11 @@ fn serve_requests(
                 replies.send((id, Reply::Injected(results))).ok();
             }
             Ok((id, Request::Service)) => {
-                let mut rumble = Vec::new();
-                let result = target.service(&mut rumble);
-                replies.send((id, Reply::Serviced { rumble, result })).ok();
+                let mut feedback = Vec::new();
+                let result = target.service(&mut feedback);
+                replies
+                    .send((id, Reply::Serviced { feedback, result }))
+                    .ok();
             }
             Err(RecvTimeoutError::Timeout) => {
                 idle.clear();
@@ -220,7 +255,8 @@ struct InputStage<'a> {
     pending: Vec<InputEvent>,
     repairs: Vec<InputEvent>,
     outcomes: Vec<Result<(), InputError>>,
-    commands: Vec<RumbleCommand>,
+    commands: Vec<PadFeedback>,
+    access_reported: bool,
 }
 
 impl<'a> InputStage<'a> {
@@ -235,6 +271,7 @@ impl<'a> InputStage<'a> {
             repairs: Vec::new(),
             outcomes: Vec::new(),
             commands: Vec::new(),
+            access_reported: false,
         }
     }
 
@@ -350,10 +387,17 @@ impl<'a> InputStage<'a> {
         target.inject_batch(events, &mut self.outcomes);
 
         for (event, outcome) in events.iter().zip(&self.outcomes) {
-            if outcome.is_ok() {
-                self.held.observe(event);
-                counters.input_events.increment();
-                injected += 1;
+            match outcome {
+                Ok(()) => {
+                    self.held.observe(event);
+                    counters.input_events.increment();
+                    injected += 1;
+                }
+                Err(error) if error.is_device_access_denied() && !self.access_reported => {
+                    self.access_reported = true;
+                    eprintln!("rusplay-host: input: {error}");
+                }
+                Err(_) => {}
             }
         }
         let failed = events.len() - injected;
@@ -373,19 +417,21 @@ impl<'a> InputStage<'a> {
             return Ok(());
         }
 
-        for command in self.commands.drain(..) {
-            let message = ControlMessage::Rumble {
-                slot: command.slot,
-                strong: command.strong,
-                weak: command.weak,
-                delay_ms: command.delay_ms,
-                duration_ms: command.duration_ms,
+        for feedback in self.commands.drain(..) {
+            let rumble = matches!(feedback, PadFeedback::Rumble(_));
+            let sent = self
+                .outbox
+                .channel()
+                .send(control_message(feedback), Instant::now());
+            let (delivered, dropped) = if rumble {
+                (&counters.rumble_sent, &counters.rumble_dropped)
+            } else {
+                (&counters.feedback_sent, &counters.feedback_dropped)
             };
-            let sent = self.outbox.channel().send(message, Instant::now());
 
             match sent {
-                Ok(_) => counters.rumble_sent.increment(),
-                Err(NetError::ControlWindowFull { .. }) => counters.rumble_dropped.increment(),
+                Ok(_) => delivered.increment(),
+                Err(NetError::ControlWindowFull { .. }) => dropped.increment(),
                 Err(error) => return Err(error.into()),
             }
         }
@@ -405,7 +451,7 @@ impl<'a> InputStage<'a> {
 mod tests {
     use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
 
-    use rusplay_input::{GamepadButton, GamepadEvent};
+    use rusplay_input::{GamepadButton, GamepadEvent, RumbleCommand};
     use rusplay_net::{ControlChannel, ControlConfig, Transport, TransportOptions};
     use rusplay_protocol::push_input_record;
 
@@ -427,7 +473,7 @@ mod tests {
             Ok(())
         }
 
-        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
             Ok(())
         }
     }
@@ -511,7 +557,7 @@ mod tests {
 
     struct ThreadBound {
         events: Arc<Mutex<Vec<InputEvent>>>,
-        rumble: RumbleCommand,
+        rumble: PadFeedback,
         _not_send: PhantomData<*const ()>,
     }
 
@@ -521,8 +567,8 @@ mod tests {
             Ok(())
         }
 
-        fn service(&mut self, rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
-            rumble.push(self.rumble);
+        fn service(&mut self, feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
+            feedback.push(self.rumble);
             Ok(())
         }
     }
@@ -530,13 +576,13 @@ mod tests {
     #[test]
     fn a_target_that_cannot_leave_its_thread_is_driven_through_the_injector_thread() {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let rumble = RumbleCommand {
+        let rumble = PadFeedback::Rumble(RumbleCommand {
             slot: 1,
             strong: 7,
             weak: 3,
             delay_ms: 0,
             duration_ms: 100,
-        };
+        });
         let recorded = Arc::clone(&events);
         let feed = InputFeed::spawn(move || {
             Ok(ThreadBound {
@@ -572,7 +618,7 @@ mod tests {
             Ok(())
         }
 
-        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
             Ok(())
         }
     }
@@ -605,7 +651,7 @@ mod tests {
         let feed = InputFeed::spawn(move || {
             Ok(ThreadBound {
                 events: recorded,
-                rumble: RumbleCommand::stop(0),
+                rumble: PadFeedback::Rumble(RumbleCommand::stop(0)),
                 _not_send: PhantomData,
             })
         })
@@ -668,7 +714,7 @@ mod tests {
             }));
         }
 
-        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
             Ok(())
         }
     }
@@ -740,7 +786,7 @@ mod tests {
             }
         }
 
-        fn service(&mut self, _rumble: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
             Ok(())
         }
     }

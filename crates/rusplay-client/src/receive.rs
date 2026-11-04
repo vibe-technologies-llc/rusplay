@@ -11,7 +11,7 @@ use std::{
 use parking_lot::Mutex;
 use rusplay_config::{LossRecovery, NetworkConfig};
 use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
-use rusplay_input::RumbleCommand;
+use rusplay_input::{PadFeedback, RumbleCommand};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
     ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
@@ -177,11 +177,51 @@ struct AudioIngress {
     queue: SyncSender<EncodedAudio>,
 }
 
+fn pad_feedback(message: ControlMessage) -> Option<PadFeedback> {
+    match message {
+        ControlMessage::Rumble {
+            slot,
+            strong,
+            weak,
+            delay_ms,
+            duration_ms,
+        } => Some(PadFeedback::Rumble(RumbleCommand {
+            slot,
+            strong,
+            weak,
+            delay_ms,
+            duration_ms,
+        })),
+        ControlMessage::Lightbar {
+            slot,
+            red,
+            green,
+            blue,
+        } => Some(PadFeedback::Lightbar {
+            slot,
+            red,
+            green,
+            blue,
+        }),
+        ControlMessage::PlayerLeds { slot, mask } => Some(PadFeedback::PlayerLeds { slot, mask }),
+        ControlMessage::TriggerEffect {
+            slot,
+            right,
+            effect,
+        } => Some(PadFeedback::TriggerEffect {
+            slot,
+            right,
+            effect,
+        }),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Links {
     pub decode_queue: SyncSender<DecodeInput>,
     pub audio_queue: Option<SyncSender<EncodedAudio>>,
-    pub rumble: Option<Sender<RumbleCommand>>,
+    pub pad_feedback: Option<Sender<PadFeedback>>,
     pub cursor: LatestCursor,
     pub format: SharedFormat,
     pub feedback: Receiver<Feedback>,
@@ -590,23 +630,16 @@ impl ReceiveStage {
                     host_micros,
                 }) => self.record_clock(sent_micros, host_micros, now),
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
-                ControlEvent::Received(ControlMessage::Rumble {
-                    slot,
-                    strong,
-                    weak,
-                    delay_ms,
-                    duration_ms,
-                }) => {
-                    if let Some(rumble) = &self.links.rumble {
-                        rumble
-                            .send(RumbleCommand {
-                                slot,
-                                strong,
-                                weak,
-                                delay_ms,
-                                duration_ms,
-                            })
-                            .ok();
+                ControlEvent::Received(
+                    message @ (ControlMessage::Rumble { .. }
+                    | ControlMessage::Lightbar { .. }
+                    | ControlMessage::PlayerLeds { .. }
+                    | ControlMessage::TriggerEffect { .. }),
+                ) => {
+                    if let (Some(pad), Some(feedback)) =
+                        (&self.links.pad_feedback, pad_feedback(message))
+                    {
+                        pad.send(feedback).ok();
                     }
                 }
                 ControlEvent::Undeliverable {
@@ -858,7 +891,7 @@ mod tests {
         client: SocketAddr,
         audio: Option<mpsc::Receiver<EncodedAudio>>,
         cursor: LatestCursor,
-        rumble: mpsc::Receiver<RumbleCommand>,
+        rumble: mpsc::Receiver<PadFeedback>,
         counters: Arc<Counters>,
         stop: Arc<AtomicBool>,
         stage: Option<JoinHandle<Result<(), ClientError>>>,
@@ -895,7 +928,7 @@ mod tests {
             let links = Links {
                 decode_queue,
                 audio_queue,
-                rumble: Some(rumble_sender),
+                pad_feedback: Some(rumble_sender),
                 cursor: cursor.clone(),
                 format: Arc::clone(&format),
                 feedback,
@@ -1656,14 +1689,63 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                RumbleCommand {
+                PadFeedback::Rumble(RumbleCommand {
                     slot: 1,
                     strong: 0xFFFF,
                     weak: 0x4000,
                     delay_ms: 3,
                     duration_ms: 250,
+                }),
+                PadFeedback::Rumble(RumbleCommand::stop(1)),
+            ]
+        );
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn lightbar_led_and_trigger_messages_are_forwarded_as_pad_feedback() {
+        let rig = Rig::start(None);
+        let messages = [
+            ControlMessage::Lightbar {
+                slot: 2,
+                red: 1,
+                green: 2,
+                blue: 3,
+            },
+            ControlMessage::PlayerLeds { slot: 2, mask: 9 },
+            ControlMessage::TriggerEffect {
+                slot: 2,
+                right: false,
+                effect: [4; 11],
+            },
+        ];
+
+        for (id, message) in messages.into_iter().enumerate() {
+            let packet = ControlPacket::Message {
+                id: u32::try_from(id).unwrap(),
+                message,
+            };
+            rig.send(&[packet.to_datagram().unwrap()]);
+        }
+
+        let received: Vec<_> = (0..3)
+            .map(|_| rig.rumble.recv_timeout(WAIT).expect("feedback arrives"))
+            .collect();
+        assert_eq!(
+            received,
+            vec![
+                PadFeedback::Lightbar {
+                    slot: 2,
+                    red: 1,
+                    green: 2,
+                    blue: 3
                 },
-                RumbleCommand::stop(1),
+                PadFeedback::PlayerLeds { slot: 2, mask: 9 },
+                PadFeedback::TriggerEffect {
+                    slot: 2,
+                    right: false,
+                    effect: [4; 11]
+                },
             ]
         );
         assert!(rig.finish().is_ok());

@@ -151,6 +151,17 @@ paths:
 - `ControlMessage::Rumble { slot, strong, weak, delay_ms, duration_ms }` (tag 6, host to client, 10
   bytes) carries gamepad force feedback; reliable delivery keeps a stop from being lost, and the
   client caps every effect length so reordering cannot leave a motor running.
+- Pad feedback from a DualSense personality pad rides the same reliable channel, host to client:
+  `ControlMessage::Lightbar { slot, red, green, blue }` (tag 12, 5 bytes), `PlayerLeds { slot,
+  mask }` (tag 13, 3 bytes, bit 0 the first LED, only the low five bits) and `TriggerEffect {
+  slot, right, effect }` (tag 14, 14 bytes: the slot, a side byte that must be 0 for left or 1 for
+  right (`UnknownTriggerSide` otherwise) and the 11 effect bytes of the output report, mode first,
+  opaque to the protocol). `decode_pad_feedback` decodes these three and rejects a short or long
+  body like every other message; the `control` fuzz target round-trips whatever decodes and also
+  forces each of the three tags in front of arbitrary bytes so the new decoder is exercised from
+  the first input. `ProtocolVersion::CURRENT` 24 added them. They are not idempotent against
+  reordering in the way a stop is, but each carries the whole state of its LED or trigger, so a
+  late one only repeats an older state until the next.
 - `ControlChannel` keeps a smoothed RTT (`rtt`, `rtt_variation`; RFC 6298: the first sample seeds
   it, later ones use gains 1/8 and 1/4) from the time a message was sent to its acknowledgement.
   A message that was retransmitted never samples (Karn), so an ambiguous ack cannot skew it.

@@ -53,6 +53,8 @@ pub struct HostStats {
     pub input_failures: u64,
     pub rumble_sent: u64,
     pub rumble_dropped: u64,
+    pub feedback_sent: u64,
+    pub feedback_dropped: u64,
     pub thread_priority_failures: u64,
     pub rtt: Option<Duration>,
 }
@@ -128,6 +130,8 @@ pub(crate) struct Counters {
     pub input_failures: Counter,
     pub rumble_sent: Counter,
     pub rumble_dropped: Counter,
+    pub feedback_sent: Counter,
+    pub feedback_dropped: Counter,
     pub thread_priority_failures: Counter,
     rtt_nanos: Counter,
 }
@@ -186,6 +190,8 @@ impl Counters {
             input_failures: self.input_failures.get(),
             rumble_sent: self.rumble_sent.get(),
             rumble_dropped: self.rumble_dropped.get(),
+            feedback_sent: self.feedback_sent.get(),
+            feedback_dropped: self.feedback_dropped.get(),
             thread_priority_failures: self.thread_priority_failures.get(),
             rtt: match self.rtt_nanos.get() {
                 0 => None,

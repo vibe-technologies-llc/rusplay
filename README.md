@@ -64,6 +64,13 @@ Start the host first, then connect from the client app.
   be loaded and the desktop user needs write access to the device, for example with the udev rule
   `KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"`. Without it
   gamepad connects fail; keyboard, pointer and touch use the portal and need no extra setup.
+- With `input.gamepad_personality = "dualsense"` the host creates its virtual pads through
+  `/dev/uhid` instead, as a USB DualSense that the kernel `hid-playstation` driver binds (module
+  `uhid` loaded, `hid_playstation` available). `/dev/uhid` is root-only on a stock system, so the
+  desktop user needs the udev rule `KERNEL=="uhid", SUBSYSTEM=="misc", OPTIONS+="static_node=uhid",
+  TAG+="uaccess"`. Without it every gamepad connect fails and the host prints that access was
+  denied once per session. Games then reach the pad like a real DualSense, so the usual Sony
+  hidraw and gamepad rules apply to it.
 
 ## License
 
