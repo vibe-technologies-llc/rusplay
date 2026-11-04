@@ -11,9 +11,9 @@ use gpui::{
 };
 use rusplay_client::{
     ActivePointer, BackendKind, ClientAction, ClientError, ClientStream, ClipboardState,
-    Credentials, LogicalArea, PeerRecord, StreamWindow, WindowLayout, announced_display,
+    Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
+    announced_display,
 };
-use rusplay_clipboard::FocusClipboardHandle;
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
 use rusplay_core::Resolution;
 

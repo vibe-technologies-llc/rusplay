@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rusplay_client::{BackendKind, ClipboardOpener, ClipboardState};
-use rusplay_clipboard::{
-    ClipboardBackend, ClipboardError, ClipboardPolicy, DataControl, DataControlOptions,
-    FocusClipboard, FocusClipboardHandle,
+use rusplay_client::{
+    BackendKind, ClipboardBackend, ClipboardError, ClipboardOpener, ClipboardPolicy,
+    ClipboardState, DataControl, DataControlOptions, FocusClipboard, FocusClipboardHandle,
 };
 
 use crate::notice::error_chain;
@@ -53,7 +52,7 @@ fn data_control(policy: ClipboardPolicy) -> Result<Box<dyn ClipboardBackend>, Cl
 
 #[cfg(test)]
 mod tests {
-    use rusplay_clipboard::MemoryClipboard;
+    use rusplay_client::MemoryClipboard;
 
     use super::*;
 

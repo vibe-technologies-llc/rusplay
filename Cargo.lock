@@ -4694,7 +4694,6 @@ dependencies = [
  "parking_lot 0.13.0",
  "raw-window-handle",
  "rusplay-client",
- "rusplay-clipboard",
  "rusplay-config",
  "rusplay-core",
  "rusplay-host",
