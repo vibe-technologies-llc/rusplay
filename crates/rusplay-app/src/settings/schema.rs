@@ -1431,6 +1431,17 @@ pub static FIELDS: &[Field] = &[
     .unit("ms"),
     field(
         Section::Capture,
+        "Virtual output",
+        "capture.virtual_first_frame_timeout_ms",
+        "Wait for the first frame at the offered size",
+        Kind::Integer {
+            min: 0,
+            max: 10_000,
+        },
+    )
+    .unit("ms"),
+    field(
+        Section::Capture,
         "Session",
         "capture.persist_session",
         "Persist session",

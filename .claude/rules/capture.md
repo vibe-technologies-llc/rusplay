@@ -27,10 +27,14 @@ paths:
   - `AvailableSourceTypes` is 7 (monitor, window and virtual), so the virtual bit is there.
   - The portal still shows its `Screen Sharing Requested` dialog for a virtual source;
     xdg-desktop-portal-kde does not skip it. Once the restore token is saved a restart skips it.
-  - KWin creates the output at 1920x1080. The first frame, and so the first keyframe, has that
-    size; 80 ms to 0.5 s after the offer the stream is exactly the offered size (1280x720,
-    1000x700 and 2560x1440 tried), and the encoder sends a second keyframe
-    (`perf-virtual-first-frame-stale-size`). KWin's `EnumFormat` takes 200x200 to 10000x10000 with
+  - KWin creates the output at 1920x1080. The first frame has that size (and, with no hold
+    on the first encode, so does the first keyframe); 80 ms to 0.5 s after the offer the stream is exactly the offered size (1280x720,
+    1000x700 and 2560x1440 tried). The host holds its first encode until a frame of the offered
+    size arrives (`virtual_first_frame_timeout_ms`, `host.md`), so the client's first keyframe has
+    the offered size and there is a single keyframe; with the hold off the encoder sends the stale
+    keyframe first and a second one at the offered size. A 120x90 offer KWin ignores (below) is
+    streamed at 1920x1080 once the timeout passes, its first frame reaching the client 1.5 s after
+    connecting against 0.4 to 1.0 s when the offered size arrives. KWin's `EnumFormat` takes 200x200 to 10000x10000 with
     the current size as the default, so a display under 200 pixels on an axis cannot be offered.
     An offer of 120x90 sent past the host's clamp (`capture.virtual_min_resolution` set to 1x1) was
     taken by nothing: the stream stayed at the size it had (1280x720), kept delivering frames and

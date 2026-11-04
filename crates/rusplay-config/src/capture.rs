@@ -39,6 +39,7 @@ pub struct CaptureConfig {
     pub virtual_max_refresh_hz: u32,
     pub virtual_min_resolution: Resolution,
     pub virtual_resize_min_interval_ms: u32,
+    pub virtual_first_frame_timeout_ms: u32,
 }
 
 impl Default for CaptureConfig {
@@ -56,6 +57,7 @@ impl Default for CaptureConfig {
             virtual_max_refresh_hz: 240,
             virtual_min_resolution: Resolution::new(200, 200),
             virtual_resize_min_interval_ms: 250,
+            virtual_first_frame_timeout_ms: 500,
         }
     }
 }
@@ -63,6 +65,7 @@ impl Default for CaptureConfig {
 impl CaptureConfig {
     pub const MAX_VIRTUAL_REFRESH_HZ: u32 = 1000;
     pub const VIRTUAL_RESIZE_INTERVAL_RANGE_MS: RangeInclusive<u32> = 10..=60_000;
+    pub const MAX_VIRTUAL_FIRST_FRAME_TIMEOUT_MS: u32 = 10_000;
 
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         if self.virtual_max_resolution.pixel_count() == 0 {
@@ -91,6 +94,12 @@ impl CaptureConfig {
         if !Self::VIRTUAL_RESIZE_INTERVAL_RANGE_MS.contains(&self.virtual_resize_min_interval_ms) {
             return Err(ConfigError::VirtualResizeIntervalOutOfRange(
                 self.virtual_resize_min_interval_ms,
+            ));
+        }
+
+        if self.virtual_first_frame_timeout_ms > Self::MAX_VIRTUAL_FIRST_FRAME_TIMEOUT_MS {
+            return Err(ConfigError::VirtualFirstFrameTimeoutOutOfRange(
+                self.virtual_first_frame_timeout_ms,
             ));
         }
 

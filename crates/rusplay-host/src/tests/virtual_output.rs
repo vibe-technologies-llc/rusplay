@@ -1,9 +1,17 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 use parking_lot::Mutex;
-use rusplay_capture::{CaptureError, Frame, OutputOffer, OutputRequest};
+use rusplay_capture::{CaptureError, DrmFourcc, Frame, FrameBuffer, OutputOffer, OutputRequest};
 use rusplay_config::SourceKind;
-use rusplay_core::{FrameRate, Resolution};
+use rusplay_core::{ColorSpace, FrameRate, Resolution, Timestamp};
 use rusplay_protocol::{ClientDisplay, ControlMessage, DisplayVolume};
 
 use super::{
@@ -241,7 +249,7 @@ fn a_flood_of_displays_is_coalesced_to_one_offer_per_interval_and_ends_on_the_la
     let (_, stream) = serving.join().unwrap().unwrap();
     assert!(client.pump_until(TestClient::has_hello));
 
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     for step in 0..FLOOD {
         client.send(display(1000 + step, 700, 60_000));
         client.pump(Duration::from_millis(2), |_| false);
@@ -325,4 +333,139 @@ fn a_session_takeover_resizes_to_the_new_clients_display() {
     );
     assert_eq!(stream.stats().sessions_taken_over, 1);
     stream.stop().unwrap();
+}
+const OFFERED: Resolution = Resolution::new(1280, 720);
+const STALE: Resolution = Resolution::new(64, 32);
+
+struct ScriptedSource {
+    sizes: VecDeque<Resolution>,
+    produced: u32,
+    started: Arc<AtomicBool>,
+}
+
+impl FrameSource for ScriptedSource {
+    fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
+        let ready = self.started.load(Ordering::Acquire);
+        let Some(resolution) = self.sizes.front().copied().filter(|_| ready) else {
+            thread::sleep(timeout);
+            return Ok(None);
+        };
+
+        thread::sleep(Duration::from_millis(10).min(timeout));
+        self.sizes.pop_front();
+        self.produced += 1;
+        let stride = resolution.width * 4;
+
+        Ok(Some(Frame {
+            resolution,
+            format: DrmFourcc::from_code(*b"XR24"),
+            color: ColorSpace::default(),
+            timestamp: Timestamp::from_micros(u64::from(self.produced) * 10_000),
+            buffer: FrameBuffer::Shm {
+                data: vec![1; (stride * resolution.height) as usize].into(),
+                stride,
+            },
+        }))
+    }
+}
+
+fn scripted_feed(sizes: impl IntoIterator<Item = Resolution>) -> Arc<CaptureFeed> {
+    CaptureFeed::new(ScriptedSource {
+        sizes: sizes.into_iter().collect(),
+        produced: 0,
+        started: stream_started(),
+    })
+}
+
+fn announced_sizes(client: &TestClient) -> Vec<Resolution> {
+    client
+        .formats
+        .iter()
+        .map(|(_, description)| description.resolution)
+        .collect()
+}
+
+fn first_formats(timeout_ms: u32, sizes: Vec<Resolution>, wanted_frames: usize) -> Vec<Resolution> {
+    let mut config = virtual_config();
+    config.capture.virtual_first_frame_timeout_ms = timeout_ms;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), scripted_feed(sizes), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.send(display(OFFERED.width, OFFERED.height, 60_000));
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| client.frames.len() >= wanted_frames);
+    stream.stop().unwrap();
+
+    announced_sizes(&client)
+}
+
+#[test]
+fn the_first_frame_is_held_until_one_of_the_offered_size_arrives() {
+    let stale = std::iter::repeat_n(STALE, 8);
+    let offered = std::iter::repeat_n(OFFERED, 8);
+
+    let sizes = first_formats(300, stale.chain(offered).collect(), 4);
+
+    assert_eq!(sizes, [OFFERED]);
+}
+
+#[test]
+fn a_static_output_that_delivers_one_frame_at_the_offered_size_does_not_deadlock() {
+    let sizes = first_formats(300, vec![STALE, OFFERED], 1);
+
+    assert_eq!(sizes, [OFFERED]);
+}
+
+#[test]
+fn a_compositor_that_ignores_the_offer_is_encoded_at_its_own_size_after_the_timeout() {
+    let started = Instant::now();
+    let sizes = first_formats(250, vec![STALE; 200], 3);
+
+    assert_eq!(sizes, [STALE]);
+    assert!(started.elapsed() >= Duration::from_millis(250));
+}
+
+#[test]
+fn a_single_stale_frame_and_then_silence_is_encoded_when_the_timeout_passes() {
+    let sizes = first_formats(250, vec![STALE], 1);
+
+    assert_eq!(sizes, [STALE]);
+}
+
+#[test]
+fn a_zero_timeout_turns_the_hold_off_and_the_stale_frame_goes_out_first() {
+    let stale = std::iter::repeat_n(STALE, 4);
+    let offered = std::iter::repeat_n(OFFERED, 40);
+
+    let sizes = first_formats(0, stale.chain(offered).collect(), 30);
+
+    assert_eq!(sizes.first(), Some(&STALE));
+    assert_eq!(sizes.last(), Some(&OFFERED));
+}
+
+#[test]
+fn a_monitor_host_never_holds_its_first_frame() {
+    let mut config = host_config();
+    config.capture.virtual_first_frame_timeout_ms = 10_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(
+        Some(pin()),
+        scripted_feed(vec![STALE; 20]),
+        fake_factory(&bitrate),
+    );
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let started = Instant::now();
+    let arrived = client.pump_until(|client| !client.frames.is_empty());
+    stream.stop().unwrap();
+
+    assert!(arrived);
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(announced_sizes(&client), [STALE]);
 }

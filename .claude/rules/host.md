@@ -106,6 +106,18 @@ paths:
     unconsumed one (`frames_superseded`), and nothing is delivered before the client's `Hello`,
     so the first encoded frame is a keyframe the client will see. Each consumed frame is moved
     into the feed as the retained frame, never copied.
+  - With a virtual source the first encode is held (`FirstFrameHold` in `encode.rs`, pure and unit
+    tested): until a captured frame has the size `Shared::output` offered, the newest frame is kept
+    in the stage instead of encoded (a newer one replaces it, which drops its capture buffer lease),
+    so the client never receives and decodes a keyframe at the compositor's initial size that it
+    would throw away when the offered size arrives (KWin first delivers 1920x1080, `capture.md`).
+    The clock starts at the first frame that is not the offered size and runs for
+    `capture.virtual_first_frame_timeout_ms` (default 500, 0 turns the hold off, up to 10000), after
+    which whatever frame is held is encoded at its own size, so a compositor that ignores the offer
+    or an output that delivered one stale frame and nothing more costs the timeout once and never
+    blocks. The wait is the mailbox wait cut to the deadline, so it neither spins nor delays a
+    keyframe request past it, and the hold ends for good at the first release; a monitor host has
+    no offer and never holds.
   - After every encode it compares `VideoPipeline::stream_format` (codec, the encoder's
     resolution, pixel format and colour) with the last one announced; on a change (the first
     frame, a reopen after a capture resize) it bumps the generation and calls

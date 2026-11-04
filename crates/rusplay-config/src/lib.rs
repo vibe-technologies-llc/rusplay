@@ -464,6 +464,7 @@ mod tests {
             rusplay_core::Resolution::new(200, 200)
         );
         assert_eq!(defaults.virtual_resize_min_interval_ms, 250);
+        assert_eq!(defaults.virtual_first_frame_timeout_ms, 500);
 
         for (width, height) in [(0, 200), (200, 0), (8000, 200), (200, 4400)] {
             let mut config = Config::default();
@@ -482,6 +483,16 @@ mod tests {
                 Err(ConfigError::VirtualResizeIntervalOutOfRange(rejected)) if rejected == ms
             ));
         }
+
+        let mut config = Config::default();
+        config.capture.virtual_first_frame_timeout_ms = 10_001;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::VirtualFirstFrameTimeoutOutOfRange(10_001))
+        ));
+
+        config.capture.virtual_first_frame_timeout_ms = 0;
+        assert!(config.validate().is_ok());
     }
 
     #[test]
