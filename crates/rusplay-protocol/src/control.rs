@@ -1,8 +1,8 @@
 use rusplay_core::FormatSet;
 
 use crate::{
-    PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription, StreamKind,
-    stream::Reader,
+    ClientDisplay, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription,
+    StreamKind, stream::Reader,
 };
 
 const TAG_HELLO: u8 = 0;
@@ -17,6 +17,7 @@ const TAG_CLOCK_PING: u8 = 8;
 const TAG_CLOCK_PONG: u8 = 9;
 const TAG_ACKNOWLEDGE_FRAME: u8 = 10;
 const TAG_REQUEST_RECOVERY: u8 = 11;
+const TAG_DISPLAY: u8 = 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlMessage {
@@ -58,6 +59,7 @@ pub enum ControlMessage {
         frame: u32,
         last_good: u32,
     },
+    Display(ClientDisplay),
 }
 
 impl ControlMessage {
@@ -72,6 +74,7 @@ impl ControlMessage {
             Self::Goodbye | Self::Keepalive => 1,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
+            Self::Display(display) => 1 + display.encoded_len(),
             Self::ClockPing { .. } | Self::RequestRecovery { .. } => 9,
             Self::ClockPong { .. } => 17,
         }
@@ -152,6 +155,12 @@ impl ControlMessage {
                 description.write(&mut body);
                 out.copy_from_slice(&body);
             }
+            Self::Display(display) => {
+                let mut body = Vec::with_capacity(len);
+                body.push(TAG_DISPLAY);
+                display.write(&mut body);
+                out.copy_from_slice(&body);
+            }
         }
 
         Ok(len)
@@ -170,6 +179,15 @@ impl ControlMessage {
             let description = StreamDescription::read(&mut reader)?;
             return match reader.remaining() {
                 0 => Ok(Self::StreamFormat(description)),
+                extra => Err(ProtocolError::TrailingBytes { extra }),
+            };
+        }
+
+        if tag == TAG_DISPLAY {
+            let mut reader = Reader::new(body, 1);
+            let display = ClientDisplay::read(&mut reader)?;
+            return match reader.remaining() {
+                0 => Ok(Self::Display(display)),
                 extra => Err(ProtocolError::TrailingBytes { extra }),
             };
         }

@@ -9,6 +9,25 @@ paths:
   runtime, because gpui enables it and ashpd refuses two runtimes, and the `screencast` feature)
   and then the PipeWire node the portal returns. No compositor-specific protocols
   (wlr-screencopy, ext-image-copy-capture) until the portal path is complete, and no X11.
+- `capture.source = "virtual"` (`SourceKind::Virtual`) asks the portal for `SourceType::Virtual`,
+  a monitor the compositor creates for the stream. The default stays `monitor`. Before
+  `select_sources` the session reads the portal's `AvailableSourceTypes` and a portal without the
+  virtual bit is `CaptureError::SourceUnavailable { requested }` (`PortalSession` and
+  `SharedScreencast` both check; `check_source_available` is the pure part, unit tested). The
+  mapping of every kind is `portal_sources`, tested too. A virtual stream's size is compositor
+  specific: Mutter sizes it from the negotiated format, KWin chooses itself, so the size a frame
+  really has (`NegotiatedFormat::size`, then `Frame::resolution`) is the truth and nothing here
+  assumes the offered size was taken. None of it has run against a compositor
+  (`capture-virtual-output-live` in `docs/FEATURES.md`).
+- `OutputOffer` (a cloneable handle from `PipeWireCapture::output_offer`, usable without the
+  `pipewire` feature) takes an `OutputRequest { resolution, frame_rate }` after the stream is
+  already running: the request goes into a shared slot and a `Command::Offer` wakes the PipeWire
+  thread, which rebuilds the `EnumFormat`s with `StreamOptions::offering` (the size and rate become
+  the defaults of the `size` and `framerate` ranges, never a fixed value, so a compositor that picks
+  its own size still negotiates) and calls `update_params`, the same renegotiation the shared-memory
+  fallback uses. The worker also adopts the slot before every fixation and fallback pod, so a later
+  renegotiation never offers the stale size. A failed update is stored as the stream's failure and
+  ends the loop. Only the host's virtual source uses it (`host.md`).
 - The portal session asks for persistence (`PersistMode::ExplicitlyRevoked`) when
   `capture.persist_session` is on. `PortalSession::open_persistent` reads the restore token from
   a `RestoreTokenStore` (an explicit `capture.restore_token` wins), and writes the token the portal

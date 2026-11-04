@@ -274,6 +274,22 @@ mod tests {
     }
 
     #[test]
+    fn a_stream_without_a_configured_size_runs_no_scaler_at_any_capture_size() {
+        let config = stream(srgb(), None);
+
+        for capture in [CAPTURE, Resolution::new(3440, 1440), Resolution::new(1, 1)] {
+            let key = RouteKey {
+                capture,
+                ..key(*b"XB24", srgb())
+            };
+
+            let route = Route::plan(&config, &key).unwrap();
+
+            assert!(route.scale.is_none());
+        }
+    }
+
+    #[test]
     fn downscaling_in_linear_light_linearises_first() {
         let config = stream(srgb(), Some(Resolution::new(32, 16)));
 

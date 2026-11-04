@@ -16,7 +16,7 @@ use rusplay_net::{
     busy_reply,
 };
 use rusplay_protocol::{
-    ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
+    ClientDisplay, ControlMessage, FecHeader, PacketHeader, PeerId, ProtocolVersion, StreamKind,
 };
 
 use crate::{
@@ -27,6 +27,7 @@ use crate::{
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
+    virtual_output::VirtualOutput,
 };
 
 const RECV_BATCH_DATAGRAMS: usize = 32;
@@ -101,6 +102,7 @@ pub(crate) struct ControlLinks {
     pub input: Option<SyncSender<ForwardedDatagram>>,
     pub microphone: Option<SyncSender<ForwardedDatagram>>,
     pub configured: CodecFormat,
+    pub virtual_output: Option<VirtualOutput>,
 }
 
 pub(crate) struct ControlStage {
@@ -110,6 +112,7 @@ pub(crate) struct ControlStage {
     takeover: SessionTakeover,
     streaming: bool,
     unanswered_hello: Option<FormatSet>,
+    display: Option<ClientDisplay>,
     started: Instant,
     last_heard: Instant,
     next_keepalive: Instant,
@@ -131,6 +134,7 @@ impl ControlStage {
             links,
             streaming: false,
             unanswered_hello: None,
+            display: None,
             started: now,
             last_heard: now,
             next_keepalive: now + timing.keepalive_interval,
@@ -430,6 +434,9 @@ impl ControlStage {
                     }
                     self.unanswered_hello = Some(formats);
                 }
+                ControlEvent::Received(ControlMessage::Display(display)) => {
+                    self.display = Some(display);
+                }
                 ControlEvent::Received(ControlMessage::RequestKeyframe { frame }) => {
                     shared.mailbox.request_keyframe(frame);
                 }
@@ -489,6 +496,9 @@ impl ControlStage {
         else {
             return Ok(());
         };
+        if self.awaiting_display() {
+            return Ok(());
+        }
         self.unanswered_hello = None;
 
         self.send(
@@ -508,6 +518,11 @@ impl ControlStage {
 
         match negotiate(self.links.configured, encodable, decodable) {
             Ok(negotiated) => {
+                if let Some((output, display)) =
+                    self.links.virtual_output.as_ref().zip(self.display)
+                {
+                    shared.set_output(output.select(&display));
+                }
                 shared.negotiation.agree(negotiated);
                 self.streaming = true;
                 self.next_keepalive = now + self.timing.keepalive_interval;
@@ -519,6 +534,12 @@ impl ControlStage {
                 Err(error)
             }
         }
+    }
+
+    fn awaiting_display(&self) -> bool {
+        self.links.virtual_output.is_some()
+            && self.display.is_none()
+            && self.links.shared.negotiation.agreed().is_none()
     }
 
     fn take_hint(&self, kbps: u32) {

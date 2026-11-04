@@ -3,6 +3,7 @@ mod error;
 mod handoff;
 mod lease;
 mod modifier;
+mod output;
 #[cfg(feature = "pipewire")]
 mod pipewire;
 #[cfg(feature = "pipewire")]
@@ -26,6 +27,7 @@ pub use crate::{
         DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
         choose_modifier, modifiers_for,
     },
+    output::{OutputOffer, OutputRequest},
     portal::{PortalSession, PortalStream, SharedScreencast, portal_resolution},
     token::{RestoreTokenStore, default_path as default_restore_token_path},
 };

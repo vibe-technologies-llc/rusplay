@@ -30,6 +30,7 @@ mod stats;
 #[cfg(test)]
 mod tests;
 mod upload;
+mod virtual_output;
 
 pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
 pub use rusplay_core::{

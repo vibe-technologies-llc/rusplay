@@ -1,5 +1,6 @@
 use std::{io, path::PathBuf};
 
+use rusplay_config::SourceKind;
 use thiserror::Error;
 
 use crate::DrmFourcc;
@@ -10,6 +11,8 @@ pub enum CaptureError {
     Portal(#[from] ashpd::Error),
     #[error("the portal returned no streams")]
     NoStreams,
+    #[error("the portal does not offer {requested:?} sources")]
+    SourceUnavailable { requested: SourceKind },
     #[error("the pipewire stream ended")]
     StreamEnded,
     #[cfg(feature = "pipewire")]

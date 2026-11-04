@@ -1,6 +1,7 @@
 mod control;
 mod cursor;
 mod discovery;
+mod display;
 mod error;
 mod fec;
 mod header;
@@ -15,6 +16,7 @@ pub use crate::{
     control::{ControlMessage, ControlPacket},
     cursor::{CursorImage, CursorMessage},
     discovery::{DiscoveryMessage, HostId},
+    display::{ClientDisplay, DisplayVolume},
     error::ProtocolError,
     fec::FecHeader,
     header::{PacketFlags, PacketHeader, ProtocolVersion, StreamKind},

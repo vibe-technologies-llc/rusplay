@@ -17,8 +17,8 @@ use rusplay_net::{
     ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
 };
 use rusplay_protocol::{
-    ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion, StreamDescription,
-    StreamKind, VideoFrameHeader,
+    ClientDisplay, ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion,
+    StreamDescription, StreamKind, VideoFrameHeader,
 };
 
 use crate::{
@@ -186,6 +186,7 @@ pub(crate) struct Links {
     pub format: SharedFormat,
     pub feedback: Receiver<Feedback>,
     pub handshake: Sender<()>,
+    pub display: ClientDisplay,
     pub stop: Arc<AtomicBool>,
     pub counters: Arc<Counters>,
 }
@@ -279,6 +280,8 @@ impl ReceiveStage {
             },
             Instant::now(),
         )?;
+        self.control
+            .send(ControlMessage::Display(self.links.display), Instant::now())?;
         self.control.flush(&self.transport, self.host)?;
 
         loop {
@@ -900,6 +903,8 @@ mod tests {
                 format: Arc::clone(&format),
                 feedback,
                 handshake,
+                display: crate::announce::default_display(&rusplay_config::Config::default())
+                    .unwrap(),
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };

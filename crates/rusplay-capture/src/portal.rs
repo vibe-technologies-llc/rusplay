@@ -58,6 +58,7 @@ impl PortalSession {
         restore_token: Option<&str>,
     ) -> Result<Self, CaptureError> {
         let proxy = Screencast::new().await?;
+        require_source(&proxy, config.source).await?;
         let session = proxy
             .create_session(CreateSessionOptions::default())
             .await?;
@@ -114,6 +115,7 @@ impl SharedScreencast {
         session: &Session<impl IsScreencastSession>,
     ) -> Result<Self, CaptureError> {
         let proxy = Screencast::new().await?;
+        require_source(&proxy, config.source).await?;
         let sources = SelectSourcesOptions::default()
             .set_cursor_mode(portal_cursor(config.cursor))
             .set_sources(portal_sources(config.source))
@@ -158,11 +160,31 @@ fn portal_cursor(mode: CursorMode) -> PortalCursorMode {
     }
 }
 
+async fn require_source(proxy: &Screencast, kind: SourceKind) -> Result<(), CaptureError> {
+    if kind != SourceKind::Virtual {
+        return Ok(());
+    }
+
+    check_source_available(kind, proxy.available_source_types().await?)
+}
+
+fn check_source_available(
+    kind: SourceKind,
+    available: BitFlags<SourceType>,
+) -> Result<(), CaptureError> {
+    if available.contains(portal_sources(kind)) {
+        Ok(())
+    } else {
+        Err(CaptureError::SourceUnavailable { requested: kind })
+    }
+}
+
 fn portal_sources(kind: SourceKind) -> BitFlags<SourceType> {
     match kind {
         SourceKind::Monitor => SourceType::Monitor.into(),
         SourceKind::Window => SourceType::Window.into(),
         SourceKind::Any => SourceType::Monitor | SourceType::Window,
+        SourceKind::Virtual => SourceType::Virtual.into(),
     }
 }
 
@@ -171,4 +193,48 @@ fn resolution_from_portal((width, height): (i32, i32)) -> Option<Resolution> {
         u32::try_from(width).ok()?,
         u32::try_from(height).ok()?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_source_kind_maps_to_its_portal_type() {
+        assert_eq!(
+            portal_sources(SourceKind::Monitor),
+            BitFlags::from(SourceType::Monitor)
+        );
+        assert_eq!(
+            portal_sources(SourceKind::Window),
+            BitFlags::from(SourceType::Window)
+        );
+        assert_eq!(
+            portal_sources(SourceKind::Any),
+            SourceType::Monitor | SourceType::Window
+        );
+        assert_eq!(
+            portal_sources(SourceKind::Virtual),
+            BitFlags::from(SourceType::Virtual)
+        );
+    }
+
+    #[test]
+    fn a_portal_advertising_virtual_sources_satisfies_a_virtual_request() {
+        let advertised = SourceType::Monitor | SourceType::Window | SourceType::Virtual;
+
+        assert!(check_source_available(SourceKind::Virtual, advertised).is_ok());
+    }
+
+    #[test]
+    fn a_portal_without_virtual_sources_refuses_a_virtual_request() {
+        let advertised = SourceType::Monitor | SourceType::Window;
+
+        assert!(matches!(
+            check_source_available(SourceKind::Virtual, advertised),
+            Err(CaptureError::SourceUnavailable {
+                requested: SourceKind::Virtual
+            })
+        ));
+    }
 }

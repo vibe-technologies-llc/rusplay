@@ -8,7 +8,7 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_capture::{CaptureError, CursorUpdate, Frame, ShmFallback, Subscriber};
+use rusplay_capture::{CaptureError, CursorUpdate, Frame, OutputOffer, ShmFallback, Subscriber};
 use rusplay_core::Resolution;
 
 pub trait FrameSource: Send {
@@ -21,6 +21,10 @@ pub trait FrameSource: Send {
     fn shm_fallback(&self) -> Option<ShmFallback> {
         None
     }
+
+    fn output_offer(&self) -> Option<OutputOffer> {
+        None
+    }
 }
 
 pub struct CaptureFeed {
@@ -29,6 +33,7 @@ pub struct CaptureFeed {
     cursor: Option<Subscriber<CursorUpdate>>,
     cursor_state: Mutex<Option<CursorUpdate>>,
     fallback: Option<ShmFallback>,
+    offer: Option<OutputOffer>,
     capture_size: AtomicU64,
 }
 
@@ -37,6 +42,7 @@ impl CaptureFeed {
         Arc::new(Self {
             cursor: source.cursor_feed(),
             fallback: source.shm_fallback(),
+            offer: source.output_offer(),
             source: Mutex::new(Box::new(source)),
             retained: Mutex::new(None),
             cursor_state: Mutex::new(None),
@@ -76,6 +82,10 @@ impl CaptureFeed {
         self.fallback.clone()
     }
 
+    pub(crate) fn output_offer(&self) -> Option<OutputOffer> {
+        self.offer.clone()
+    }
+
     pub(crate) fn cursor_subscriber(&self) -> Option<Subscriber<CursorUpdate>> {
         self.cursor.clone()
     }
@@ -103,7 +113,7 @@ mod portal {
     use std::{sync::Arc, time::Duration};
 
     use rusplay_capture::{
-        CaptureError, CaptureSource, CursorUpdate, DrmFourcc, FormatModifiers, Frame,
+        CaptureError, CaptureSource, CursorUpdate, DrmFourcc, FormatModifiers, Frame, OutputOffer,
         PipeWireCapture, PortalSession, RestoreTokenStore, ShmFallback, StreamOptions, Subscriber,
     };
     use rusplay_config::Config;
@@ -122,6 +132,10 @@ mod portal {
 
         fn shm_fallback(&self) -> Option<ShmFallback> {
             Some(PipeWireCapture::shm_fallback(self))
+        }
+
+        fn output_offer(&self) -> Option<OutputOffer> {
+            Some(PipeWireCapture::output_offer(self))
         }
     }
 

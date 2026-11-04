@@ -135,6 +135,17 @@ paths:
     `NoCommonFormat`, a session failure. After a session takeover the format is never
     renegotiated, since the encoder is already built for it: the new client's `Hello` must list the
     agreed format (`resume_after_takeover`), otherwise the session ends with `NoCommonFormat`.
+    With `capture.source = "virtual"` it also keeps the client's `ControlMessage::Display` and does
+    not answer the `Hello` until it has both (a client that never sends one ends in
+    `HandshakeTimeout`, an older client is refused by the protocol version before that). The
+    selection is `virtual_output::select_output`, pure: the display's size fitted into
+    `capture.virtual_max_resolution` keeping its aspect ratio and its refresh capped at
+    `capture.virtual_max_refresh_hz` (defaults 7680x4320 and 240), so a hostile client's
+    16384x16384 at 1000 Hz becomes a bounded request, never an allocation. The request goes to the
+    capture through `CaptureFeed::output_offer` (`FrameSource::output_offer`, `capture.md`) and into
+    `Shared::output`, before the negotiation is agreed and the mailbox opens. A session takeover
+    keeps the first client's request: the encoder is already built for it. The colour volume is
+    received and range-checked but unused. `HostStream::virtual_output` exposes the request.
     `RequestKeyframe`, `RequestRecovery`, `AcknowledgeFrame`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
     `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.
@@ -290,6 +301,12 @@ paths:
     source's reference white); then scale, map and convert with `InputLight::Linear`. Upscaling is
     always in linear light, since the sigmoid needs it. The sigmoid is left off when the source transfer is PQ or HLG, whose linear
     light runs above reference white and would be clamped by the sigmoid's 0..1 input.
+  - For a virtual source the encode stage tells the factory the session's `OutputRequest`
+    (`PipelineFactory::use_output`) before `build`: `video.frame_rate` becomes the client's refresh
+    (the send stage's pacing interval follows `Shared::output` too) and `video.resolution` is cleared,
+    so the stream is whatever size the compositor actually delivered and the scaler never runs, on
+    the host or, when it equals the client's swapchain, on the client. The size offered is only an
+    offer; if the compositor ignores it the stream is sent at its own size and the client scales.
   - The stream resolution is `video.resolution`, or the capture size when unset. A different size
     runs `Scaler` into an `rgba16float` target (downscale settings, or the upscale ones when either
     axis grows). Scaling runs before mapping. `ColorConverter` (`video.color`,
