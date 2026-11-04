@@ -13,6 +13,7 @@ use std::{
 use parking_lot::RwLock;
 use rusplay_audio::CODEC_THREAD_STACK_BYTES;
 use rusplay_capture::OutputRequest;
+use rusplay_clipboard::{ClipboardLink, ClipboardPolicy, ClipboardState};
 use rusplay_config::{Config, SourceKind};
 use rusplay_net::{
     ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
@@ -24,6 +25,7 @@ use crate::{
     accept::accept,
     audio::{self, AudioLinks, AudioSourceFactory, default_audio_source},
     capture,
+    clipboard::{ClipboardOpener, default_clipboard_opener, open_link},
     control::{ControlLinks, ControlStage, HintPolicy},
     cursor::{self, CursorLinks},
     encode::{self, EncodeLinks, PipelineFactory},
@@ -48,6 +50,7 @@ pub struct HostSession {
     audio: Option<AudioSourceFactory>,
     microphone: Option<MicrophoneOutputFactory>,
     input: Option<Arc<InputFeed>>,
+    clipboard: Option<ClipboardOpener>,
     busy: Arc<AtomicBool>,
 }
 
@@ -61,6 +64,7 @@ impl fmt::Debug for HostSession {
             .field("audio", &self.audio.is_some())
             .field("microphone", &self.microphone.is_some())
             .field("input", &self.input.is_some())
+            .field("clipboard", &self.clipboard.is_some())
             .field("busy", &self.busy)
             .finish()
     }
@@ -85,6 +89,7 @@ impl HostSession {
             audio: default_audio_source(),
             microphone: default_microphone_output(),
             input: None,
+            clipboard: default_clipboard_opener(),
             busy: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -116,6 +121,18 @@ impl HostSession {
     #[must_use]
     pub fn with_input(mut self, feed: Arc<InputFeed>) -> Self {
         self.input = Some(feed);
+        self
+    }
+
+    #[must_use]
+    pub fn with_clipboard(mut self, opener: ClipboardOpener) -> Self {
+        self.clipboard = Some(opener);
+        self
+    }
+
+    #[must_use]
+    pub fn without_clipboard(mut self) -> Self {
+        self.clipboard = None;
         self
     }
 
@@ -188,6 +205,17 @@ impl HostSession {
             .ok_or(HostError::MicrophoneNotCompiled)
     }
 
+    fn open_clipboard(&self, stream: &mut HostStream) -> Option<ClipboardLink> {
+        let (link, state) = open_link(
+            self.clipboard.as_ref(),
+            ClipboardPolicy::host(&self.config.input),
+        );
+        stream.clipboard = state;
+
+        link
+    }
+
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn serve_with(
         &self,
         client: &Client,
@@ -200,6 +228,7 @@ impl HostSession {
             stages: Vec::new(),
             shared: Arc::clone(&shared),
             tuning: ThreadTuning::from_config(network),
+            clipboard: ClipboardState::Off,
             _busy: BusyGuard::raise(&self.busy),
         };
 
@@ -232,6 +261,7 @@ impl HostSession {
                 microphone: microphone.is_some().then_some(microphone_sender),
                 configured: configured_format(&self.config.video),
                 virtual_output: self.virtual_output(feed),
+                clipboard: self.open_clipboard(&mut stream),
             },
         )?;
         stream.spawn(Stage::Control, move || control.run())?;
@@ -343,6 +373,7 @@ pub struct HostStream {
     stages: Vec<(Stage, JoinHandle<Result<(), HostError>>)>,
     shared: Arc<Shared>,
     tuning: ThreadTuning,
+    clipboard: ClipboardState,
     _busy: BusyGuard,
 }
 
@@ -377,6 +408,10 @@ impl HostStream {
 
     pub fn virtual_output(&self) -> Option<OutputRequest> {
         self.shared.output()
+    }
+
+    pub fn clipboard(&self) -> &ClipboardState {
+        &self.clipboard
     }
 
     pub fn is_finished(&self) -> bool {

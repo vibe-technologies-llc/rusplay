@@ -9,6 +9,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use rusplay_clipboard::{ClipboardError, ClipboardLink};
 use rusplay_config::{LossRecovery, NetworkConfig};
 use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
 use rusplay_input::{PadFeedback, RumbleCommand};
@@ -17,8 +18,8 @@ use rusplay_net::{
     ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
 };
 use rusplay_protocol::{
-    ClientDisplay, ControlMessage, CursorMessage, FecHeader, PacketHeader, ProtocolVersion,
-    StreamDescription, StreamKind, VideoFrameHeader,
+    ClientDisplay, ClipboardChunk, ControlMessage, CursorMessage, FecHeader, PacketHeader,
+    ProtocolVersion, StreamDescription, StreamKind, VideoFrameHeader,
 };
 
 use crate::{
@@ -222,6 +223,7 @@ pub(crate) struct Links {
     pub decode_queue: SyncSender<DecodeInput>,
     pub audio_queue: Option<SyncSender<EncodedAudio>>,
     pub pad_feedback: Option<Sender<PadFeedback>>,
+    pub clipboard: Option<ClipboardLink>,
     pub cursor: LatestCursor,
     pub format: SharedFormat,
     pub feedback: Receiver<Feedback>,
@@ -361,6 +363,7 @@ impl ReceiveStage {
             }
             self.send_frame_ack(now)?;
             self.adapt_bitrate(now)?;
+            self.service_clipboard(now);
 
             self.control.flush(&self.transport, self.host)?;
             self.links
@@ -661,11 +664,45 @@ impl ReceiveStage {
                         adaptation.outbox.acked(id);
                     }
                 }
+                ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
+                    self.receive_clipboard(&chunk);
+                }
                 ControlEvent::Received(_) => {}
             }
         }
 
         Ok(flow)
+    }
+
+    fn receive_clipboard(&mut self, chunk: &ClipboardChunk) {
+        if !self.handshake_done {
+            return;
+        }
+        let Some(link) = &mut self.links.clipboard else {
+            return;
+        };
+
+        match link.receive(chunk) {
+            Ok(()) => {}
+            Err(ClipboardError::Protocol(_)) => self.links.counters.malformed_datagrams.increment(),
+            Err(_) => self.links.clipboard = None,
+        }
+    }
+
+    fn service_clipboard(&mut self, now: Instant) {
+        if !self.handshake_done {
+            return;
+        }
+        let Some(link) = &mut self.links.clipboard else {
+            return;
+        };
+
+        let control = &mut self.control;
+        let serviced =
+            link.service(|chunk| control.send(ControlMessage::Clipboard(chunk), now).is_ok());
+        if serviced.is_err() {
+            self.links.clipboard = None;
+        }
     }
 
     fn send_clock_ping(&mut self, now: Instant) -> Result<(), ClientError> {
@@ -905,6 +942,10 @@ mod tests {
 
     impl Rig {
         fn start(audio_capacity: Option<usize>) -> Self {
+            Self::start_with(audio_capacity, None)
+        }
+
+        fn start_with(audio_capacity: Option<usize>, clipboard: Option<ClipboardLink>) -> Self {
             let network = NetworkConfig::default();
             let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
             let host = Transport::bind(loopback, TransportOptions::from(&network)).unwrap();
@@ -932,6 +973,7 @@ mod tests {
                 decode_queue,
                 audio_queue,
                 pad_feedback: Some(rumble_sender),
+                clipboard,
                 cursor: cursor.clone(),
                 format: Arc::clone(&format),
                 feedback,
@@ -1654,6 +1696,108 @@ mod tests {
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 2));
         assert_eq!(rig.cursor.latest().unwrap().x, 60);
         assert!(rig.finish().is_ok());
+    }
+
+    fn clipboard_rig(send: bool, receive: bool, board: &rusplay_clipboard::MemoryClipboard) -> Rig {
+        let policy = rusplay_clipboard::ClipboardPolicy {
+            send,
+            receive,
+            max_bytes: 4096,
+        };
+        let link = ClipboardLink::new(policy, Box::new(board.clone()));
+        let rig = Rig::start_with(None, Some(link));
+        let hello = ControlMessage::Hello {
+            version: ProtocolVersion::CURRENT,
+            formats: FormatSet::ALL,
+        };
+
+        rig.send(&[ControlPacket::Message {
+            id: 0,
+            message: hello,
+        }
+        .to_datagram()
+        .unwrap()]);
+        rig
+    }
+
+    fn clipboard_datagrams(first_id: u32, transfer: u32, text: &str) -> Vec<Vec<u8>> {
+        ClipboardChunk::split(transfer, text)
+            .unwrap()
+            .into_iter()
+            .zip(first_id..)
+            .map(|(chunk, id)| {
+                ControlPacket::Message {
+                    id,
+                    message: ControlMessage::Clipboard(chunk),
+                }
+                .to_datagram()
+                .unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn clipboard_text_from_the_host_reaches_the_client_clipboard() {
+        let board = rusplay_clipboard::MemoryClipboard::default();
+        let rig = clipboard_rig(false, true, &board);
+        let text = "über ".repeat(200);
+
+        rig.send(&clipboard_datagrams(1, 0, &text));
+
+        assert!(rig.wait_until(|_| board.contents().as_deref() == Some(text.as_str())));
+        rig.finish().unwrap();
+    }
+
+    #[test]
+    fn clipboard_text_copied_on_the_client_is_sent_to_the_host_in_chunks() {
+        let board = rusplay_clipboard::MemoryClipboard::default();
+        let rig = clipboard_rig(true, false, &board);
+        let text = "hello ".repeat(300);
+
+        board.copy(text.clone());
+        let mut reassembler = rusplay_protocol::ClipboardReassembler::new(4096);
+        let mut received = None;
+        while received.is_none() {
+            let Some(ControlMessage::Clipboard(chunk)) = next_message_matching(&rig, |message| {
+                matches!(message, ControlMessage::Clipboard(_))
+            }) else {
+                break;
+            };
+            received = reassembler.push(&chunk).unwrap();
+        }
+
+        assert_eq!(received.as_deref(), Some(text.as_str()));
+        rig.finish().unwrap();
+    }
+
+    #[test]
+    fn clipboard_text_is_ignored_when_the_client_may_not_receive() {
+        let board = rusplay_clipboard::MemoryClipboard::default();
+        let rig = clipboard_rig(true, false, &board);
+
+        rig.send(&clipboard_datagrams(1, 0, "not for the client"));
+        thread::sleep(Duration::from_millis(200));
+
+        assert_eq!(board.writes(), 0);
+        rig.finish().unwrap();
+    }
+
+    #[test]
+    fn invalid_clipboard_text_is_counted_malformed_and_never_applied() {
+        let board = rusplay_clipboard::MemoryClipboard::default();
+        let rig = clipboard_rig(false, true, &board);
+        let chunk = ClipboardChunk::new(0, 0, 1, &[0xC3, 0x28]).unwrap();
+
+        rig.send(&[ControlPacket::Message {
+            id: 1,
+            message: ControlMessage::Clipboard(chunk),
+        }
+        .to_datagram()
+        .unwrap()]);
+
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().malformed_datagrams >= 1));
+        assert_eq!(board.writes(), 0);
+        rig.finish().unwrap();
     }
 
     #[test]

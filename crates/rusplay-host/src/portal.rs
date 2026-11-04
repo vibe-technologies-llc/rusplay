@@ -2,12 +2,23 @@ use std::sync::Arc;
 
 use rusplay_config::Config;
 
-use crate::{CaptureFeed, Gpu, HostError, InputFeed, open_portal_capture};
+use crate::{CaptureFeed, ClipboardOpener, Gpu, HostError, InputFeed, open_portal_capture};
 
-#[derive(Debug)]
 pub struct PortalHost {
     pub feed: Arc<CaptureFeed>,
     pub input: Option<Arc<InputFeed>>,
+    pub clipboard: Option<ClipboardOpener>,
+}
+
+impl std::fmt::Debug for PortalHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PortalHost")
+            .field("feed", &self.feed)
+            .field("input", &self.input)
+            .field("clipboard", &self.clipboard.is_some())
+            .finish()
+    }
 }
 
 pub fn open_portal(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> {
@@ -17,16 +28,21 @@ pub fn open_portal(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> 
         Ok(PortalHost {
             feed: open_portal_capture(config, gpu)?,
             input: None,
+            clipboard: None,
         })
     }
 }
 
 #[cfg(all(feature = "pipewire", feature = "input"))]
 mod shared {
-    use std::{os::fd::OwnedFd, time::Duration};
+    use std::{os::fd::OwnedFd, sync::Arc, time::Duration};
 
     use rusplay_capture::{
         PortalSession, PortalStream, RestoreTokenStore, SharedScreencast, portal_resolution,
+    };
+    use rusplay_clipboard::{
+        Clipboard, ClipboardError, ClipboardPolicy, PortalClipboard, probe_data_control,
+        request_clipboard,
     };
     use rusplay_config::Config;
     use rusplay_input::{
@@ -38,7 +54,9 @@ mod shared {
     };
 
     use super::PortalHost;
-    use crate::{Gpu, HostError, InputFeed, InputTarget, source::feed_from_session};
+    use crate::{
+        ClipboardOpener, Gpu, HostError, InputFeed, InputTarget, source::feed_from_session,
+    };
 
     const READY_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -66,7 +84,7 @@ mod shared {
     }
 
     struct InputSession {
-        session: RemoteDesktopSession,
+        session: Arc<RemoteDesktopSession>,
         eis: OwnedFd,
         target: AbsoluteTarget,
     }
@@ -74,6 +92,7 @@ mod shared {
     struct Opened {
         capture: PortalSession,
         input: InputSession,
+        clipboard: Option<ClipboardOpener>,
     }
 
     pub(super) fn open(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> {
@@ -88,7 +107,9 @@ mod shared {
             (None, None) => None,
         };
 
-        let opened = pollster::block_on(open_session(config, stored))?;
+        let portal_clipboard =
+            ClipboardPolicy::host(&config.input).is_enabled() && probe_data_control().is_err();
+        let opened = pollster::block_on(open_session(config, stored, portal_clipboard))?;
         if let (Some(store), Some(token)) = (&store, &opened.capture.restore_token) {
             store.store(token)?;
         }
@@ -116,14 +137,21 @@ mod shared {
         Ok(PortalHost {
             feed: feed_from_session(opened.capture, config, gpu)?,
             input: Some(feed),
+            clipboard: opened.clipboard,
         })
     }
 
     async fn open_session(
         config: &Config,
         restore_token: Option<String>,
+        portal_clipboard: bool,
     ) -> Result<Opened, HostError> {
         let session = RemoteDesktopSession::create().await?;
+        let requested = if portal_clipboard {
+            Some(request_clipboard(&session).await)
+        } else {
+            None
+        };
         let options = PortalInputOptions {
             persist: config.capture.persist_session,
             restore_token,
@@ -145,6 +173,8 @@ mod shared {
                     .and_then(|(width, height)| portal_resolution(width, height)),
             })
             .collect();
+        let session = Arc::new(session);
+        let clipboard = requested.map(|requested| portal_opener(&session, requested));
         let capture = screencast
             .open_remote(session.session(), streams, started.restore_token.clone())
             .await?;
@@ -162,6 +192,21 @@ mod shared {
                 eis,
                 target,
             },
+            clipboard,
+        })
+    }
+
+    fn portal_opener(
+        session: &Arc<RemoteDesktopSession>,
+        requested: Result<Clipboard, ClipboardError>,
+    ) -> ClipboardOpener {
+        let portal = requested
+            .and_then(|clipboard| PortalClipboard::spawn(Arc::clone(session), clipboard))
+            .map_err(Arc::new);
+
+        Arc::new(move |policy| match &portal {
+            Ok(portal) => Ok(portal.link(policy.max_bytes, policy.send)),
+            Err(error) => Err(ClipboardError::PortalSetup(Arc::clone(error))),
         })
     }
 }

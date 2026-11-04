@@ -1,6 +1,7 @@
 mod accept;
 mod audio;
 mod capture;
+mod clipboard;
 mod clock;
 mod control;
 mod cursor;
@@ -33,6 +34,7 @@ mod upload;
 mod virtual_output;
 
 pub use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
+pub use rusplay_clipboard::{BackendKind, ClipboardError, ClipboardState};
 pub use rusplay_core::{
     CodecFormat, FormatSet, JsonLine, StatsPhase, StatsSchedule, unix_millis_now,
 };
@@ -44,6 +46,7 @@ pub use rusplay_protocol::{HostId, PeerId};
 pub use crate::{
     accept::{Admission, Client},
     audio::{AudioSource, AudioSourceFactory},
+    clipboard::ClipboardOpener,
     error::{HostError, Stage},
     gpu::Gpu,
     input::{InputFeed, InputTarget},

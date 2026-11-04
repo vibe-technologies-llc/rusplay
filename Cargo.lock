@@ -4741,6 +4741,7 @@ dependencies = [
  "parking_lot 0.13.0",
  "pollster 1.0.1",
  "rusplay-audio",
+ "rusplay-clipboard",
  "rusplay-config",
  "rusplay-core",
  "rusplay-decode",
@@ -4755,6 +4756,24 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wgpu 30.0.1",
+]
+
+[[package]]
+name = "rusplay-clipboard"
+version = "0.1.0"
+dependencies = [
+ "ashpd",
+ "futures-util",
+ "parking_lot 0.13.0",
+ "pollster 1.0.1",
+ "rusplay-config",
+ "rusplay-input",
+ "rusplay-protocol",
+ "rustix",
+ "thiserror 2.0.21",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
@@ -4821,6 +4840,7 @@ dependencies = [
  "rusplay-audio",
  "rusplay-capture",
  "rusplay-client",
+ "rusplay-clipboard",
  "rusplay-config",
  "rusplay-core",
  "rusplay-decode",

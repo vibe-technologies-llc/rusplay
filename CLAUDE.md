@@ -23,6 +23,7 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-encode` | Video encoder trait and backends: VAAPI, NVENC, x264, x265, SVT-AV1 |
 | `rusplay-decode` | Video decoder trait and backends: VAAPI, NVDEC, software |
 | `rusplay-audio` | Opus (opus-rs) and optional FLAC audio codecs |
+| `rusplay-clipboard` | Text clipboard sync: the pure engine, `ClipboardLink`, data-control (ext and wlr) and portal backends (features `wayland`, `portal`) |
 | `rusplay-input` | Input event model, host injection, client capture |
 | `rusplay-host` | Host session: capture → scale → encode → net, plus input injection |
 | `rusplay-client` | Client session: net → decode → scale → present, plus input capture |
@@ -32,7 +33,7 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale` build on it,
 `net` builds on `protocol` and `config`, `priority` builds on `config`, `va` and `cuda` build on `core` (`cuda` on nothing else),
 and the media crates (`capture`, `encode`, `decode`, `audio`, `input`) build on `core`/`config`; `encode` and `decode` also
-use `va` and `cuda`, which is how the two share driver code without depending on each other. `host` and `client` compose them and `priority`, and the binaries
+use `va` and `cuda`, which is how the two share driver code without depending on each other. `clipboard` builds on `config` and `protocol` (its portal backend also on `input`); `host` and `client` compose them and `priority`, and the binaries
 depend only on `host`/`client`/`config` (`hostd` on `host`, `app` on both). No crate depends upward, and no media crate depends on
 `net`. `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
 commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders and to
@@ -64,7 +65,7 @@ the `decode` bitstream parsers (through its `fuzzing` feature).
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
 | Hardware test run | `RUSPLAY_REQUIRE_HW=1 cargo test --workspace --all-features` |
-| Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) and `decode_software` with `ASAN_OPTIONS=detect_leaks=0` (see `decode-rav1d-picture-unref-leak`) |
+| Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `clipboard`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) and `decode_software` with `ASAN_OPTIONS=detect_leaks=0` (see `decode-rav1d-picture-unref-leak`) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
 | App with decoders and host encoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software,input` |
@@ -107,6 +108,7 @@ that implements it. The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/priority.md` | Thread scheduling for the host and client frame threads |
 | `.claude/rules/driver-wrappers.md` | `rusplay-va` and `rusplay-cuda`: libva and libcuda wrappers shared by encode and decode |
 | `.claude/rules/input.md` | Input forwarding and injection |
+| `.claude/rules/clipboard.md` | Text clipboard sync: direction, limits, echo suppression, backends |
 | `.claude/rules/ui.md` | The gpui desktop app |
 | `.claude/rules/hostd.md` | Headless host binary: arguments and config discovery |
 | `.claude/rules/client.md` | Client session: stages, feedback, frame hand-off and colour |

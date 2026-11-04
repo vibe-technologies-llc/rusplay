@@ -24,6 +24,9 @@ paths:
   `config_path(role)` is the first candidate that exists, else the first candidate, which is where
   a save creates it. `rusplay-hostd` and the app both go through it, so they never read and write
   different files.
+- `input.clipboard` (`ClipboardDirection`: `off` default, `client-to-host`, `host-to-client`,
+  `both`) and `input.clipboard_max_bytes` (default 65536, `ClipboardMaxBytesOutOfRange` outside
+  1 to 1048576) are the only switches for clipboard sync (`clipboard.md`); each end reads its own.
 - New options go through the `add-config-option` skill.
 - `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the
   client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the

@@ -1,8 +1,8 @@
 use rusplay_core::FormatSet;
 
 use crate::{
-    ClientDisplay, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion, StreamDescription,
-    StreamKind, stream::Reader,
+    ClientDisplay, ClipboardChunk, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion,
+    StreamDescription, StreamKind, stream::Reader,
 };
 
 const TAG_HELLO: u8 = 0;
@@ -21,6 +21,7 @@ const TAG_LIGHTBAR: u8 = 12;
 const TAG_PLAYER_LEDS: u8 = 13;
 const TAG_TRIGGER_EFFECT: u8 = 14;
 const TAG_DISPLAY: u8 = 15;
+const TAG_CLIPBOARD: u8 = 20;
 
 pub const TRIGGER_EFFECT_LEN: usize = 11;
 
@@ -80,10 +81,16 @@ pub enum ControlMessage {
         effect: [u8; TRIGGER_EFFECT_LEN],
     },
     Display(ClientDisplay),
+    Clipboard(ClipboardChunk),
 }
 
 impl ControlMessage {
-    pub const MAX_ENCODED_LEN: usize = 1 + StreamDescription::MAX_ENCODED_LEN;
+    pub const MAX_ENCODED_LEN: usize =
+        1 + if StreamDescription::MAX_ENCODED_LEN > ClipboardChunk::MAX_ENCODED_LEN {
+            StreamDescription::MAX_ENCODED_LEN
+        } else {
+            ClipboardChunk::MAX_ENCODED_LEN
+        };
 
     pub const fn encoded_len(&self) -> usize {
         match self {
@@ -100,6 +107,7 @@ impl ControlMessage {
             Self::ClockPong { .. } => 17,
             Self::PlayerLeds { .. } => 3,
             Self::TriggerEffect { .. } => 3 + TRIGGER_EFFECT_LEN,
+            Self::Clipboard(chunk) => 1 + chunk.encoded_len(),
         }
     }
 
@@ -192,16 +200,12 @@ impl ControlMessage {
                 out[3..].copy_from_slice(effect);
             }
             Self::StreamFormat(description) => {
-                let mut body = Vec::with_capacity(len);
-                body.push(TAG_STREAM_FORMAT);
-                description.write(&mut body);
-                out.copy_from_slice(&body);
+                write_tagged(out, TAG_STREAM_FORMAT, |body| description.write(body));
             }
-            Self::Display(display) => {
-                let mut body = Vec::with_capacity(len);
-                body.push(TAG_DISPLAY);
-                display.write(&mut body);
-                out.copy_from_slice(&body);
+            Self::Display(display) => write_tagged(out, TAG_DISPLAY, |body| display.write(body)),
+            Self::Clipboard(chunk) => {
+                out[0] = TAG_CLIPBOARD;
+                chunk.write(&mut out[1..]);
             }
         }
 
@@ -217,12 +221,7 @@ impl ControlMessage {
         };
 
         if tag == TAG_STREAM_FORMAT {
-            let mut reader = Reader::new(body, 1);
-            let description = StreamDescription::read(&mut reader)?;
-            return match reader.remaining() {
-                0 => Ok(Self::StreamFormat(description)),
-                extra => Err(ProtocolError::TrailingBytes { extra }),
-            };
+            return read_whole(body, StreamDescription::read).map(Self::StreamFormat);
         }
 
         if let Some(decoded) = Self::decode_pad_feedback(tag, body) {
@@ -230,12 +229,11 @@ impl ControlMessage {
         }
 
         if tag == TAG_DISPLAY {
-            let mut reader = Reader::new(body, 1);
-            let display = ClientDisplay::read(&mut reader)?;
-            return match reader.remaining() {
-                0 => Ok(Self::Display(display)),
-                extra => Err(ProtocolError::TrailingBytes { extra }),
-            };
+            return read_whole(body, ClientDisplay::read).map(Self::Display);
+        }
+
+        if tag == TAG_CLIPBOARD {
+            return ClipboardChunk::read(body).map(Self::Clipboard);
         }
 
         let body_len = match tag {
@@ -320,6 +318,26 @@ impl ControlMessage {
     }
 }
 
+fn write_tagged(out: &mut [u8], tag: u8, write: impl FnOnce(&mut Vec<u8>)) {
+    let mut body = Vec::with_capacity(out.len());
+    body.push(tag);
+    write(&mut body);
+    out.copy_from_slice(&body);
+}
+
+fn read_whole<'a, T>(
+    body: &'a [u8],
+    read: impl FnOnce(&mut Reader<'a>) -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    let mut reader = Reader::new(body, 1);
+    let value = read(&mut reader)?;
+
+    match reader.remaining() {
+        0 => Ok(value),
+        extra => Err(ProtocolError::TrailingBytes { extra }),
+    }
+}
+
 impl ControlMessage {
     fn decode_pad_feedback(tag: u8, body: &[u8]) -> Option<Result<Self, ProtocolError>> {
         let expected = match tag {
@@ -375,6 +393,7 @@ impl ControlMessage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ControlPacket {
     Message { id: u32, message: ControlMessage },
     Ack { id: u32 },
@@ -452,7 +471,7 @@ impl ControlPacket {
 mod tests {
     use super::*;
 
-    fn every_message() -> [ControlMessage; 15] {
+    fn every_message() -> [ControlMessage; 16] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -501,6 +520,9 @@ mod tests {
                 right: true,
                 effect: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             },
+            ControlMessage::Clipboard(
+                ClipboardChunk::new(9, 0, 1, &[b'x'; ClipboardChunk::MAX_DATA]).unwrap(),
+            ),
         ]
     }
 
@@ -658,6 +680,20 @@ mod tests {
         assert_eq!(
             ControlMessage::decode(&[TAG_REQUEST_RECOVERY, 0, 0, 0, 1, 0, 0, 0, 0, 0]),
             Err(ProtocolError::TrailingBytes { extra: 1 })
+        );
+    }
+
+    #[test]
+    fn clipboard_chunk_follows_its_tag_and_decodes_validated() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+        let chunk = ClipboardChunk::new(1, 0, 1, b"hi").unwrap();
+
+        let len = ControlMessage::Clipboard(chunk).encode(&mut buf).unwrap();
+
+        assert_eq!(&buf[..len], [20, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, b'h', b'i']);
+        assert_eq!(
+            ControlMessage::decode(&[20, 0, 0, 0, 1, 0, 5, 0, 1, 0, 1, b'h']),
+            Err(ProtocolError::ClipboardChunkIndex { index: 5, count: 1 })
         );
     }
 

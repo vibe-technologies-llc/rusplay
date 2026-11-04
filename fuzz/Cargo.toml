@@ -48,6 +48,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "clipboard"
+path = "fuzz_targets/clipboard.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "cursor"
 path = "fuzz_targets/cursor.rs"
 test = false

@@ -92,6 +92,8 @@ pub enum ConfigError {
     PointerSensitivityOutOfRange(f32),
     #[error("gamepad deadzone {0} is outside 0.0..=0.9")]
     GamepadDeadzoneOutOfRange(f32),
+    #[error("clipboard size limit {0} is outside 1..=1048576 bytes")]
+    ClipboardMaxBytesOutOfRange(u32),
     #[error(
         "hotkey chord {hotkey:?} holds every modifier of the release chord {release:?}, which would release input first"
     )]
@@ -264,6 +266,7 @@ impl ConfigError {
             Self::GamepadSlotsOutOfRange(_) => Some("input.max_gamepads"),
             Self::PointerSensitivityOutOfRange(_) => Some("input.pointer_sensitivity"),
             Self::GamepadDeadzoneOutOfRange(_) => Some("input.gamepad_deadzone"),
+            Self::ClipboardMaxBytesOutOfRange(_) => Some("input.clipboard_max_bytes"),
             Self::HotkeyChordShadowsRelease { .. } => Some("input.hotkey_chord"),
             Self::HotkeyKeyReused { field, .. } => Some(*field),
             Self::EmptyHostPeersFile => Some("peers.host_file"),

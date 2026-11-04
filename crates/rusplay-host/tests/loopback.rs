@@ -15,17 +15,18 @@ use rusplay_client::{
     AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream, Credentials,
     LatestFrame, PresentedFrame,
 };
+use rusplay_clipboard::{ClipboardBackend, MemoryClipboard};
 use rusplay_config::{
-    Config, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VideoDecoderConfig,
-    VideoEncoderConfig, X265Config,
+    ClipboardDirection, Config, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig,
+    VideoDecoderConfig, VideoEncoderConfig, X265Config,
 };
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorSpace, PixelFormat, Resolution,
     Timestamp, TransferFunction,
 };
 use rusplay_host::{
-    AudioSource, CaptureFeed, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu, HostError,
-    HostSession, HostStats, InputFeed, InputTarget, PeerStore, Pin,
+    AudioSource, CaptureFeed, ClipboardOpener, DrmFourcc, Frame, FrameBuffer, FrameSource, Gpu,
+    HostError, HostSession, HostStats, InputFeed, InputTarget, PeerStore, Pin,
 };
 use rusplay_input::{InputError, InputEvent, PadFeedback};
 use tempfile::TempDir;
@@ -564,4 +565,128 @@ fn a_host_and_client_without_a_shared_format_both_refuse() {
                 && encodable.iter().all(|format| format.codec == Codec::Hevc)
     ));
     assert!(matches!(served, Err(HostError::NoCommonFormat { .. })));
+}
+
+fn clipboard_config(config: &mut Config, max_bytes: u32) {
+    config.input.clipboard = ClipboardDirection::Both;
+    config.input.clipboard_max_bytes = max_bytes;
+}
+
+fn clipboard_opener(clipboard: &MemoryClipboard) -> ClipboardOpener {
+    let clipboard = clipboard.clone();
+
+    Arc::new(move |_| Ok(Box::new(clipboard.clone()) as Box<dyn ClipboardBackend>))
+}
+
+fn wait_for_clipboard(clipboard: &MemoryClipboard, expected: &str, deadline: Instant) -> bool {
+    while Instant::now() < deadline && clipboard.contents().as_deref() != Some(expected) {
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    clipboard.contents().as_deref() == Some(expected)
+}
+
+#[test]
+fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_client() {
+    let mut config = host_config(VideoEncoderConfig::SvtAv1(SvtAv1Config::default()));
+    clipboard_config(&mut config, 4096);
+    if !supported(&config) {
+        return;
+    }
+    let Some(gpu) = open_gpu() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let host_clipboard = MemoryClipboard::default();
+    let client_clipboard = MemoryClipboard::default();
+    let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
+    let host = Arc::new(
+        HostSession::bind(config, store)
+            .unwrap()
+            .without_audio()
+            .with_clipboard(clipboard_opener(&host_clipboard)),
+    );
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+
+    let mut client_config = client_config();
+    clipboard_config(&mut client_config, 4096);
+    let session =
+        ClientSession::new(client_config).with_clipboard(clipboard_opener(&client_clipboard));
+    let stream = session
+        .connect_with_audio(
+            address,
+            &Credentials::Pin(Pin::parse(PIN).unwrap()),
+            client_gpu(&gpu),
+            LatestFrame::new(),
+            None,
+        )
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let long_text = "wörds ".repeat(500);
+
+    client_clipboard.copy("from the client");
+    let reached_host = wait_for_clipboard(&host_clipboard, "from the client", deadline);
+    host_clipboard.copy(long_text.clone());
+    let reached_client = wait_for_clipboard(&client_clipboard, &long_text, deadline);
+    host_clipboard.copy("x".repeat(5000));
+    thread::sleep(Duration::from_millis(500));
+    let oversized_arrived = client_clipboard.contents().as_deref() != Some(long_text.as_str());
+    let state = stream.clipboard().is_active();
+    stream.stop().unwrap();
+    serving.join().unwrap().unwrap();
+
+    assert!(reached_host);
+    assert!(reached_client);
+    assert!(!oversized_arrived);
+    assert!(state);
+    assert_eq!(host_clipboard.writes(), 1);
+    assert_eq!(client_clipboard.writes(), 1);
+}
+
+#[test]
+fn clipboard_text_is_not_shared_when_the_config_leaves_it_off() {
+    let config = host_config(VideoEncoderConfig::SvtAv1(SvtAv1Config::default()));
+    if !supported(&config) {
+        return;
+    }
+    let Some(gpu) = open_gpu() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let host_clipboard = MemoryClipboard::default();
+    let client_clipboard = MemoryClipboard::default();
+    let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
+    let host = Arc::new(
+        HostSession::bind(config, store)
+            .unwrap()
+            .without_audio()
+            .with_clipboard(clipboard_opener(&host_clipboard)),
+    );
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+
+    let session =
+        ClientSession::new(client_config()).with_clipboard(clipboard_opener(&client_clipboard));
+    let stream = session
+        .connect_with_audio(
+            address,
+            &Credentials::Pin(Pin::parse(PIN).unwrap()),
+            client_gpu(&gpu),
+            LatestFrame::new(),
+            None,
+        )
+        .unwrap();
+
+    client_clipboard.copy("stays here");
+    host_clipboard.copy("stays there");
+    thread::sleep(Duration::from_millis(500));
+    let host_after = host_clipboard.contents();
+    let client_after = client_clipboard.contents();
+    stream.stop().unwrap();
+    serving.join().unwrap().unwrap();
+
+    assert_eq!(host_after.as_deref(), Some("stays there"));
+    assert_eq!(client_after.as_deref(), Some("stays here"));
+    assert_eq!(host_clipboard.polls(), 0);
 }

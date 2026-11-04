@@ -1,3 +1,4 @@
+mod clipboard;
 mod control;
 mod cursor;
 mod discovery;
@@ -13,6 +14,7 @@ mod stream;
 mod video;
 
 pub use crate::{
+    clipboard::{ClipboardChunk, ClipboardReassembler},
     control::{ControlMessage, ControlPacket, TRIGGER_EFFECT_LEN},
     cursor::{CursorImage, CursorMessage},
     discovery::{DiscoveryMessage, HostId},

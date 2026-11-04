@@ -251,6 +251,10 @@ impl HostModel {
 
                 Some(Notice::Info(format!("{address} left")))
             }
+            HostEvent::ClipboardUnavailable(error) => Some(Notice::Info(format!(
+                "Clipboard sharing is off for this session: {}",
+                error_chain(&**error)
+            ))),
             HostEvent::SessionFailed(error) => Some(Notice::Failure(format!(
                 "A client session failed: {}",
                 error_chain(error)

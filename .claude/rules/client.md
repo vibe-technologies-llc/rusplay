@@ -57,6 +57,13 @@ paths:
   Datagrams from any address but the host are ignored; FEC packets are routed by
   `FecHeader::protects`. Control events of a batch are handled before its video events, so a
   `StreamFormat` that arrived together with the keyframe it describes is applied first.
+- Clipboard: `ClientSession::with_clipboard` / `without_clipboard` and the `window` feature's
+  default data-control opener, exactly like the host's (`clipboard.md`). `connect_stream` opens a
+  `ClipboardLink` when `input.clipboard` is not `off` and hands it to the receive stage in
+  `Links::clipboard`; the receive stage passes `ControlMessage::Clipboard` chunks to it once the
+  handshake is done and calls `service` once per loop pass, never on the frame path.
+  `ClientStream::clipboard()` is the `ClipboardState`. A protocol error counts in
+  `malformed_datagrams`, a backend error drops the link.
 - The receive stage keeps the newest `StreamDescription` (an older or equal generation is
   ignored), publishes it for `ClientStream::stream_format` and counts it in
   `stream_formats_received`. Every forwarded `EncodedVideo` carries the description in force, and

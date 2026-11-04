@@ -11,6 +11,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_audio::{AudioInput, CODEC_THREAD_STACK_BYTES};
+use rusplay_clipboard::{ClipboardPolicy, ClipboardState};
 use rusplay_config::{AudioConfig, Config, InputConfig};
 use rusplay_core::Resolution;
 use rusplay_input::{InputEvent, PadFeedback, gamepad::PhysicalOptions};
@@ -23,10 +24,12 @@ use rusplay_protocol::{ClientDisplay, StreamDescription};
 use rusplay_scale::{GpuFaults, check_extent};
 
 use crate::{
-    AudioOutput, ClientError, ClientStats, DisplayImage, FrameSink, LatestCursor, Stage,
+    AudioOutput, ClientError, ClientStats, ClipboardOpener, DisplayImage, FrameSink, LatestCursor,
+    Stage,
     announce::default_display,
     audio::{self, AudioLinks, EncodedAudio},
     bitrate::BitrateSettings,
+    clipboard::{default_clipboard_opener, open_link},
     decode::{self, DecodeLinks},
     display::resolve_target,
     input::{self, GamepadLinks, InputHandle, InputLinks, InputStage, InputTiming},
@@ -80,10 +83,21 @@ pub enum Credentials {
     Peer(PeerRecord),
 }
 
-#[derive(Debug)]
 pub struct ClientSession {
     config: Config,
     display: Option<ClientDisplay>,
+    clipboard: Option<ClipboardOpener>,
+}
+
+impl std::fmt::Debug for ClientSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClientSession")
+            .field("config", &self.config)
+            .field("display", &self.display)
+            .field("clipboard", &self.clipboard.is_some())
+            .finish()
+    }
 }
 
 impl ClientSession {
@@ -91,12 +105,25 @@ impl ClientSession {
         Self {
             config,
             display: None,
+            clipboard: default_clipboard_opener(),
         }
     }
 
     #[must_use]
     pub fn with_display(mut self, display: ClientDisplay) -> Self {
         self.display = Some(display);
+        self
+    }
+
+    #[must_use]
+    pub fn with_clipboard(mut self, opener: ClipboardOpener) -> Self {
+        self.clipboard = Some(opener);
+        self
+    }
+
+    #[must_use]
+    pub fn without_clipboard(mut self) -> Self {
+        self.clipboard = None;
         self
     }
 
@@ -192,6 +219,7 @@ impl ClientSession {
             cursor: LatestCursor::new(),
             input: InputHandle::new(input_sender),
             gamepads_done: Arc::new(AtomicBool::new(true)),
+            clipboard: ClipboardState::Off,
             paired,
         };
         let decoded = Arc::clone(&stream.decoded);
@@ -205,12 +233,18 @@ impl ClientSession {
         };
 
         let (pad_feedback, pad_feedback_commands) = mpsc::channel();
+        let (clipboard, clipboard_state) = open_link(
+            self.clipboard.as_ref(),
+            ClipboardPolicy::client(&self.config.input),
+        );
+        stream.clipboard = clipboard_state;
 
         let (handshake, handshake_done) = mpsc::channel();
         let links = Links {
             decode_queue: queue,
             audio_queue,
             pad_feedback: self.config.input.gamepads.then_some(pad_feedback),
+            clipboard,
             cursor: stream.cursor.clone(),
             format: Arc::clone(&stream.format),
             feedback,
@@ -317,10 +351,15 @@ pub struct ClientStream {
     cursor: LatestCursor,
     input: InputHandle,
     gamepads_done: Arc<AtomicBool>,
+    clipboard: ClipboardState,
     paired: Option<PeerSecret>,
 }
 
 impl ClientStream {
+    pub fn clipboard(&self) -> &ClipboardState {
+        &self.clipboard
+    }
+
     pub fn stats(&self) -> ClientStats {
         self.counters.snapshot()
     }

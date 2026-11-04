@@ -7,6 +7,7 @@ use crate::ConfigError;
 const GAMEPAD_SLOT_RANGE: RangeInclusive<u8> = 1..=16;
 const SENSITIVITY_RANGE: RangeInclusive<f32> = 0.05..=20.0;
 const DEADZONE_RANGE: RangeInclusive<f32> = 0.0..=0.9;
+const CLIPBOARD_BYTES_RANGE: RangeInclusive<u32> = 1..=1_048_576;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -34,6 +35,26 @@ pub enum ReleaseChord {
     AltShift,
     #[default]
     CtrlAltShift,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClipboardDirection {
+    #[default]
+    Off,
+    ClientToHost,
+    HostToClient,
+    Both,
+}
+
+impl ClipboardDirection {
+    pub const fn client_sends(self) -> bool {
+        matches!(self, Self::ClientToHost | Self::Both)
+    }
+
+    pub const fn host_sends(self) -> bool {
+        matches!(self, Self::HostToClient | Self::Both)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +153,8 @@ pub struct InputConfig {
     pub resend_delay_ms: u16,
     pub snapshot_interval_ms: u16,
     pub accept_remote: bool,
+    pub clipboard: ClipboardDirection,
+    pub clipboard_max_bytes: u32,
 }
 
 impl Default for InputConfig {
@@ -160,6 +183,8 @@ impl Default for InputConfig {
             resend_delay_ms: 8,
             snapshot_interval_ms: 1000,
             accept_remote: true,
+            clipboard: ClipboardDirection::Off,
+            clipboard_max_bytes: 65_536,
         }
     }
 }
@@ -179,6 +204,12 @@ impl InputConfig {
         if !DEADZONE_RANGE.contains(&self.gamepad_deadzone) {
             return Err(ConfigError::GamepadDeadzoneOutOfRange(
                 self.gamepad_deadzone,
+            ));
+        }
+
+        if !CLIPBOARD_BYTES_RANGE.contains(&self.clipboard_max_bytes) {
+            return Err(ConfigError::ClipboardMaxBytesOutOfRange(
+                self.clipboard_max_bytes,
             ));
         }
 
@@ -336,6 +367,55 @@ mod tests {
         assert_eq!(config.snapshot_interval_ms, 0);
         assert!(!config.accept_remote);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn clipboard_sync_ships_off_with_a_bounded_size() {
+        let default: InputConfig = toml::from_str("").unwrap();
+
+        assert_eq!(default.clipboard, ClipboardDirection::Off);
+        assert!(!default.clipboard.client_sends());
+        assert!(!default.clipboard.host_sends());
+        assert_eq!(default.clipboard_max_bytes, 65_536);
+        assert!(default.validate().is_ok());
+    }
+
+    #[test]
+    fn clipboard_direction_uses_kebab_case_names_and_gates_each_side() {
+        let cases = [
+            ("off", false, false),
+            ("client-to-host", true, false),
+            ("host-to-client", false, true),
+            ("both", true, true),
+        ];
+
+        for (name, client, host) in cases {
+            let config: InputConfig = toml::from_str(&format!("clipboard = \"{name}\"")).unwrap();
+
+            assert_eq!(config.clipboard.client_sends(), client);
+            assert_eq!(config.clipboard.host_sends(), host);
+        }
+    }
+
+    #[test]
+    fn clipboard_size_must_be_in_range() {
+        let none = InputConfig {
+            clipboard_max_bytes: 0,
+            ..InputConfig::default()
+        };
+        let huge = InputConfig {
+            clipboard_max_bytes: 1_048_577,
+            ..InputConfig::default()
+        };
+
+        assert!(matches!(
+            none.validate(),
+            Err(ConfigError::ClipboardMaxBytesOutOfRange(0))
+        ));
+        assert!(matches!(
+            huge.validate(),
+            Err(ConfigError::ClipboardMaxBytesOutOfRange(1_048_577))
+        ));
     }
 
     #[test]

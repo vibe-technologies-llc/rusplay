@@ -382,6 +382,18 @@ paths:
   `HostSession::bind` installs the virtual-source `AudioPlayback` behind the `pipewire` feature
   and nothing without it; `with_microphone_output` replaces it and `without_microphone` removes
   it. Tests that enable the microphone must replace it or they publish a real PipeWire node.
+- Clipboard: `HostSession::with_clipboard(ClipboardOpener)` replaces the default opener (data-control
+  with the `input` feature, none without) and `without_clipboard` removes it. `serve_with` opens a
+  `ClipboardLink` per session when `input.clipboard` is not `off` (`clipboard::open_link`); the
+  link lives in `ControlStage`, which hands received `ControlMessage::Clipboard` chunks to it while
+  streaming and calls `service` once per loop pass (so within `IDLE_WAKE`, 20 ms, of a local copy),
+  sending through the shared `ControlOutbox` channel and leaving chunks queued when the control
+  window is full. A takeover resets the link's engine. `HostStream::clipboard()` is the
+  `ClipboardState`; an unavailable backend becomes `HostEvent::ClipboardUnavailable` once per
+  session and the session streams on. In `portal.rs`, `open_portal` requests the portal clipboard
+  on the shared RemoteDesktop session only when `input.clipboard` is on and
+  `probe_data_control` fails, and returns the matching `ClipboardOpener` in `PortalHost::clipboard`
+  for `HostService::start` to install. See `clipboard.md`.
 - Input: `HostSession::with_input(Arc<InputFeed>)` turns it on; without a feed the host drops
   `StreamKind::Input` datagrams. `InputFeed` holds an `InputTarget` (`inject(InputEvent)` and
   `inject_batch`, which defaults to `inject` per event, and `service(&mut Vec<PadFeedback>)`)

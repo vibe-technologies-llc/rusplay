@@ -1,6 +1,7 @@
 use std::{
     io,
     os::{fd::OwnedFd, unix::net::UnixStream},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -161,7 +162,7 @@ pub struct LibeiInjector {
     sync_locks: bool,
     lock_sync: LockSync,
     touches: TouchSet,
-    session: Option<RemoteDesktopSession>,
+    session: Option<Arc<RemoteDesktopSession>>,
 }
 
 impl LibeiInjector {
@@ -207,8 +208,8 @@ impl LibeiInjector {
         Ok((injector, started))
     }
 
-    pub fn attach_session(&mut self, session: RemoteDesktopSession) {
-        self.session = Some(session);
+    pub fn attach_session(&mut self, session: impl Into<Arc<RemoteDesktopSession>>) {
+        self.session = Some(session.into());
     }
 
     pub fn wait_ready(&mut self, timeout: Duration) -> Result<(), InputError> {
