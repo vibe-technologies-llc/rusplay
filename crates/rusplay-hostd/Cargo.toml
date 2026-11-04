@@ -23,9 +23,21 @@ rusplay-config.workspace = true
 rusplay-host.workspace = true
 thiserror.workspace = true
 
+[[test]]
+name = "nested"
+required-features = ["pipewire", "svt-av1"]
+
 [dev-dependencies]
+pollster.workspace = true
+rusplay-client = { workspace = true, features = ["software"] }
+rusplay-core.workspace = true
 rusplay-net.workspace = true
+rustix = { workspace = true, features = ["event", "fs", "process"] }
 tempfile.workspace = true
+wayland-client.workspace = true
+wayland-protocols = { workspace = true, features = ["client"] }
+wayland-protocols-plasma = { workspace = true, features = ["client"] }
+wgpu.workspace = true
 
 [lints]
 workspace = true

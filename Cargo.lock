@@ -4861,11 +4861,19 @@ version = "0.1.0"
 dependencies = [
  "lexopt",
  "parking_lot 0.13.0",
+ "pollster 1.0.1",
+ "rusplay-client",
  "rusplay-config",
+ "rusplay-core",
  "rusplay-host",
  "rusplay-net",
+ "rustix",
  "tempfile",
  "thiserror 2.0.21",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-plasma",
+ "wgpu 30.0.1",
 ]
 
 [[package]]

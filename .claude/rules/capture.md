@@ -17,8 +17,30 @@ paths:
   mapping of every kind is `portal_sources`, tested too. A virtual stream's size is compositor
   specific: Mutter sizes it from the negotiated format, KWin chooses itself, so the size a frame
   really has (`NegotiatedFormat::size`, then `Frame::resolution`) is the truth and nothing here
-  assumes the offered size was taken. None of it has run against a compositor
+  assumes the offered size was taken.
+- What KWin 6.8.2 does with the virtual source, measured in a nested headless `kwin_wayland
+  --virtual` on its own D-Bus with the portal frontend and backend, a client in the same process
+  and the shared PipeWire daemon (`crates/rusplay-hostd/tests/nested/`, `hostd.md`). It is the
+  virtual backend, loopback and no display: nothing here is a statement about a real output, a
+  real GPU scanout or a second machine, and Mutter has not been run
   (`capture-virtual-output-live` in `docs/FEATURES.md`).
+  - `AvailableSourceTypes` is 7 (monitor, window and virtual), so the virtual bit is there.
+  - The portal still shows its `Screen Sharing Requested` dialog for a virtual source;
+    xdg-desktop-portal-kde does not skip it. Once the restore token is saved a restart skips it.
+  - KWin creates the output at 1920x1080. The first frame, and so the first keyframe, has that
+    size; 80 ms to 0.5 s after the offer the stream is exactly the offered size (1280x720,
+    1000x700 and 2560x1440 tried), and the encoder sends a second keyframe
+    (`perf-virtual-first-frame-stale-size`). KWin's `EnumFormat` takes 200x200 to 10000x10000 with
+    the current size as the default, so a display under 200 pixels on an axis cannot be offered.
+  - The offered rate is not honoured: the format carries a variable `framerate` (0/1) and a
+    `maxFramerate` of the output's refresh, 60 Hz. Offers of 30, 90 and 144 Hz all captured 60
+    frames a second from a damaged output (`capture-virtual-refresh-kwin`).
+  - A virtual output nothing draws on delivers one frame after the renegotiation, at the new
+    size, and then nothing until something is drawn on it.
+  - The stream has no colour description: KWin's `EnumFormat` lists no `transferFunction` or
+    `colorPrimaries`, so every frame is the sRGB/BT.709 fallback of `describe_color`. The portal
+    has no request that takes the client's colour volume, so it cannot reach the output through
+    it; KWin's own output management (HDR, ICC) was not tried.
 - `OutputOffer` (a cloneable handle from `PipeWireCapture::output_offer`, usable without the
   `pipewire` feature) takes an `OutputRequest { resolution, frame_rate }` after the stream is
   already running: the request goes into a shared slot and a `Command::Offer` wakes the PipeWire
