@@ -37,7 +37,7 @@ const CODING_TYPE_P: u32 = 2;
 const VIDEO_FORMAT_UNSPECIFIED: u64 = 5;
 const ASPECT_RATIO_SQUARE: u8 = 1;
 const NO_COLLOCATED_PICTURE: u8 = 0xff;
-const LONG_TERM_DEC_PIC_BUFFERING_MINUS1: u32 = 2;
+const LONG_TERM_DEC_PIC_BUFFERING_MINUS1: u32 = 3;
 const SINGLE_DEC_PIC_BUFFERING_MINUS1: u32 = 1;
 const SHORT_TERM_SET_PREVIOUS: u64 = 0;
 const SHORT_TERM_SET_EMPTY: u64 = 1;
@@ -436,13 +436,16 @@ impl HevcStream {
 
     fn long_term_set(&self, rbsp: &mut BitWriter) {
         let plan = self.references.plan();
-        let (long_term, used) = match plan.reference {
-            Reference::LongTerm(held) => (Some(held), true),
-            _ => (plan.kept_long_term, false),
-        };
+        let referenced = plan.referenced_slot();
+        let pictures: Vec<(Held, bool)> = plan
+            .long_term
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, held)| held.map(|held| (held, Some(slot) == referenced)))
+            .collect();
 
-        rbsp.ue(u32::from(long_term.is_some()));
-        if let Some(held) = long_term {
+        rbsp.ue(u32::try_from(pictures.len()).unwrap_or(0));
+        for (held, used) in pictures {
             rbsp.bits(
                 u64::try_from(held.order & POC_LSB_MASK).unwrap_or(0),
                 LOG2_MAX_POC_LSB,
@@ -568,7 +571,7 @@ impl HevcStream {
             Reference::Previous(held) => {
                 Some(Self::entry(held, ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE))
             }
-            Reference::LongTerm(held) => Some(Self::entry(
+            Reference::LongTerm { held, .. } => Some(Self::entry(
                 held,
                 ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE | ffi::VA_PICTURE_HEVC_RPS_LT_CURR,
             )),
@@ -585,7 +588,7 @@ impl HevcStream {
             decoded_curr_pic: ffi::VAPictureHEVC {
                 picture_id: picture.recon,
                 pic_order_cnt: order,
-                flags: if plan.mark_long_term {
+                flags: if plan.mark_long_term.is_some() {
                     ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
                 } else {
                     0
@@ -604,8 +607,8 @@ impl HevcStream {
             ..Default::default()
         };
         let kept = plan
-            .kept_long_term
-            .map(|held| Self::entry(held, ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE));
+            .kept_long_term()
+            .map(|(_, held)| Self::entry(held, ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE));
         let held = self.reference_entry().into_iter().chain(kept);
         for (entry, reference) in parameters.reference_frames.iter_mut().zip(held) {
             *entry = reference;

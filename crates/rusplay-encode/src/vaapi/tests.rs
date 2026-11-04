@@ -743,6 +743,7 @@ struct LossCase {
     last_good: u64,
     resumed: u64,
     count: u64,
+    reference: Option<u64>,
 }
 
 fn recover_after_a_loss(case: &LossCase, config: &VideoConfig) {
@@ -768,6 +769,9 @@ fn recover_after_a_loss(case: &LossCase, config: &VideoConfig) {
         panic!("vaapi {codec} fell back to a keyframe: {recovery:?}");
     };
     assert!(reference <= case.last_good);
+    if let Some(expected) = case.reference {
+        assert_eq!(reference, expected, "{codec}");
+    }
     assert!(case.last_good - reference < 16);
     assert!(!packets[split].keyframe);
     assert!(!keyframe_check(codec)(&packets[split].data));
@@ -783,6 +787,7 @@ fn av1_case(acknowledged: Option<u64>) -> LossCase {
         last_good: 14,
         resumed: 20,
         count: 30,
+        reference: None,
     }
 }
 
@@ -823,6 +828,7 @@ fn h26x_recovers_against_the_long_term_frame_without_a_keyframe() {
                 last_good: 18,
                 resumed: 23,
                 count: 32,
+                reference: Some(17),
             };
             let config = video(codec, format, RESOLUTION);
 
@@ -843,15 +849,41 @@ fn h26x_recovers_from_the_candidate_right_after_marking_it() {
             codec,
             format,
             acknowledged: None,
-            last_good: 16,
-            resumed: 20,
+            last_good: 17,
+            resumed: 21,
             count: 30,
+            reference: Some(17),
         };
 
         recover_after_a_loss(
             &case,
             &without_intra_refresh(video(codec, format, RESOLUTION)),
         );
+    }
+}
+
+#[test]
+fn h26x_recovers_from_the_older_slot_while_the_newest_candidate_is_unacknowledged() {
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        for acknowledged in [Some(10), None] {
+            let case = LossCase {
+                codec,
+                format,
+                acknowledged,
+                last_good: 16,
+                resumed: 20,
+                count: 30,
+                reference: Some(9),
+            };
+            let config = video(codec, format, RESOLUTION);
+
+            recover_after_a_loss(&case, &config);
+            recover_after_a_loss(&case, &without_intra_refresh(config));
+        }
     }
 }
 
@@ -891,7 +923,6 @@ fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
 struct LossEvent {
     first_lost: u64,
     resumed: u64,
-    recovers: bool,
 }
 
 const ACK_DELAY: u64 = 2;
@@ -902,37 +933,30 @@ fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConf
         LossEvent {
             first_lost: 19,
             resumed: 23,
-            recovers: true,
         },
         LossEvent {
             first_lost: 24,
             resumed: 26,
-            recovers: false,
         },
         LossEvent {
             first_lost: 35,
             resumed: 37,
-            recovers: true,
         },
         LossEvent {
             first_lost: 42,
             resumed: 43,
-            recovers: false,
         },
         LossEvent {
             first_lost: 52,
             resumed: 53,
-            recovers: true,
         },
         LossEvent {
             first_lost: 60,
             resumed: 61,
-            recovers: true,
         },
         LossEvent {
             first_lost: 72,
             resumed: 75,
-            recovers: true,
         },
     ];
 
@@ -958,9 +982,8 @@ fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConf
             let last_good = event.first_lost - 1;
             let recovery = encoder.recover(OutputIndex(last_good));
 
-            assert_eq!(
+            assert!(
                 matches!(recovery, Recovery::Reference(_)),
-                event.recovers,
                 "{codec} at frame {index}: {recovery:?}"
             );
             if let Recovery::Reference(OutputIndex(reference)) = recovery {
@@ -970,8 +993,8 @@ fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConf
 
         let frame = pattern_frame(format, RESOLUTION, index);
         let packet = encoder.encode(&frame).unwrap().unwrap();
-        if let Some(event) = events.iter().find(|event| event.resumed == index) {
-            assert_eq!(packet.keyframe, !event.recovers, "{codec} at frame {index}");
+        if events.iter().any(|event| event.resumed == index) {
+            assert!(!packet.keyframe, "{codec} at frame {index}");
         }
         packets.push(packet);
         if !lost {
