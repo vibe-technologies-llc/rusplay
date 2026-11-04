@@ -20,6 +20,8 @@ mod hardware;
 ))]
 mod hdr;
 pub mod input;
+#[cfg(all(test, feature = "x264", feature = "vaapi"))]
+mod loss;
 #[cfg(feature = "nvenc")]
 mod nvenc;
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]

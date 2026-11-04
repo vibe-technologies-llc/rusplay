@@ -9,7 +9,7 @@ mod hevc;
 mod level;
 mod params;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod va;
 
 use std::{
