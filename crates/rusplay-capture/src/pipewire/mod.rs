@@ -46,8 +46,8 @@ use self::{
     },
 };
 use crate::{
-    BufferLease, CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, PortalSession,
-    ShmFallback,
+    BufferLease, CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, OutputOffer,
+    OutputRequest, PortalSession, ShmFallback,
     cursor::{CursorTracker, CursorUpdate},
     handoff::{Publisher, Received, Subscriber, latest},
     modifier::FormatModifiers,
@@ -91,6 +91,15 @@ impl StreamOptions {
     }
 
     #[must_use]
+    pub fn offering(&self, request: OutputRequest) -> Self {
+        Self {
+            size_hint: Some(request.resolution),
+            frame_rate: request.frame_rate,
+            ..self.clone()
+        }
+    }
+
+    #[must_use]
     pub fn with_modifiers(mut self, modifiers: Vec<FormatModifiers>) -> Self {
         self.modifiers = modifiers;
         self
@@ -115,16 +124,19 @@ impl StreamOptions {
 
 enum Command {
     Release(BufferHandle),
+    Offer,
     Stop,
 }
 
 type Failure = Arc<Mutex<Option<CaptureError>>>;
+type OfferSlot = Arc<Mutex<Option<OutputRequest>>>;
 
 pub struct PipeWireCapture {
     deliveries: Subscriber<Frame>,
     cursor: Subscriber<CursorUpdate>,
     failure: Failure,
     fallback: ShmFallback,
+    offer: OfferSlot,
     control: channel::Sender<Command>,
     worker: Option<JoinHandle<()>>,
 }
@@ -139,6 +151,7 @@ impl PipeWireCapture {
         let (cursor_publisher, cursor) = latest();
         let failure = Failure::default();
         let fallback = ShmFallback::default();
+        let offer = OfferSlot::default();
         let (control, commands) = channel::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
 
@@ -150,6 +163,7 @@ impl PipeWireCapture {
             cursor_publisher,
             failure: Arc::clone(&failure),
             fallback: fallback.clone(),
+            offer: Arc::clone(&offer),
             control: control.clone(),
             commands,
         };
@@ -167,6 +181,7 @@ impl PipeWireCapture {
             cursor,
             failure,
             fallback,
+            offer,
             control,
             worker: Some(worker),
         };
@@ -217,6 +232,16 @@ impl PipeWireCapture {
         self.fallback.clone()
     }
 
+    pub fn output_offer(&self) -> OutputOffer {
+        let slot = Arc::clone(&self.offer);
+        let control = self.control.clone();
+
+        OutputOffer::new(move |request| {
+            *slot.lock() = Some(request);
+            let _ = control.send(Command::Offer);
+        })
+    }
+
     fn resolve(&self, received: Received<Frame>) -> Result<Option<Frame>, CaptureError> {
         match received {
             Received::Value(frame) => Ok(Some(frame)),
@@ -264,6 +289,7 @@ struct WorkerSetup {
     cursor_publisher: Publisher<CursorUpdate>,
     failure: Failure,
     fallback: ShmFallback,
+    offer: OfferSlot,
     control: channel::Sender<Command>,
     commands: channel::Receiver<Command>,
 }
@@ -278,6 +304,7 @@ struct Worker {
     shm_pool: ShmPool,
     failure: Failure,
     fallback: ShmFallback,
+    offer: OfferSlot,
     control: channel::Sender<Command>,
     mainloop: MainLoopWeak,
     epoch: Instant,
@@ -323,7 +350,14 @@ impl Worker {
         }
     }
 
+    fn adopt_offer(&mut self) {
+        if let Some(request) = *self.offer.lock() {
+            self.options = self.options.offering(request);
+        }
+    }
+
     fn negotiate(&mut self, stream: &Stream, param: &Pod) -> Result<(), CaptureError> {
+        self.adopt_offer();
         let parsed = parse_format(param.as_bytes())?;
         let table = self.options.dmabuf_table().unwrap_or_default();
 
@@ -363,6 +397,7 @@ impl Worker {
             return Ok(());
         }
 
+        self.adopt_offer();
         self.options.prefer_dmabuf = false;
         let params = self.options.enum_formats()?;
         stream.update_params(&mut as_pods(&params)?)?;
@@ -504,6 +539,12 @@ fn as_pods(params: &[Vec<u8>]) -> Result<Vec<&Pod>, CaptureError> {
         .collect()
 }
 
+fn offer_params(stream: &Stream, options: &StreamOptions) -> Result<(), CaptureError> {
+    let params = options.enum_formats()?;
+    stream.update_params(&mut as_pods(&params)?)?;
+    Ok(())
+}
+
 fn run_worker(
     setup: WorkerSetup,
     started: &mpsc::SyncSender<Result<(), CaptureError>>,
@@ -529,6 +570,8 @@ fn run_worker(
     }
     let params = options.enum_formats()?;
     let held = Rc::new(RefCell::new(HeldBuffers::default()));
+    let offered_options = options.clone();
+    let offer_failure = Arc::clone(&setup.failure);
     let worker = Worker {
         options,
         format: None,
@@ -538,7 +581,8 @@ fn run_worker(
         held: Rc::clone(&held),
         shm_pool: ShmPool::default(),
         failure: setup.failure,
-        fallback: setup.fallback,
+        fallback: setup.fallback.clone(),
+        offer: Arc::clone(&setup.offer),
         control: setup.control,
         mainloop: mainloop.downgrade(),
         epoch: Instant::now(),
@@ -561,8 +605,25 @@ fn run_worker(
     let _commands = setup.commands.attach(mainloop.loop_(), {
         let mainloop = mainloop.downgrade();
         let stream = stream.clone();
+        let offer = setup.offer;
+        let fallback = setup.fallback;
+        let failure = offer_failure;
+        let base = offered_options;
         move |command| match command {
             Command::Release(handle) => held.borrow_mut().release(handle, &stream),
+            Command::Offer => {
+                let Some(request) = *offer.lock() else {
+                    return;
+                };
+                let mut options = base.offering(request);
+                options.prefer_dmabuf &= !fallback.is_requested();
+                if let Err(error) = offer_params(&stream, &options) {
+                    failure.lock().get_or_insert(error);
+                    if let Some(mainloop) = mainloop.upgrade() {
+                        mainloop.quit();
+                    }
+                }
+            }
             Command::Stop => {
                 if let Some(mainloop) = mainloop.upgrade() {
                     mainloop.quit();
@@ -578,7 +639,16 @@ fn run_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use pipewire::spa::{
+        param::format::FormatProperties,
+        pod::{ChoiceValue, Value},
+        utils::{Choice, ChoiceEnum, Fraction, Rectangle},
+    };
+
+    use super::{
+        format::{parse_object, property},
+        *,
+    };
 
     #[test]
     fn colour_is_offered_only_where_unmatched_properties_are_dropped() {
@@ -588,6 +658,73 @@ mod tests {
         assert!(!drops_unmatched_properties("1.4.9"));
         assert!(!drops_unmatched_properties("0.3.65"));
         assert!(!drops_unmatched_properties(""));
+    }
+
+    fn offered_size_and_rate(options: &StreamOptions) -> Vec<(Rectangle, Fraction)> {
+        options
+            .enum_formats()
+            .unwrap()
+            .iter()
+            .map(|bytes| {
+                let object = parse_object(bytes).unwrap();
+                let size = property(&object, FormatProperties::VideoSize.as_raw()).unwrap();
+                let rate = property(&object, FormatProperties::VideoFramerate.as_raw()).unwrap();
+                let Value::Choice(ChoiceValue::Rectangle(Choice(
+                    _,
+                    ChoiceEnum::Range { default: size, .. },
+                ))) = &size.value
+                else {
+                    panic!("size is not a rectangle range");
+                };
+                let Value::Choice(ChoiceValue::Fraction(Choice(
+                    _,
+                    ChoiceEnum::Range { default: rate, .. },
+                ))) = &rate.value
+                else {
+                    panic!("rate is not a fraction range");
+                };
+
+                (*size, *rate)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_offered_output_sets_the_default_size_and_rate_of_every_format() {
+        let options = StreamOptions::new(&CaptureConfig::default(), &VideoConfig::default());
+        let request = OutputRequest {
+            resolution: Resolution::new(3440, 1440),
+            frame_rate: FrameRate::new(2997, 50),
+        };
+
+        let offered = offered_size_and_rate(&options.offering(request));
+
+        assert!(offered.len() > 1);
+        for (size, rate) in offered {
+            assert_eq!((size.width, size.height), (3440, 1440));
+            assert_eq!((rate.num, rate.denom), (2997, 50));
+        }
+    }
+
+    #[test]
+    fn an_offered_output_leaves_the_rest_of_the_options_alone() {
+        let mut options = StreamOptions::new(&CaptureConfig::default(), &VideoConfig::default());
+        options.prefer_dmabuf = false;
+        let request = OutputRequest {
+            resolution: Resolution::new(1280, 720),
+            frame_rate: FrameRate::integer(30),
+        };
+
+        let offering = options.offering(request);
+
+        assert_eq!(
+            StreamOptions {
+                size_hint: options.size_hint,
+                frame_rate: options.frame_rate,
+                ..offering
+            },
+            options
+        );
     }
 
     #[test]

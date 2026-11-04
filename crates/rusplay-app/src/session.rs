@@ -3,8 +3,8 @@ use std::{net::SocketAddr, time::Duration};
 use gpui::Window;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use rusplay_client::{
-    ClientError, ClientSession, ClientStream, Credentials, DiscoveredHost, DiscoveryBrowser,
-    DiscoveryOptions, FrameSink, Gpu, StreamWindow, WaylandTarget,
+    ClientDisplay, ClientError, ClientSession, ClientStream, Credentials, DiscoveredHost,
+    DiscoveryBrowser, DiscoveryOptions, FrameSink, Gpu, StreamWindow, WaylandTarget,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole, HostProfile};
 use thiserror::Error;
@@ -53,8 +53,14 @@ pub fn connect(
     credentials: &Credentials,
     gpu: Gpu,
     sink: impl FrameSink,
+    display: Option<ClientDisplay>,
 ) -> Result<ClientStream, SessionError> {
-    Ok(ClientSession::new(config).connect(host, credentials, gpu, sink)?)
+    let session = match display {
+        Some(display) => ClientSession::new(config).with_display(display),
+        None => ClientSession::new(config),
+    };
+
+    Ok(session.connect(host, credentials, gpu, sink)?)
 }
 
 fn wayland_target(window: &Window) -> Option<WaylandTarget> {

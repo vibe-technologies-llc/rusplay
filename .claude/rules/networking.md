@@ -117,6 +117,18 @@ paths:
   `codec * 9 + chroma * 3 + depth` (codec H.264, HEVC, AV1; chroma 4:2:0, 4:2:2, 4:4:4; depth 8,
   10, 12). Bits 27 and up are `UnknownFormatBits`. The client sends what its decoder decodes,
   the host answers with what its encoder produces.
+- `ControlMessage::Display(ClientDisplay)` (tag 15, client to host, 27 to 43 bytes with the tag):
+  the client's display, sent right after its `Hello` whatever the host's source, so no host depends
+  on the order the two arrive in. Big-endian u32 width and height (each `1..=StreamDescription::MAX_DIMENSION`,
+  `DisplayResolutionOutOfRange`), u32 refresh in millihertz (`1000..=1_000_000`,
+  `DisplayRefreshOutOfRange`; `ClientDisplay::frame_rate` reduces it to a `FrameRate`), then the
+  colour volume: primaries (the `StreamDescription` encoding, custom ones followed by their
+  chromaticities), transfer code, reference white and peak as u32 nits (`1..=10000`, the
+  stream description's errors) and black as u32 0.0001 cd/m² units, which must stay below the
+  reference white (`DisplayBlackNotBelowWhite`). `ClientDisplay::new` is the only constructor and
+  `decode` goes through it, so a value in hand is always in range. The host ignores it unless
+  `capture.source` is `virtual` (`host.md`); the client never sends it again in a session.
+  `rusplay-fuzz`'s `control` target covers it through `ControlMessage::decode`.
 - Format negotiation: the host picks
   `FormatSet::closest_to(configured)` from encodable ∩ decodable, where `configured` is the
   host's `video.codec` and `video.pixel_format`. The fallback order is lexicographic: chroma

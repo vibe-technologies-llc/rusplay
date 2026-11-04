@@ -410,6 +410,51 @@ mod tests {
     }
 
     #[test]
+    fn the_virtual_source_and_its_limits_parse() {
+        let parsed: Config = toml::from_str(
+            r#"
+            [capture]
+            source = "virtual"
+            virtual_max_resolution = { width = 2560, height = 1440 }
+            virtual_max_refresh_hz = 144
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.capture.source, SourceKind::Virtual);
+        assert_eq!(
+            parsed.capture.virtual_max_resolution,
+            rusplay_core::Resolution::new(2560, 1440)
+        );
+        assert_eq!(parsed.capture.virtual_max_refresh_hz, 144);
+        assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn the_default_source_stays_a_monitor() {
+        assert_eq!(Config::default().capture.source, SourceKind::Monitor);
+    }
+
+    #[test]
+    fn empty_virtual_limits_are_rejected() {
+        let mut config = Config::default();
+        config.capture.virtual_max_resolution = rusplay_core::Resolution::new(0, 1080);
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::EmptyVirtualMaxResolution { width: 0, .. })
+        ));
+
+        for hz in [0, 1001] {
+            let mut config = Config::default();
+            config.capture.virtual_max_refresh_hz = hz;
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::VirtualMaxRefreshOutOfRange(rejected)) if rejected == hz
+            ));
+        }
+    }
+
+    #[test]
     fn peer_files_are_configurable() {
         let parsed: Config = toml::from_str(
             r#"

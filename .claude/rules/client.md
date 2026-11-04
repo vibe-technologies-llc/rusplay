@@ -16,6 +16,20 @@ paths:
   decoders. Before binding, `connect` asks `rusplay_decode::capabilities` for `video.decoder`'s
   formats; the `Hello` carries them, and a host `Hello` whose encodable set shares none of them
   ends the stream with `NoCommonFormat { decodable, encodable }`.
+- The client announces its display in the handshake: right after the `Hello`, in the same flush,
+  it sends `ControlMessage::Display` (`networking.md`) with its swapchain size, refresh and colour
+  volume. `ClientSession::with_display` sets it; without it `announce::default_display` takes
+  `video.resolution` (1920x1080 when unset), `video.frame_rate` and the volume
+  `color.target` resolves to over the sRGB fallback. `announced_display` builds one from a size, a
+  `FrameRate` and a `ColorVolume`, clamping what the protocol would refuse (an axis outside
+  `1..=16384`, a refresh outside 1 to 1000 Hz, nits outside 1 to 10000, a black level at or above
+  the reference white), so a real display never fails the connect. The app announces its window's
+  viewport times the scale factor at connect, `video.frame_rate` as the refresh and
+  `StreamWindow::color_target` as the volume (`StreamView::new`); the stream area and the display's
+  true refresh are not known before the window has laid out (`capture-virtual-resize` in
+  `docs/FEATURES.md`). Only a host with a virtual source uses it. The client upscale does not run
+  when the stream size equals the window's target (`target != source` in the present stage), which is
+  the point of sizing the host's output to it.
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. Before the first video frame, and again whenever any of it changes, the host

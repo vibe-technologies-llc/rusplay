@@ -15,11 +15,11 @@ use parking_lot::Mutex;
 use rusplay_audio::AudioError;
 use rusplay_client::{
     AudioInput, ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame,
-    OutputLight, Pin, PresentedFrame,
+    OutputLight, Pin, PresentedFrame, announced_display,
 };
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange, ColorSpace,
-    FormatSet, PixelFormat, Resolution,
+    FormatSet, FrameRate, PixelFormat, Resolution,
 };
 use rusplay_input::{InputEvent, StateRecord};
 use rusplay_net::NetError;
@@ -516,6 +516,42 @@ fn the_hello_names_what_the_client_decodes_and_a_fallback_is_visible() {
         version: rusplay_protocol::ProtocolVersion::CURRENT,
         formats: software_decodable(),
     }));
+}
+
+#[test]
+fn the_hello_is_followed_by_the_display_the_client_was_given() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let display = announced_display(
+        Resolution::new(3440, 1440),
+        FrameRate::new(143_981, 1000),
+        &ColorVolume::srgb_display(),
+    )
+    .unwrap();
+    let session = ClientSession::new(common::client_config()).with_display(display);
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while !host.messages().contains(&ControlMessage::Display(display))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stream.stop().unwrap();
+
+    assert!(host.messages().contains(&ControlMessage::Display(display)));
 }
 
 #[test]

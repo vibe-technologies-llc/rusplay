@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use rusplay_capture::{Frame, FrameBuffer, Plane, ShmFallback};
+use rusplay_capture::{Frame, FrameBuffer, OutputRequest, Plane, ShmFallback};
 use rusplay_config::Config;
 use rusplay_core::{
     ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
@@ -242,6 +242,11 @@ impl PipelineFactory for GpuPipelineFactory {
         self.pipelines = Some(ScalePipelines::new(&self.gpu.device));
 
         Ok(capabilities.format_set())
+    }
+
+    fn use_output(&mut self, request: OutputRequest) {
+        self.config.video.frame_rate = request.frame_rate;
+        self.config.video.resolution = None;
     }
 
     fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError> {

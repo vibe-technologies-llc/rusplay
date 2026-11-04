@@ -12,7 +12,8 @@ use std::{
 
 use parking_lot::RwLock;
 use rusplay_audio::CODEC_THREAD_STACK_BYTES;
-use rusplay_config::Config;
+use rusplay_capture::OutputRequest;
+use rusplay_config::{Config, SourceKind};
 use rusplay_net::{
     ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
 };
@@ -33,6 +34,7 @@ use crate::{
     pipeline::GpuPipelineFactory,
     send::{self, Pacing, SendLinks, SendOptions},
     shared::{Shared, StopOnDrop},
+    virtual_output::VirtualOutput,
 };
 
 const FEC_BLOCK_DATA_SHARDS: u8 = 32;
@@ -168,6 +170,13 @@ impl HostSession {
         self.serve_with(client, feed, Box::new(factory))
     }
 
+    fn virtual_output(&self, feed: &CaptureFeed) -> Option<VirtualOutput> {
+        (self.config.capture.source == SourceKind::Virtual).then(|| VirtualOutput {
+            limits: self.config.capture.clone(),
+            offer: feed.output_offer(),
+        })
+    }
+
     fn microphone_factory(&self) -> Result<Option<MicrophoneOutputFactory>, HostError> {
         if !self.config.audio.microphone.enabled {
             return Ok(None);
@@ -222,6 +231,7 @@ impl HostSession {
                 input: self.input.is_some().then_some(input_sender),
                 microphone: microphone.is_some().then_some(microphone_sender),
                 configured: configured_format(&self.config.video),
+                virtual_output: self.virtual_output(feed),
             },
         )?;
         stream.spawn(Stage::Control, move || control.run())?;
@@ -363,6 +373,10 @@ impl HostStream {
 
     pub fn format(&self) -> Option<NegotiatedFormat> {
         self.shared.negotiation.agreed()
+    }
+
+    pub fn virtual_output(&self) -> Option<OutputRequest> {
+        self.shared.output()
     }
 
     pub fn is_finished(&self) -> bool {

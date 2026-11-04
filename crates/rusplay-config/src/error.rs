@@ -178,6 +178,10 @@ pub enum ConfigError {
     FecOverheadOutOfRange(u8),
     #[error("capture.restore_token_file is set to an empty path")]
     EmptyRestoreTokenFile,
+    #[error("virtual output limit {width}x{height} has a zero side")]
+    EmptyVirtualMaxResolution { width: u32, height: u32 },
+    #[error("virtual output refresh limit {0} Hz is outside 1..=1000")]
+    VirtualMaxRefreshOutOfRange(u32),
     #[error("neither XDG_CONFIG_HOME nor HOME names an absolute directory for the config file")]
     NoConfigHome,
     #[error("failed to serialize the configuration")]
@@ -219,6 +223,8 @@ impl ConfigError {
             Self::AntiringingOutOfRange(_) => Some("scaling.upscale.antiringing"),
             Self::FecOverheadOutOfRange(_) => Some("network.fec_overhead_percent"),
             Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
+            Self::EmptyVirtualMaxResolution { .. } => Some("capture.virtual_max_resolution"),
+            Self::VirtualMaxRefreshOutOfRange(_) => Some("capture.virtual_max_refresh_hz"),
             Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
             Self::ZeroReassemblyPendingFrames => Some("network.reassembly_max_pending_frames"),
             Self::ZeroReassemblyFragments => Some("network.reassembly_max_fragments"),

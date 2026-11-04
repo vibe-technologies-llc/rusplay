@@ -11,7 +11,7 @@ const UNSPECIFIED_MATRIX: u8 = 2;
 const HAS_MASTERING: u8 = 1;
 const HAS_CONTENT_LIGHT: u8 = 1 << 1;
 const KNOWN_HDR_FLAGS: u8 = HAS_MASTERING | HAS_CONTENT_LIGHT;
-const CHROMATICITIES_LEN: usize = 16;
+pub(crate) const CHROMATICITIES_LEN: usize = 16;
 const CONFIGURED_LEN: usize = 3;
 const SITING_LEN: usize = 1;
 const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + CONFIGURED_LEN + SITING_LEN;
@@ -215,20 +215,20 @@ impl<'a> Reader<'a> {
         Ok(bytes)
     }
 
-    fn u8(&mut self) -> Result<u8, ProtocolError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, ProtocolError> {
         Ok(self.take::<1>()?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, ProtocolError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, ProtocolError> {
         Ok(u16::from_be_bytes(self.take()?))
     }
 
-    fn u32(&mut self) -> Result<u32, ProtocolError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, ProtocolError> {
         Ok(u32::from_be_bytes(self.take()?))
     }
 }
 
-const fn primaries_extra_len(primaries: ColorPrimaries) -> usize {
+pub(crate) const fn primaries_extra_len(primaries: ColorPrimaries) -> usize {
     match primaries {
         ColorPrimaries::Custom(_) => CHROMATICITIES_LEN,
         _ => 0,
@@ -317,7 +317,7 @@ fn read_resolution(width: u32, height: u32) -> Result<Resolution, ProtocolError>
     }
 }
 
-fn read_levels(reference_white_nits: u32, peak_nits: u32) -> Result<(), ProtocolError> {
+pub(crate) fn read_levels(reference_white_nits: u32, peak_nits: u32) -> Result<(), ProtocolError> {
     let levels = HdrLevels {
         reference_white_nits,
         peak_nits,
@@ -356,11 +356,11 @@ fn read_mastering(reader: &mut Reader<'_>) -> Result<MasteringDisplay, ProtocolE
     }
 }
 
-fn read_luminance(units: u32) -> Result<Luminance, ProtocolError> {
+pub(crate) fn read_luminance(units: u32) -> Result<Luminance, ProtocolError> {
     Luminance::from_units(units).ok_or(ProtocolError::LuminanceOutOfRange(units))
 }
 
-fn write_primaries(primaries: ColorPrimaries, out: &mut Vec<u8>) {
+pub(crate) fn write_primaries(primaries: ColorPrimaries, out: &mut Vec<u8>) {
     match primaries {
         ColorPrimaries::Custom(chromaticities) => {
             out.push(CUSTOM_PRIMARIES);
@@ -379,7 +379,7 @@ fn write_primaries(primaries: ColorPrimaries, out: &mut Vec<u8>) {
     }
 }
 
-fn read_primaries(reader: &mut Reader<'_>) -> Result<ColorPrimaries, ProtocolError> {
+pub(crate) fn read_primaries(reader: &mut Reader<'_>) -> Result<ColorPrimaries, ProtocolError> {
     let code = reader.u8()?;
     if code != CUSTOM_PRIMARIES {
         return ColorPrimaries::from_h273_code(code)

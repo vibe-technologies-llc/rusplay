@@ -102,6 +102,17 @@ pub enum ProtocolError {
         "mastering display minimum of {min_units} is not below its maximum of {max_units} units of 0.0001 cd/m²"
     )]
     MasteringLuminanceInverted { min_units: u32, max_units: u32 },
+    #[error("display resolution {width}x{height} is outside 1..={max} on an axis")]
+    DisplayResolutionOutOfRange { width: u32, height: u32, max: u32 },
+    #[error("display refresh of {millihertz} mHz is outside {min}..={max}")]
+    DisplayRefreshOutOfRange { millihertz: u32, min: u32, max: u32 },
+    #[error(
+        "display black level of {black_units} units of 0.0001 cd/m² is not below its reference white of {reference_white_nits} nits"
+    )]
+    DisplayBlackNotBelowWhite {
+        black_units: u32,
+        reference_white_nits: u32,
+    },
     #[error("video frame flags {0:#04x} carry unknown bits")]
     UnknownVideoFrameFlags(u8),
     #[error("video frame names reference frame {0} without the recovery flag")]

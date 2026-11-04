@@ -6,6 +6,9 @@ use std::{
     },
 };
 
+use parking_lot::Mutex;
+use rusplay_capture::OutputRequest;
+
 use crate::{
     capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox,
     negotiate::Negotiation, stats::Counters,
@@ -20,6 +23,7 @@ pub(crate) struct Shared {
     pub counters: Counters,
     pub mailbox: Mailbox<Captured>,
     pub negotiation: Negotiation,
+    output: Mutex<Option<OutputRequest>>,
 }
 
 impl Shared {
@@ -32,7 +36,16 @@ impl Shared {
             counters: Counters::default(),
             mailbox: Mailbox::new(),
             negotiation: Negotiation::default(),
+            output: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn set_output(&self, request: OutputRequest) {
+        *self.output.lock() = Some(request);
+    }
+
+    pub(crate) fn output(&self) -> Option<OutputRequest> {
+        *self.output.lock()
     }
 
     pub(crate) fn stopped(&self) -> bool {

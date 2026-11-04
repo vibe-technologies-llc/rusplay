@@ -166,7 +166,7 @@ const HOTKEY_KEYS: &[&str] = &[
     "f11", "f12",
 ];
 const CHROMA_SITINGS: &[&str] = &["left", "center"];
-const SOURCE_KINDS: &[&str] = &["monitor", "window", "any"];
+const SOURCE_KINDS: &[&str] = &["monitor", "window", "any", "virtual"];
 const CURSOR_MODES: &[&str] = &["hidden", "embedded", "metadata"];
 const SCALE_FILTERS: &[&str] = &[
     "bilinear",
@@ -1368,6 +1368,21 @@ pub static FIELDS: &[Field] = &[
         "DMA-BUF fence timeout",
         U32,
     ),
+    field(
+        Section::Capture,
+        "Virtual output",
+        "capture.virtual_max_resolution",
+        "Largest virtual output",
+        Kind::Resolution,
+    ),
+    field(
+        Section::Capture,
+        "Virtual output",
+        "capture.virtual_max_refresh_hz",
+        "Fastest virtual output",
+        U32,
+    )
+    .unit("Hz"),
     field(
         Section::Capture,
         "Session",

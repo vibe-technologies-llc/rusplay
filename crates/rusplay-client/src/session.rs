@@ -19,11 +19,12 @@ use rusplay_net::{
     pair_as_client, reconnect_as_client,
 };
 use rusplay_priority::{ThreadRole, ThreadTuning};
-use rusplay_protocol::StreamDescription;
+use rusplay_protocol::{ClientDisplay, StreamDescription};
 use rusplay_scale::{GpuFaults, check_extent};
 
 use crate::{
     AudioOutput, ClientError, ClientStats, DisplayImage, FrameSink, LatestCursor, Stage,
+    announce::default_display,
     audio::{self, AudioLinks, EncodedAudio},
     bitrate::BitrateSettings,
     decode::{self, DecodeLinks},
@@ -82,11 +83,21 @@ pub enum Credentials {
 #[derive(Debug)]
 pub struct ClientSession {
     config: Config,
+    display: Option<ClientDisplay>,
 }
 
 impl ClientSession {
     pub fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            display: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_display(mut self, display: ClientDisplay) -> Self {
+        self.display = Some(display);
+        self
     }
 
     pub fn config(&self) -> &Config {
@@ -157,6 +168,10 @@ impl ClientSession {
         open_microphone: impl FnOnce(&AudioConfig) -> Result<Option<Box<dyn AudioInput>>, ClientError>,
     ) -> Result<ClientStream, ClientError> {
         let network = &self.config.network;
+        let display = match self.display {
+            Some(display) => display,
+            None => default_display(&self.config)?,
+        };
         let decodable = rusplay_decode::capabilities(&self.config.video.decoder)?.formats();
         let transport = Transport::bind(
             SocketAddr::new(bind_address(network.bind_address, host), 0),
@@ -200,6 +215,7 @@ impl ClientSession {
             format: Arc::clone(&stream.format),
             feedback,
             handshake,
+            display,
             stop: Arc::clone(&stream.stop),
             counters: Arc::clone(&stream.counters),
         };

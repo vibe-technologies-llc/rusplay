@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rusplay_capture::OutputRequest;
 use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Timestamp};
 
 use crate::{
@@ -25,6 +26,8 @@ const REFERENCE_HISTORY: usize = 256;
 
 pub(crate) trait PipelineFactory: Send {
     fn encodable(&mut self) -> Result<FormatSet, HostError>;
+
+    fn use_output(&mut self, _request: OutputRequest) {}
 
     fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError>;
 }
@@ -73,6 +76,9 @@ fn open_negotiated(
             return Ok(None);
         }
         if let Some(negotiated) = negotiation.wait_agreed(IDLE_WAKE) {
+            if let Some(request) = links.shared.output() {
+                factory.use_output(request);
+            }
             return Ok(Some(NegotiatedPipeline {
                 pipeline: factory.build(negotiated.chosen)?,
                 negotiated,

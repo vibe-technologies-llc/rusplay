@@ -6,14 +6,15 @@ use std::{
 };
 
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Subscription, Task,
-    Window, canvas, div, prelude::*, px,
+    Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Size, Subscription,
+    Task, Window, canvas, div, prelude::*, px,
 };
 use rusplay_client::{
     ActivePointer, ClientAction, ClientError, ClientStream, Credentials, LogicalArea, PeerRecord,
-    StreamWindow, WindowLayout,
+    StreamWindow, WindowLayout, announced_display,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
+use rusplay_core::Resolution;
 
 use crate::{
     hosts::{HostEntry, HostId},
@@ -130,8 +131,15 @@ impl StreamView {
         let stats_overlay = config.video.stats_overlay;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
 
+        let display = announced_display(
+            swapchain_size(window.viewport_size(), window.scale_factor()),
+            config.video.frame_rate,
+            &stream_window.color_target(),
+        )
+        .ok();
+
         let connecting = cx.background_spawn(async move {
-            session::connect(config, address, &credentials, gpu, sink)
+            session::connect(config, address, &credentials, gpu, sink, display)
         });
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = connecting.await;
@@ -441,6 +449,13 @@ impl StreamView {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn swapchain_size(viewport: Size<Pixels>, scale: f32) -> Resolution {
+    let device = |logical: Pixels| (logical.as_f32() * scale).round().max(1.0) as u32;
+
+    Resolution::new(device(viewport.width), device(viewport.height))
+}
+
 fn hotkey_hint(input: &InputConfig) -> String {
     if !input.hotkeys {
         return String::new();
@@ -604,7 +619,21 @@ impl Render for StreamView {
 
 #[cfg(test)]
 mod tests {
+    use gpui::size;
+
     use super::*;
+
+    #[test]
+    fn the_swapchain_size_is_the_viewport_in_device_pixels() {
+        assert_eq!(
+            swapchain_size(size(px(1280.0), px(720.0)), 1.5),
+            Resolution::new(1920, 1080)
+        );
+        assert_eq!(
+            swapchain_size(size(px(0.0), px(-4.0)), 2.0),
+            Resolution::new(1, 1)
+        );
+    }
 
     #[test]
     fn the_pointer_label_names_the_active_pointer_and_whether_auto_chose_it() {

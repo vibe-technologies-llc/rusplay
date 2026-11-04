@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rusplay_capture::OutputRequest;
 use rusplay_net::{DatagramArena, FecScheme, Pacer, Packetizer, Transport};
 use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
@@ -28,6 +29,17 @@ pub(crate) struct Pacing {
 }
 
 impl Pacing {
+    fn following(self, output: Option<OutputRequest>) -> Self {
+        let frame_interval = output
+            .and_then(|output| output.frame_rate.frame_interval())
+            .unwrap_or(self.frame_interval);
+
+        Self {
+            frame_interval,
+            ..self
+        }
+    }
+
     fn window(self, measured: Option<Duration>) -> Duration {
         let interval = measured.map_or(self.frame_interval, |measured| {
             measured.min(self.frame_interval)
@@ -118,9 +130,10 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
         match links.queue.recv_timeout(IDLE_WAKE) {
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
+                let output = links.shared.output();
                 let pacing = options
                     .pacing
-                    .map(|pacing| pacing.for_frame(cadence.smoothed));
+                    .map(|pacing| pacing.following(output).for_frame(cadence.smoothed));
                 send_frame(
                     &mut packetizer,
                     &mut arena,

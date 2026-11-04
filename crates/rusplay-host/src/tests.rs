@@ -2,6 +2,7 @@ mod input;
 mod media;
 mod microphone;
 mod service;
+mod virtual_output;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
