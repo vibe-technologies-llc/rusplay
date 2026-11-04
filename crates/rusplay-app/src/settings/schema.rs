@@ -158,6 +158,7 @@ const CHANNEL_LAYOUTS: &[&str] = &["mono", "stereo", "5.1", "7.1"];
 const OPUS_FRAME_DURATIONS: &[&str] = &["2.5ms", "5ms", "10ms", "20ms"];
 const SVT_AV1_LOG_LEVELS: &[&str] = &["off", "fatal", "error", "warn", "info", "debug"];
 const POINTER_MODES: &[&str] = &["absolute", "relative", "auto"];
+const GAMEPAD_PERSONALITIES: &[&str] = &["xbox360", "dualsense"];
 const RELEASE_CHORDS: &[&str] = &["ctrl-alt", "ctrl-shift", "alt-shift", "ctrl-alt-shift"];
 const HOTKEY_KEYS: &[&str] = &[
     "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s",
@@ -1201,6 +1202,13 @@ pub static FIELDS: &[Field] = &[
         "input.max_gamepads",
         "Max gamepads",
         U8,
+    ),
+    field(
+        Section::Input,
+        "Forwarding",
+        "input.gamepad_personality",
+        "Host gamepad type",
+        Kind::Choice(GAMEPAD_PERSONALITIES),
     ),
     field(
         Section::Input,

@@ -3,6 +3,8 @@ mod error;
 mod event;
 #[cfg(feature = "gamepad")]
 pub mod gamepad;
+#[cfg(all(test, feature = "gamepad"))]
+mod hardware;
 mod held;
 #[cfg(feature = "libei")]
 pub mod libei;

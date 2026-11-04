@@ -388,7 +388,7 @@ paths:
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input }`; the GPU is needed for the
     capture's importable modifiers, so the GPU is opened before the portal. With `input.accept_remote` it
     opens the combined RemoteDesktop + ScreenCast session (`input.md`) and an `InputFeed` over
-    `SplitSink<LibeiInjector, UinputGamepads>`; a build without the `input` feature (or without
+    `SplitSink<LibeiInjector, VirtualGamepads>`; a build without the `input` feature (or without
     `pipewire`) fails with `InputNotCompiled` (`CaptureNotCompiled`), and
     `input.accept_remote = false` opens the plain ScreenCast session with no feed.
     `open_portal_capture` stays for callers that want capture only.

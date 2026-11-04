@@ -137,4 +137,84 @@ pub enum InputError {
         #[source]
         source: io::Error,
     },
+    #[cfg(feature = "gamepad")]
+    #[error(
+        "opening /dev/uhid for gamepad slot {slot} was denied, grant the desktop user write access to it with a udev rule"
+    )]
+    UhidPermissionDenied {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("opening /dev/uhid for gamepad slot {slot} failed")]
+    UhidOpen {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("writing to the uhid device of gamepad slot {slot} failed")]
+    UhidWrite {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("reading from the uhid device of gamepad slot {slot} failed")]
+    UhidRead {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
+    #[error("the uhid device of gamepad slot {slot} returned an event of only {len} bytes")]
+    UhidEventTruncated { slot: u8, len: usize },
+}
+
+impl InputError {
+    pub fn is_device_access_denied(&self) -> bool {
+        match self {
+            #[cfg(feature = "gamepad")]
+            Self::UhidPermissionDenied { .. } => true,
+            #[cfg(feature = "gamepad")]
+            Self::UinputCreate { source, .. } => source.kind() == io::ErrorKind::PermissionDenied,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "gamepad"))]
+mod tests {
+    use super::*;
+
+    fn denied() -> io::Error {
+        io::ErrorKind::PermissionDenied.into()
+    }
+
+    #[test]
+    fn only_denied_device_access_is_reported_as_such() {
+        let uhid = InputError::UhidPermissionDenied {
+            slot: 0,
+            source: denied(),
+        };
+        let uinput = InputError::UinputCreate {
+            slot: 0,
+            source: denied(),
+        };
+        let missing = InputError::UhidOpen {
+            slot: 0,
+            source: io::ErrorKind::NotFound.into(),
+        };
+        let other_uinput = InputError::UinputCreate {
+            slot: 0,
+            source: io::ErrorKind::NotFound.into(),
+        };
+
+        assert!(uhid.is_device_access_denied());
+        assert!(uinput.is_device_access_denied());
+        assert!(!missing.is_device_access_denied());
+        assert!(!other_uinput.is_device_access_denied());
+        assert!(!InputError::SinkClosed.is_device_access_denied());
+    }
 }

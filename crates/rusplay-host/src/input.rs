@@ -221,6 +221,7 @@ struct InputStage<'a> {
     repairs: Vec<InputEvent>,
     outcomes: Vec<Result<(), InputError>>,
     commands: Vec<RumbleCommand>,
+    access_reported: bool,
 }
 
 impl<'a> InputStage<'a> {
@@ -235,6 +236,7 @@ impl<'a> InputStage<'a> {
             repairs: Vec::new(),
             outcomes: Vec::new(),
             commands: Vec::new(),
+            access_reported: false,
         }
     }
 
@@ -350,10 +352,17 @@ impl<'a> InputStage<'a> {
         target.inject_batch(events, &mut self.outcomes);
 
         for (event, outcome) in events.iter().zip(&self.outcomes) {
-            if outcome.is_ok() {
-                self.held.observe(event);
-                counters.input_events.increment();
-                injected += 1;
+            match outcome {
+                Ok(()) => {
+                    self.held.observe(event);
+                    counters.input_events.increment();
+                    injected += 1;
+                }
+                Err(error) if error.is_device_access_denied() && !self.access_reported => {
+                    self.access_reported = true;
+                    eprintln!("rusplay-host: input: {error}");
+                }
+                Err(_) => {}
             }
         }
         let failed = events.len() - injected;

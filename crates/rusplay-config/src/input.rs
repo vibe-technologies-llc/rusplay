@@ -19,6 +19,15 @@ pub enum PointerMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum GamepadPersonality {
+    #[default]
+    Xbox360,
+    #[serde(rename = "dualsense")]
+    DualSense,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ReleaseChord {
     CtrlAlt,
     CtrlShift,
@@ -104,6 +113,7 @@ pub struct InputConfig {
     pub pointer: bool,
     pub touch: bool,
     pub gamepads: bool,
+    pub gamepad_personality: GamepadPersonality,
     pub max_gamepads: u8,
     pub pointer_mode: PointerMode,
     pub pointer_auto_delay_ms: u16,
@@ -131,6 +141,7 @@ impl Default for InputConfig {
             pointer: true,
             touch: true,
             gamepads: true,
+            gamepad_personality: GamepadPersonality::default(),
             max_gamepads: 4,
             pointer_mode: PointerMode::default(),
             pointer_auto_delay_ms: 250,
@@ -276,6 +287,18 @@ mod tests {
         assert_eq!(config.pointer_mode, PointerMode::Auto);
         assert_eq!(config.pointer_auto_delay_ms, 250);
         assert_eq!(InputConfig::default().pointer_mode, PointerMode::Absolute);
+    }
+
+    #[test]
+    fn gamepad_personality_defaults_to_the_xbox_360_pad_and_accepts_the_dualsense() {
+        let default: InputConfig = toml::from_str("").unwrap();
+        let dualsense: InputConfig = toml::from_str("gamepad_personality = \"dualsense\"").unwrap();
+        let xbox: InputConfig = toml::from_str("gamepad_personality = \"xbox360\"").unwrap();
+
+        assert_eq!(default.gamepad_personality, GamepadPersonality::Xbox360);
+        assert_eq!(dualsense.gamepad_personality, GamepadPersonality::DualSense);
+        assert_eq!(xbox.gamepad_personality, GamepadPersonality::Xbox360);
+        assert!(toml::from_str::<InputConfig>("gamepad_personality = \"ds4\"").is_err());
     }
 
     #[test]

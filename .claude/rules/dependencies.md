@@ -78,7 +78,8 @@ paths:
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads on the host and physical gamepads with force feedback on the client,
-  `rusplay-input/gamepad`; it only declares the kernel structs through `libc`), `wayland-protocols`
+  `rusplay-input/gamepad`; it only declares the kernel structs through `libc`; the DualSense
+  personality writes `uhid_event`s by hand over `rustix` file calls instead of a uhid crate), `wayland-protocols`
   (pointer constraints, relative pointer and, from `staging`, cursor shape bindings, `rusplay-input/wayland`), `wgpu`
   (GPU scaling), `ash` (raw Vulkan for DMA-BUF import in `rusplay-scale`, default features off so
   it loads nothing itself; kept at the version wgpu-hal uses, since handles cross between them),

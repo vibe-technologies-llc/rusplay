@@ -27,7 +27,9 @@ pub use crate::{
     },
     decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
     error::ConfigError,
-    input::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, ReleaseChord},
+    input::{
+        ChordModifiers, GamepadPersonality, HotkeyKey, InputConfig, PointerMode, ReleaseChord,
+    },
     network::{LossRecovery, NetworkConfig},
     paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,

@@ -5,17 +5,16 @@ use evdev::{
     FFEffectData, FFEffectKind, InputEvent as EvdevEvent, InputId, UInputCode, UinputAbsSetup,
     uinput::VirtualDevice,
 };
-use rusplay_config::InputConfig;
 use rustix::{
     fs::{OFlags, fcntl_getfl, fcntl_setfl},
     io::Errno,
 };
 
 use crate::{
-    InputError, MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker,
+    GamepadEvent, InputError, MAX_RUMBLE_EFFECTS, RumbleCommand, RumbleEffect, RumbleTracker,
     gamepad::{
-        pool::{GamepadDevice, GamepadFactory, GamepadPool},
-        xbox360::{HAT_MAX, KEYS, Report, STICK_MAX, STICK_MIN, TRIGGER_MAX},
+        pool::{GamepadDevice, GamepadFactory},
+        xbox360::{HAT_MAX, KEYS, Report, STICK_MAX, STICK_MIN, TRIGGER_MAX, Xbox360Mapper},
     },
 };
 
@@ -29,6 +28,7 @@ const STICK_FLAT: i32 = 128;
 pub struct UinputGamepad {
     slot: u8,
     device: VirtualDevice,
+    mapper: Xbox360Mapper,
     rumble: RumbleTracker,
 }
 
@@ -89,6 +89,7 @@ impl UinputGamepad {
         Ok(Self {
             slot,
             device,
+            mapper: Xbox360Mapper::default(),
             rumble: RumbleTracker::new(slot),
         })
     }
@@ -132,8 +133,8 @@ impl UinputGamepad {
     }
 }
 
-impl GamepadDevice for UinputGamepad {
-    fn emit(&mut self, report: Report) -> Result<(), InputError> {
+impl UinputGamepad {
+    pub(super) fn emit(&mut self, report: Report) -> Result<(), InputError> {
         let event = match report {
             Report::Key { code, value } => EvdevEvent::new(EventType::KEY.0, code, value),
             Report::Abs { code, value } => EvdevEvent::new(EventType::ABSOLUTE.0, code, value),
@@ -145,6 +146,15 @@ impl GamepadDevice for UinputGamepad {
                 slot: self.slot,
                 source,
             })
+    }
+}
+
+impl GamepadDevice for UinputGamepad {
+    fn handle(&mut self, event: GamepadEvent) -> Result<(), InputError> {
+        match self.mapper.map(event)? {
+            Some(report) => self.emit(report),
+            None => Ok(()),
+        }
     }
 
     fn poll_rumble(&mut self, out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
@@ -197,14 +207,6 @@ impl GamepadFactory for UinputFactory {
     }
 }
 
-pub type UinputGamepads = GamepadPool<UinputFactory>;
-
-impl UinputGamepads {
-    pub fn from_config(config: InputConfig) -> Self {
-        Self::new(UinputFactory, config.max_gamepads)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -217,7 +219,7 @@ mod tests {
     use evdev::{Device, FFReplay, FFTrigger, KeyCode};
 
     use super::*;
-    use crate::{GamepadAxis, GamepadButton, GamepadEvent, InputEvent, InputSink};
+    use crate::{GamepadAxis, GamepadButton, InputEvent, InputSink, gamepad::pool::GamepadPool};
 
     fn open_when_permitted(node: &Path) -> Device {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -324,7 +326,7 @@ mod tests {
     #[test]
     #[ignore = "needs write access to /dev/uinput"]
     fn live_pool_creates_and_drives_virtual_pads() {
-        let mut pads = UinputGamepads::from_config(InputConfig::default());
+        let mut pads = GamepadPool::new(UinputFactory, 4);
 
         pads.inject(InputEvent::Gamepad {
             slot: 1,

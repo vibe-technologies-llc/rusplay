@@ -14,7 +14,7 @@ paths:
   `Motion` with positions normalised to the stream like `PointerAbsolute`, `Up` and `Cancel`;
   slots are below `MAX_TOUCHES`, 16, and a larger one is `TouchSlotOutOfRange` on decode).
 - `InputError` carries typed data and is not `Copy`. Backend failures are their own variants
-  (`Portal { step, source }`, `EiIo`, `EiProtocol`, `Wayland*`, `Uinput*`, `PhysicalGamepad*`),
+  (`Portal { step, source }`, `EiIo`, `EiProtocol`, `Wayland*`, `Uinput*`, `Uhid*`, `PhysicalGamepad*`),
   never a message string.
 - Platform backends sit behind cargo features of `rusplay-input` and are off by default, so the
   default build pulls in none of them. The host enables the ones it uses when it wires the sinks.
@@ -133,12 +133,16 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   are -1.0..1.0 with positive Y down, triggers 0.0..1.0, and values are clamped. The d-pad is four
   buttons that the mapper folds into the two hat axes, remembering which are held.
 - `xbox360::Xbox360Mapper` (event to evdev `Report`) and `GamepadPool` (slot bookkeeping over a
-  `GamepadFactory`) are pure and tested with fakes; only `uinput` touches the kernel.
+  `GamepadFactory` of `GamepadDevice`s, which take a `GamepadEvent` themselves) are pure and tested
+  with fakes; only `uinput` and `uhid` touch the kernel.
   `GamepadPool::handle` enforces the slot limit (`GamepadSlotOutOfRange`, limit
   `input.max_gamepads`, default 4, valid 1..=16), creates the device on `Connected` (ignored for a slot that is already connected, so a failed
   re-creation cannot leave a held pad without a device), drops it on
   `Disconnected` (the kernel removes the pad) and rejects button and axis events for a slot that
   is not connected (`GamepadNotConnected`).
+- The pad type is `input.gamepad_personality` (`xbox360`, the default, or `dualsense`), applied to
+  every pad the host creates: `PersonalityFactory` makes a `UinputGamepad` or a `UhidGamepad` and
+  `VirtualGamepad` is the enum of the two. A DS4 personality is not implemented.
 - Pads also carry motion and a touchpad, which the Xbox 360 personality cannot show.
   `GamepadEvent::Sensor { sensor, x, y, z }` is a gyroscope (`SensorKind::Gyro`, radians per
   second) or accelerometer (`SensorKind::Accel`, metres per second squared) sample in the axes
@@ -149,9 +153,51 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   (`PadFingerOutOfRange`), an unknown sensor kind (`WireUnknownSensorKind`) and any non-finite
   value (`NonFiniteValue`). `Xbox360Mapper` and so `GamepadPool` accept all of them and inject
   nothing, rather than erroring on every sample a DualSense sends.
+- DualSense personality (`gamepad/dualsense.rs` pure, `gamepad/uhid.rs` the `/dev/uhid` side): the
+  pad is a USB DualSense (`054c:0ce6`, bus USB) created with `UHID_CREATE2`, so the kernel
+  `hid-playstation` driver binds it and creates the pad, `Motion Sensors` and `Touchpad` evdev
+  nodes itself. The `uhid_event` is built and parsed by hand over a 4376-byte buffer (`rustix`
+  `read` and `write`, no unsafe, no extra crate); every write is a whole event and every read
+  buffer a whole event. The report descriptor (`REPORT_DESCRIPTOR`, checked by a test that sums
+  its report sizes) declares input report 1 (64 bytes with the id), output report 2 (63) and
+  feature reports 5, 9 and 32. `hid_add_device` runs in a kernel worker after `CREATE2`, so the
+  driver's probe asks for the feature reports while the host keeps calling `poll_rumble`, whose
+  `UhidDevice::service` answers each `UHID_GET_REPORT` at once (the kernel waits 5 seconds per
+  request) and acknowledges `UHID_SET_REPORT`. The answers: 0x05 calibration, 41 bytes, with every
+  denominator the driver divides by non-zero and chosen so calibrated values equal the raw counts
+  (accelerometer 8192 per g, gyroscope 16 per degree per second, bias 0); 0x09 pairing info, 20
+  bytes, whose MAC is unique per slot and process because the driver refuses a duplicate; 0x20
+  firmware info, 64 bytes, hardware version at 24, firmware at 28 and update version at 44
+  (0x0224, which selects the second vibration flag). Anything else is an `EIO` reply.
+- Presenting as USB means no CRC32 anywhere: input reports are `0x01`, 64 bytes, and the driver's
+  output reports are `0x02`, 63 bytes, sent as `UHID_OUTPUT`. `DualSenseState::apply` folds a
+  `GamepadEvent` into the state and says whether the report changed; the host writes the whole
+  64-byte report after each change. Layout: sticks (0 to 255, positive Y down) at 1 to 4, triggers
+  at 5 and 6, a sequence byte at 7, buttons at 8 to 10 (hat in the low nibble of byte 8 with 8 as
+  neutral, square, cross, circle, triangle in the high nibble; L1, R1, L2, R2, create, options, L3,
+  R3 in byte 9; PS and the touchpad click in byte 10, L2 and R2 also set from the trigger past 32),
+  the gyroscope at 16 and accelerometer at 22 (little-endian `i16`, saturated), the sensor timestamp
+  at 28 (3 units per microsecond), two touch points at 33 (contact id with bit 7 meaning no touch,
+  then 12-bit x and y over 1920 by 1080) and a full battery at 53. Fingers 2 and 3 have no
+  contact point and are dropped. The output report's rumble is read when either vibration
+  flag (flag byte 1 bit 0, flag byte 39 bit 2) is set and becomes a `RumbleCommand` with
+  `duration_ms` 0 (the client's `input.rumble_max_ms` ends it), the left motor strong and the right
+  weak, each byte times 257; other flags are not read yet.
+- A failure to open `/dev/uhid` is `UhidPermissionDenied` (carrying the `PermissionDenied`
+  source, and a message naming the udev rule) or `UhidOpen`, and the host handles it exactly like a
+  uinput one: the `Connected` injection fails and counts in `input_failures`, with no fallback to
+  the 360 pad. `InputError::is_device_access_denied` covers both, and the host's input stage prints
+  the first such error of a session to stderr, so a missing udev rule is not silent.
+- `/dev/uhid` is root-only on a stock system, so it needs a rule next to the uinput one, for example
+  `KERNEL=="uhid", SUBSYSTEM=="misc", OPTIONS+="static_node=uhid", TAG+="uaccess"`, and the `uhid`
+  module. The report layouts come from the kernel driver's semantics and were never bound by the
+  real `hid-playstation` driver or SDL on the machine that wrote them; the live test
+  (`gamepad::uhid::tests`, `src/hardware.rs` skip) checks the driver's three feature requests
+  and skips visibly without `/dev/uhid` access or the `hid_playstation` module (a failure under
+  `RUSPLAY_REQUIRE_HW=1`).
 - `SplitSink` routes `InputEvent::Gamepad` to the gamepad sink and everything else to the
-  desktop sink, so the host holds one `InputSink` made of `LibeiInjector` and `UinputGamepads`.
-- Permissions: creating devices needs write access to `/dev/uinput`, and the `uinput` kernel
+  desktop sink, so the host holds one `InputSink` made of `LibeiInjector` and `VirtualGamepads`.
+- Permissions: creating Xbox 360 devices needs write access to `/dev/uinput`, and the `uinput` kernel
   module must be loaded (`modules-load.d` entry `uinput`). Do not run the host as root; grant the
   desktop user access with a udev rule such as
   `KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"`
@@ -160,7 +206,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   are `#[ignore]`d and need that access.
 - Each virtual pad advertises `FF_RUMBLE` only (like `xpad`) and `ff_effects_max` of
   `MAX_RUMBLE_EFFECTS` (16). The uinput fd is non-blocking. `GamepadPool::poll_rumble` (also
-  `UinputGamepads::poll_rumble`) drains every connected pad's fd and appends `RumbleCommand`s; the
+  `VirtualGamepads::poll_rumble`) drains every connected pad's fd and appends `RumbleCommand`s; the
   host calls it from its input loop every few milliseconds, because the kernel blocks the game's
   `EVIOCSFF` upload until the owner answers it (30 s timeout, then the game sees an error).
 - `RumbleTracker` (pure, one per pad, tested without hardware) holds the uploaded effects by the
@@ -363,7 +409,7 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   and then `current` (one lost datagram is recovered, and the very first datagram recovers the
   lost sequence 0). Records decode with `InputEvent::decode`; a malformed one is dropped and
   counted. `InputSequence::reset` when a new client session starts. Events then go to the
-  `SplitSink`, which routes gamepad events to `UinputGamepads` and the rest to `LibeiInjector`.
+  `SplitSink`, which routes gamepad events to `VirtualGamepads` and the rest to `LibeiInjector`.
 - The client sends one extra datagram with an empty `current` `input.resend_delay_ms` after any
   datagram that changed key, button or pad-button state (`0` disables), so a lost final release
   is recovered even when nothing follows.
@@ -407,8 +453,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   is why the client caps every effect at `input.rumble_max_ms`.
 - The host applies this in its input stage (`host.md`): one `HostSession` input stage per client
   session, fed the `StreamKind::Input` datagrams the control stage routes to it once the `Hello`
-  is answered. Its target is the `SplitSink` of `LibeiInjector` and `UinputGamepads`, whose
-  `service` drives the injector's connection and `UinputGamepads::poll_rumble` every 4 ms, and
+  is answered. Its target is the `SplitSink` of `LibeiInjector` and `VirtualGamepads`, whose
+  `service` drives the injector's connection and `VirtualGamepads::poll_rumble` every 4 ms, and
   every `RumbleCommand` leaves as one `ControlMessage::Rumble`. `HeldInput` tracks what the host
   injected successfully (the client's input stage tracks what it sent the same way; keys and
   buttons are `KeySet` bitsets over evdev codes below 768, pads are `PadState`, touches a

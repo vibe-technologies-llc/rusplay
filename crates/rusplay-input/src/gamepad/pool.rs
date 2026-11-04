@@ -1,10 +1,7 @@
-use crate::{
-    GamepadEvent, InputError, InputEvent, InputSink, RumbleCommand,
-    gamepad::xbox360::{Report, Xbox360Mapper},
-};
+use crate::{GamepadEvent, InputError, InputEvent, InputSink, RumbleCommand};
 
 pub trait GamepadDevice {
-    fn emit(&mut self, report: Report) -> Result<(), InputError>;
+    fn handle(&mut self, event: GamepadEvent) -> Result<(), InputError>;
 
     fn poll_rumble(&mut self, _out: &mut Vec<RumbleCommand>) -> Result<(), InputError> {
         Ok(())
@@ -17,14 +14,9 @@ pub trait GamepadFactory {
     fn create(&mut self, slot: u8) -> Result<Self::Device, InputError>;
 }
 
-struct Slot<D> {
-    device: D,
-    mapper: Xbox360Mapper,
-}
-
 pub struct GamepadPool<F: GamepadFactory> {
     factory: F,
-    slots: Vec<Option<Slot<F::Device>>>,
+    slots: Vec<Option<F::Device>>,
 }
 
 impl<F: GamepadFactory> GamepadPool<F> {
@@ -49,7 +41,7 @@ impl<F: GamepadFactory> GamepadPool<F> {
         self.slots
             .iter_mut()
             .flatten()
-            .try_for_each(|connected| connected.device.poll_rumble(out))
+            .try_for_each(|device| device.poll_rumble(out))
     }
 
     pub fn handle(&mut self, slot: u8, event: GamepadEvent) -> Result<(), InputError> {
@@ -61,25 +53,17 @@ impl<F: GamepadFactory> GamepadPool<F> {
         match event {
             GamepadEvent::Connected if entry.is_some() => Ok(()),
             GamepadEvent::Connected => {
-                *entry = Some(Slot {
-                    device: self.factory.create(slot)?,
-                    mapper: Xbox360Mapper::default(),
-                });
+                *entry = Some(self.factory.create(slot)?);
                 Ok(())
             }
             GamepadEvent::Disconnected => {
                 *entry = None;
                 Ok(())
             }
-            other => {
-                let connected = entry
-                    .as_mut()
-                    .ok_or(InputError::GamepadNotConnected(slot))?;
-                match connected.mapper.map(other)? {
-                    Some(report) => connected.device.emit(report),
-                    None => Ok(()),
-                }
-            }
+            other => entry
+                .as_mut()
+                .ok_or(InputError::GamepadNotConnected(slot))?
+                .handle(other),
         }
     }
 }
@@ -100,7 +84,7 @@ mod tests {
     use super::*;
     use crate::{GamepadAxis, GamepadButton};
 
-    type Log = Rc<RefCell<Vec<(u8, Report)>>>;
+    type Log = Rc<RefCell<Vec<(u8, GamepadEvent)>>>;
 
     struct FakeDevice {
         slot: u8,
@@ -108,8 +92,8 @@ mod tests {
     }
 
     impl GamepadDevice for FakeDevice {
-        fn emit(&mut self, report: Report) -> Result<(), InputError> {
-            self.log.borrow_mut().push((self.slot, report));
+        fn handle(&mut self, event: GamepadEvent) -> Result<(), InputError> {
+            self.log.borrow_mut().push((self.slot, event));
             Ok(())
         }
 
