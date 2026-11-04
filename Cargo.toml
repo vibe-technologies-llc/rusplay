@@ -67,7 +67,7 @@ subtle = { version = "2.6.1", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }
-toml = { version = "1.1.8", default-features = false }
+toml = { version = "1.2.0", default-features = false }
 unicode-segmentation = "1.13.3"
 wayland-backend = { version = "0.3.17", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
