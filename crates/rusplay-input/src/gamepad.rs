@@ -2,6 +2,7 @@
 mod descriptor_walk;
 mod dualsense;
 mod dualshock4;
+mod hidraw;
 mod model;
 mod personality;
 mod physical;

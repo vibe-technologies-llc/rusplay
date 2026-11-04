@@ -222,10 +222,30 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   does a client without `sysfs`. A write that fails on an LED that exists, normally because the
   LED files are root-only, is `PhysicalGamepadLed` and counts in the client's `feedback_failures`;
   a udev rule that gives the desktop user write access to `brightness` and `multi_intensity` of
-  `SUBSYSTEM=="leds"` Sony pads is needed. Adaptive trigger effects are always dropped without an
-  error: neither evdev nor the kernel's LED class has an API for them (`hid-playstation` does not
-  expose them, only a raw hidraw output report could), and the dropped message is still counted
-  as applied.
+  `SUBSYSTEM=="leds"` Sony pads is needed.
+- Adaptive trigger effects have no evdev or LED class API (`hid-playstation` exposes none), so
+  `PhysicalGamepads::apply` writes a raw output report to the pad's hidraw node
+  (`gamepad/hidraw.rs`, pure builders tested without a pad). The node is found, never guessed,
+  from the sysfs parent of the pad's `eventN` node (the HID device, `0003:054C:0CE6.0005`): the
+  directory name gives the bus (`0003` USB, `0005` Bluetooth) and must be a DualSense
+  (`054c:0ce6`) or an Edge (`054c:0df2`), and `<hid device>/hidraw/hidrawN` names the node, joined
+  to the device root (`/dev`, `with_hidraw_root` for tests). One message is one report with the
+  valid flag of that side only (flag byte 0 bit 2 for the right trigger, bit 3 for the left; the
+  11 effect bytes at 10 and 21 of the common block), so the other trigger and every other
+  output field are left alone. USB sends `0x02`, 63 bytes, the common block at 1. Bluetooth sends
+  `0x31`, 78 bytes: a sequence byte (a per-pad counter, low four bits, shifted left by four), tag
+  `0x10`, the common block at 3 and a little-endian CRC-32 (the standard reflected polynomial
+  `0xedb88320`, `hidraw::crc32`, a small function tested against the `123456789` check value
+  rather than a crate) over `0xA2` followed by the first 74 bytes. `apply` returns
+  `FeedbackOutcome`: a pad with no sysfs parent, another model, or no hidraw node, a slot with no
+  pad or a client without `sysfs` is `Dropped` with no error (as for LEDs), a written report is
+  `Applied`, and a node that exists but cannot be opened or written, normally because hidraw is
+  root-only, is `PhysicalGamepadTrigger` and counts in `feedback_failures`. The client's
+  `feedback_commands` counts only `Applied` feedback (rumble keeps `rumble_commands`), a
+  `Dropped` one counts in `feedback_dropped`. Needs a udev rule that gives the desktop user write
+  access to the pad's hidraw, for example `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c",
+  TAG+="uaccess"` for USB and `SUBSYSTEM=="hidraw", KERNELS=="0005:054C:*", TAG+="uaccess"` for
+  Bluetooth. Nothing here has run against a real pad; the tests write to a fake node.
 - A failure to open `/dev/uhid` is `UhidPermissionDenied` (carrying the `PermissionDenied`
   source, and a message naming the udev rule) or `UhidOpen`, and the host handles it exactly like a
   uinput one: the `Connected` injection fails and counts in `input_failures`, with no fallback to

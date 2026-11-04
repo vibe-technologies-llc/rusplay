@@ -9,7 +9,8 @@ use std::{
 };
 
 use rusplay_input::{
-    GamepadEvent, HeldInput, InputEvent, InputRecord, PadFeedback, StateRecord, TouchEvent,
+    FeedbackOutcome, GamepadEvent, HeldInput, InputError, InputEvent, InputRecord, PadFeedback,
+    StateRecord, TouchEvent,
     capture::EventCoalescer,
     gamepad::{PhysicalGamepads, PhysicalOptions},
 };
@@ -309,6 +310,27 @@ pub(crate) struct GamepadLinks {
     pub counters: Arc<Counters>,
 }
 
+fn count_feedback(
+    counters: &Counters,
+    feedback: &PadFeedback,
+    result: &Result<FeedbackOutcome, InputError>,
+) {
+    if matches!(feedback, PadFeedback::Rumble(_)) {
+        counters.rumble_commands.increment();
+        if result.is_err() {
+            counters.rumble_failures.increment();
+        }
+
+        return;
+    }
+
+    match result {
+        Ok(FeedbackOutcome::Applied) => counters.feedback_commands.increment(),
+        Ok(FeedbackOutcome::Dropped) => counters.feedback_dropped.increment(),
+        Err(_) => counters.feedback_failures.increment(),
+    }
+}
+
 pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
     let _done = DoneOnDrop(Arc::clone(&links.done));
     let mut pads = PhysicalGamepads::new(options);
@@ -316,20 +338,8 @@ pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
 
     while !links.stop.load(Ordering::Relaxed) {
         while let Ok(feedback) = links.pad_feedback.try_recv() {
-            let (commands, failures) = match feedback {
-                PadFeedback::Rumble(_) => (
-                    &links.counters.rumble_commands,
-                    &links.counters.rumble_failures,
-                ),
-                _ => (
-                    &links.counters.feedback_commands,
-                    &links.counters.feedback_failures,
-                ),
-            };
-            commands.increment();
-            if pads.apply(&feedback).is_err() {
-                failures.increment();
-            }
+            let result = pads.apply(&feedback);
+            count_feedback(&links.counters, &feedback, &result);
         }
 
         if pads.poll(GAMEPAD_POLL, &mut events).is_err() {
@@ -350,6 +360,61 @@ mod tests {
     use rusplay_protocol::{InputAdmission, InputSequence, PacketHeader, StreamKind};
 
     use super::*;
+
+    const TRIGGER: PadFeedback = PadFeedback::TriggerEffect {
+        slot: 0,
+        right: true,
+        effect: [0; 11],
+    };
+
+    fn counts(counters: &Counters) -> [u64; 5] {
+        [
+            counters.feedback_commands.get(),
+            counters.feedback_dropped.get(),
+            counters.feedback_failures.get(),
+            counters.rumble_commands.get(),
+            counters.rumble_failures.get(),
+        ]
+    }
+
+    #[test]
+    fn only_an_applied_feedback_counts_as_a_command() {
+        let counters = Counters::default();
+
+        count_feedback(&counters, &TRIGGER, &Ok(FeedbackOutcome::Applied));
+        count_feedback(&counters, &TRIGGER, &Ok(FeedbackOutcome::Dropped));
+        count_feedback(&counters, &TRIGGER, &Ok(FeedbackOutcome::Dropped));
+
+        assert_eq!(counts(&counters), [1, 2, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_failed_feedback_counts_as_a_failure_and_not_as_applied() {
+        let counters = Counters::default();
+        let failed = Err(InputError::PhysicalGamepadTrigger {
+            slot: 0,
+            source: std::io::ErrorKind::PermissionDenied.into(),
+        });
+
+        count_feedback(&counters, &TRIGGER, &failed);
+
+        assert_eq!(counts(&counters), [0, 0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn rumble_keeps_its_own_counters() {
+        let counters = Counters::default();
+        let rumble = PadFeedback::Rumble(rusplay_input::RumbleCommand::stop(0));
+        let failed = Err(InputError::PhysicalGamepadRumble {
+            slot: 0,
+            source: std::io::ErrorKind::Other.into(),
+        });
+
+        count_feedback(&counters, &rumble, &Ok(FeedbackOutcome::Applied));
+        count_feedback(&counters, &rumble, &failed);
+
+        assert_eq!(counts(&counters), [0, 0, 0, 2, 1]);
+    }
 
     const BUDGET: usize = 1200;
     const SMALL_BUDGET: usize = 300;

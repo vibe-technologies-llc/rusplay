@@ -138,6 +138,15 @@ pub enum InputError {
         source: io::Error,
     },
     #[cfg(feature = "gamepad")]
+    #[error(
+        "writing a trigger effect to the hidraw node of the physical gamepad in slot {slot} failed"
+    )]
+    PhysicalGamepadTrigger {
+        slot: u8,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "gamepad")]
     #[error("writing to the uinput device of gamepad slot {slot} failed")]
     UinputEmit {
         slot: u8,
