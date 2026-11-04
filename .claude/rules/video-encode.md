@@ -158,8 +158,9 @@ paths:
   the VAAPI AV1 anchor policy decoded correctly through rav1d with the packets after the loss
   dropped, but level 0 hangs `svt_av1_enc_get_packet` under CPU starvation
   (`encode-svt-av1-flat-hang` in `docs/BUGS.md`, all library threads idle, reproduced without any
-  event), which would freeze a host, so it was removed; `video-ltr-svt-av1` in
-  `docs/FEATURES.md` holds what to redo once the library is fixed.
+  event), which would freeze a host, so it was removed. Upstream fixed that race in 4.3.0, and
+  level 0 stays off until the system package reaches it; `video-ltr-svt-av1` in
+  `docs/FEATURES.md` holds what to redo then.
 - x265 has no reference recovery. The public API (`x265.h`, 4.3) offers `x265_encoder_intra_refresh`
   (starts a new intra refresh sweep, which needs `bIntraRefresh` and heals the picture over a
   whole sweep rather than at the next frame, so it cannot honour the contract that the next
