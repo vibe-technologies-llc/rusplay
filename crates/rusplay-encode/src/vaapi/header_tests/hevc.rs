@@ -368,7 +368,7 @@ fn sps_carries_every_field_the_writer_sets() {
             assert_eq!(sps.bit_depth_chroma_minus8, case.format.depth.bits() - 8);
             assert_eq!(sps.log2_max_pic_order_cnt_lsb_minus4, 12);
             assert!(sps.sub_layer_ordering_info_present_flag);
-            assert_eq!(sps.max_dec_pic_buffering_minus1[0], 2);
+            assert_eq!(sps.max_dec_pic_buffering_minus1[0], 3);
             assert_eq!(sps.max_num_reorder_pics[0], 0);
             assert_eq!(sps.max_latency_increase_plus1[0], 0);
             assert_eq!(sps.log2_min_luma_coding_block_size_minus3, 0);
@@ -791,7 +791,7 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
             } else {
                 let previous = previous.unwrap();
                 let reference = picture_parameters.reference_frames[0];
-                let flags = if index == 1 {
+                let flags = if index == 1 || index == 2 {
                     ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE | ffi::VA_PICTURE_HEVC_RPS_LT_CURR
                 } else {
                     ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE
@@ -805,7 +805,7 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
             }
             assert_eq!(
                 picture_parameters.reference_frames[1].flags,
-                if !keyframe && index > 1 {
+                if !keyframe && index == 2 {
                     ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
                 } else {
                     ffi::VA_PICTURE_HEVC_INVALID
@@ -837,9 +837,12 @@ fn frames(count: u64) -> impl Iterator<Item = Picture> {
 }
 
 #[test]
-fn slice_headers_keep_the_long_term_frame_in_the_rps() {
+fn slice_headers_keep_both_long_term_frames_in_the_rps() {
+    let candidates = [(0_u64, 0_usize), (1, 1), (9, 0), (17, 1)];
+    let long_term_references = [(1_u64, 0_usize), (2, 1), (10, 0), (18, 1)];
     let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
     let mut stream = stream(format, Resolution::new(402, 226));
+    let mut slots: [Option<u64>; 2] = [None; 2];
     let mut walked = 0;
 
     long_term_walk(&mut stream, frames(20), |stream, picture| {
@@ -848,12 +851,18 @@ fn slice_headers_keep_the_long_term_frame_in_the_rps() {
         let header = parse_slice(stream, picture.keyframe, order).header;
         let parameters = stream.picture_parameters(picture, order);
         let slice = stream.slice_parameters(picture);
-        let follows_candidate = index == 1 || index == 9 || index == 17;
-        let marked = index == 0 || index == 8 || index == 16;
+        let marked = candidates
+            .iter()
+            .find(|(frame, _)| *frame == index)
+            .map(|(_, slot)| *slot);
+        let referenced = long_term_references
+            .iter()
+            .find(|(frame, _)| *frame == index)
+            .map(|(_, slot)| *slot);
 
         assert_eq!(
             parameters.decoded_curr_pic.flags,
-            if marked {
+            if marked.is_some() {
                 ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
             } else {
                 0
@@ -861,47 +870,64 @@ fn slice_headers_keep_the_long_term_frame_in_the_rps() {
             "frame {index}"
         );
         walked += 1;
-        if picture.keyframe {
-            return;
-        }
-        let held = (index - 1) / 8 * 8;
+        if !picture.keyframe {
+            let held: Vec<(usize, u64)> = slots
+                .iter()
+                .enumerate()
+                .filter_map(|(slot, poc)| poc.map(|poc| (slot, poc)))
+                .collect();
 
-        assert!(header.short_term_ref_pic_set_sps_flag);
-        assert_eq!(header.num_long_term_sps, 0);
-        assert_eq!(header.num_long_term_pics, 1, "frame {index}");
-        assert_eq!(u64::from(header.poc_lsb_lt[0]), held, "frame {index}");
-        assert_eq!(
-            header.used_by_curr_pic_lt[0], follows_candidate,
-            "frame {index}"
-        );
-        assert!(!header.delta_poc_msb_present_flag[0]);
-        assert_eq!(
-            header.short_term_ref_pic_set_idx,
-            u8::from(follows_candidate),
-            "frame {index}"
-        );
-        if follows_candidate {
+            assert!(header.short_term_ref_pic_set_sps_flag);
+            assert_eq!(header.num_long_term_sps, 0);
             assert_eq!(
-                slice.ref_pic_list0[0].flags,
-                ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE | ffi::VA_PICTURE_HEVC_RPS_LT_CURR
+                usize::from(header.num_long_term_pics),
+                held.len(),
+                "frame {index}"
             );
+            for (position, (slot, poc)) in held.iter().enumerate() {
+                assert_eq!(
+                    u64::from(header.poc_lsb_lt[position]),
+                    *poc,
+                    "frame {index}"
+                );
+                assert_eq!(
+                    header.used_by_curr_pic_lt[position],
+                    referenced == Some(*slot),
+                    "frame {index}"
+                );
+                assert!(!header.delta_poc_msb_present_flag[position]);
+            }
             assert_eq!(
-                parameters.reference_frames[1].flags,
-                ffi::VA_PICTURE_HEVC_INVALID
+                header.short_term_ref_pic_set_idx,
+                u8::from(referenced.is_some()),
+                "frame {index}"
             );
-        } else {
-            assert_eq!(
-                slice.ref_pic_list0[0].flags,
-                ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE
-            );
-            assert_eq!(
-                parameters.reference_frames[1].flags,
-                ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
-            );
-            assert_eq!(
-                i64::from(parameters.reference_frames[1].pic_order_cnt),
-                i64::try_from(held).unwrap()
-            );
+            if let Some(slot) = referenced {
+                assert_eq!(
+                    slice.ref_pic_list0[0].flags,
+                    ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE | ffi::VA_PICTURE_HEVC_RPS_LT_CURR
+                );
+                assert_eq!(
+                    u64::try_from(parameters.reference_frames[0].pic_order_cnt).unwrap(),
+                    slots[slot].unwrap()
+                );
+            } else {
+                assert_eq!(
+                    slice.ref_pic_list0[0].flags,
+                    ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE
+                );
+            }
+            let listed = held.len() + usize::from(referenced.is_none());
+            for (position, entry) in parameters.reference_frames.iter().enumerate() {
+                assert_eq!(
+                    entry.flags == ffi::VA_PICTURE_HEVC_INVALID,
+                    position >= listed,
+                    "frame {index} entry {position}"
+                );
+            }
+        }
+        if let Some(slot) = marked {
+            slots[slot] = Some(index);
         }
     });
 
@@ -933,7 +959,7 @@ fn the_long_term_lsb_wraps_with_the_picture_order_count() {
 }
 
 #[test]
-fn a_recovery_frame_references_only_the_long_term_frame() {
+fn a_recovery_frame_references_the_newest_acknowledged_long_term_frame() {
     let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
     let mut stream = stream(format, Resolution::new(402, 226));
 
@@ -946,17 +972,50 @@ fn a_recovery_frame_references_only_the_long_term_frame() {
     let parameters = stream.picture_parameters(&recovery, order);
     let slice = stream.slice_parameters(&recovery);
 
-    assert_eq!(reference, Some(OutputIndex(8)));
+    assert_eq!(reference, Some(OutputIndex(9)));
     assert_eq!(header.short_term_ref_pic_set_idx, 1);
-    assert_eq!(header.num_long_term_pics, 1);
-    assert_eq!(header.poc_lsb_lt[0], 8);
+    assert_eq!(header.num_long_term_pics, 2);
+    assert_eq!(header.poc_lsb_lt[0], 9);
     assert!(header.used_by_curr_pic_lt[0]);
-    assert_eq!(parameters.reference_frames[0].pic_order_cnt, 8);
+    assert_eq!(header.poc_lsb_lt[1], 1);
+    assert!(!header.used_by_curr_pic_lt[1]);
+    assert_eq!(parameters.reference_frames[0].pic_order_cnt, 9);
+    assert_eq!(parameters.reference_frames[1].pic_order_cnt, 1);
+    assert_eq!(
+        parameters.reference_frames[2].flags,
+        ffi::VA_PICTURE_HEVC_INVALID
+    );
+    assert_eq!(slice.ref_pic_list0[0].picture_id, picture(9, false).recon);
+}
+
+#[test]
+fn a_recovery_while_the_newest_candidate_is_unacknowledged_uses_the_older_slot() {
+    let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
+    let mut stream = stream(format, Resolution::new(402, 226));
+
+    long_term_walk(&mut stream, frames(13), |_, _| {});
+    let reference = stream.recover(OutputIndex(5));
+    let recovery = picture(13, false);
+    let order = HevcStream::order(&recovery);
+    stream.begin(&recovery);
+    let header = parse_slice(&stream, false, order).header;
+    let parameters = stream.picture_parameters(&recovery, order);
+    let slice = stream.slice_parameters(&recovery);
+
+    assert_eq!(reference, Some(OutputIndex(1)));
+    assert_eq!(header.num_long_term_pics, 1);
+    assert_eq!(header.poc_lsb_lt[0], 1);
+    assert!(header.used_by_curr_pic_lt[0]);
+    assert_eq!(parameters.reference_frames[0].pic_order_cnt, 1);
     assert_eq!(
         parameters.reference_frames[1].flags,
         ffi::VA_PICTURE_HEVC_INVALID
     );
-    assert_eq!(slice.ref_pic_list0[0].picture_id, picture(8, false).recon);
+    assert_eq!(
+        parameters.decoded_curr_pic.flags,
+        ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
+    );
+    assert_eq!(slice.ref_pic_list0[0].picture_id, picture(1, false).recon);
 }
 
 #[test]

@@ -37,9 +37,21 @@ impl Demand {
 }
 
 pub(super) fn select(levels: &[Level], demand: Demand, bitrate_scale_percent: u64) -> Selected {
+    select_if(levels, demand, bitrate_scale_percent, |_| true)
+}
+
+pub(super) fn select_if(
+    levels: &[Level],
+    demand: Demand,
+    bitrate_scale_percent: u64,
+    admits: impl Fn(usize) -> bool,
+) -> Selected {
     let scaled = |kbps: u64| kbps * bitrate_scale_percent / 100;
 
-    for level in levels {
+    for (index, level) in levels.iter().enumerate() {
+        if !admits(index) {
+            continue;
+        }
         if demand.picture_samples > level.max_picture_samples
             || demand.sample_rate > level.max_sample_rate
         {
@@ -120,6 +132,13 @@ mod tests {
                 high_tier: true
             }
         );
+    }
+
+    #[test]
+    fn an_admission_test_skips_levels() {
+        let selected = select_if(&LEVELS, demand(900, 50), 100, |index| index > 0);
+
+        assert_eq!(selected.id, 2);
     }
 
     #[test]

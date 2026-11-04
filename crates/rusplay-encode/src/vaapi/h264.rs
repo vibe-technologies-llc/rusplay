@@ -7,7 +7,7 @@ use crate::{
         format::{colour_primaries, full_range, matrix_coefficients, transfer_characteristics},
         hdr::{SeiNal, sei},
         level::{self, Demand, Level},
-        long_term::{Held, LongTermReferences, Reference},
+        long_term::{Held, LONG_TERM_SLOTS, LongTermReferences, Reference},
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, PackedHeader, Profile},
     },
@@ -28,11 +28,13 @@ const NAL_REF_IDC_HIGHEST: u8 = 3;
 const VIDEO_FORMAT_UNSPECIFIED: u64 = 5;
 const ASPECT_RATIO_SQUARE: u8 = 1;
 const HIGH_PROFILE_BITRATE_PERCENT: u64 = 125;
-pub(super) const LONG_TERM_REFERENCE_FRAMES: u32 = 2;
+#[allow(clippy::cast_possible_truncation)]
+const LONG_TERM_SLOT_COUNT: u32 = LONG_TERM_SLOTS as u32;
+pub(super) const LONG_TERM_REFERENCE_FRAMES: u32 = LONG_TERM_SLOT_COUNT + 1;
 const SINGLE_REFERENCE_FRAME: u32 = 1;
-const LONG_TERM_FRAME_IDX: u32 = 0;
 const MODIFICATION_LONG_TERM: u32 = 2;
 const MODIFICATION_END: u32 = 3;
+const MARKING_MAX_LONG_TERM_IDX: u32 = 4;
 const MARKING_CURRENT_LONG_TERM: u32 = 6;
 const MARKING_END: u32 = 0;
 
@@ -61,6 +63,11 @@ const INVALID_PICTURE: ffi::VAPictureH264 = ffi::VAPictureH264 {
     BottomFieldOrderCnt: 0,
     va_reserved: [0; 4],
 };
+
+pub(super) const MAX_DPB_MBS: [u64; 19] = [
+    396, 900, 2_376, 2_376, 2_376, 4_752, 8_100, 8_100, 18_000, 20_480, 32_768, 32_768, 34_816,
+    110_400, 184_320, 184_320, 696_320, 696_320, 696_320,
+];
 
 pub(super) const LEVELS: [Level; 19] = [
     level(10, 99, 1_485, 64),
@@ -150,10 +157,18 @@ impl H264Stream {
             100
         };
         let demand = Demand::new(info.resolution, info.frame_rate, info.peak_kbps);
+        let frames = if info.long_term_references {
+            LONG_TERM_REFERENCE_FRAMES
+        } else {
+            SINGLE_REFERENCE_FRAME
+        };
 
         Self {
             profile,
-            level_idc: level::select(&LEVELS, demand, bitrate_percent).id,
+            level_idc: level::select_if(&LEVELS, demand, bitrate_percent, |index| {
+                MAX_DPB_MBS[index] / u64::from(width_mbs * height_mbs).max(1) >= u64::from(frames)
+            })
+            .id,
             width_mbs,
             height_mbs,
             crop_right: (width_mbs * MACROBLOCK_SIZE - info.resolution.width) / 2,
@@ -306,22 +321,23 @@ impl H264Stream {
             rbsp.ue(u32::from(self.idr_pic_id));
         } else {
             rbsp.flag(false);
-            let long_term = matches!(plan.reference, Reference::LongTerm(_));
-            rbsp.flag(long_term);
-            if long_term {
+            rbsp.flag(plan.referenced_slot().is_some());
+            if let Some(slot) = plan.referenced_slot() {
                 rbsp.ue(MODIFICATION_LONG_TERM);
-                rbsp.ue(LONG_TERM_FRAME_IDX);
+                rbsp.ue(Self::long_term_frame_idx(slot));
                 rbsp.ue(MODIFICATION_END);
             }
         }
         if keyframe {
             rbsp.flag(false);
-            rbsp.flag(plan.mark_long_term);
+            rbsp.flag(plan.mark_long_term.is_some());
         } else {
-            rbsp.flag(plan.mark_long_term);
-            if plan.mark_long_term {
+            rbsp.flag(plan.mark_long_term.is_some());
+            if let Some(slot) = plan.mark_long_term {
+                rbsp.ue(MARKING_MAX_LONG_TERM_IDX);
+                rbsp.ue(LONG_TERM_SLOT_COUNT);
                 rbsp.ue(MARKING_CURRENT_LONG_TERM);
-                rbsp.ue(LONG_TERM_FRAME_IDX);
+                rbsp.ue(Self::long_term_frame_idx(slot));
                 rbsp.ue(MARKING_END);
             }
         }
@@ -391,10 +407,14 @@ impl H264Stream {
         }
     }
 
-    fn long_term_entry(held: Held) -> ffi::VAPictureH264 {
+    fn long_term_frame_idx(slot: usize) -> u32 {
+        u32::try_from(slot).unwrap_or(0)
+    }
+
+    fn long_term_entry(slot: usize, held: Held) -> ffi::VAPictureH264 {
         ffi::VAPictureH264 {
             picture_id: held.surface,
-            frame_idx: LONG_TERM_FRAME_IDX,
+            frame_idx: Self::long_term_frame_idx(slot),
             flags: ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE,
             TopFieldOrderCnt: held.order,
             BottomFieldOrderCnt: held.order,
@@ -406,7 +426,7 @@ impl H264Stream {
         match self.references.plan().reference {
             Reference::Intra => None,
             Reference::Previous(held) => Some(self.previous_entry(held)),
-            Reference::LongTerm(held) => Some(Self::long_term_entry(held)),
+            Reference::LongTerm { slot, held } => Some(Self::long_term_entry(slot, held)),
         }
     }
 
@@ -419,12 +439,10 @@ impl H264Stream {
         let mut parameters = ffi::VAEncPictureParameterBufferH264 {
             CurrPic: ffi::VAPictureH264 {
                 picture_id: picture.recon,
-                frame_idx: if plan.mark_long_term {
-                    LONG_TERM_FRAME_IDX
-                } else {
-                    self.frame_num
-                },
-                flags: if plan.mark_long_term {
+                frame_idx: plan
+                    .mark_long_term
+                    .map_or(self.frame_num, Self::long_term_frame_idx),
+                flags: if plan.mark_long_term.is_some() {
                     ffi::VA_PICTURE_H264_LONG_TERM_REFERENCE
                 } else {
                     0
@@ -439,10 +457,10 @@ impl H264Stream {
             pic_init_qp: self.qp(),
             ..Default::default()
         };
-        let held = self
-            .reference_entry()
-            .into_iter()
-            .chain(plan.kept_long_term.map(Self::long_term_entry));
+        let held = self.reference_entry().into_iter().chain(
+            plan.kept_long_term()
+                .map(|(slot, held)| Self::long_term_entry(slot, held)),
+        );
         for (entry, reference) in parameters.ReferenceFrames.iter_mut().zip(held) {
             *entry = reference;
         }
