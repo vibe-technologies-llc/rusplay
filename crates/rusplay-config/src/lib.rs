@@ -456,6 +456,35 @@ mod tests {
     }
 
     #[test]
+    fn the_virtual_resize_options_have_defaults_and_are_range_checked() {
+        let defaults = Config::default().capture;
+
+        assert_eq!(
+            defaults.virtual_min_resolution,
+            rusplay_core::Resolution::new(200, 200)
+        );
+        assert_eq!(defaults.virtual_resize_min_interval_ms, 250);
+
+        for (width, height) in [(0, 200), (200, 0), (8000, 200), (200, 4400)] {
+            let mut config = Config::default();
+            config.capture.virtual_min_resolution = rusplay_core::Resolution::new(width, height);
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::VirtualMinResolutionOutOfRange { .. })
+            ));
+        }
+
+        for ms in [0, 9, 60_001] {
+            let mut config = Config::default();
+            config.capture.virtual_resize_min_interval_ms = ms;
+            assert!(matches!(
+                config.validate(),
+                Err(ConfigError::VirtualResizeIntervalOutOfRange(rejected)) if rejected == ms
+            ));
+        }
+    }
+
+    #[test]
     fn peer_files_are_configurable() {
         let parsed: Config = toml::from_str(
             r#"

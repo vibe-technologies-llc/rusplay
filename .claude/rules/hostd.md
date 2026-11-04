@@ -146,7 +146,9 @@ paths:
   pointer move and Enter, repeated until hostd prints its PIN), `Painter` draws on the virtual
   output (an `xdg_toplevel` made fullscreen on the output that is not `Virtual-0`) so it has
   damage, and the client is `rusplay-client` with the software AV1 decoder against SVT-AV1 on
-  loopback. `offer.rs` holds the KWin findings of `capture.md`, `service.rs` the pairing, `pin`,
+  loopback. `offer.rs` holds the KWin findings of `capture.md`, `resize.rs` the live resize (the stream
+  reaching each new size, a window below KWin's minimum, a flood of resizes, a takeover resizing
+  to the new client), `service.rs` the pairing, `pin`,
   `new-pin`, `status`, `peers list`, `forget`, stats line and reconnect run and a restart with the
   restore token. Run them with
   `cargo test -p rusplay-hostd --features pipewire,svt-av1 --test nested -- --ignored --test-threads=1`.

@@ -136,7 +136,9 @@ paths:
   state and `Disconnect`, and below it a black area holding a `canvas`. The canvas's prepaint
   turns its bounds and `Window::scale_factor` into `WindowLayout::letterbox` against the
   stream description's resolution, calls `ClientStream::set_target` with the device size and
-  `StreamWindow::set_layout` with the rectangle. Doing it in prepaint means the subsurface
+  `StreamWindow::set_layout` with the rectangle, and `ClientStream::announce_display` with the
+  canvas area in device pixels (`area_size`, only when it changed), so the host's virtual output
+  follows the window (`client.md`). Doing it in prepaint means the subsurface
   position (applied on the parent's commit) lands with the frame gpui is drawing.
 - Clipboard: the client library's data-control backend does the work, because gpui has no
   clipboard change notification (only `read_from_clipboard`, which the `TextField` uses for paste).

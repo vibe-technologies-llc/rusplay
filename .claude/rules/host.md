@@ -146,8 +146,25 @@ paths:
     16384x16384 at 1000 Hz becomes a bounded request, never an allocation. The request goes to the
     capture through `CaptureFeed::output_offer` (`FrameSource::output_offer`, `capture.md`) and into
     `Shared::output`, before the negotiation is agreed and the mailbox opens. A session takeover
-    keeps the first client's request: the encoder is already built for it. The colour volume is
-    received and range-checked but unused. `HostStream::virtual_output` exposes the request.
+    keeps the encoder it built, but the new client's `Display` resizes the output like any later
+    one (below). The colour volume is received and range-checked but unused.
+    `HostStream::virtual_output` exposes the request.
+    A `Display` that arrives once the negotiation is agreed resizes the output live
+    (`ResizeGate` in `virtual_output.rs`): it replaces the one pending (`display_updates_coalesced`
+    counts the replaced, `display_updates_received` every one), so a flood is held in one slot,
+    and `due` releases the newest at most once per `capture.virtual_resize_min_interval_ms`
+    (default 250, validated 10 to 60000, so there is no unlimited setting). A released display
+    goes through the same `select_output`, so the maximum resolution, maximum refresh and the
+    minimum below still apply; a request equal to the one in force offers nothing. A new request is
+    offered through `OutputOffer` and set on `Shared::output` (`virtual_resizes`), which the send
+    stage's pacing reads; the encode stage's pipeline follows the size the compositor then
+    delivers through the existing reopen, and announces the new `StreamFormat` before the new
+    keyframe. A takeover resets the gate, so the new client's `Display` is applied at once rather
+    than after the interval. The control loop wakes for the gate's deadline and nothing on the
+    frame path waits for it. `select_output` first grows a display below
+    `capture.virtual_min_resolution` (default 200x200, KWin's `EnumFormat` minimum) to it keeping
+    the aspect ratio, then fits it into the maximum, then clamps each axis up to the minimum, so
+    the offer is always inside both limits; the client scales a stream whose aspect differs.
     `RequestKeyframe`, `RequestRecovery`, `AcknowledgeFrame`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
     `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.

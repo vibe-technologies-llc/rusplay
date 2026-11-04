@@ -36,7 +36,7 @@ use crate::{
     microphone::{self, MicrophoneLinks, default_microphone},
     name::announced_name,
     present::{self, MappingOptions, PresentLinks, PresentOptions, SharedTarget},
-    receive::{DecodeInput, Feedback, Links, ReceiveStage, SharedFormat},
+    receive::{DecodeInput, DisplayUpdates, Feedback, Links, ReceiveStage, SharedFormat},
     slot::Slot,
     stats::Counters,
 };
@@ -216,6 +216,7 @@ impl ClientSession {
             target: Arc::new(Mutex::new(None)),
             decoded: Arc::new(Slot::new()),
             format: Arc::new(Mutex::new(None)),
+            display_updates: Arc::new(Mutex::new(None)),
             cursor: LatestCursor::new(),
             input: InputHandle::new(input_sender),
             gamepads_done: Arc::new(AtomicBool::new(true)),
@@ -250,6 +251,10 @@ impl ClientSession {
             feedback,
             handshake,
             display,
+            display_updates: Arc::clone(&stream.display_updates),
+            display_debounce: Duration::from_millis(u64::from(
+                self.config.video.display_debounce_ms,
+            )),
             stop: Arc::clone(&stream.stop),
             counters: Arc::clone(&stream.counters),
         };
@@ -348,6 +353,7 @@ pub struct ClientStream {
     target: SharedTarget,
     decoded: Arc<Slot<decode::DecodedVideo>>,
     format: SharedFormat,
+    display_updates: DisplayUpdates,
     cursor: LatestCursor,
     input: InputHandle,
     gamepads_done: Arc<AtomicBool>,
@@ -373,6 +379,10 @@ impl ClientStream {
         *current = target;
         drop(current);
         self.decoded.nudge();
+    }
+
+    pub fn announce_display(&self, display: ClientDisplay) {
+        *self.display_updates.lock() = Some(display);
     }
 
     pub fn target(&self) -> Option<Resolution> {

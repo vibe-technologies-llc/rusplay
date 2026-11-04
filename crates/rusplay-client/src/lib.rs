@@ -16,6 +16,7 @@ mod microphone;
 mod name;
 mod present;
 mod receive;
+mod resize;
 mod session;
 mod sink;
 mod slot;

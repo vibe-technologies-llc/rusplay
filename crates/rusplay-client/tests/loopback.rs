@@ -23,7 +23,7 @@ use rusplay_core::{
 };
 use rusplay_input::{InputEvent, StateRecord};
 use rusplay_net::NetError;
-use rusplay_protocol::{ControlMessage, CursorImage, CursorMessage};
+use rusplay_protocol::{ClientDisplay, ControlMessage, CursorImage, CursorMessage};
 
 const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const UNARMED: u32 = u32::MAX;
@@ -552,6 +552,67 @@ fn the_hello_is_followed_by_the_display_the_client_was_given() {
     stream.stop().unwrap();
 
     assert!(host.messages().contains(&ControlMessage::Display(display)));
+}
+
+fn displays(host: &TestHost) -> Vec<ClientDisplay> {
+    host.messages()
+        .into_iter()
+        .filter_map(|message| match message {
+            ControlMessage::Display(display) => Some(display),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_resize_drag_announces_only_the_size_it_settles_on() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let announce = |width, height| {
+        announced_display(
+            Resolution::new(width, height),
+            FrameRate::integer(60),
+            &ColorVolume::srgb_display(),
+        )
+        .unwrap()
+    };
+    let mut config = common::client_config();
+    config.video.display_debounce_ms = 150;
+    let session = ClientSession::new(config).with_display(announce(1280, 720));
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
+        message,
+        ControlMessage::Display(_)
+    )));
+
+    for step in 0..30 {
+        stream.announce_display(announce(1300 + step, 720));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let settled = announce(1329, 720);
+    let arrived = host.wait_for(STREAM_TIMEOUT, |message| {
+        *message == ControlMessage::Display(settled)
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let sent = stream.stats().display_updates_sent;
+    stream.stop().unwrap();
+
+    assert!(arrived);
+    assert_eq!(displays(&host), [announce(1280, 720), settled]);
+    assert_eq!(sent, 1);
 }
 
 #[test]

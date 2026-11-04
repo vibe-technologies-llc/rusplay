@@ -127,7 +127,12 @@ paths:
   stream description's errors) and black as u32 0.0001 cd/m² units, which must stay below the
   reference white (`DisplayBlackNotBelowWhite`). `ClientDisplay::new` is the only constructor and
   `decode` goes through it, so a value in hand is always in range. The host ignores it unless
-  `capture.source` is `virtual` (`host.md`); the client never sends it again in a session.
+  `capture.source` is `virtual` (`host.md`). The client sends it again whenever its stream area
+  changes, once the new size has settled (`client.md`); the encoding did not change, so
+  `ProtocolVersion::CURRENT` did not either, and a host that predates the later sends keeps the
+  last one it received and uses only the first. Control delivery is unordered, so the client keeps
+  one `Display` in flight and sends the newest after the acknowledgement. The host applies the
+  newest pending `Display` at most once per `capture.virtual_resize_min_interval_ms`.
   `rusplay-fuzz`'s `control` target covers it through `ControlMessage::decode`.
 - Format negotiation: the host picks
   `FormatSet::closest_to(configured)` from encodable ∩ decodable, where `configured` is the

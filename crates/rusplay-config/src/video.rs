@@ -12,6 +12,7 @@ const MAX_SVT_AV1_PRESET: u8 = 13;
 const PRESENT_FRAME_LATENCY_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 const MAX_PRESENT_MARGIN_US: u32 = 50_000;
 const MAX_PRESENT_JITTER_US: u32 = 100_000;
+const MAX_DISPLAY_DEBOUNCE_MS: u32 = 5_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,6 +34,7 @@ pub struct VideoConfig {
     pub present_margin_us: u32,
     pub present_jitter_us: u32,
     pub stats_overlay: bool,
+    pub display_debounce_ms: u32,
 }
 
 impl Default for VideoConfig {
@@ -55,6 +57,7 @@ impl Default for VideoConfig {
             present_margin_us: 3_000,
             present_jitter_us: 8_000,
             stats_overlay: false,
+            display_debounce_ms: 200,
         }
     }
 }
@@ -115,6 +118,12 @@ impl VideoConfig {
         }
         if self.present_jitter_us > MAX_PRESENT_JITTER_US {
             return Err(ConfigError::PresentJitterOutOfRange(self.present_jitter_us));
+        }
+
+        if self.display_debounce_ms > MAX_DISPLAY_DEBOUNCE_MS {
+            return Err(ConfigError::DisplayDebounceOutOfRange(
+                self.display_debounce_ms,
+            ));
         }
 
         self.encoder.validate()?;
@@ -413,6 +422,22 @@ mod tests {
 
         assert_eq!(VideoConfig::default().present_pacing, PresentPacing::Off);
         assert_eq!(parsed.present_pacing, PresentPacing::Smooth);
+    }
+
+    #[test]
+    fn the_display_debounce_is_range_checked_and_may_be_zero() {
+        let mut config = VideoConfig::default();
+
+        assert_eq!(config.display_debounce_ms, 200);
+
+        config.display_debounce_ms = MAX_DISPLAY_DEBOUNCE_MS + 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::DisplayDebounceOutOfRange(5_001))
+        ));
+
+        config.display_debounce_ms = 0;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

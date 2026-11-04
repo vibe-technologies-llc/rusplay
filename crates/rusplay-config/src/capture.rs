@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{ops::RangeInclusive, path::PathBuf};
 
 use rusplay_core::Resolution;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ pub struct CaptureConfig {
     pub restore_token_file: Option<PathBuf>,
     pub virtual_max_resolution: Resolution,
     pub virtual_max_refresh_hz: u32,
+    pub virtual_min_resolution: Resolution,
+    pub virtual_resize_min_interval_ms: u32,
 }
 
 impl Default for CaptureConfig {
@@ -52,12 +54,15 @@ impl Default for CaptureConfig {
             restore_token_file: None,
             virtual_max_resolution: Resolution::new(7680, 4320),
             virtual_max_refresh_hz: 240,
+            virtual_min_resolution: Resolution::new(200, 200),
+            virtual_resize_min_interval_ms: 250,
         }
     }
 }
 
 impl CaptureConfig {
     pub const MAX_VIRTUAL_REFRESH_HZ: u32 = 1000;
+    pub const VIRTUAL_RESIZE_INTERVAL_RANGE_MS: RangeInclusive<u32> = 10..=60_000;
 
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         if self.virtual_max_resolution.pixel_count() == 0 {
@@ -70,6 +75,22 @@ impl CaptureConfig {
         if !(1..=Self::MAX_VIRTUAL_REFRESH_HZ).contains(&self.virtual_max_refresh_hz) {
             return Err(ConfigError::VirtualMaxRefreshOutOfRange(
                 self.virtual_max_refresh_hz,
+            ));
+        }
+
+        if self.virtual_min_resolution.pixel_count() == 0
+            || self.virtual_min_resolution.width > self.virtual_max_resolution.width
+            || self.virtual_min_resolution.height > self.virtual_max_resolution.height
+        {
+            return Err(ConfigError::VirtualMinResolutionOutOfRange {
+                width: self.virtual_min_resolution.width,
+                height: self.virtual_min_resolution.height,
+            });
+        }
+
+        if !Self::VIRTUAL_RESIZE_INTERVAL_RANGE_MS.contains(&self.virtual_resize_min_interval_ms) {
+            return Err(ConfigError::VirtualResizeIntervalOutOfRange(
+                self.virtual_resize_min_interval_ms,
             ));
         }
 

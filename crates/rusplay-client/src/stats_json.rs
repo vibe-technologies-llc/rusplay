@@ -51,6 +51,7 @@ pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) ->
         .number("gamepad_failures", stats.gamepad_failures)
         .number("thread_priority_failures", stats.thread_priority_failures)
         .number("bitrate_hints_sent", stats.bitrate_hints_sent)
+        .number("display_updates_sent", stats.display_updates_sent)
         .optional("bitrate_target_kbps", stats.bitrate_target_kbps)
         .optional("rtt_us", stats.rtt.map(|rtt| rtt.as_micros()))
         .optional("clock_offset_us", stats.clock_offset_micros)

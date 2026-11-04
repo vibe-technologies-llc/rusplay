@@ -32,6 +32,15 @@ paths:
     1000x700 and 2560x1440 tried), and the encoder sends a second keyframe
     (`perf-virtual-first-frame-stale-size`). KWin's `EnumFormat` takes 200x200 to 10000x10000 with
     the current size as the default, so a display under 200 pixels on an axis cannot be offered.
+    An offer of 120x90 sent past the host's clamp (`capture.virtual_min_resolution` set to 1x1) was
+    taken by nothing: the stream stayed at the size it had (1280x720), kept delivering frames and
+    raised no error, so the failure is silent and the host must never send such an offer
+    (`select_output` raises it to 267x200, which KWin took).
+  - Live resizes: three further offers on a running stream (1000x700, 1600x900, 800x600) each
+    reached the client as exactly that size, one keyframe per size; a flood of 120 window sizes
+    10 ms apart became one `Display` from the client (its settle time) and one offer, and the
+    stream ended on the last size, 1376x838. A hostile client skipping that debounce is bounded by
+    the host's own gate (`host.md`), which the nested KWin runs do not exercise.
   - The offered rate is not honoured: the format carries a variable `framerate` (0/1) and a
     `maxFramerate` of the output's refresh, 60 Hz. Offers of 30, 90 and 144 Hz all captured 60
     frames a second from a damaged output (`capture-virtual-refresh-kwin`).

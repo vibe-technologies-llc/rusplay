@@ -27,6 +27,7 @@ use crate::{
     audio::EncodedAudio,
     bitrate::{BitrateController, BitrateSettings, HintOutbox},
     clock::ClockSync,
+    resize::DisplayAnnouncer,
     stats::Counters,
 };
 
@@ -218,6 +219,8 @@ fn pad_feedback(message: ControlMessage) -> Option<PadFeedback> {
     }
 }
 
+pub(crate) type DisplayUpdates = Arc<Mutex<Option<ClientDisplay>>>;
+
 #[derive(Debug)]
 pub(crate) struct Links {
     pub decode_queue: SyncSender<DecodeInput>,
@@ -229,6 +232,8 @@ pub(crate) struct Links {
     pub feedback: Receiver<Feedback>,
     pub handshake: Sender<()>,
     pub display: ClientDisplay,
+    pub display_updates: DisplayUpdates,
+    pub display_debounce: Duration,
     pub stop: Arc<AtomicBool>,
     pub counters: Arc<Counters>,
 }
@@ -249,6 +254,7 @@ pub(crate) struct ReceiveStage {
     resync: Resync,
     acks: Acks,
     adaptation: Option<Adaptation>,
+    announcer: DisplayAnnouncer,
     clock_sync: ClockSync,
     last_heard: Instant,
 }
@@ -270,6 +276,7 @@ impl ReceiveStage {
                 outbox: HintOutbox::default(),
             }
         });
+        let announcer = DisplayAnnouncer::new(links.display, links.display_debounce);
         let limits = ReassemblyLimits::from(network);
         let audio = links.audio_queue.take().map(|queue| AudioIngress {
             reassembler: Reassembler::new(StreamKind::Audio, limits),
@@ -299,6 +306,7 @@ impl ReceiveStage {
             resync: Resync::default(),
             acks: Acks::default(),
             adaptation,
+            announcer,
             clock_sync: ClockSync::new(network.clock_sync_interval_ms, now),
             last_heard: now,
         }
@@ -322,8 +330,10 @@ impl ReceiveStage {
             },
             Instant::now(),
         )?;
-        self.control
+        let announced = self
+            .control
             .send(ControlMessage::Display(self.links.display), Instant::now())?;
+        self.announcer.sent(self.links.display, announced);
         self.control.flush(&self.transport, self.host)?;
 
         loop {
@@ -363,6 +373,7 @@ impl ReceiveStage {
             }
             self.send_frame_ack(now)?;
             self.adapt_bitrate(now)?;
+            self.announce_display(now)?;
             self.service_clipboard(now);
 
             self.control.flush(&self.transport, self.host)?;
@@ -395,6 +406,7 @@ impl ReceiveStage {
                 .as_ref()
                 .and_then(|audio| audio.reassembler.next_timeout()),
             self.resync.next_retry(self.timing.keyframe_interval),
+            self.announcer.next_deadline(),
             self.acks
                 .next_due(now, self.timing.ack_interval, self.resync.last_good),
             self.adaptation
@@ -658,8 +670,10 @@ impl ReceiveStage {
                         let current = adaptation.controller.target_kbps();
                         adaptation.outbox.undeliverable(id, current);
                     }
+                    self.announcer.undeliverable(id, now);
                 }
                 ControlEvent::Acked { id } => {
+                    self.announcer.acked(id);
                     if let Some(adaptation) = &mut self.adaptation {
                         adaptation.outbox.acked(id);
                     }
@@ -799,6 +813,25 @@ impl ReceiveStage {
             Ok(id) => {
                 adaptation.outbox.sent(id);
                 self.links.counters.bitrate_hints_sent.increment();
+                Ok(())
+            }
+            Err(NetError::ControlWindowFull { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn announce_display(&mut self, now: Instant) -> Result<(), ClientError> {
+        if let Some(display) = self.links.display_updates.lock().take() {
+            self.announcer.request(display, now);
+        }
+
+        let Some(display) = self.announcer.ready(now) else {
+            return Ok(());
+        };
+        match self.control.send(ControlMessage::Display(display), now) {
+            Ok(id) => {
+                self.announcer.sent(display, id);
+                self.links.counters.display_updates_sent.increment();
                 Ok(())
             }
             Err(NetError::ControlWindowFull { .. }) => Ok(()),
@@ -980,6 +1013,8 @@ mod tests {
                 handshake,
                 display: crate::announce::default_display(&rusplay_config::Config::default())
                     .unwrap(),
+                display_updates: Arc::new(Mutex::new(None)),
+                display_debounce: Duration::ZERO,
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };

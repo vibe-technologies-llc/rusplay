@@ -54,6 +54,7 @@ pub struct ClientStats {
     pub gamepad_failures: u64,
     pub thread_priority_failures: u64,
     pub bitrate_hints_sent: u64,
+    pub display_updates_sent: u64,
     pub bitrate_target_kbps: Option<u32>,
     pub rtt: Option<Duration>,
     pub clock_offset_micros: Option<i64>,
@@ -153,6 +154,7 @@ pub(crate) struct Counters {
     pub gamepad_failures: Counter,
     pub thread_priority_failures: Counter,
     pub bitrate_hints_sent: Counter,
+    pub display_updates_sent: Counter,
     bitrate_target_kbps: Counter,
     pub capture_to_receive: Gauge,
     pub capture_to_decode: Gauge,
@@ -209,6 +211,7 @@ impl Counters {
             gamepad_failures: self.gamepad_failures.get(),
             thread_priority_failures: self.thread_priority_failures.get(),
             bitrate_hints_sent: self.bitrate_hints_sent.get(),
+            display_updates_sent: self.display_updates_sent.get(),
             bitrate_target_kbps: match self.bitrate_target_kbps.get() {
                 0 => None,
                 kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),

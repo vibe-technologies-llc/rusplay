@@ -5,6 +5,7 @@ mod daemon;
 mod input;
 mod offer;
 mod painter;
+mod resize;
 mod service;
 mod stack;
 
