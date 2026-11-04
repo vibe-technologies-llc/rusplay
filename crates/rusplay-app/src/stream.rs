@@ -15,7 +15,7 @@ use rusplay_client::{
     announced_display,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
-use rusplay_core::Resolution;
+use rusplay_core::{FrameRate, Resolution};
 
 use crate::{
     clipboard::{self, FocusSlot},
@@ -50,11 +50,12 @@ enum Phase {
     Ended,
 }
 
-#[derive(Default)]
 struct Live {
     window: Option<StreamWindow>,
     stream: Option<ClientStream>,
     failure: Option<ClientError>,
+    refresh: FrameRate,
+    announced: Option<Resolution>,
 }
 
 impl Live {
@@ -69,6 +70,14 @@ impl Live {
             width: bounds.size.width.as_f32(),
             height: bounds.size.height.as_f32(),
         };
+        let wanted = area_size(area, scale);
+        if self.announced != Some(wanted) {
+            self.announced = Some(wanted);
+            if let Ok(display) = announced_display(wanted, self.refresh, &window.color_target()) {
+                stream.announce_display(display);
+            }
+        }
+
         let layout = stream
             .stream_format()
             .and_then(|format| WindowLayout::letterbox(area, scale, format.resolution));
@@ -133,10 +142,12 @@ impl StreamView {
         let address = host.address;
         let input = config.input;
         let stats_overlay = config.video.stats_overlay;
+        let refresh = config.video.frame_rate;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
 
+        let announced_size = swapchain_size(window.viewport_size(), window.scale_factor());
         let display = announced_display(
-            swapchain_size(window.viewport_size(), window.scale_factor()),
+            announced_size,
             config.video.frame_rate,
             &stream_window.color_target(),
         )
@@ -167,7 +178,10 @@ impl StreamView {
             phase: Phase::Connecting,
             live: Rc::new(RefCell::new(Live {
                 window: Some(stream_window),
-                ..Live::default()
+                stream: None,
+                failure: None,
+                refresh,
+                announced: Some(announced_size),
             })),
             format_generation: None,
             input,
@@ -509,6 +523,13 @@ impl StreamView {
     }
 }
 
+fn area_size(area: LogicalArea, scale: f32) -> Resolution {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let device = |logical: f32| (logical * scale).round().max(1.0) as u32;
+
+    Resolution::new(device(area.width), device(area.height))
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn swapchain_size(viewport: Size<Pixels>, scale: f32) -> Resolution {
     let device = |logical: Pixels| (logical.as_f32() * scale).round().max(1.0) as u32;
@@ -693,6 +714,22 @@ mod tests {
             swapchain_size(size(px(0.0), px(-4.0)), 2.0),
             Resolution::new(1, 1)
         );
+    }
+
+    #[test]
+    fn the_announced_area_is_the_canvas_in_device_pixels_and_never_empty() {
+        let area = |width, height| LogicalArea {
+            x: 0.0,
+            y: 40.0,
+            width,
+            height,
+        };
+
+        assert_eq!(
+            area_size(area(1280.0, 680.0), 1.5),
+            Resolution::new(1920, 1020)
+        );
+        assert_eq!(area_size(area(0.0, -3.0), 2.0), Resolution::new(1, 1));
     }
 
     #[test]

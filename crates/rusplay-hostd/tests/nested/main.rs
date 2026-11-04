@@ -5,6 +5,7 @@ mod daemon;
 mod input;
 mod offer;
 mod painter;
+mod resize;
 mod service;
 mod stack;
 
@@ -222,8 +223,17 @@ impl Observation {
 }
 
 fn observe(display: (u32, u32, u32), animate: bool, seconds: u64) -> Option<Observation> {
+    observe_with(display, animate, seconds, "")
+}
+
+fn observe_with(
+    display: (u32, u32, u32),
+    animate: bool,
+    seconds: u64,
+    extra: &str,
+) -> Option<Observation> {
     let _serial = SERIAL.lock();
-    let live = Live::start(animate, "")?;
+    let live = Live::start(animate, extra)?;
     let gpu = gpu()?;
 
     let (seen, sink) = recorder();

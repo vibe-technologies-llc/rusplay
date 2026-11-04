@@ -27,6 +27,12 @@ paths:
 - `input.clipboard` (`ClipboardDirection`: `off` default, `client-to-host`, `host-to-client`,
   `both`) and `input.clipboard_max_bytes` (default 65536, `ClipboardMaxBytesOutOfRange` outside
   1 to 1048576) are the only switches for clipboard sync (`clipboard.md`); each end reads its own.
+- The virtual output options are `capture.virtual_max_resolution` and `virtual_max_refresh_hz`
+  (upper bounds on what a client's display may ask for), `virtual_min_resolution` (default
+  200x200, validated nonzero and within the maximum), `virtual_resize_min_interval_ms` (default
+  250, 10 to 60000) and `virtual_first_frame_timeout_ms` (default 500, 0 to 10000, 0 turns the hold
+  off). The client
+  side is `video.display_debounce_ms` (default 200, up to 5000). See `host.md` and `client.md`.
 - New options go through the `add-config-option` skill.
 - `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the
   client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the

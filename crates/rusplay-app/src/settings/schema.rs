@@ -684,6 +684,14 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Section::Video,
+        "Presentation",
+        "video.display_debounce_ms",
+        "Window resize settle time",
+        Kind::Integer { min: 0, max: 5_000 },
+    )
+    .unit("ms"),
+    field(
         Section::Audio,
         "Stream",
         "audio.codec",
@@ -1403,6 +1411,35 @@ pub static FIELDS: &[Field] = &[
         U32,
     )
     .unit("Hz"),
+    field(
+        Section::Capture,
+        "Virtual output",
+        "capture.virtual_min_resolution",
+        "Smallest virtual output",
+        Kind::Resolution,
+    ),
+    field(
+        Section::Capture,
+        "Virtual output",
+        "capture.virtual_resize_min_interval_ms",
+        "Shortest time between resizes",
+        Kind::Integer {
+            min: 10,
+            max: 60_000,
+        },
+    )
+    .unit("ms"),
+    field(
+        Section::Capture,
+        "Virtual output",
+        "capture.virtual_first_frame_timeout_ms",
+        "Wait for the first frame at the offered size",
+        Kind::Integer {
+            min: 0,
+            max: 10_000,
+        },
+    )
+    .unit("ms"),
     field(
         Section::Capture,
         "Session",

@@ -29,7 +29,7 @@ use crate::{
     negotiate::negotiate,
     outbox::ControlOutbox,
     shared::Shared,
-    virtual_output::VirtualOutput,
+    virtual_output::{ResizeGate, VirtualOutput, select_output},
 };
 
 const RECV_BATCH_DATAGRAMS: usize = 32;
@@ -116,6 +116,7 @@ pub(crate) struct ControlStage {
     streaming: bool,
     unanswered_hello: Option<FormatSet>,
     display: Option<ClientDisplay>,
+    resize: ResizeGate,
     started: Instant,
     last_heard: Instant,
     next_keepalive: Instant,
@@ -129,6 +130,14 @@ impl ControlStage {
     ) -> Result<Self, HostError> {
         let now = Instant::now();
         let timing = ControlTiming::from(network);
+        let resize = ResizeGate::new(
+            links
+                .virtual_output
+                .as_ref()
+                .map_or(Duration::ZERO, |output| {
+                    Duration::from_millis(u64::from(output.limits.virtual_resize_min_interval_ms))
+                }),
+        );
 
         Ok(Self {
             timing,
@@ -138,6 +147,7 @@ impl ControlStage {
             streaming: false,
             unanswered_hello: None,
             display: None,
+            resize,
             started: now,
             last_heard: now,
             next_keepalive: now + timing.keepalive_interval,
@@ -189,6 +199,7 @@ impl ControlStage {
                 return Ok(());
             }
             self.answer_hello(now)?;
+            self.apply_resize(now);
             self.keep_alive(now)?;
             self.service_clipboard(now);
 
@@ -309,6 +320,7 @@ impl ControlStage {
         shared.client.switch(address);
         self.links.outbox.reset();
         shared.counters.sessions_taken_over.increment();
+        self.resize.reset();
 
         events.clear();
         self.links.replay = replay;
@@ -330,6 +342,7 @@ impl ControlStage {
             self.links.outbox.channel().next_deadline(),
             handshake_deadline,
             keepalive,
+            self.resize.next_deadline(),
             Some(self.last_heard + self.timing.peer_timeout),
         ]
         .into_iter()
@@ -442,7 +455,7 @@ impl ControlStage {
                     self.unanswered_hello = Some(formats);
                 }
                 ControlEvent::Received(ControlMessage::Display(display)) => {
-                    self.display = Some(display);
+                    self.take_display(display);
                 }
                 ControlEvent::Received(ControlMessage::RequestKeyframe { frame }) => {
                     shared.mailbox.request_keyframe(frame);
@@ -584,6 +597,41 @@ impl ControlStage {
                 Err(error)
             }
         }
+    }
+
+    fn take_display(&mut self, display: ClientDisplay) {
+        let counters = &self.links.shared.counters;
+
+        if self.links.shared.negotiation.agreed().is_none() {
+            self.display = Some(display);
+            return;
+        }
+        if self.links.virtual_output.is_none() {
+            return;
+        }
+
+        counters.display_updates_received.increment();
+        if self.resize.submit(display) {
+            counters.display_updates_coalesced.increment();
+        }
+    }
+
+    fn apply_resize(&mut self, now: Instant) {
+        let Some(output) = &self.links.virtual_output else {
+            return;
+        };
+        let Some(display) = self.resize.due(now) else {
+            return;
+        };
+
+        let request = select_output(&display, &output.limits);
+        if self.links.shared.output() == Some(request) {
+            return;
+        }
+
+        output.offer(request);
+        self.links.shared.set_output(request);
+        self.links.shared.counters.virtual_resizes.increment();
     }
 
     fn awaiting_display(&self) -> bool {

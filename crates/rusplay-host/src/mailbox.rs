@@ -31,6 +31,20 @@ pub(crate) struct Delivery<T> {
     pub suspensions: u32,
 }
 
+impl<T> Delivery<T> {
+    pub(crate) const fn idle(suspensions: u32) -> Self {
+        Self {
+            frame: None,
+            keyframe_for: None,
+            keyframe_forced: false,
+            recovery_for: None,
+            acknowledged: None,
+            bitrate_kbps: None,
+            suspensions,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Waited<T> {
     Delivered(Delivery<T>),

@@ -18,7 +18,7 @@ pub fn summary(stats: &HostStats) -> String {
         "rtt {rtt}, frames captured {} encoded {} sent {} dropped {} repeated {}, dmabuf fallbacks {} import failures {} handoff off {}, \
          keyframes {} requested {}, datagrams {}, reported lost {}, undeliverable {}, \
          malformed {} rejected {}, audio {} overruns {}, microphone {} lost {} underruns {}, cursor {}, input packets {} events {} dropped {}, \
-         rumble {} feedback {}",
+         rumble {} feedback {}, virtual resizes {} display updates {} coalesced {}",
         stats.frames_captured,
         stats.frames_encoded,
         stats.frames_sent,
@@ -45,6 +45,9 @@ pub fn summary(stats: &HostStats) -> String {
         stats.input_packets_dropped,
         stats.rumble_sent,
         stats.feedback_sent,
+        stats.virtual_resizes,
+        stats.display_updates_received,
+        stats.display_updates_coalesced,
     )
     .ok();
 

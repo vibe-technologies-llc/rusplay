@@ -184,6 +184,16 @@ pub enum ConfigError {
     EmptyVirtualMaxResolution { width: u32, height: u32 },
     #[error("virtual output refresh limit {0} Hz is outside 1..=1000")]
     VirtualMaxRefreshOutOfRange(u32),
+    #[error(
+        "virtual output minimum {width}x{height} has a zero side or exceeds the virtual output limit"
+    )]
+    VirtualMinResolutionOutOfRange { width: u32, height: u32 },
+    #[error("virtual output resize interval {0} ms is outside 10..=60000")]
+    VirtualResizeIntervalOutOfRange(u32),
+    #[error("virtual output first frame timeout {0} ms is above 10000")]
+    VirtualFirstFrameTimeoutOutOfRange(u32),
+    #[error("display announcement debounce {0} ms is above 5000")]
+    DisplayDebounceOutOfRange(u32),
     #[error("neither XDG_CONFIG_HOME nor HOME names an absolute directory for the config file")]
     NoConfigHome,
     #[error("failed to serialize the configuration")]
@@ -197,6 +207,7 @@ pub enum ConfigError {
 }
 
 impl ConfigError {
+    #[allow(clippy::too_many_lines)]
     pub const fn field(&self) -> Option<&'static str> {
         match self {
             Self::InvalidFrameRate { .. } => Some("video.frame_rate"),
@@ -227,6 +238,14 @@ impl ConfigError {
             Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
             Self::EmptyVirtualMaxResolution { .. } => Some("capture.virtual_max_resolution"),
             Self::VirtualMaxRefreshOutOfRange(_) => Some("capture.virtual_max_refresh_hz"),
+            Self::VirtualMinResolutionOutOfRange { .. } => Some("capture.virtual_min_resolution"),
+            Self::VirtualResizeIntervalOutOfRange(_) => {
+                Some("capture.virtual_resize_min_interval_ms")
+            }
+            Self::VirtualFirstFrameTimeoutOutOfRange(_) => {
+                Some("capture.virtual_first_frame_timeout_ms")
+            }
+            Self::DisplayDebounceOutOfRange(_) => Some("video.display_debounce_ms"),
             Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
             Self::ZeroReassemblyPendingFrames => Some("network.reassembly_max_pending_frames"),
             Self::ZeroReassemblyFragments => Some("network.reassembly_max_fragments"),

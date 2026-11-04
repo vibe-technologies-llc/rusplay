@@ -8,7 +8,7 @@ use std::{
 };
 
 use rusplay_capture::OutputRequest;
-use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Timestamp};
+use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Resolution, Timestamp};
 
 use crate::{
     CaptureFeed, HostError,
@@ -49,6 +49,7 @@ struct Origin {
 }
 
 pub(crate) struct EncodeLinks {
+    pub first_frame_timeout: Duration,
     pub shared: Arc<Shared>,
     pub feed: Arc<CaptureFeed>,
     pub output: SyncSender<Outgoing>,
@@ -57,9 +58,11 @@ pub(crate) struct EncodeLinks {
 
 pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Result<(), HostError> {
     let result = open_negotiated(factory, links).and_then(|opened| match opened {
-        Some(mut opened) => {
-            EncodeStage::default().serve(&mut *opened.pipeline, opened.negotiated, links)
-        }
+        Some(mut opened) => EncodeStage::holding_first_frame(FirstFrameHold::new(
+            links.shared.output().map(|request| request.resolution),
+            links.first_frame_timeout,
+        ))
+        .serve(&mut *opened.pipeline, opened.negotiated, links),
         None => Ok(()),
     });
     links.shared.stop();
@@ -133,8 +136,65 @@ impl References {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    Encode,
+    Wait,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FirstFrameHold {
+    wanted: Option<Resolution>,
+    timeout: Duration,
+    started: Option<Instant>,
+    released: bool,
+}
+
+impl Default for FirstFrameHold {
+    fn default() -> Self {
+        Self::new(None, Duration::ZERO)
+    }
+}
+
+impl FirstFrameHold {
+    fn new(wanted: Option<Resolution>, timeout: Duration) -> Self {
+        Self {
+            wanted,
+            timeout,
+            started: None,
+            released: wanted.is_none() || timeout.is_zero(),
+        }
+    }
+
+    fn judge(&mut self, resolution: Resolution, now: Instant) -> Held {
+        if self.released {
+            return Held::Encode;
+        }
+        if self.wanted == Some(resolution) {
+            self.released = true;
+            return Held::Encode;
+        }
+
+        let started = *self.started.get_or_insert(now);
+        if now.saturating_duration_since(started) >= self.timeout {
+            self.released = true;
+            Held::Encode
+        } else {
+            Held::Wait
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.started
+            .filter(|_| !self.released)
+            .map(|started| started + self.timeout)
+    }
+}
+
 #[derive(Debug, Default)]
 struct EncodeStage {
+    hold: FirstFrameHold,
+    held: Option<Captured>,
     next_number: u32,
     last_keyframe: Option<u32>,
     last_refresh: Option<u32>,
@@ -147,6 +207,22 @@ struct EncodeStage {
 }
 
 impl EncodeStage {
+    fn holding_first_frame(hold: FirstFrameHold) -> Self {
+        Self {
+            hold,
+            ..Self::default()
+        }
+    }
+
+    fn wait_timeout(&self, now: Instant) -> Duration {
+        self.hold
+            .deadline()
+            .filter(|_| self.held.is_some())
+            .map_or(IDLE_WAKE, |deadline| {
+                deadline.saturating_duration_since(now).min(IDLE_WAKE)
+            })
+    }
+
     fn serve(
         &mut self,
         pipeline: &mut dyn VideoPipeline,
@@ -156,10 +232,14 @@ impl EncodeStage {
         let counters = &links.shared.counters;
 
         loop {
-            let delivery = match links.shared.mailbox.wait(IDLE_WAKE) {
+            let delivery = match links.shared.mailbox.wait(self.wait_timeout(Instant::now())) {
                 Waited::Delivered(delivery) => delivery,
-                Waited::Idle if !links.shared.stopped() => continue,
-                Waited::Idle | Waited::Closed => return Ok(()),
+                Waited::Idle if links.shared.stopped() => return Ok(()),
+                Waited::Idle if self.held.is_some() => {
+                    Delivery::idle(links.shared.mailbox.suspensions())
+                }
+                Waited::Idle => continue,
+                Waited::Closed => return Ok(()),
             };
             let Delivery {
                 frame,
@@ -192,6 +272,22 @@ impl EncodeStage {
             if let Some(request) = recovery_for {
                 self.recover(pipeline, request, counters);
             }
+
+            if frame.is_some() {
+                self.held = frame;
+            }
+            let frame = match self.held.take() {
+                Some(captured) => {
+                    match self.hold.judge(captured.frame.resolution, Instant::now()) {
+                        Held::Encode => Some(captured),
+                        Held::Wait => {
+                            self.held = Some(captured);
+                            continue;
+                        }
+                    }
+                }
+                None => None,
+            };
 
             let (encoded, captured_micros) = match frame {
                 Some(Captured {
@@ -354,6 +450,8 @@ fn follows(refresh: Option<u32>, frame: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_capture::{DrmFourcc, Frame, FrameBuffer};
+    use rusplay_core::ColorSpace;
     use rusplay_encode::OutputIndex;
 
     use super::*;
@@ -365,6 +463,92 @@ mod tests {
         }
     }
 
+    const OFFERED: Resolution = Resolution::new(1280, 720);
+    const STALE: Resolution = Resolution::new(1920, 1080);
+    const TIMEOUT: Duration = Duration::from_millis(500);
+    const MS: Duration = Duration::from_millis(1);
+
+    fn captured(resolution: Resolution) -> Captured {
+        Captured {
+            frame: Frame {
+                resolution,
+                format: DrmFourcc::from_code(*b"XR24"),
+                color: ColorSpace::default(),
+                timestamp: Timestamp::ZERO,
+                buffer: FrameBuffer::Shm {
+                    data: vec![0; 4].into(),
+                    stride: 4,
+                },
+            },
+            captured_micros: 0,
+        }
+    }
+
+    #[test]
+    fn nothing_is_held_without_an_offered_size_or_with_a_zero_timeout() {
+        let now = Instant::now();
+
+        assert_eq!(FirstFrameHold::default().judge(STALE, now), Held::Encode);
+        assert_eq!(
+            FirstFrameHold::new(None, TIMEOUT).judge(STALE, now),
+            Held::Encode
+        );
+        assert_eq!(
+            FirstFrameHold::new(Some(OFFERED), Duration::ZERO).judge(STALE, now),
+            Held::Encode
+        );
+    }
+
+    #[test]
+    fn a_frame_of_the_offered_size_releases_the_hold_at_once_and_for_good() {
+        let now = Instant::now();
+        let mut hold = FirstFrameHold::new(Some(OFFERED), TIMEOUT);
+
+        let stale = hold.judge(STALE, now);
+        let offered = hold.judge(OFFERED, now + 80 * MS);
+        let later_stale = hold.judge(STALE, now + 90 * MS);
+
+        assert_eq!(stale, Held::Wait);
+        assert_eq!(offered, Held::Encode);
+        assert_eq!(later_stale, Held::Encode);
+        assert_eq!(hold.deadline(), None);
+    }
+
+    #[test]
+    fn the_timeout_counts_from_the_first_stale_frame_and_then_releases_whatever_arrived() {
+        let now = Instant::now();
+        let mut hold = FirstFrameHold::new(Some(OFFERED), TIMEOUT);
+
+        let first = hold.judge(STALE, now);
+        let deadline = hold.deadline();
+        let before = hold.judge(STALE, now + 499 * MS);
+        let after = hold.judge(STALE, now + 500 * MS);
+
+        assert_eq!(first, Held::Wait);
+        assert_eq!(deadline, Some(now + TIMEOUT));
+        assert_eq!(before, Held::Wait);
+        assert_eq!(after, Held::Encode);
+        assert_eq!(hold.deadline(), None);
+    }
+
+    #[test]
+    fn the_stage_waits_no_longer_than_the_deadline_and_idles_normally_otherwise() {
+        let now = Instant::now();
+        let mut stage = EncodeStage::holding_first_frame(FirstFrameHold::new(
+            Some(OFFERED),
+            Duration::from_millis(5),
+        ));
+
+        let idle = stage.wait_timeout(now);
+        stage.hold.judge(STALE, now);
+        stage.held = Some(captured(STALE));
+        let near = stage.wait_timeout(now);
+        let overdue = stage.wait_timeout(now + 50 * MS);
+
+        assert_eq!(idle, IDLE_WAKE);
+        assert_eq!(near, Duration::from_millis(5));
+        assert_eq!(overdue, Duration::ZERO);
+    }
     #[test]
     fn a_request_for_a_frame_before_the_last_keyframe_is_already_answered() {
         let stage = EncodeStage {

@@ -1,6 +1,6 @@
 use rusplay_core::{ColorPrimaries, Resolution, TransferFunction};
 
-use super::{SERIAL, hardware, observe, stack::Stack};
+use super::{SERIAL, hardware, observe, observe_with, stack::Stack};
 
 const VIRTUAL_SOURCE_BIT: u32 = 4;
 const OUTPUT_REFRESH_HZ: usize = 60;
@@ -57,7 +57,7 @@ fn the_portal_lists_the_virtual_source_type() {
 
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
-fn kwin_takes_the_offered_size_after_a_first_frame_at_its_own() {
+fn the_first_keyframe_has_the_offered_size_because_the_first_frame_is_held() {
     for (width, height, millihertz) in [
         (1280, 720, 60_000),
         (1000, 700, 90_000),
@@ -68,10 +68,47 @@ fn kwin_takes_the_offered_size_after_a_first_frame_at_its_own() {
         };
         observation.report();
 
-        assert_eq!(observation.sizes.first(), Some(&offered(1920, 1080)));
-        assert_eq!(observation.sizes.last(), Some(&offered(width, height)));
+        assert_eq!(observation.sizes, [offered(width, height)]);
         assert!(observation.first.is_some_and(|first| first.keyframe));
+        assert_eq!(observation.keyframe_times.len(), 1);
+        assert_eq!(observation.client.stream_formats_received, 1);
     }
+}
+
+#[test]
+#[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
+fn without_the_hold_kwin_sends_a_keyframe_at_its_own_size_first() {
+    let Some(observation) = observe_with(
+        (1280, 720, 60_000),
+        true,
+        OBSERVED_SECONDS,
+        "virtual_first_frame_timeout_ms = 0",
+    ) else {
+        return;
+    };
+    observation.report();
+
+    assert_eq!(observation.sizes.first(), Some(&offered(1920, 1080)));
+    assert_eq!(observation.sizes.last(), Some(&offered(1280, 720)));
+    assert!(observation.keyframe_times.len() >= 2);
+}
+
+#[test]
+#[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
+fn an_offer_kwin_ignores_is_streamed_at_its_own_size_after_the_timeout() {
+    let Some(observation) = observe_with(
+        (120, 90, 60_000),
+        true,
+        OBSERVED_SECONDS,
+        "virtual_min_resolution = { width = 1, height = 1 }",
+    ) else {
+        return;
+    };
+    observation.report();
+
+    assert_eq!(observation.sizes, [offered(1920, 1080)]);
+    assert!(observation.first.is_some_and(|first| first.keyframe));
+    assert!(observation.frames > 30);
 }
 
 #[test]
@@ -107,8 +144,9 @@ fn a_static_virtual_monitor_delivers_a_frame_at_the_new_size_after_renegotiation
     };
     observation.report();
 
-    assert_eq!(observation.sizes.last(), Some(&offered(1280, 720)));
-    assert!(observation.frames >= 2);
+    assert_eq!(observation.sizes, [offered(1280, 720)]);
+    assert!(observation.first.is_some_and(|first| first.keyframe));
+    assert!(observation.frames >= 1);
 }
 
 #[test]

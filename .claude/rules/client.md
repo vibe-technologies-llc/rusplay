@@ -26,10 +26,23 @@ paths:
   the reference white), so a real display never fails the connect. The app announces its window's
   viewport times the scale factor at connect, `video.frame_rate` as the refresh and
   `StreamWindow::color_target` as the volume (`StreamView::new`); the stream area and the display's
-  true refresh are not known before the window has laid out (`capture-virtual-resize` in
-  `docs/FEATURES.md`). Only a host with a virtual source uses it. The client upscale does not run
+  true refresh are not known before the window has laid out, so the first layout announces the
+  canvas size (below the header) a settle time after connect, one resize at the start of a stream.
+  Only a host with a virtual source uses it. The client upscale does not run
   when the stream size equals the window's target (`target != source` in the present stage), which is
   the point of sizing the host's output to it.
+- `ClientStream::announce_display(ClientDisplay)` stores the newest wanted display in a slot the
+  receive stage takes every pass (so it never blocks the caller, and it is cheap to call from a
+  layout). `DisplayAnnouncer` (`resize.rs`, pure, unit tested) turns the requests into
+  `ControlMessage::Display` sends: a new size is held until it has stayed unchanged for
+  `video.display_debounce_ms` (default 200, 0 to 5000, 0 sends at once) and every different size
+  restarts the wait, so a window drag sends one message when it stops; a request for the size the
+  host already has cancels the pending one; and, because control delivery is unordered, one
+  `Display` is in flight at a time (the connect one included) with the newest sent once it is
+  acknowledged, an undeliverable one being sent again. A full control window leaves it pending.
+  `ClientStats::display_updates_sent` counts the later sends. The app calls it from the canvas
+  prepaint with the canvas area in device pixels whenever that changes, so a window resize,
+  fullscreen and the header hiding all follow (`ui.md`).
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
   control channel right after keys are installed, the host answers with its own `Hello` and starts
   sending video. Before the first video frame, and again whenever any of it changes, the host

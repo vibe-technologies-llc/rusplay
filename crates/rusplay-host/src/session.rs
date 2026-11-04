@@ -286,6 +286,9 @@ impl HostSession {
         stream.spawn(Stage::Send, move || send::run(options, &send_links))?;
 
         let encode_links = EncodeLinks {
+            first_frame_timeout: Duration::from_millis(u64::from(
+                self.config.capture.virtual_first_frame_timeout_ms,
+            )),
             shared: Arc::clone(&shared),
             feed: Arc::clone(feed),
             output,
