@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_int, c_uint, c_void},
+    ffi::{CStr, c_int, c_uint, c_void},
     fs::{File, OpenOptions},
     mem,
     os::fd::AsRawFd,
@@ -99,6 +99,19 @@ impl Display {
 
     pub(crate) fn raw(&self) -> ffi::VADisplay {
         self.raw
+    }
+
+    pub fn vendor(&self) -> Option<String> {
+        let vendor = unsafe { ffi::vaQueryVendorString(self.raw) };
+        if vendor.is_null() {
+            return None;
+        }
+
+        Some(
+            unsafe { CStr::from_ptr(vendor) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 
     pub fn profiles(&self) -> Result<Vec<Profile>, VaError> {

@@ -1,7 +1,7 @@
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat};
 
 use crate::{
-    EncodeError,
+    EncodeError, OutputIndex,
     vaapi::{
         CodecBuffers, INFINITE_INTRA_PERIOD, PackedKind, Picture, StreamInfo,
         bits::{BitWriter, nal_unit, nal_unit_prefix, packed},
@@ -9,6 +9,7 @@ use crate::{
         format::{colour_primaries, full_range, matrix_coefficients, transfer_characteristics},
         hdr::{SeiNal, sei},
         level::{self, Demand, Level},
+        long_term::{Held, LongTermReferences, Reference},
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, PackedHeader, Profile},
     },
@@ -36,6 +37,11 @@ const CODING_TYPE_P: u32 = 2;
 const VIDEO_FORMAT_UNSPECIFIED: u64 = 5;
 const ASPECT_RATIO_SQUARE: u8 = 1;
 const NO_COLLOCATED_PICTURE: u8 = 0xff;
+const LONG_TERM_DEC_PIC_BUFFERING_MINUS1: u32 = 2;
+const SINGLE_DEC_PIC_BUFFERING_MINUS1: u32 = 1;
+const SHORT_TERM_SET_PREVIOUS: u64 = 0;
+const SHORT_TERM_SET_EMPTY: u64 = 1;
+const SHORT_TERM_SET_BITS: u32 = 1;
 
 const INVALID_PICTURE: ffi::VAPictureHEVC = ffi::VAPictureHEVC {
     picture_id: INVALID_SURFACE,
@@ -168,12 +174,6 @@ const fn chroma_scale(chroma: ChromaSubsampling) -> (u32, u32) {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReferencePicture {
-    surface: u32,
-    order: i32,
-}
-
 pub(super) struct HevcStream {
     profile: HevcProfile,
     level: level::Selected,
@@ -182,7 +182,7 @@ pub(super) struct HevcStream {
     crop_right: u32,
     crop_bottom: u32,
     info: StreamInfo,
-    reference: Option<ReferencePicture>,
+    references: LongTermReferences,
 }
 
 impl HevcStream {
@@ -201,12 +201,24 @@ impl HevcStream {
             crop_right: (coded_width - info.resolution.width) / scale_x,
             crop_bottom: (coded_height - info.resolution.height) / scale_y,
             info,
-            reference: None,
+            references: LongTermReferences::new(info.long_term_references),
         }
     }
 
     pub(super) const fn refresh_block_size() -> u32 {
         1 << LOG2_CTB
+    }
+
+    pub(super) fn holds(&self, surface: u32) -> bool {
+        self.references.holds(surface)
+    }
+
+    pub(super) fn acknowledge(&mut self, output: OutputIndex) {
+        self.references.acknowledge(output);
+    }
+
+    pub(super) fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
+        self.references.recover(last_good)
     }
 
     fn ctb_count(&self) -> u32 {
@@ -311,7 +323,11 @@ impl HevcStream {
         rbsp.ue(self.depth_minus8());
         rbsp.ue(LOG2_MAX_POC_LSB - 4);
         rbsp.flag(true);
-        rbsp.ue(1);
+        rbsp.ue(if self.references.enabled() {
+            LONG_TERM_DEC_PIC_BUFFERING_MINUS1
+        } else {
+            SINGLE_DEC_PIC_BUFFERING_MINUS1
+        });
         rbsp.ue(0);
         rbsp.ue(0);
         rbsp.ue(LOG2_MIN_CB - 3);
@@ -324,12 +340,21 @@ impl HevcStream {
         rbsp.flag(true);
         rbsp.flag(true);
         rbsp.flag(false);
-        rbsp.ue(1);
+        let long_term = self.references.enabled();
+        rbsp.ue(if long_term { 2 } else { 1 });
         rbsp.ue(1);
         rbsp.ue(0);
         rbsp.ue(0);
         rbsp.flag(true);
-        rbsp.flag(false);
+        if long_term {
+            rbsp.flag(false);
+            rbsp.ue(0);
+            rbsp.ue(0);
+        }
+        rbsp.flag(long_term);
+        if long_term {
+            rbsp.ue(0);
+        }
         rbsp.flag(false);
         rbsp.flag(false);
 
@@ -409,7 +434,25 @@ impl HevcStream {
         Self::nal(NAL_PPS, rbsp)
     }
 
-    pub(super) fn slice_header(keyframe: bool, order: i32) -> PackedHeader {
+    fn long_term_set(&self, rbsp: &mut BitWriter) {
+        let plan = self.references.plan();
+        let (long_term, used) = match plan.reference {
+            Reference::LongTerm(held) => (Some(held), true),
+            _ => (plan.kept_long_term, false),
+        };
+
+        rbsp.ue(u32::from(long_term.is_some()));
+        if let Some(held) = long_term {
+            rbsp.bits(
+                u64::try_from(held.order & POC_LSB_MASK).unwrap_or(0),
+                LOG2_MAX_POC_LSB,
+            );
+            rbsp.flag(used);
+            rbsp.flag(false);
+        }
+    }
+
+    pub(super) fn slice_header(&self, keyframe: bool, order: i32) -> PackedHeader {
         let mut rbsp = BitWriter::new();
 
         rbsp.flag(true);
@@ -428,6 +471,15 @@ impl HevcStream {
                 LOG2_MAX_POC_LSB,
             );
             rbsp.flag(true);
+            if self.references.enabled() {
+                let set = if matches!(self.references.plan().reference, Reference::Previous(_)) {
+                    SHORT_TERM_SET_PREVIOUS
+                } else {
+                    SHORT_TERM_SET_EMPTY
+                };
+                rbsp.bits(set, SHORT_TERM_SET_BITS);
+                self.long_term_set(&mut rbsp);
+            }
         }
         rbsp.flag(true);
         rbsp.flag(true);
@@ -501,13 +553,26 @@ impl HevcStream {
         parameters
     }
 
-    fn reference_entry(&self) -> Option<ffi::VAPictureHEVC> {
-        self.reference.map(|reference| ffi::VAPictureHEVC {
-            picture_id: reference.surface,
-            pic_order_cnt: reference.order,
-            flags: ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE,
+    fn entry(held: Held, flags: u32) -> ffi::VAPictureHEVC {
+        ffi::VAPictureHEVC {
+            picture_id: held.surface,
+            pic_order_cnt: held.order,
+            flags,
             ..Default::default()
-        })
+        }
+    }
+
+    fn reference_entry(&self) -> Option<ffi::VAPictureHEVC> {
+        match self.references.plan().reference {
+            Reference::Intra => None,
+            Reference::Previous(held) => {
+                Some(Self::entry(held, ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE))
+            }
+            Reference::LongTerm(held) => Some(Self::entry(
+                held,
+                ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE | ffi::VA_PICTURE_HEVC_RPS_LT_CURR,
+            )),
+        }
     }
 
     pub(super) fn picture_parameters(
@@ -515,10 +580,16 @@ impl HevcStream {
         picture: &Picture,
         order: i32,
     ) -> ffi::VAEncPictureParameterBufferHEVC {
+        let plan = self.references.plan();
         let mut parameters = ffi::VAEncPictureParameterBufferHEVC {
             decoded_curr_pic: ffi::VAPictureHEVC {
                 picture_id: picture.recon,
                 pic_order_cnt: order,
+                flags: if plan.mark_long_term {
+                    ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE
+                } else {
+                    0
+                },
                 ..Default::default()
             },
             reference_frames: [INVALID_PICTURE; 15],
@@ -532,8 +603,12 @@ impl HevcStream {
             },
             ..Default::default()
         };
-        if let Some(reference) = self.reference_entry() {
-            parameters.reference_frames[0] = reference;
+        let kept = plan
+            .kept_long_term
+            .map(|held| Self::entry(held, ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE));
+        let held = self.reference_entry().into_iter().chain(kept);
+        for (entry, reference) in parameters.reference_frames.iter_mut().zip(held) {
+            *entry = reference;
         }
 
         let fields = unsafe { &mut parameters.pic_fields.bits };
@@ -608,7 +683,7 @@ impl HevcStream {
                 ),
                 (
                     PackedKind::Slice,
-                    Some(Self::slice_header(picture.keyframe, order)),
+                    Some(self.slice_header(picture.keyframe, order)),
                 ),
             ],
         )?;
@@ -626,9 +701,7 @@ impl HevcStream {
     }
 
     pub(super) fn begin(&mut self, picture: &Picture) {
-        if picture.keyframe {
-            self.reference = None;
-        }
+        self.references.begin(picture.keyframe);
     }
 
     pub(super) fn order(picture: &Picture) -> i32 {
@@ -636,9 +709,6 @@ impl HevcStream {
     }
 
     pub(super) fn commit(&mut self, picture: &Picture, order: i32) {
-        self.reference = Some(ReferencePicture {
-            surface: picture.recon,
-            order,
-        });
+        self.references.commit(picture.recon, order);
     }
 }
