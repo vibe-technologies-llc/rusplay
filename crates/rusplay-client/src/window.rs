@@ -658,6 +658,7 @@ impl Presenter {
             if self.mapped {
                 self.child.unmap();
                 self.mapped = false;
+                self.configured = None;
             }
             return Ok(());
         };
@@ -699,7 +700,10 @@ impl Presenter {
                 self.configured = None;
                 return Ok(());
             }
-            wgpu::CurrentSurfaceTexture::Lost => return Err(ClientError::SurfaceLost),
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.configured = None;
+                return Ok(());
+            }
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err(ClientError::SurfaceValidation);
             }

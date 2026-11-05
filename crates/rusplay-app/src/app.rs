@@ -505,9 +505,6 @@ impl Render for RusplayApp {
                 }
             }))
             .on_action(cx.listener(|this, _: &Quit, _, cx| {
-                if this.input_engaged(cx) {
-                    return;
-                }
                 this.end_stream(cx);
                 this.end_hosting(cx);
                 cx.quit();
