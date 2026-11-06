@@ -160,9 +160,11 @@ impl LongTermReferences {
             .map(|held| held.output)
             .max()?;
         self.previous = None;
-        for slot in &mut self.long_term {
-            if slot.is_some_and(|held| held.output > reference) {
-                *slot = None;
+        for slot in 0..LONG_TERM_SLOTS {
+            let keep = self.long_term[slot].is_some_and(|held| held.output == reference);
+            if !keep {
+                self.long_term[slot] = None;
+                self.first_written[slot] = None;
             }
         }
 
@@ -373,13 +375,9 @@ mod tests {
                 }
             }
         ));
-        assert_eq!(
-            plan.kept_long_term()
-                .map(|(slot, _)| slot)
-                .collect::<Vec<_>>(),
-            [1]
-        );
-        assert_eq!(plan.mark_long_term, None);
+        assert_eq!(plan.kept_long_term().count(), 0);
+        assert!(plan.long_term[1].is_none());
+        assert_eq!(plan.mark_long_term, Some(1));
     }
 
     #[test]

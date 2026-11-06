@@ -282,8 +282,11 @@ paths:
     (no SPS candidates, `num_long_term_ref_pics_sps` 0, and no `delta_poc_msb` because the frame is
     far younger than the 16-bit LSB range), `used_by_curr_pic_lt_flag` 1 on the one it references
     and 0 on the other, with `short_term_ref_pic_set_idx` 1 (the empty set) when it references a
-    long-term frame. A decoder that missed the frames
-    after a candidate still finds it, since the long-term lookup matches any reference picture.
+    long-term frame. A recovery frame lists only the picture it predicts from and drops the other
+    slot: a picture named in the set and missing from the decoder makes the frame undecodable
+    even when prediction does not use it. A decoder that missed the frames
+    after a candidate still finds the one picture that remains, since the long-term lookup
+    matches any reference picture.
     A decoded picture buffer of 4 is below the smallest level limit of 6.
   - The VA parameters list exactly the frames kept (`ReferenceFrames`/`reference_frames`), since
     Mesa evicts the others, with `CurrPic` flagged long-term on a marked frame (H.264 `frame_idx`

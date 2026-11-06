@@ -974,15 +974,12 @@ fn a_recovery_frame_references_the_newest_acknowledged_long_term_frame() {
 
     assert_eq!(reference, Some(OutputIndex(9)));
     assert_eq!(header.short_term_ref_pic_set_idx, 1);
-    assert_eq!(header.num_long_term_pics, 2);
+    assert_eq!(header.num_long_term_pics, 1);
     assert_eq!(header.poc_lsb_lt[0], 9);
     assert!(header.used_by_curr_pic_lt[0]);
-    assert_eq!(header.poc_lsb_lt[1], 1);
-    assert!(!header.used_by_curr_pic_lt[1]);
     assert_eq!(parameters.reference_frames[0].pic_order_cnt, 9);
-    assert_eq!(parameters.reference_frames[1].pic_order_cnt, 1);
     assert_eq!(
-        parameters.reference_frames[2].flags,
+        parameters.reference_frames[1].flags,
         ffi::VA_PICTURE_HEVC_INVALID
     );
     assert_eq!(slice.ref_pic_list0[0].picture_id, picture(9, false).recon);

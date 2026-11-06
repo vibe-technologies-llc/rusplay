@@ -642,19 +642,14 @@ fn a_recovery_frame_references_the_newest_acknowledged_long_term_frame_and_marks
     assert_eq!(reference, Some(OutputIndex(9)));
     assert_eq!(header.frame_num, 13);
     assert_eq!(modifications(&header), vec![(2, 0), (3, 0)]);
-    assert_eq!(marking_operations(&header), Vec::new());
+    assert_eq!(marking_operations(&header), vec![(4, 0), (6, 1)]);
     assert_eq!(
         parameters.ReferenceFrames[0].picture_id,
         picture(9, false).recon
     );
     assert_eq!(parameters.ReferenceFrames[0].TopFieldOrderCnt, 18);
     assert_eq!(
-        parameters.ReferenceFrames[1].picture_id,
-        picture(1, false).recon
-    );
-    assert_eq!(parameters.ReferenceFrames[1].frame_idx, 1);
-    assert_eq!(
-        parameters.ReferenceFrames[2].flags,
+        parameters.ReferenceFrames[1].flags,
         ffi::VA_PICTURE_H264_INVALID
     );
     assert_eq!(slice.RefPicList0[0].picture_id, picture(9, false).recon);

@@ -93,8 +93,10 @@ paths:
   because the decode queue is full, or a decode error on a non-keyframe enters resync. The first
   request of a resync is `RequestRecovery { frame, last_good }` when
   `network.loss_recovery = "reference"` (the default) and the decoder has a last good frame, else
-  `RequestKeyframe { frame }`, naming the first missing frame; it is repeated every
-  `network.keyframe_request_interval_ms` as `RequestKeyframe` until a keyframe or a usable
+  `RequestKeyframe { frame }`, naming the first missing frame. A recovery frame that the
+  decoder rejects is not requested again: the next request is a keyframe. While the decoder
+  accepts pictures, a later loss may try recovery once more. An unanswered request is repeated
+  every `network.keyframe_request_interval_ms` as `RequestKeyframe` until a keyframe or a usable
   recovery frame arrives, and every other frame until then is skipped (counted in
   `frames_skipped`). A recovery frame is usable when its reference is at or before the last good
   frame and not before the last keyframe (`Resync::can_resume_from`, `reference_recoveries`). A

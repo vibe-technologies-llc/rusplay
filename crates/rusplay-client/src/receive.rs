@@ -91,6 +91,12 @@ impl Resync {
         {
             self.last_good = Some(frame);
         }
+        if (self.awaiting_keyframe || self.recovery_tried)
+            && frame.wrapping_sub(self.missing_frame).cast_signed() >= 0
+        {
+            self.awaiting_keyframe = false;
+            self.recovery_tried = false;
+        }
     }
 
     fn can_resume_from(&self, reference: u32) -> bool {
@@ -843,9 +849,6 @@ impl ReceiveStage {
         let already_waiting = self.resync.awaiting_keyframe;
         self.resync.awaiting_keyframe = true;
         self.resync.missing_frame = frame;
-        if !already_waiting {
-            self.resync.recovery_tried = false;
-        }
 
         if !already_waiting || self.resync.retry_due(now, self.timing.keyframe_interval) {
             self.send_refresh_request(now)?;
@@ -1359,6 +1362,52 @@ mod tests {
         let stats = rig.counters.snapshot();
 
         assert_eq!(retry, Some(ControlMessage::RequestKeyframe { frame: 2 }));
+        assert_eq!(stats.recovery_requests_sent, 1);
+        assert!(stats.keyframe_requests_sent >= 1);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_recovery_the_decoder_rejects_asks_for_a_keyframe() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 2);
+        packetizer
+            .packetize(2, false, &video_frame(0, 64, 2))
+            .unwrap();
+        rig.send(
+            &packetizer
+                .packetize(3, false, &video_frame(0, 64, 3))
+                .unwrap(),
+        );
+        let recovery = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestRecovery { .. })
+        });
+        let Some(ControlMessage::RequestRecovery { last_good, .. }) = recovery else {
+            panic!("no recovery request in {recovery:?}");
+        };
+        rig.send(
+            &packetizer
+                .packetize(4, false, &recovery_frame(0, Some(last_good), 64, 4))
+                .unwrap(),
+        );
+        let rejected = rig.next_video();
+        rig.feedback
+            .send(Feedback::DecodeFailed {
+                frame: rejected.number,
+            })
+            .unwrap();
+        let keyframe = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestKeyframe { .. })
+        });
+        let stats = rig.counters.snapshot();
+
+        assert!(matches!(
+            keyframe,
+            Some(ControlMessage::RequestKeyframe { .. })
+        ));
         assert_eq!(stats.recovery_requests_sent, 1);
         assert!(stats.keyframe_requests_sent >= 1);
         assert!(rig.finish().is_ok());
