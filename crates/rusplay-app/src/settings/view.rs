@@ -5,9 +5,12 @@ use std::{
 
 use gpui::{
     Anchor, AnyElement, Context, Entity, EventEmitter, FontWeight, ScrollHandle, Subscription,
-    Window, anchored, deferred, div, point, prelude::*, px,
+    Task, Window, anchored, deferred, div, point, prelude::*, px,
 };
-use rusplay_config::{Config, ConfigEnvironment, ConfigRole};
+use rusplay_config::{
+    Config, ConfigEnvironment, ConfigRole, VideoDecoderConfig, VideoEncoderConfig,
+};
+use rusplay_core::{CodecFormat, FormatSet};
 
 use crate::{
     notice::{Notice, NoticeRaised, error_chain},
@@ -15,6 +18,7 @@ use crate::{
         display::DisplayColorDefaults,
         form::{FormModel, Pair, Value},
         labels::{choice_label, field_matches, section_summary, segmented_choice},
+        outlook::{self, OutlookLine},
         primaries,
         role::{ROLES, load_baseline, role_label},
         schema::{FIELDS, Field, Kind, Section},
@@ -54,6 +58,17 @@ struct RoleState {
     dirty: bool,
 }
 
+#[derive(Clone, PartialEq)]
+enum DeviceKey {
+    Encoder(VideoEncoderConfig),
+    Decoder(VideoDecoderConfig),
+}
+
+struct HardwareProbe {
+    key: DeviceKey,
+    formats: Option<Result<FormatSet, String>>,
+}
+
 enum ScrollTo {
     Top,
     Field(usize),
@@ -80,6 +95,9 @@ pub struct SettingsView {
     open_choice: Option<usize>,
     errors: BTreeMap<usize, String>,
     dirty: bool,
+    probe_generation: u64,
+    probe: Option<HardwareProbe>,
+    probe_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -150,6 +168,9 @@ impl SettingsView {
             open_choice: None,
             errors: BTreeMap::new(),
             dirty: false,
+            probe_generation: 0,
+            probe: None,
+            probe_task: None,
             _subscriptions: Vec::new(),
         };
 
@@ -175,16 +196,19 @@ impl SettingsView {
             }
         }
 
-        Self {
+        let mut view = Self {
             _subscriptions: subscriptions,
             ..view
-        }
+        };
+        view.sync_hardware(cx);
+        view
     }
 
     fn text_edited(&mut self, index: usize, input: &Entity<TextField>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
         self.form.set_text(index, text);
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
@@ -284,6 +308,7 @@ impl SettingsView {
         self.form.set_text(index, text);
         self.open_choice = None;
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
@@ -291,12 +316,14 @@ impl SettingsView {
         let flag = matches!(self.form.value(index), Value::Flag(true));
         self.form.set_flag(index, !flag);
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
     fn toggle_member(&mut self, index: usize, member: &str, cx: &mut Context<Self>) {
         self.form.toggle_member(index, member);
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
@@ -340,6 +367,7 @@ impl SettingsView {
 
         self.form.set_pair(index, position, pair);
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
@@ -347,6 +375,7 @@ impl SettingsView {
         self.form.add_pair(index);
         self.rebuild_pairs(index, cx);
         self.dirty = true;
+        self.sync_hardware(cx);
         cx.notify();
     }
 
@@ -354,11 +383,12 @@ impl SettingsView {
         self.form.remove_pair(index, position);
         self.rebuild_pairs(index, cx);
         self.mark_edited(index);
+        self.sync_hardware(cx);
         cx.notify();
     }
 
     fn reset(&mut self, cx: &mut Context<Self>) {
-        match FormModel::from_config(&self.saved) {
+        match FormModel::from_config(&self.saved, self.role) {
             Ok(form) => self.form = form,
             Err(error) => {
                 cx.emit(NoticeRaised(Notice::Failure(error_chain(&error))));
@@ -368,6 +398,8 @@ impl SettingsView {
 
         self.sync_inputs(cx);
         self.dirty = false;
+        self.sync_hardware(cx);
+        self.settle_section();
         cx.emit(NoticeRaised(Notice::Info(
             "Reverted to the saved settings".to_owned(),
         )));
@@ -414,6 +446,8 @@ impl SettingsView {
         });
         self.role = role;
         self.sync_inputs(cx);
+        self.settle_section();
+        self.sync_hardware(cx);
         self.scroll_to = Some(ScrollTo::Top);
         cx.notify();
     }
@@ -428,7 +462,7 @@ impl SettingsView {
         };
 
         let saved = load_baseline(&self.environment, role).map_err(|error| failure(&error))?;
-        let form = FormModel::from_config(&saved).map_err(|error| failure(&error))?;
+        let form = FormModel::from_config(&saved, role).map_err(|error| failure(&error))?;
 
         Ok(RoleState {
             saved,
@@ -515,6 +549,10 @@ impl SettingsView {
         let searching = self.searching();
 
         for (position, section) in Section::ALL.into_iter().enumerate() {
+            if self.form.visible_fields(section).is_empty() {
+                continue;
+            }
+
             let selected = !searching && self.section == section;
             let matches = self.section_match_count(section);
             let errored = self.section_has_error(section);
@@ -938,7 +976,7 @@ impl SettingsView {
                 count => format!("{count} settings"),
             }
         } else {
-            section_summary(self.section).to_owned()
+            section_summary(self.section, self.role).to_owned()
         };
 
         for (position, role) in ROLES.into_iter().enumerate() {
@@ -1019,6 +1057,162 @@ impl SettingsView {
                     )
                     .child(tab_strip(tabs)),
             )
+    }
+
+    pub fn note_host_launch(&mut self, enabled: bool) {
+        let Some(index) = FIELDS
+            .iter()
+            .position(|field| field.path == "peers.host_on_launch")
+        else {
+            return;
+        };
+        let apply = |saved: &mut Config, form: &mut FormModel| {
+            saved.peers.host_on_launch = enabled;
+            form.set_flag(index, enabled);
+        };
+
+        if self.role == ConfigRole::Host {
+            apply(&mut self.saved, &mut self.form);
+            self.dirty = self.form.build().is_ok_and(|config| config != self.saved);
+        } else if let Some(state) = &mut self.parked {
+            apply(&mut state.saved, &mut state.form);
+            state.dirty = state.form.build().is_ok_and(|config| config != state.saved);
+        }
+    }
+
+    fn settle_section(&mut self) {
+        if !self.form.visible_fields(self.section).is_empty() {
+            return;
+        }
+
+        if let Some(section) = Section::ALL
+            .into_iter()
+            .find(|section| !self.form.visible_fields(*section).is_empty())
+        {
+            self.section = section;
+        }
+    }
+
+    fn sync_hardware(&mut self, cx: &mut Context<Self>) {
+        let Ok(config) = self.form.build() else {
+            return;
+        };
+        let key = match self.role {
+            ConfigRole::Host => DeviceKey::Encoder(config.video.encoder.clone()),
+            ConfigRole::Client => DeviceKey::Decoder(config.video.decoder.clone()),
+        };
+        if self.probe.as_ref().is_some_and(|probe| probe.key == key) {
+            return;
+        }
+
+        self.probe_generation = self.probe_generation.wrapping_add(1);
+        let generation = self.probe_generation;
+        self.probe = Some(HardwareProbe {
+            key: key.clone(),
+            formats: None,
+        });
+        let pending = cx.background_spawn(async move {
+            match key {
+                DeviceKey::Encoder(encoder) => {
+                    rusplay_host::encoder_formats(&encoder).map_err(|error| error.to_string())
+                }
+                DeviceKey::Decoder(decoder) => {
+                    rusplay_client::decoder_formats(&decoder).map_err(|error| error.to_string())
+                }
+            }
+        });
+        self.probe_task = Some(cx.spawn(async move |this, cx| {
+            let formats = pending.await;
+            this.update(cx, |this, cx| {
+                if this.probe_generation == generation
+                    && let Some(probe) = &mut this.probe
+                {
+                    probe.formats = Some(formats);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    fn outlook_lines(&self) -> Vec<OutlookLine> {
+        let mut lines = Vec::new();
+        if let Some(text) = outlook::audio_gap(
+            self.form.text(field_index("audio.codec")).trim(),
+            cfg!(feature = "flac"),
+        ) {
+            lines.push(OutlookLine {
+                text: text.to_owned(),
+                attention: true,
+            });
+        }
+
+        let Ok(config) = self.form.build() else {
+            return lines;
+        };
+        let key = match self.role {
+            ConfigRole::Host => DeviceKey::Encoder(config.video.encoder.clone()),
+            ConfigRole::Client => DeviceKey::Decoder(config.video.decoder.clone()),
+        };
+        let Some(probe) = &self.probe else {
+            return lines;
+        };
+        if probe.key != key {
+            lines.push(checking_line(self.role));
+            return lines;
+        }
+
+        match &probe.formats {
+            None => lines.push(checking_line(self.role)),
+            Some(Err(error)) => lines.push(OutlookLine {
+                text: error.clone(),
+                attention: true,
+            }),
+            Some(Ok(formats)) => match self.role {
+                ConfigRole::Host => lines.push(outlook::encoder_outlook(
+                    outlook::encoder_backend(&config.video.encoder),
+                    CodecFormat::new(config.video.codec, config.video.pixel_format),
+                    *formats,
+                )),
+                ConfigRole::Client => {
+                    lines.extend(outlook::decoder_outlook(
+                        outlook::decoder_backend(&config.video.decoder),
+                        *formats,
+                    ));
+                }
+            },
+        }
+
+        lines
+    }
+
+    fn render_outlook(&self) -> AnyElement {
+        let lines = self.outlook_lines();
+        if lines.is_empty() {
+            return div().into_any_element();
+        }
+
+        div()
+            .flex()
+            .flex_none()
+            .flex_col()
+            .gap_1()
+            .px_6()
+            .py_3()
+            .border_t_1()
+            .border_color(theme::border())
+            .bg(theme::chrome())
+            .children(lines.into_iter().map(|line| {
+                div()
+                    .text_xs()
+                    .text_color(if line.attention {
+                        theme::warning()
+                    } else {
+                        theme::text_muted()
+                    })
+                    .child(line.text)
+            }))
+            .into_any_element()
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1147,6 +1341,7 @@ impl Render for SettingsView {
             fields.children(children)
         };
         let sidebar = self.render_sidebar(cx);
+        let outlook = self.render_outlook();
         let footer = self.render_footer(cx);
         let roles = self.render_roles(match_count, cx);
 
@@ -1159,6 +1354,7 @@ impl Render for SettingsView {
                 .h_full()
                 .child(roles)
                 .child(fields)
+                .child(outlook)
                 .child(footer),
         )
     }
@@ -1175,6 +1371,23 @@ impl SettingsView {
             }
             None => {}
         }
+    }
+}
+
+fn field_index(path: &str) -> usize {
+    FIELDS
+        .iter()
+        .position(|field| field.path == path)
+        .unwrap_or(0)
+}
+
+fn checking_line(role: ConfigRole) -> OutlookLine {
+    OutlookLine {
+        text: match role {
+            ConfigRole::Host => "Checking what this encoder can send…".to_owned(),
+            ConfigRole::Client => "Checking what this decoder can play…".to_owned(),
+        },
+        attention: false,
     }
 }
 

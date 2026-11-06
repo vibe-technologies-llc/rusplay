@@ -8,6 +8,7 @@ mod cursor;
 mod decode;
 mod display;
 mod error;
+mod formats;
 #[cfg(test)]
 mod hardware;
 mod host_book;
@@ -60,6 +61,7 @@ pub use crate::{
         query_target, resolve_target,
     },
     error::{ClientError, Stage},
+    formats::decoder_formats,
     host_book::{HostBook, SavedHost},
     input::InputHandle,
     microphone::default_microphone,

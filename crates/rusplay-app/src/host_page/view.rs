@@ -1,15 +1,18 @@
 use std::time::{Duration, Instant};
 
 use gpui::{Context, EventEmitter, FontWeight, Task, Window, div, prelude::*, px};
-use rusplay_config::ConfigEnvironment;
+use rusplay_config::{ConfigEnvironment, ConfigRole};
 
 use crate::{
     host_page::model::{HostModel, Phase, client_summary, grouped_pin},
     hosting::{self, HostEvent, HostHandle, HostingError, PairedClient, PairedClients, PeerId},
     notice::{Notice, NoticeRaised, error_chain},
     theme,
-    widgets::controls::{ButtonStyle, Tone, badge, button, card, card_heading, status_dot},
+    widgets::controls::{ButtonStyle, Tone, badge, button, card, card_heading, status_dot, toggle},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostLaunchPreference(pub bool);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SIDE_PANEL_WIDTH: f32 = 330.0;
@@ -18,6 +21,7 @@ const ROW_LABEL_WIDTH: f32 = 120.0;
 
 pub struct HostPageView {
     environment: ConfigEnvironment,
+    launch_on_start: bool,
     model: HostModel,
     handle: Option<HostHandle>,
     clients: Option<PairedClients>,
@@ -29,6 +33,7 @@ pub struct HostPageView {
 }
 
 impl EventEmitter<NoticeRaised> for HostPageView {}
+impl EventEmitter<HostLaunchPreference> for HostPageView {}
 
 impl HostPageView {
     pub fn new(environment: ConfigEnvironment, cx: &mut Context<Self>) -> Self {
@@ -43,6 +48,7 @@ impl HostPageView {
 
         let mut view = Self {
             environment,
+            launch_on_start: false,
             model: HostModel::default(),
             handle: None,
             clients: None,
@@ -53,15 +59,23 @@ impl HostPageView {
             _poller: poller,
         };
         view.reopen_clients();
+        view.reload_launch_preference();
 
         view
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.reload_launch_preference();
         if self.model.phase() == Phase::Stopped {
             self.reopen_clients();
         }
         cx.notify();
+    }
+
+    pub fn start_if_requested(&mut self, cx: &mut Context<Self>) {
+        if self.launch_on_start {
+            self.start(cx);
+        }
     }
 
     pub fn shutdown(&mut self) {
@@ -73,6 +87,7 @@ impl HostPageView {
     }
 
     pub fn apply_saved_settings(&mut self, cx: &mut Context<Self>) {
+        self.reload_launch_preference();
         if !self.model.restarts_for_saved_settings() {
             self.refresh(cx);
             return;
@@ -85,6 +100,42 @@ impl HostPageView {
         cx.emit(NoticeRaised(Notice::Info(
             "Restarting the host so the saved settings apply".to_owned(),
         )));
+        cx.notify();
+    }
+
+    fn reload_launch_preference(&mut self) {
+        self.launch_on_start = hosting::load_host_config(&self.environment)
+            .is_ok_and(|config| config.peers.host_on_launch);
+    }
+
+    fn set_launch_on_start(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let mut config = match hosting::load_host_config(&self.environment) {
+            Ok(config) => config,
+            Err(error) => {
+                cx.emit(NoticeRaised(Notice::Failure(format!(
+                    "Could not update hosting on launch: {}",
+                    error_chain(&error)
+                ))));
+                return;
+            }
+        };
+        config.peers.host_on_launch = enabled;
+        let written = self
+            .environment
+            .config_path(ConfigRole::Host)
+            .and_then(|path| config.save(&path));
+
+        match written {
+            Ok(()) => {
+                self.launch_on_start = enabled;
+                cx.emit(HostLaunchPreference(enabled));
+            }
+            Err(error) => cx.emit(NoticeRaised(Notice::Failure(format!(
+                "Could not update hosting on launch: {}",
+                error_chain(&error)
+            )))),
+        }
+
         cx.notify();
     }
 
@@ -342,6 +393,25 @@ impl HostPageView {
                             .text_color(theme::text_muted())
                             .child(status_dot(self.tone()))
                             .child(self.model.status()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .pt_2()
+                            .child(toggle("host-on-launch", self.launch_on_start).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    let enabled = !this.launch_on_start;
+                                    this.set_launch_on_start(enabled, cx);
+                                }),
+                            ))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme::text())
+                                    .child("Start hosting when the app opens"),
+                            ),
                     ),
             )
             .child(

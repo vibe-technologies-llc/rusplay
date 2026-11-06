@@ -18,6 +18,7 @@ pub struct PeersConfig {
     pub pin_file: Option<PathBuf>,
     pub control_socket: bool,
     pub control_socket_path: Option<PathBuf>,
+    pub host_on_launch: bool,
 }
 
 impl Default for PeersConfig {
@@ -31,6 +32,7 @@ impl Default for PeersConfig {
             pin_file: None,
             control_socket: true,
             control_socket_path: None,
+            host_on_launch: false,
         }
     }
 }
@@ -141,6 +143,7 @@ mod tests {
 
         assert!(PeersConfig::default().control_socket);
         assert_eq!(PeersConfig::default().control_socket_path, None);
+        assert!(!PeersConfig::default().host_on_launch);
         assert!(matches!(
             empty.validate(),
             Err(ConfigError::EmptyControlSocketPath)

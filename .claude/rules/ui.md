@@ -229,6 +229,11 @@ paths:
   negotiated format, from which `HostModel::observe` derives per-second rates over 500 ms
   windows. The countdown is computed from the window length and the time the event was seen.
   `HostModel` has no gpui types and is unit tested; the view only renders it.
+- Under the status line, `Start hosting when the app opens` writes `peers.host_on_launch` in
+  `host.toml` at once. The app reads that flag when it opens and starts the host
+  (`HostPageView::start_if_requested`). The headless daemon ignores the flag. Saving host settings
+  reloads the toggle. The same flag is the Hosting row in Host settings, and a change on this page
+  updates that form so a later save does not put the old value back.
 - The page shows the PIN in groups of three while a pairing window is open, with the seconds left
   and `New PIN` (`HostService::renew_pin`, which ends the open window so the loop issues the next
   PIN at once); no PIN is shown while a client streams. The connected client card shows its name,
@@ -282,9 +287,24 @@ paths:
   serde. Choice strings are the serde names, never display labels.
 - `when` only gates the tagged-enum selectors (`video.encoder.backend`,
   `video.encoder.rate_control.mode` and `video.decoder.backend`), because those decide which keys
-  exist at all and the structs are `deny_unknown_fields`. Everything else is always shown and
-  always written, so a value that does not apply to the current codec is never lost on save. A
-  test pins this.
+  exist at all and the structs are `deny_unknown_fields`. Everything else is always written when
+  the row belongs to the role being edited, so a value that does not apply to the current codec is
+  never lost on save. A test pins the `when` paths.
+- Each row also has an audience (`settings/schema.rs`, `audience`): host, client or shared.
+  The Host tab shows the encoder, capture, stream format, downscale and the host's peers and
+  input. The Client tab shows the decoder, presentation, display target, upscale and the client's
+  capture and peers. Shared rows (bitrate, frame rate, audio, network, tone and gamut mapping,
+  and the devices both ends enable) stay on both. A row the role does not show is left out of the
+  saved file, so it returns to its default there; the other role's own file is untouched. A
+  section with no rows for the role disappears from the sidebar.
+- The band above the footer says what this machine will actually use. For the host it probes
+  `encoder_formats` and names the format `FormatSet::closest_to` would send when the selected
+  codec, chroma or depth does not exist (12-bit with no 12-bit encoder becomes the nearest format
+  the encoder can send). For the client it probes `decoder_formats` and names a missing bit depth,
+  chroma or codec, including the deepest depth and widest chroma that remain. A backend that is
+  not compiled, or a device that cannot be opened, is that error. FLAC selected in a build without
+  it says audio will not start. The probe runs off the UI thread and again when the encoder or
+  decoder configuration changes.
 - Switching backend or rate-control mode reveals rows that were absent from the loaded file; their
   initial values come from the config crate's defaults (`RateControl::DEFAULT_VBR`,
   `DEFAULT_CONSTANT_QUALITY` and each encoder and decoder backend's `Default`), never from the UI.

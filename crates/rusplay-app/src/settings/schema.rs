@@ -305,6 +305,85 @@ impl Field {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    Shared,
+    Host,
+    Client,
+}
+
+impl Audience {
+    pub const fn allows(self, host: bool) -> bool {
+        match self {
+            Self::Shared => true,
+            Self::Host => host,
+            Self::Client => !host,
+        }
+    }
+}
+
+pub fn audience(path: &str) -> Audience {
+    const HOST_PREFIXES: &[&str] = &[
+        "capture.",
+        "video.encoder",
+        "video.color.",
+        "video.pixel_format.",
+        "scaling.downscale.",
+    ];
+    const CLIENT_PREFIXES: &[&str] = &[
+        "video.decoder",
+        "video.present",
+        "scaling.upscale.",
+        "color.target.",
+        "color.output.",
+        "color.processing.",
+        "input.hotkey",
+    ];
+    const HOST_PATHS: &[&str] = &[
+        "video.resolution",
+        "video.codec",
+        "video.vbv_frames",
+        "peers.host_name",
+        "peers.host_file",
+        "peers.write_pin_file",
+        "peers.pin_file",
+        "peers.control_socket",
+        "peers.control_socket_path",
+        "peers.host_on_launch",
+        "input.gamepad_personality",
+        "input.sync_locks",
+        "input.accept_remote",
+    ];
+    const CLIENT_PATHS: &[&str] = &[
+        "video.decode_queue_frames",
+        "video.stats_overlay",
+        "video.display_debounce_ms",
+        "peers.client_name",
+        "peers.client_file",
+        "input.pointer_mode",
+        "input.pointer_auto_delay_ms",
+        "input.release_chord",
+        "input.inhibit_shortcuts",
+        "input.pointer_sensitivity",
+        "input.gamepad_deadzone",
+        "input.rumble_max_ms",
+        "input.resend_delay_ms",
+        "input.snapshot_interval_ms",
+    ];
+
+    if HOST_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) || HOST_PATHS.contains(&path) {
+        Audience::Host
+    } else if CLIENT_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+        || CLIENT_PATHS.contains(&path)
+    {
+        Audience::Client
+    } else {
+        Audience::Shared
+    }
+}
+
 pub static FIELDS: &[Field] = &[
     field(
         Section::Video,
@@ -1127,6 +1206,13 @@ pub static FIELDS: &[Field] = &[
         POSITIVE_U32,
     )
     .unit("kbps"),
+    field(
+        Section::Network,
+        "Hosting",
+        "peers.host_on_launch",
+        "Start hosting when the app opens",
+        Kind::Flag,
+    ),
     field(
         Section::Network,
         "Peers",

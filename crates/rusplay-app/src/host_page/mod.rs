@@ -1,4 +1,4 @@
 mod model;
 mod view;
 
-pub use view::HostPageView;
+pub use view::{HostLaunchPreference, HostPageView};

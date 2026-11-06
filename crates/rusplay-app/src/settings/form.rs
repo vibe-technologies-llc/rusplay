@@ -1,16 +1,16 @@
 use std::net::IpAddr;
 
 use rusplay_config::{
-    Config, ConfigError, NvdecDecoderConfig, NvencConfig, RateControl, SoftwareDecoderConfig,
-    SvtAv1Config, VaapiConfig, VaapiDecoderConfig, VideoDecoderConfig, VideoEncoderConfig,
-    X264Config, X265Config,
+    Config, ConfigError, ConfigRole, NvdecDecoderConfig, NvencConfig, RateControl,
+    SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VaapiDecoderConfig, VideoDecoderConfig,
+    VideoEncoderConfig, X264Config, X265Config,
 };
 use thiserror::Error;
 use toml::{Table, Value as Toml};
 
 use crate::settings::{
     primaries,
-    schema::{Condition, FIELDS, Field, Kind, Section},
+    schema::{Condition, FIELDS, Field, Kind, Section, audience},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -96,10 +96,11 @@ impl FormError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormModel {
     values: Vec<Value>,
+    role: ConfigRole,
 }
 
 impl FormModel {
-    pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
+    pub fn from_config(config: &Config, role: ConfigRole) -> Result<Self, ConfigError> {
         let mut sources = vec![to_table(config)?];
         for encoder in encoder_alternatives() {
             let mut alternative = config.clone();
@@ -123,7 +124,7 @@ impl FormModel {
             })
             .collect();
 
-        Ok(Self { values })
+        Ok(Self { values, role })
     }
 
     pub fn value(&self, field: usize) -> &Value {
@@ -186,10 +187,25 @@ impl FormModel {
     }
 
     pub fn is_visible(&self, field: usize) -> bool {
+        audience(FIELDS[field].path).allows(self.role == ConfigRole::Host)
+            && self.conditions_hold(field)
+    }
+
+    fn conditions_hold(&self, field: usize) -> bool {
         FIELDS[field].when.iter().all(|condition| {
-            self.current(condition.path)
+            self.selector(condition.path)
                 .is_some_and(|value| condition.any_of.contains(&value))
         })
+    }
+
+    fn selector(&self, path: &str) -> Option<&str> {
+        (0..FIELDS.len())
+            .find(|&index| {
+                FIELDS[index].path == path
+                    && audience(FIELDS[index].path).allows(self.role == ConfigRole::Host)
+                    && self.conditions_hold(index)
+            })
+            .map(|index| self.text(index))
     }
 
     pub fn visible_fields(&self, section: Section) -> Vec<usize> {
@@ -240,12 +256,6 @@ impl FormModel {
         })?;
 
         Ok(config)
-    }
-
-    fn current(&self, path: &str) -> Option<&str> {
-        (0..FIELDS.len())
-            .find(|&index| FIELDS[index].path == path && self.is_visible(index))
-            .map(|index| self.text(index))
     }
 
     fn field_value(&self, index: usize) -> Result<Option<Toml>, FieldError> {
@@ -538,9 +548,25 @@ mod tests {
     };
 
     use super::*;
+    use crate::settings::schema::{Audience, audience};
 
     fn form(config: &Config) -> FormModel {
-        FormModel::from_config(config).unwrap()
+        form_as(config, ConfigRole::Host)
+    }
+
+    fn client_form(config: &Config) -> FormModel {
+        form_as(config, ConfigRole::Client)
+    }
+
+    fn form_as(config: &Config, role: ConfigRole) -> FormModel {
+        FormModel::from_config(config, role).unwrap()
+    }
+
+    fn role_for(index: usize) -> ConfigRole {
+        match audience(FIELDS[index].path) {
+            Audience::Client => ConfigRole::Client,
+            Audience::Host | Audience::Shared => ConfigRole::Host,
+        }
     }
 
     fn index_of(path: &str, label: &str) -> usize {
@@ -740,14 +766,44 @@ mod tests {
         let config = Config::default();
 
         assert_eq!(form(&config).build().unwrap(), config);
+        assert_eq!(client_form(&config).build().unwrap(), config);
     }
 
     #[test]
-    fn every_encoder_variant_round_trips_through_the_form() {
+    fn each_role_keeps_the_settings_it_owns() {
         for config in populated_configs() {
-            let rebuilt = form(&config).build().unwrap();
+            let host = form(&config).build().unwrap();
+            let client = client_form(&config).build().unwrap();
 
-            assert_eq!(rebuilt, config);
+            assert_eq!(host.video.encoder, config.video.encoder);
+            assert_eq!(host.video.codec, config.video.codec);
+            assert_eq!(host.video.pixel_format, config.video.pixel_format);
+            assert_eq!(host.video.color, config.video.color);
+            assert_eq!(host.capture, config.capture);
+            assert_eq!(host.scaling.downscale, config.scaling.downscale);
+            assert_eq!(host.video.decoder, VideoDecoderConfig::default());
+            assert_eq!(host.color.target, Config::default().color.target);
+            assert!(!host.video.stats_overlay);
+
+            assert_eq!(client.video.decoder, config.video.decoder);
+            assert_eq!(client.color.target, config.color.target);
+            assert_eq!(client.scaling.upscale, config.scaling.upscale);
+            assert_eq!(client.video.present_mode, config.video.present_mode);
+            assert_eq!(client.video.encoder, VideoEncoderConfig::default());
+            assert_eq!(client.capture, Config::default().capture);
+            assert_eq!(client.video.codec, Config::default().video.codec);
+
+            assert_eq!(host.peers.host_name, config.peers.host_name);
+            assert_eq!(host.peers.client_name, None);
+            assert_eq!(client.peers.client_name, config.peers.client_name);
+            assert_eq!(client.peers.host_name, None);
+            assert!(!client.peers.host_on_launch);
+            assert_eq!(host.video.bitrate_kbps, config.video.bitrate_kbps);
+            assert_eq!(client.video.bitrate_kbps, config.video.bitrate_kbps);
+            assert_eq!(host.network, config.network);
+            assert_eq!(client.network, config.network);
+            assert_eq!(form(&host).build().unwrap(), host);
+            assert_eq!(client_form(&client).build().unwrap(), client);
         }
     }
 
@@ -793,7 +849,7 @@ mod tests {
             };
 
             for option in options {
-                let mut model = form(&Config::default());
+                let mut model = form_as(&Config::default(), role_for(index));
                 satisfy(&mut model, index);
                 model.set_flag(first_with_path("input.hotkeys"), false);
                 model.set_text(index, *option);
@@ -813,7 +869,7 @@ mod tests {
 
         for index in fields {
             for name in crate::settings::schema::PRIMARIES {
-                let mut model = form(&Config::default());
+                let mut model = form_as(&Config::default(), role_for(index));
                 model.set_text(index, *name);
                 model.set_flag(first_with_path("input.hotkeys"), false);
 
@@ -826,14 +882,15 @@ mod tests {
     fn custom_primaries_are_kept_and_edited_through_the_form() {
         let custom = populated_configs().pop().unwrap();
         let target = first_with_path("color.target.primaries");
-        let mut model = form(&custom);
+        let host = form(&custom);
+        let mut model = client_form(&custom);
 
         assert!(
-            model
-                .text(first_with_path("video.color.primaries"))
+            host.text(first_with_path("video.color.primaries"))
                 .starts_with("custom ")
         );
-        assert_eq!(model.build().unwrap(), custom);
+        assert_eq!(host.build().unwrap().video.color, custom.video.color);
+        assert_eq!(model.build().unwrap().color.target, custom.color.target);
 
         model.set_text(target, "custom 0.68,0.32 0.265,0.69 0.15,0.06 0.3127,0.329");
         let edited = model.build().unwrap();
@@ -888,15 +945,16 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rusplay-app-form-{}", std::process::id()));
 
-        for (position, config) in populated_configs().into_iter().enumerate() {
-            let path = directory.join(format!("client-{position}.toml"));
+        for role in [ConfigRole::Host, ConfigRole::Client] {
+            for (position, config) in populated_configs().into_iter().enumerate() {
+                let path = directory.join(format!("{role:?}-{position}.toml"));
+                let built = form_as(&config, role).build().unwrap();
+                built.save(&path).unwrap();
+                let reloaded = Config::load(&path).unwrap();
 
-            let built = form(&config).build().unwrap();
-            built.save(&path).unwrap();
-            let reloaded = Config::load(&path).unwrap();
-
-            assert_eq!(form(&reloaded), form(&config));
-            assert_eq!(reloaded, config);
+                assert_eq!(form_as(&reloaded, role), form_as(&built, role));
+                assert_eq!(reloaded, built);
+            }
         }
 
         std::fs::remove_dir_all(&directory).unwrap();
@@ -917,6 +975,36 @@ mod tests {
                 assert!(condition.any_of.iter().all(|value| options.contains(value)));
             }
         }
+    }
+
+    #[test]
+    fn the_other_role_s_encode_and_decode_rows_stay_hidden() {
+        let config = Config::default();
+        let host = form(&config);
+        let client = client_form(&config);
+        let encoder = first_with_path("video.encoder.backend");
+        let decoder = first_with_path("video.decoder.backend");
+        let capture = first_with_path("capture.source");
+        let present = first_with_path("video.present_mode");
+        let launch = first_with_path("peers.host_on_launch");
+        let bitrate = first_with_path("video.bitrate_kbps");
+
+        assert!(host.is_visible(encoder));
+        assert!(!host.is_visible(decoder));
+        assert!(host.is_visible(capture));
+        assert!(!host.is_visible(present));
+        assert!(host.is_visible(launch));
+        assert!(host.is_visible(bitrate));
+
+        assert!(!client.is_visible(encoder));
+        assert!(client.is_visible(decoder));
+        assert!(!client.is_visible(capture));
+        assert!(client.is_visible(present));
+        assert!(!client.is_visible(launch));
+        assert!(client.is_visible(bitrate));
+        assert_eq!(audience("video.encoder.device"), Audience::Host);
+        assert_eq!(audience("video.decoder.device"), Audience::Client);
+        assert_eq!(audience("network.port"), Audience::Shared);
     }
 
     #[test]
@@ -1064,7 +1152,7 @@ mod tests {
     fn a_reused_hotkey_marks_the_row_that_reuses_it() {
         let stats = first_with_path("input.hotkey_stats");
         let disconnect = first_with_path("input.hotkey_disconnect");
-        let mut model = form(&Config::default());
+        let mut model = client_form(&Config::default());
         model.set_text(disconnect, "s");
 
         let issues = model.build().unwrap_err();

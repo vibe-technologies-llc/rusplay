@@ -3,12 +3,12 @@ use gpui::{
     MouseButton, Subscription, Window, actions, div, prelude::*, px,
 };
 use rusplay_client::HostBook;
-use rusplay_config::{Config, ConfigEnvironment};
+use rusplay_config::{Config, ConfigEnvironment, ConfigRole};
 
 use crate::{
     chrome::{self, Frame},
     cli::Launch,
-    host_page::HostPageView,
+    host_page::{HostLaunchPreference, HostPageView},
     hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
     session,
@@ -123,10 +123,7 @@ impl RusplayApp {
         ));
 
         let hosting = cx.new(|cx| HostPageView::new(environment.clone(), cx));
-        subscriptions.push(cx.subscribe(&hosting, |this, _, event: &NoticeRaised, cx| {
-            this.notice = Some(event.0.clone());
-            cx.notify();
-        }));
+        subscriptions.extend(host_subscriptions(&hosting, cx));
 
         let app = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -138,7 +135,7 @@ impl RusplayApp {
             true
         });
 
-        let settings = match FormModel::from_config(&config) {
+        let settings = match FormModel::from_config(&config, ConfigRole::Client) {
             Ok(form) => {
                 let settings =
                     cx.new(|cx| SettingsView::new(config, form, environment.clone(), cx));
@@ -164,6 +161,8 @@ impl RusplayApp {
                 None
             }
         };
+
+        hosting.update(cx, HostPageView::start_if_requested);
 
         let app = Self {
             page: Page::Hosts,
@@ -482,6 +481,27 @@ impl RusplayApp {
                     .child(KEY_HINTS),
             )
     }
+}
+
+fn host_subscriptions(
+    hosting: &Entity<HostPageView>,
+    cx: &mut Context<RusplayApp>,
+) -> Vec<Subscription> {
+    vec![
+        cx.subscribe(hosting, |this, _, event: &NoticeRaised, cx| {
+            this.notice = Some(event.0.clone());
+            cx.notify();
+        }),
+        cx.subscribe(hosting, |this, _, event: &HostLaunchPreference, cx| {
+            let HostLaunchPreference(enabled) = *event;
+            if let Some(settings) = &this.settings {
+                settings.update(cx, |settings, cx| {
+                    settings.note_host_launch(enabled);
+                    cx.notify();
+                });
+            }
+        }),
+    ]
 }
 
 impl Focusable for RusplayApp {

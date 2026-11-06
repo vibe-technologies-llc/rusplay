@@ -27,6 +27,8 @@ paths:
 - `input.clipboard` (`ClipboardDirection`: `off` default, `client-to-host`, `host-to-client`,
   `both`) and `input.clipboard_max_bytes` (default 65536, `ClipboardMaxBytesOutOfRange` outside
   1 to 1048576) are the only switches for clipboard sync (`clipboard.md`); each end reads its own.
+- `peers.host_on_launch` (default off) tells the desktop app to start hosting when it opens.
+  `rusplay-hostd` ignores it, because that process is already the host.
 - The virtual output options are `capture.virtual_max_resolution` and `virtual_max_refresh_hz`
   (upper bounds on what a client's display may ask for), `virtual_min_resolution` (default
   200x200, validated nonzero and within the maximum), `virtual_resize_min_interval_ms` (default

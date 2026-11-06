@@ -12,6 +12,8 @@ paths:
   `UnknownCommand`. A usage error exits with status 2 after printing the
   cause and a pointer to `--help`; any other failure exits with status 1 and prints the cause
   chain.
+- `peers.host_on_launch` is an app setting (`ui.md`). The daemon ignores it and hosts for its
+  whole run.
 - `peers` (`peers.rs`) opens the paired-client store (`PeerStore::open_host`, so `peers.host_file`
   applies) from the same discovered config and exits without touching the GPU, portal or
   network. `list` prints `<id> <name>` per line (never a secret). `forget` takes a name (exact)

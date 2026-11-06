@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use rusplay_config::ConfigRole;
+
 use crate::settings::{
     primaries,
     schema::{Field, Kind, Section},
@@ -24,14 +26,21 @@ pub fn choice_label(value: &str) -> Cow<'static, str> {
     Cow::Owned(sentence_case(value))
 }
 
-pub const fn section_summary(section: Section) -> &'static str {
+pub const fn section_summary(section: Section, role: ConfigRole) -> &'static str {
+    let host = matches!(role, ConfigRole::Host);
+
     match section {
-        Section::Video => "Format, encode, decode and presentation.",
+        Section::Video if host => "Stream format, the encoder and the bitrate.",
+        Section::Video => "Decoder, presentation and the bitrate ceiling.",
         Section::Audio => "Codec, buffers and the microphone.",
+        Section::Network if host => "Socket, transport, discovery and hosting.",
         Section::Network => "Socket, transport, discovery and pairing.",
-        Section::Input => "Keyboard, pointer, gamepads and clipboard.",
+        Section::Input if host => "What the host injects, and the clipboard.",
+        Section::Input => "What the client captures, and the clipboard.",
         Section::Capture => "Source, cursor and the virtual output.",
-        Section::Scaling => "Filters for the picture and its chroma.",
+        Section::Scaling if host => "Downscale filter and chroma siting.",
+        Section::Scaling => "Upscale filter and chroma siting.",
+        Section::Color if host => "Tone and gamut mapping into the stream.",
         Section::Color => "Tone mapping, gamut mapping and the display.",
     }
 }
@@ -299,7 +308,14 @@ mod tests {
     #[test]
     fn every_section_has_a_summary() {
         for section in Section::ALL {
-            assert_ne!(section_summary(section), "");
+            assert_ne!(
+                section_summary(section, rusplay_config::ConfigRole::Host),
+                ""
+            );
+            assert_ne!(
+                section_summary(section, rusplay_config::ConfigRole::Client),
+                ""
+            );
         }
     }
 

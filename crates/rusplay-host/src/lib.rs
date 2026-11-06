@@ -8,6 +8,7 @@ mod cursor;
 mod datagrams;
 mod encode;
 mod error;
+mod formats;
 mod gpu;
 mod handoff;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub use crate::{
     audio::{AudioSource, AudioSourceFactory},
     clipboard::ClipboardOpener,
     error::{HostError, Stage},
+    formats::encoder_formats,
     gpu::Gpu,
     input::{InputFeed, InputTarget},
     microphone::MicrophoneOutputFactory,
