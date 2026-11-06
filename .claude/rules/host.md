@@ -88,8 +88,9 @@ paths:
     (`rusplay-hostd`) to announce; accepting and pairing alone do not raise it.
   - The encode, send and control threads apply `rusplay_priority::ThreadTuning`
     (`.claude/rules/priority.md`) as the first thing they do: encode and control as
-    `ThreadRole::Frame`, send as `ThreadRole::TimerDriven`, so only the send thread also lowers its
-    timer slack. A refused request leaves the thread at its default and is counted in
+    `ThreadRole::Frame`, send, audio and microphone as `ThreadRole::TimerDriven`, so only those
+    three also lower their timer slack and a busy encode thread cannot starve the audio capture
+    or the virtual microphone. A refused request leaves the thread at its default and is counted in
     `HostStats::thread_priority_failures`.
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the

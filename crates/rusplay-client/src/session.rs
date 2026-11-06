@@ -354,7 +354,7 @@ fn authenticate(
 
 const fn thread_role(stage: Stage) -> Option<ThreadRole> {
     match stage {
-        Stage::Receive => Some(ThreadRole::TimerDriven),
+        Stage::Receive | Stage::Audio | Stage::Microphone => Some(ThreadRole::TimerDriven),
         Stage::Decode | Stage::Present => Some(ThreadRole::Frame),
         _ => None,
     }

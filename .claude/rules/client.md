@@ -61,8 +61,10 @@ paths:
   Dropping the stream stops it.
 - The receive, decode and present threads apply `rusplay_priority::ThreadTuning`
   (`.claude/rules/priority.md`) as the first thing they do, in `ClientStream::spawn`: receive as
-  `ThreadRole::TimerDriven` (it waits on timeouts), decode and present as `ThreadRole::Frame`. The
-  audio, microphone, input and gamepad threads keep the default. A refused request leaves the
+  `ThreadRole::TimerDriven` (it waits on timeouts), decode and present as `ThreadRole::Frame`, and
+  the audio and microphone threads as `ThreadRole::TimerDriven` as well, so a decode thread busy
+  with a software decoder or a VAAPI readback cannot keep them at the default nice and starve the
+  playback ring. The input and gamepad threads keep the default. A refused request leaves the
   thread at its default and is counted in `ClientStats::thread_priority_failures`.
 - Receive owns the transport, the `ControlChannel` and one `Reassembler` per media stream (video,
   cursor, and audio when there is an output). It waits in

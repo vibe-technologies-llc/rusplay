@@ -63,8 +63,10 @@ paths:
   frames (`overflows`); the first callback after a consumer appears trims the backlog down to the
   jitter floor, so stale audio never plays.
 - The jitter buffer is `audio.jitter_buffer_ms` (default 10, at most 500). The callback outputs
-  silence until at least `max(target, one quantum)` frames are queued, then plays. If it runs dry
-  it pads the rest of that quantum with silence, counts an `underrun` and re-buffers up to the
+  silence until at least `max(target, one quantum)` frames are queued, then plays. If a quantum
+  arrives short it pads the rest with silence and counts an `underrun` but keeps playing, so a
+  decode thread that briefly delays the audio thread does not open a hole the size of the jitter
+  target. A quantum that finds the ring empty counts an `underrun` and re-buffers up to the
   target. If the queue grows past twice that floor (clock drift, a burst) it drops the surplus
   down to the floor and counts a `trim`, so latency cannot creep up.
 - Lost packets are the caller's to conceal before `submit`: `AudioDecoder::conceal` runs Opus

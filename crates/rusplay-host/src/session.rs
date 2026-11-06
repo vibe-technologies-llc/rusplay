@@ -366,7 +366,7 @@ fn send_options(config: &Config) -> SendOptions {
 const fn thread_role(stage: Stage) -> Option<ThreadRole> {
     match stage {
         Stage::Encode | Stage::Control => Some(ThreadRole::Frame),
-        Stage::Send => Some(ThreadRole::TimerDriven),
+        Stage::Send | Stage::Audio | Stage::Microphone => Some(ThreadRole::TimerDriven),
         _ => None,
     }
 }

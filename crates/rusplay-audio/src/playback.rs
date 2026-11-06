@@ -105,7 +105,9 @@ impl Playout {
         };
         if self.playing && taken < wanted {
             self.counters.underruns.fetch_add(1, Ordering::Relaxed);
-            self.playing = false;
+            if taken == 0 {
+                self.playing = false;
+            }
         }
 
         let mut written = 0;
@@ -483,8 +485,22 @@ mod tests {
 
         fixture.writer.write(&ramp(100, 300));
         fixture.playout.render(&mut out);
+        let continued = samples(&out);
+        assert_eq!(&continued[..100 * CHANNELS], &ramp(100, 300)[..]);
+        assert!(
+            continued[100 * CHANNELS..]
+                .iter()
+                .all(|sample| *sample == 0.0)
+        );
+        assert_eq!(underruns(&fixture), 2);
+
+        fixture.playout.render(&mut out);
         assert!(samples(&out).iter().all(|sample| *sample == 0.0));
-        assert_eq!(underruns(&fixture), 1);
+        assert_eq!(underruns(&fixture), 3);
+        fixture.writer.write(&ramp(100, 400));
+        fixture.playout.render(&mut out);
+        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+        assert_eq!(underruns(&fixture), 3);
     }
 
     #[test]

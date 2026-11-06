@@ -11,10 +11,10 @@ paths:
   `apply(ThreadRole)` runs on the thread it tunes, as the first thing the thread body does, and
   returns the `PriorityError`s of the requests that failed. The caller adds their count to its
   `thread_priority_failures` counter and carries on: a refused request is never fatal.
-- `ThreadRole::Frame` takes the nice value. `ThreadRole::TimerDriven` (the host's send thread, the
-  client's receive thread, both of which sleep on short timeouts) also takes the timer slack
-  (`PR_SET_TIMERSLACK`, 0 leaves the kernel's). `setpriority` on Linux applies to the calling
-  thread, and threads spawned afterwards inherit it.
+- `ThreadRole::Frame` takes the nice value. `ThreadRole::TimerDriven` (the host's send, audio and
+  microphone threads and the client's receive, audio and microphone threads, all of which sleep on
+  short timeouts) also takes the timer slack (`PR_SET_TIMERSLACK`, 0 leaves the kernel's).
+  `setpriority` on Linux applies to the calling thread, and threads spawned afterwards inherit it.
 - `network.frame_thread_nice` 0 leaves the thread alone. When the nice request is refused (no
   `RLIMIT_NICE` headroom) and `network.rtkit_priority` is not 0, the thread asks rtkit
   (`org.freedesktop.RealtimeKit1` on the system bus, through `zbus`'s blocking API) for
