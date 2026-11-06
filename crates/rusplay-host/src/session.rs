@@ -333,7 +333,10 @@ impl HostSession {
         }
 
         let feed = Arc::clone(feed);
-        stream.spawn(Stage::Capture, move || capture::run(&feed, &shared))?;
+        let frame_rate = self.config.video.frame_rate;
+        stream.spawn(Stage::Capture, move || {
+            capture::run(&feed, &shared, frame_rate)
+        })?;
 
         Ok(stream)
     }
