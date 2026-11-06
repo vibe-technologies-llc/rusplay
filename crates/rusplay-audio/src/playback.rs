@@ -105,9 +105,10 @@ impl Playout {
         };
         if self.playing && taken < wanted {
             self.counters.underruns.fetch_add(1, Ordering::Relaxed);
-            if taken == 0 {
-                self.playing = false;
-            }
+            // Even a partial underrun exhausts the queued audio. Rebuild the
+            // jitter buffer before consuming another packet, otherwise small
+            // refills produce repeated sound/silence cycles under load.
+            self.playing = false;
         }
 
         let mut written = 0;
@@ -485,22 +486,20 @@ mod tests {
 
         fixture.writer.write(&ramp(100, 300));
         fixture.playout.render(&mut out);
-        let continued = samples(&out);
-        assert_eq!(&continued[..100 * CHANNELS], &ramp(100, 300)[..]);
-        assert!(
-            continued[100 * CHANNELS..]
-                .iter()
-                .all(|sample| *sample == 0.0)
-        );
-        assert_eq!(underruns(&fixture), 2);
-
-        fixture.playout.render(&mut out);
         assert!(samples(&out).iter().all(|sample| *sample == 0.0));
-        assert_eq!(underruns(&fixture), 3);
+        assert_eq!(underruns(&fixture), 1);
+
         fixture.writer.write(&ramp(100, 400));
         fixture.playout.render(&mut out);
         assert!(samples(&out).iter().all(|sample| *sample == 0.0));
-        assert_eq!(underruns(&fixture), 3);
+        assert_eq!(underruns(&fixture), 1);
+
+        fixture.writer.write(&ramp(280, 500));
+        fixture.playout.render(&mut out);
+        assert_eq!(samples(&out), ramp(240, 300));
+        fixture.playout.render(&mut out);
+        assert_eq!(samples(&out), ramp(240, 540));
+        assert_eq!(underruns(&fixture), 1);
     }
 
     #[test]

@@ -275,6 +275,11 @@ impl Stream {
     ) -> Result<DecodedFrame, DecodeError> {
         self.session.display().sync(surface.id)?;
 
+        let image = self.pool.export_output(surface)?;
+        // Keep the original pool token leased even if export returned a new
+        // allocation. The renderer releases it only after GPU completion.
+        let lease = Arc::clone(&surface.image);
+
         let coded = self.format.coded;
         let resolution = Resolution::new(
             resolution.width.min(coded.width),
@@ -286,7 +291,7 @@ impl Stream {
             format: self.format.pixel_format,
             color: self.color,
             timestamp,
-            buffer: DecodedBuffer::DmaBuf(DmaBufFrame::new(Arc::clone(&surface.image), ())),
+            buffer: DecodedBuffer::DmaBuf(DmaBufFrame::new(image, lease)),
         })
     }
 }

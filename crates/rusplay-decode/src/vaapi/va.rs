@@ -152,6 +152,21 @@ impl SurfacePool {
         }
     }
 
+    pub(super) fn export_output(
+        &self,
+        surface: &PoolSurface,
+    ) -> Result<Arc<DmaBufImage>, DecodeError> {
+        // A VA surface ID is stable, but its backing storage need not be. Ask
+        // the driver for the completed picture rather than reusing the handle
+        // exported when the pool entry was first allocated.
+        let owned = self
+            .owned
+            .iter()
+            .find(|owned| owned.id() == surface.id)
+            .expect("output surface belongs to this pool");
+        Ok(Arc::new(export(owned)?))
+    }
+
     pub(super) fn acquire(&mut self) -> Result<PoolSurface, DecodeError> {
         if let Some(free) = self
             .surfaces
