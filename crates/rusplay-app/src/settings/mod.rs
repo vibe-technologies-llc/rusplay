@@ -1,5 +1,6 @@
 mod display;
 mod form;
+mod labels;
 mod primaries;
 mod role;
 mod schema;

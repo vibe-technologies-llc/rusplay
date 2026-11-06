@@ -166,7 +166,21 @@ pub fn tab(
     }
 }
 
-pub fn list_item(
+pub fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_0p5()
+        .p_0p5()
+        .rounded_lg()
+        .bg(theme::inset())
+        .border_1()
+        .border_color(theme::border())
+        .children(segments)
+}
+
+pub fn segment(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     selected: bool,
@@ -174,21 +188,65 @@ pub fn list_item(
     let base = div()
         .id(id)
         .h(px(OPTION_HEIGHT))
-        .px_2()
+        .px_3()
         .flex()
         .items_center()
         .rounded_md()
         .text_sm()
+        .whitespace_nowrap()
         .cursor_pointer()
         .child(label.into());
 
     if selected {
-        base.bg(theme::accent_soft())
-            .text_color(theme::accent_bright())
+        base.bg(theme::surface_hover())
+            .text_color(theme::text())
+            .font_weight(FontWeight::MEDIUM)
     } else {
-        base.text_color(theme::text())
-            .hover(|style| style.bg(theme::surface_hover()))
+        base.text_color(theme::text_muted())
+            .hover(|style| style.bg(theme::surface()).text_color(theme::text()))
     }
+}
+
+pub fn menu_row(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .min_h(px(OPTION_HEIGHT))
+        .px_2()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_md()
+        .text_sm()
+        .cursor_pointer()
+        .when(selected, |this| this.bg(theme::accent_soft()))
+        .when(!selected, |this| {
+            this.hover(|style| style.bg(theme::surface_hover()))
+        })
+        .child(
+            div()
+                .w(px(14.0))
+                .flex_none()
+                .text_xs()
+                .text_color(theme::accent_bright())
+                .child(if selected { "\u{2713}" } else { "" }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(if selected {
+                    theme::accent_bright()
+                } else {
+                    theme::text()
+                })
+                .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
+                .child(label.into()),
+        )
 }
 
 pub fn select_trigger(
@@ -216,7 +274,7 @@ pub fn select_trigger(
         .text_color(theme::text())
         .cursor_pointer()
         .hover(|style| style.border_color(theme::accent()))
-        .child(label.into())
+        .child(div().flex_1().min_w_0().truncate().child(label.into()))
         .child(
             div()
                 .text_xs()

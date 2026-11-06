@@ -4,8 +4,8 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, Context, Entity, EventEmitter, FontWeight, Subscription, Window, anchored,
-    deferred, div, point, prelude::*, px,
+    Anchor, AnyElement, Context, Entity, EventEmitter, FontWeight, ScrollHandle, Subscription,
+    Window, anchored, deferred, div, point, prelude::*, px,
 };
 use rusplay_config::{Config, ConfigEnvironment, ConfigRole};
 
@@ -14,6 +14,7 @@ use crate::{
     settings::{
         display::DisplayColorDefaults,
         form::{FormModel, Pair, Value},
+        labels::{choice_label, field_matches, section_summary, segmented_choice},
         primaries,
         role::{ROLES, load_baseline, role_label},
         schema::{FIELDS, Field, Kind, Section},
@@ -21,26 +22,26 @@ use crate::{
     theme,
     widgets::{
         controls::{
-            ButtonStyle, Tone, badge, button, card, list_item, option_button, section_title,
-            select_trigger, tab, tab_strip, toggle,
+            ButtonStyle, Tone, badge, button, card, menu_row, option_button, section_title,
+            segment, segmented, select_trigger, tab, tab_strip, toggle,
         },
         text_field::{TextField, TextFieldEvent},
     },
 };
 
-const SEGMENTED_LIMIT: usize = 4;
 const LABEL_WIDTH: f32 = 200.0;
-const INPUT_WIDTH: f32 = 300.0;
-const PRIMARIES_INPUT_WIDTH: f32 = 440.0;
-const SIDEBAR_WIDTH: f32 = 200.0;
+const INPUT_WIDTH: f32 = 280.0;
+const PRIMARIES_INPUT_WIDTH: f32 = 320.0;
+const SIDEBAR_WIDTH: f32 = 216.0;
 const SIDEBAR_ITEM_HEIGHT: f32 = 32.0;
 const SIDEBAR_INDICATOR_WIDTH: f32 = 3.0;
 const SIDEBAR_INDICATOR_HEIGHT: f32 = 16.0;
 const LABEL_TOP: f32 = 7.0;
-const DROPDOWN_WIDTH: f32 = 230.0;
+const DROPDOWN_WIDTH: f32 = 240.0;
 const DROPDOWN_MAX_HEIGHT: f32 = 340.0;
 const DROPDOWN_OFFSET: f32 = 4.0;
 const UNSET_LABEL: &str = "(none)";
+const SEARCH_PLACEHOLDER: &str = "Search";
 
 struct PairInputs {
     key: Entity<TextField>,
@@ -51,6 +52,11 @@ struct RoleState {
     saved: Config,
     form: FormModel,
     dirty: bool,
+}
+
+enum ScrollTo {
+    Top,
+    Field(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,6 +70,10 @@ pub struct SettingsView {
     form: FormModel,
     color_defaults: Option<DisplayColorDefaults>,
     section: Section,
+    search: Entity<TextField>,
+    query: String,
+    scroll: ScrollHandle,
+    scroll_to: Option<ScrollTo>,
     inputs: Vec<Option<Entity<TextField>>>,
     pair_inputs: HashMap<usize, Vec<PairInputs>>,
     pair_subscriptions: HashMap<usize, Vec<Subscription>>,
@@ -116,6 +126,12 @@ impl SettingsView {
         let mut subscriptions = Vec::new();
 
         let color_defaults = DisplayColorDefaults::query();
+        let search = cx.new(|cx| TextField::new("", SEARCH_PLACEHOLDER, cx));
+        subscriptions.push(cx.subscribe(&search, |this, input, event, cx| {
+            if *event == TextFieldEvent::Changed {
+                this.search_edited(&input, cx);
+            }
+        }));
         let mut view = Self {
             environment,
             role: ConfigRole::Client,
@@ -124,6 +140,10 @@ impl SettingsView {
             form,
             color_defaults,
             section: Section::Video,
+            search,
+            query: String::new(),
+            scroll: ScrollHandle::new(),
+            scroll_to: None,
             inputs: Vec::new(),
             pair_inputs: HashMap::new(),
             pair_subscriptions: HashMap::new(),
@@ -179,6 +199,76 @@ impl SettingsView {
                 self.errors.insert(index, error.to_string());
             }
         }
+    }
+
+    fn search_edited(&mut self, input: &Entity<TextField>, cx: &mut Context<Self>) {
+        input.read(cx).text().clone_into(&mut self.query);
+        self.open_choice = None;
+        self.scroll_to = Some(ScrollTo::Top);
+        cx.notify();
+    }
+
+    fn clear_search(&mut self, cx: &mut Context<Self>) {
+        if self.query.is_empty() {
+            return;
+        }
+
+        self.query.clear();
+        self.search.update(cx, |field, cx| field.set_text("", cx));
+        self.open_choice = None;
+        self.scroll_to = Some(ScrollTo::Top);
+        cx.notify();
+    }
+
+    fn show_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        self.section = section;
+        self.open_choice = None;
+        self.scroll_to = Some(ScrollTo::Top);
+
+        if !self.query.is_empty() {
+            self.query.clear();
+            self.search.update(cx, |field, cx| field.set_text("", cx));
+        }
+
+        cx.notify();
+    }
+
+    fn searching(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
+    fn listed_fields(&self) -> Vec<usize> {
+        if !self.searching() {
+            return self.form.visible_fields(self.section);
+        }
+
+        let query = self.query.trim();
+
+        Section::ALL
+            .into_iter()
+            .flat_map(|section| self.form.visible_fields(section))
+            .filter(|index| field_matches(&FIELDS[*index], query))
+            .collect()
+    }
+
+    fn section_has_error(&self, section: Section) -> bool {
+        self.errors
+            .keys()
+            .any(|index| FIELDS[*index].section == section)
+    }
+
+    fn section_match_count(&self, section: Section) -> usize {
+        if !self.searching() {
+            return 0;
+        }
+
+        let query = self.query.trim();
+
+        self.form
+            .visible_fields(section)
+            .into_iter()
+            .filter(|index| field_matches(&FIELDS[*index], query))
+            .count()
     }
 
     fn choose(&mut self, index: usize, option: &str, cx: &mut Context<Self>) {
@@ -324,6 +414,7 @@ impl SettingsView {
         });
         self.role = role;
         self.sync_inputs(cx);
+        self.scroll_to = Some(ScrollTo::Top);
         cx.notify();
     }
 
@@ -368,6 +459,9 @@ impl SettingsView {
 
                 if let Some((&first, _)) = self.errors.first_key_value() {
                     self.section = FIELDS[first].section;
+                    self.query.clear();
+                    self.search.update(cx, |field, cx| field.set_text("", cx));
+                    self.scroll_to = Some(ScrollTo::Field(first));
                 }
 
                 let mut message = format!("{} setting(s) need attention", issues.len());
@@ -418,8 +512,12 @@ impl SettingsView {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut items = Vec::with_capacity(Section::ALL.len());
 
+        let searching = self.searching();
+
         for (position, section) in Section::ALL.into_iter().enumerate() {
-            let selected = self.section == section;
+            let selected = !searching && self.section == section;
+            let matches = self.section_match_count(section);
+            let errored = self.section_has_error(section);
 
             items.push(
                 div()
@@ -428,7 +526,7 @@ impl SettingsView {
                     .items_center()
                     .gap_2()
                     .h(px(SIDEBAR_ITEM_HEIGHT))
-                    .pr_3()
+                    .pr_2()
                     .rounded_md()
                     .cursor_pointer()
                     .text_sm()
@@ -443,11 +541,7 @@ impl SettingsView {
                             })
                         }
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.section = section;
-                        this.open_choice = None;
-                        cx.notify();
-                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_section(section, cx)))
                     .child(
                         div()
                             .w(px(SIDEBAR_INDICATOR_WIDTH))
@@ -455,7 +549,24 @@ impl SettingsView {
                             .rounded_full()
                             .when(selected, |this| this.bg(theme::brand())),
                     )
-                    .child(section.title()),
+                    .child(div().flex_1().min_w_0().truncate().child(section.title()))
+                    .when(searching && matches > 0, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::accent_bright())
+                                .child(matches.to_string()),
+                        )
+                    })
+                    .when(errored, |this| {
+                        this.child(
+                            div()
+                                .size(px(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(theme::danger()),
+                        )
+                    }),
             );
         }
 
@@ -484,12 +595,7 @@ impl SettingsView {
                             .text_color(theme::text())
                             .child("Settings"),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_subtle())
-                            .child("Every option, one place"),
-                    ),
+                    .child(div().w_full().pt_3().child(self.search.clone())),
             )
             .children(items)
     }
@@ -504,7 +610,7 @@ impl SettingsView {
                     .on_click(cx.listener(move |this, _, _, cx| this.flip(index, cx)))
                     .into_any_element()
             }
-            Kind::Choice(options) if options.len() <= SEGMENTED_LIMIT && !field.optional => {
+            Kind::Choice(options) if segmented_choice(field.optional, options) => {
                 self.render_segmented(index, options, cx)
             }
             Kind::Choice(options) => self.render_dropdown(index, options, field.optional, cx),
@@ -551,7 +657,12 @@ impl SettingsView {
 
     fn render_primaries(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let selector = self.render_dropdown(index, primaries::CHOICES, FIELDS[index].optional, cx);
-        let mut row = div().flex().items_center().gap_2().child(selector);
+        let mut row = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(selector);
 
         if primaries::is_custom(self.form.text(index))
             && let Some(input) = self.inputs[index].clone()
@@ -575,21 +686,16 @@ impl SettingsView {
 
         for (position, option) in options.iter().copied().enumerate() {
             buttons.push(
-                option_button(
+                segment(
                     ("choice", index * 100 + position),
-                    option,
+                    choice_label(option).into_owned(),
                     current == option,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.choose(index, option, cx))),
             );
         }
 
-        div()
-            .flex()
-            .flex_wrap()
-            .gap_1()
-            .children(buttons)
-            .into_any_element()
+        segmented(buttons).into_any_element()
     }
 
     fn render_chips(
@@ -608,7 +714,7 @@ impl SettingsView {
             chips.push(
                 option_button(
                     ("chip", index * 100 + position),
-                    option,
+                    choice_label(option).into_owned(),
                     selected.iter().any(|member| member == option),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle_member(index, option, cx))),
@@ -636,7 +742,7 @@ impl SettingsView {
         let shown = if current.is_empty() {
             unset.clone()
         } else {
-            current.clone()
+            choice_label(&current).into_owned()
         };
         let open = self.open_choice == Some(index);
 
@@ -671,9 +777,9 @@ impl SettingsView {
                 let label = if option.is_empty() {
                     unset.clone()
                 } else {
-                    option.to_owned()
+                    choice_label(option).into_owned()
                 };
-                list_item(
+                menu_row(
                     ("dropdown-option", index * 100 + position),
                     label,
                     current == option,
@@ -685,7 +791,7 @@ impl SettingsView {
             .relative()
             .child(
                 select_trigger(("dropdown", index), shown, open)
-                    .min_w(px(DROPDOWN_WIDTH))
+                    .w(px(DROPDOWN_WIDTH))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_choice = if this.open_choice == Some(index) {
                             None
@@ -768,10 +874,12 @@ impl SettingsView {
             .flex()
             .flex_col()
             .gap_1()
+            .px_4()
             .py_3()
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .items_start()
                     .gap_4()
                     .child(
@@ -780,34 +888,58 @@ impl SettingsView {
                             .flex_none()
                             .pt(px(LABEL_TOP))
                             .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(theme::text())
                             .child(field.label),
                     )
-                    .child(control)
-                    .when(!field.unit.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .pt(px(LABEL_TOP))
-                                .text_sm()
-                                .text_color(theme::text_subtle())
-                                .child(field.unit),
-                        )
-                    }),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(control)
+                                    .when(!field.unit.is_empty(), |this| {
+                                        this.child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme::text_subtle())
+                                                .child(field.unit),
+                                        )
+                                    }),
+                            )
+                            .when_some(error, |this, error| {
+                                this.child(div().text_xs().text_color(theme::danger()).child(error))
+                            }),
+                    ),
             )
-            .when_some(error, |this, error| {
-                this.child(
-                    div()
-                        .ml(px(LABEL_WIDTH + 16.0))
-                        .text_xs()
-                        .text_color(theme::danger())
-                        .child(error),
-                )
-            })
             .into_any_element()
     }
 
-    fn render_roles(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_roles(&self, match_count: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut tabs = Vec::with_capacity(ROLES.len());
+        let searching = self.searching();
+        let title = if searching {
+            "Results"
+        } else {
+            self.section.title()
+        };
+        let detail = if searching {
+            match match_count {
+                0 => "Nothing matches this search".to_owned(),
+                1 => "1 setting".to_owned(),
+                count => format!("{count} settings"),
+            }
+        } else {
+            section_summary(self.section).to_owned()
+        };
 
         for (position, role) in ROLES.into_iter().enumerate() {
             let unsaved = if role == self.role {
@@ -815,14 +947,13 @@ impl SettingsView {
             } else {
                 self.parked.as_ref().is_some_and(|state| state.dirty)
             };
-            let label = if unsaved {
-                format!("{} config (unsaved)", role_label(role))
-            } else {
-                format!("{} config", role_label(role))
-            };
 
             tabs.push(
-                tab(("role", position), label, role == self.role)
+                tab(("role", position), role_label(role), role == self.role)
+                    .gap_1p5()
+                    .when(unsaved, |this| {
+                        this.child(div().size(px(6.0)).rounded_full().bg(theme::warning()))
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_role(role, cx))),
             );
         }
@@ -832,17 +963,48 @@ impl SettingsView {
             .flex_none()
             .items_center()
             .justify_between()
-            .gap_3()
+            .gap_4()
             .px_6()
             .py_3()
             .border_b_1()
             .border_color(theme::border())
             .child(
                 div()
-                    .text_xl()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme::text())
-                    .child(self.section.title()),
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .flex_col()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::text())
+                                    .child(title),
+                            )
+                            .when(searching, |this| {
+                                this.child(
+                                    button(
+                                        "settings-search-clear",
+                                        "Clear",
+                                        ButtonStyle::Quiet,
+                                        true,
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| this.clear_search(cx))),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::text_muted())
+                            .child(detail),
+                    ),
             )
             .child(
                 div()
@@ -884,7 +1046,17 @@ impl SettingsView {
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .when(self.dirty, |this| {
+                    .when(!self.errors.is_empty(), |this| {
+                        let count = self.errors.len();
+                        let label = if count == 1 {
+                            "1 setting needs attention".to_owned()
+                        } else {
+                            format!("{count} settings need attention")
+                        };
+
+                        this.child(badge(label, Tone::Danger))
+                    })
+                    .when(self.dirty && self.errors.is_empty(), |this| {
                         this.child(badge("Unsaved changes", Tone::Warning))
                     })
                     .child(
@@ -915,32 +1087,68 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let visible = self.form.visible_fields(self.section);
-        let mut groups: Vec<(&'static str, Vec<AnyElement>)> = Vec::new();
+        let searching = self.searching();
+        let visible = self.listed_fields();
+        let match_count = visible.len();
+        let anchor = self.scroll_to.take();
+        let anchor_field = match anchor {
+            Some(ScrollTo::Field(field)) => Some(field),
+            Some(ScrollTo::Top) | None => None,
+        };
+        let mut groups: Vec<(String, Vec<AnyElement>, bool)> = Vec::new();
 
         for index in visible {
             let field = &FIELDS[index];
+            let heading = if searching {
+                format!("{} · {}", field.section.title(), field.group)
+            } else {
+                field.group.to_owned()
+            };
+            let anchored = anchor_field == Some(index);
             let row = self.render_field(index, cx);
+
             match groups.last_mut() {
-                Some((group, rows)) if *group == field.group => {
+                Some((group, rows, group_anchored)) if group == &heading => {
                     rows.push(divider().into_any_element());
                     rows.push(row);
+                    *group_anchored |= anchored;
                 }
-                _ => groups.push((field.group, vec![row])),
+                _ => groups.push((heading, vec![row], anchored)),
             }
         }
 
-        let cards = groups.into_iter().map(|(group, rows)| {
-            div()
-                .flex()
-                .flex_col()
-                .child(section_title(group))
-                .child(card().py_1().children(rows))
-        });
+        let mut children = Vec::with_capacity(groups.len() * 2);
+        let mut anchor_child = None;
 
+        for (heading, rows, anchored) in groups {
+            if anchored && anchor_child.is_none() {
+                anchor_child = Some(children.len());
+            }
+
+            children.push(section_title(heading).into_any_element());
+            children.push(card().p_0().py_1().children(rows).into_any_element());
+        }
+
+        self.apply_scroll(anchor.as_ref(), anchor_child);
+
+        let mut fields = div()
+            .id("settings-fields")
+            .track_scroll(&self.scroll)
+            .flex()
+            .flex_col()
+            .gap_1()
+            .flex_1()
+            .overflow_y_scroll()
+            .px_6()
+            .pb_8();
+        fields = if children.is_empty() {
+            fields.child(empty_results(searching))
+        } else {
+            fields.children(children)
+        };
         let sidebar = self.render_sidebar(cx);
         let footer = self.render_footer(cx);
-        let roles = self.render_roles(cx);
+        let roles = self.render_roles(match_count, cx);
 
         div().flex().size_full().child(sidebar).child(
             div()
@@ -950,20 +1158,64 @@ impl Render for SettingsView {
                 .min_w_0()
                 .h_full()
                 .child(roles)
-                .child(
-                    div()
-                        .id("settings-fields")
-                        .flex_1()
-                        .overflow_y_scroll()
-                        .px_6()
-                        .pb_6()
-                        .child(div().flex().flex_col().gap_2().children(cards)),
-                )
+                .child(fields)
                 .child(footer),
         )
     }
 }
 
+impl SettingsView {
+    fn apply_scroll(&self, anchor: Option<&ScrollTo>, child: Option<usize>) {
+        match anchor {
+            Some(ScrollTo::Top) => self.scroll.set_offset(point(px(0.0), px(0.0))),
+            Some(ScrollTo::Field(_)) => {
+                if let Some(child) = child {
+                    self.scroll.scroll_to_top_of_item(child);
+                }
+            }
+            None => {}
+        }
+    }
+}
+
 fn divider() -> impl IntoElement {
-    div().h(px(1.0)).bg(theme::border())
+    div().mx_4().h(px(1.0)).bg(theme::border())
+}
+
+fn empty_results(searching: bool) -> impl IntoElement {
+    let (title, detail) = if searching {
+        (
+            "No matching settings",
+            "Try the name from the config file, or clear the search.",
+        )
+    } else {
+        (
+            "Nothing to show in this section",
+            "The current choices hide every option here.",
+        )
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_2()
+        .mt_8()
+        .py_10()
+        .rounded_xl()
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::surface())
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme::text())
+                .child(title),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme::text_muted())
+                .child(detail),
+        )
 }

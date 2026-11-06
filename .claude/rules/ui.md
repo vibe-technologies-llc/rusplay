@@ -256,9 +256,15 @@ paths:
   optional, and `when` conditions. `settings/form.rs` (`FormModel`, no gpui types) holds one
   `Value` per row, converts a `Config` into rows and rows back into a TOML table that is
   deserialized into `Config` and then `validate()`d. `settings/view.rs` renders rows by `Kind`:
-  toggles for flags, segmented buttons for up to four choices, dropdowns beyond that (optional
-  choices gain a `(none)` entry), chips for multi-choices, `TextField` for numbers and text, and
-  an editable list for `params`.
+  toggles for flags, one segmented control for a closed set of at most four short choices,
+  dropdowns for longer sets and for optional choices (the empty choice is `(none)`, or the
+  display's reported value for an unset colour target), chips for multi-choices, `TextField` for
+  numbers and text, and an editable list for `params`. Choice text comes from `choice_label` in
+  `settings/labels.rs`, a readable name; the value stored in the form stays the serde name. The
+  sidebar search field filters every visible row by its label, group, path, unit, section and
+  choice name, and lists matches from every section until the search is cleared or a section is
+  chosen. A section with a field error carries a mark, and the footer names how many settings
+  need attention.
 - `Kind::Primaries` (`settings/primaries.rs`) is one text value: a named set, or
   `custom RX,RY GX,GY BX,BY WX,WY` for a `primaries.custom` table. The view shows a dropdown of
   the names plus `custom` (choosing it seeds the BT.709 points, or keeps the edited ones) and,
@@ -280,14 +286,16 @@ paths:
   `DEFAULT_CONSTANT_QUALITY` and each encoder and decoder backend's `Default`), never from the UI.
 - Errors are per field. Typed parsing reports on the edited field as the user types; `Save` runs
   every visible row, collects all type errors, and only when there are none runs
-  `Config::validate`, whose `ConfigError::field()` names the row to mark. A rejected save jumps to
-  the section of the first marked row.
+  `Config::validate`, whose `ConfigError::field()` names the row to mark. A rejected save clears
+  the search, jumps to the section of the first marked row and scrolls that row's group to the
+  top. Changing section, role or the search text also returns the list to the top.
 - The page edits one config role at a time, chosen by the `Editing` tabs above the fields
   (`settings/role.rs`): `client.toml`, which the app itself loads, or `host.toml`, which
   `rusplay-hostd` discovers. Each role has its own baseline: the first visit to the host tab reads
   `host.toml` (defaults when it is missing, an error notice and no switch when it is malformed),
   never the client values. The inactive role's form, saved config and unsaved flag are parked in
-  `SettingsView::parked`, so switching keeps unsaved edits and the tab names which role has them.
+  `SettingsView::parked`, so switching keeps unsaved edits and a mark on the tab shows which role
+  has them.
   `Save` and `Revert` act on the active role only. Both go through `Config::save` (validate, then
   write a sibling temporary file and rename it over the target). Save is enabled only while the
   form differs from the saved config: an unchanged form, including one edited and then put back,
