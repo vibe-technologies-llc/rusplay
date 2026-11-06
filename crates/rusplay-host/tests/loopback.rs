@@ -190,6 +190,7 @@ fn client_config() -> Config {
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = u8::MAX;
     config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
+    config.input.gamepads = false;
     config
 }
 

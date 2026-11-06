@@ -149,7 +149,7 @@ impl HostModel {
         self.format.map(|format| {
             if format.is_fallback() {
                 format!(
-                    "{} instead of the configured {}, which the encoder or client lacks",
+                    "Negotiated {}; configured {}",
                     format.chosen, format.configured
                 )
             } else {
@@ -399,6 +399,29 @@ mod tests {
             },
             format: None,
         }
+    }
+
+    #[test]
+    fn negotiated_format_reports_the_selection_without_claiming_codec_support() {
+        let configured = rusplay_core::CodecFormat::new(
+            rusplay_core::Codec::Hevc,
+            rusplay_core::PixelFormat::default(),
+        );
+        let chosen = rusplay_core::CodecFormat::new(rusplay_core::Codec::Av1, configured.format);
+        let mut model = running();
+        model.format = Some(NegotiatedFormat { configured, chosen });
+
+        assert_eq!(
+            model.format_line().unwrap(),
+            format!("Negotiated {chosen}; configured {configured}")
+        );
+
+        model.format = Some(NegotiatedFormat {
+            configured,
+            chosen: configured,
+        });
+
+        assert_eq!(model.format_line().unwrap(), configured.to_string());
     }
 
     #[test]

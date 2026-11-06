@@ -177,20 +177,24 @@ paths:
 - Statistics: the same poll feeds `StatsSampler` with `ClientStream::stats()` and the
   `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
   counter deltas into per-second rates and the timing deltas into average and peak client latency
-  (`received_at` to `submitted_at`, split at `decoded_at`), and the header shows them as a muted
-  line under the state, which the `Hide stats`/`Show stats` button and the stats hotkey toggle. Occasional counters (superseded, keyframe requests, decode errors, audio
-  underruns) appear only while non-zero. The line starts with the capture-to-present figure
+  (`received_at` to `submitted_at`, split at `decoded_at`). A scrollable vertical connection
+  details panel beside the picture shows the host and address, RTT, negotiated codec, resolution,
+  bit depth, chroma and colour, the configured format on fallback, requested bitrate and adaptive
+  bitrate target, frame rates, loss and recovery rates, and latency stages. Unavailable timings
+  have a waiting state. The `Hide details`/`Connection details` button, panel Close button and stats
+  hotkey toggle it. The panel is omitted in fullscreen, where the existing optional overlay remains.
+  The capture-to-present figure
   (`ClientStats::capture_to_present`, with `capture_to_receive` and `capture_to_decode` as its
-  stages, from the host clock offset; absent until the first clock pong) followed by the client
+  stages, from the host clock offset; absent until the first clock pong) appears alongside the client
   side latency measured from `PresentedFrame`. When the window has presentation feedback,
   `StreamRates::with_presentation(&StreamWindow::presentation())` adds `DisplayTiming`: the
-  summary gains "submit to display at <rate>" (`variable refresh` without a fixed one) and the
+  panel shows submit-to-display latency, display refresh (`Variable` without a fixed one) and the
   capture-to-display figure, the overlay a `DISPLAY +x MS  <n> HZ|VRR` line and an `E2E` line under
   it.
   With `video.stats_overlay` (default off) the same rates are also drawn over the picture, for
   when the header is hidden: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
   hands it to `StreamWindow::set_overlay` on every new sample and on the toggle. The overlay
-  follows the same `Hide stats`/`Show stats` button and stats hotkey as the header line, so
+  follows the same details toggle and stats hotkey as the panel, so
   it is the control that remains in fullscreen.
   With `network.stats_json` the same poll also writes the raw `ClientStats` to stdout as JSON
   lines (`JsonReporter` in `stats.rs`, formatting in `rusplay-client`): one every

@@ -151,22 +151,6 @@ impl DisplayTiming {
             |refresh| format!("{:.0} HZ", 1.0 / refresh.as_secs_f64()),
         )
     }
-
-    fn summary(self) -> String {
-        let rate = self.refresh.map_or_else(
-            || "variable refresh".to_owned(),
-            |refresh| format!("{:.0} Hz", 1.0 / refresh.as_secs_f64()),
-        );
-        let submit = format!(
-            "{:.1} ms submit to display at {rate}",
-            millis(self.submit_to_display)
-        );
-
-        match self.capture_to_display {
-            Some(capture) => format!("{submit}, {:.1} ms capture to display", millis(capture)),
-            None => submit,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -271,63 +255,6 @@ impl StreamRates {
         }
 
         OverlayText::new(lines)
-    }
-
-    pub fn summary(&self) -> String {
-        let mut parts = vec![format!("{:.0} fps", self.presented_fps)];
-
-        if let Some(end_to_end) = self.end_to_end {
-            parts.push(end_to_end.summary());
-        }
-        if let Some(display) = self.display {
-            parts.push(display.summary());
-        }
-        if let Some(latency) = self.latency {
-            parts.push(format!(
-                "{:.1} ms client (decode {:.1}, present {:.1}, peak {:.1})",
-                millis(latency.total()),
-                millis(latency.decode),
-                millis(latency.present),
-                millis(latency.peak)
-            ));
-        }
-        parts.push(format!("received {:.0} fps", self.received_fps));
-        parts.push(format!("lost {:.1}/s", self.frames_lost));
-        parts.push(format!("recovered {:.1}/s", self.frames_recovered));
-
-        let occasional = [
-            ("superseded", self.frames_superseded),
-            ("keyframe requests", self.keyframe_requests),
-            ("decode errors", self.decode_errors),
-            ("audio underruns", self.audio_underruns),
-        ];
-        parts.extend(
-            occasional
-                .into_iter()
-                .filter(|(_, rate)| *rate > 0.0)
-                .map(|(label, rate)| format!("{label} {rate:.1}/s")),
-        );
-
-        parts.join(" · ")
-    }
-}
-
-impl EndToEnd {
-    fn summary(self) -> String {
-        let stages = [("receive", self.receive), ("decode", self.decode)]
-            .into_iter()
-            .filter_map(|(label, time)| time.map(|time| format!("{label} {:.1}", millis(time))))
-            .collect::<Vec<_>>();
-
-        if stages.is_empty() {
-            format!("{:.1} ms capture to present", millis(self.present))
-        } else {
-            format!(
-                "{:.1} ms capture to present ({})",
-                millis(self.present),
-                stages.join(", ")
-            )
-        }
     }
 }
 
@@ -518,32 +445,6 @@ mod tests {
         assert!(due.is_some());
     }
 
-    #[test]
-    fn the_summary_lists_the_always_shown_figures_and_only_the_nonzero_extras() {
-        let rates = StreamRates {
-            received_fps: 60.0,
-            presented_fps: 59.6,
-            frames_lost: 0.0,
-            frames_recovered: 1.5,
-            frames_superseded: 0.0,
-            keyframe_requests: 2.0,
-            decode_errors: 0.0,
-            audio_underruns: 0.0,
-            latency: Some(ClientLatency {
-                decode: Duration::from_millis(2),
-                present: Duration::from_micros(500),
-                peak: Duration::from_micros(6_500),
-            }),
-            end_to_end: None,
-            display: None,
-        };
-
-        assert_eq!(
-            rates.summary(),
-            "60 fps · 2.5 ms client (decode 2.0, present 0.5, peak 6.5) · received 60 fps · lost 0.0/s · recovered 1.5/s · keyframe requests 2.0/s"
-        );
-    }
-
     fn measured_rates() -> StreamRates {
         let start = Instant::now();
         let before = reading(start);
@@ -571,11 +472,6 @@ mod tests {
         assert_eq!(end_to_end.present, Duration::from_micros(12_340));
         assert_eq!(end_to_end.receive, Some(Duration::from_micros(3_100)));
         assert_eq!(end_to_end.decode, Some(Duration::from_micros(9_000)));
-        assert!(
-            rates
-                .summary()
-                .starts_with("60 fps · 12.3 ms capture to present (receive 3.1, decode 9.0) · ")
-        );
     }
 
     #[test]
@@ -586,7 +482,6 @@ mod tests {
                 .unwrap();
 
         assert_eq!(rates.end_to_end, None);
-        assert!(!rates.summary().contains("capture to present"));
         assert!(
             !rates
                 .overlay()
@@ -627,11 +522,6 @@ mod tests {
                 .lines()
                 .iter()
                 .any(|line| line == "  E2E 21.0 MS")
-        );
-        assert!(
-            rates
-                .summary()
-                .contains("4.2 ms submit to display at 60 Hz, 21.0 ms capture to display")
         );
         assert!(
             variable

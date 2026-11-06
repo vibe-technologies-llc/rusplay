@@ -1,3 +1,5 @@
+mod details;
+
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -117,6 +119,7 @@ pub struct StreamView {
     clipboard: Option<FocusClipboardHandle>,
     show_stats: bool,
     stats_overlay: bool,
+    requested_bitrate_kbps: u32,
     sampler: StatsSampler,
     json_reporter: Option<JsonReporter>,
     rates: Option<StreamRates>,
@@ -143,6 +146,7 @@ impl StreamView {
         let input = config.input;
         let stats_overlay = config.video.stats_overlay;
         let refresh = config.video.frame_rate;
+        let requested_bitrate_kbps = config.video.bitrate_kbps;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
 
         let announced_size = swapchain_size(window.viewport_size(), window.scale_factor());
@@ -191,6 +195,7 @@ impl StreamView {
             clipboard: None,
             show_stats: true,
             stats_overlay,
+            requested_bitrate_kbps,
             sampler: StatsSampler::new(timings),
             json_reporter,
             rates: None,
@@ -600,24 +605,13 @@ impl StreamView {
                     .min_w_0()
                     .child(status_dot(self.tone()))
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_0p5()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme::text())
-                                    .child(self.status()),
-                            )
-                            .children(self.rates.filter(|_| self.show_stats).map(|rates| {
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::text_muted())
-                                    .child(rates.summary())
-                            })),
+                        div().flex().flex_col().gap_0p5().min_w_0().child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme::text())
+                                .child(self.status()),
+                        ),
                     ),
             )
             .child(
@@ -639,9 +633,9 @@ impl StreamView {
                         button(
                             "stats",
                             if self.show_stats {
-                                "Hide stats"
+                                "Hide details"
                             } else {
-                                "Show stats"
+                                "Connection details"
                             },
                             ButtonStyle::Quiet,
                             true,
@@ -690,10 +684,21 @@ impl Render for StreamView {
             .children((!window.is_fullscreen()).then_some(header))
             .child(
                 div()
+                    .flex()
                     .flex_1()
                     .min_h_0()
-                    .bg(theme::backdrop())
-                    .child(picture),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .bg(theme::backdrop())
+                            .child(picture),
+                    )
+                    .children(
+                        (self.show_stats && !window.is_fullscreen())
+                            .then(|| self.render_details(cx)),
+                    ),
             )
     }
 }
