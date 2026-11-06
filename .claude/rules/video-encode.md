@@ -335,7 +335,11 @@ paths:
   `YUYV`, `Y210`, `Y212` for 4:2:2 and `AYUV`, `Y410`, `Y412` for 4:4:4 (one plane). Another fourcc
   is `FrameFormatMismatch`, a wrong plane count `DmaBufPlaneCount`. Imports are cached, keyed by
   the dma-buf's device and inode, modifier, planes and size (16 entries, least recently used out),
-  so the buffers PipeWire recycles are imported once. A `FrameBuffer::Shm` follows the CPU input
+  so the buffers PipeWire recycles are imported once. The surface is created at
+  `coded_extent`, not at `Frame::resolution`: the handed-off chroma plane starts after the
+  padded luma, and importing the visible size makes the driver read that chroma from the luma
+  padding (a shifted, colorful picture on any size that is not a multiple of 16). A
+  `FrameBuffer::Shm` follows the CPU input
   contract below and is packed into a `VAImage` and put into one upload surface, as is a
   `YuvFrame` given to `encode_planes`. `format::pack` works per row on slices
   (`chunks_exact` zips the compiler vectorises, a scalar tail for the padding) and is checked
@@ -368,7 +372,8 @@ paths:
 - `vaapi/tests/compare.rs` compares HEVC 8-bit and 10-bit motion and long-term reference
   recovery byte-for-byte against FFmpeg software decoding, including both chroma planes.
   `pipeline/tests/handoff/hevc.rs` in the host compares GPU handoff and readback streams
-  through FFmpeg at 1280x720 for 64 frames per depth. Setting `RUSPLAY_HEVC_FIXTURE_DIR` on
+  through FFmpeg at 1280x720 and at 402x226 (off the 16-pixel coded grid) for 64 frames per
+  depth. Setting `RUSPLAY_HEVC_FIXTURE_DIR` on
   the encoder comparisons writes portable packet-indexed fixtures with software reference
   plane checksums for client-side decode testing.
 

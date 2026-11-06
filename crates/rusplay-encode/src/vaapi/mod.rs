@@ -709,11 +709,12 @@ impl Session {
 
         let mut file = File::from(fd.try_clone().map_err(EncodeError::DmaBufInspect)?);
         let metadata = file.metadata().map_err(EncodeError::DmaBufInspect)?;
+        let extent = coded_extent(frame.resolution);
         let key = ImportKey {
             device: metadata.dev(),
             inode: metadata.ino(),
             modifier: *modifier,
-            resolution: frame.resolution,
+            resolution: extent,
             planes: planes.clone(),
         };
 
@@ -741,7 +742,7 @@ impl Session {
                 fd: file.as_fd(),
                 size: u32::try_from(size).unwrap_or(u32::MAX),
                 modifier: *modifier,
-                resolution: frame.resolution,
+                resolution: extent,
                 planes: &layouts,
             },
         )?;

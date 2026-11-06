@@ -8,7 +8,7 @@ use rusplay_config::RateControl;
 
 use super::*;
 
-const SIZE: Resolution = Resolution::new(1280, 720);
+const SIZES: [Resolution; 2] = [Resolution::new(1280, 720), Resolution::new(402, 226)];
 const COUNT: u32 = 64;
 
 fn config(depth: BitDepth, handoff: bool) -> Config {
@@ -21,13 +21,13 @@ fn config(depth: BitDepth, handoff: bool) -> Config {
     config
 }
 
-fn stream(config: Config) -> Option<(Vec<EncodedFrame>, bool)> {
+fn stream(config: Config, size: Resolution) -> Option<(Vec<EncodedFrame>, bool)> {
     let mut pipeline = pipeline(config)?;
     let mut packets = Vec::new();
     for index in 0..COUNT {
         packets.extend(
             pipeline
-                .encode(&shm_frame(SIZE, index), index == 0)
+                .encode(&shm_frame(size, index), index == 0)
                 .unwrap(),
         );
     }
@@ -99,41 +99,43 @@ fn decode(depth: BitDepth, packets: &[EncodedFrame]) -> Option<Vec<u8>> {
 
 #[test]
 fn hevc_handoff_and_readback_match_in_luma_and_chroma() {
-    for depth in [BitDepth::Eight, BitDepth::Ten] {
-        if !supported(&config(depth, true)) {
-            continue;
-        }
-        let Some((packets, handed_off)) = stream(config(depth, true)) else {
-            return;
-        };
-        let Some((readback_packets, read_back)) = stream(config(depth, false)) else {
-            return;
-        };
-        let Some(actual) = decode(depth, &packets) else {
-            return;
-        };
-        let Some(expected) = decode(depth, &readback_packets) else {
-            return;
-        };
-        let sample = if depth == BitDepth::Eight { 1 } else { 2 };
-        let frame_bytes = usize::try_from(SIZE.pixel_count()).unwrap() * sample * 3 / 2;
+    for size in SIZES {
+        for depth in [BitDepth::Eight, BitDepth::Ten] {
+            if !supported(&config(depth, true)) {
+                continue;
+            }
+            let Some((packets, handed_off)) = stream(config(depth, true), size) else {
+                return;
+            };
+            let Some((readback_packets, read_back)) = stream(config(depth, false), size) else {
+                return;
+            };
+            let Some(actual) = decode(depth, &packets) else {
+                return;
+            };
+            let Some(expected) = decode(depth, &readback_packets) else {
+                return;
+            };
+            let sample = if depth == BitDepth::Eight { 1 } else { 2 };
+            let frame_bytes = usize::try_from(size.pixel_count()).unwrap() * sample * 3 / 2;
 
-        assert!(handed_off);
-        assert!(!read_back);
-        assert_eq!(packets.len(), COUNT as usize);
-        assert_eq!(actual.len(), frame_bytes * COUNT as usize);
-        assert_eq!(actual.len(), expected.len());
-        for (index, (actual, expected)) in actual
-            .chunks_exact(frame_bytes)
-            .zip(expected.chunks_exact(frame_bytes))
-            .enumerate()
-        {
-            let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
+            assert!(handed_off);
+            assert!(!read_back);
+            assert_eq!(packets.len(), COUNT as usize);
+            assert_eq!(actual.len(), frame_bytes * COUNT as usize);
+            assert_eq!(actual.len(), expected.len());
+            for (index, (actual, expected)) in actual
+                .chunks_exact(frame_bytes)
+                .zip(expected.chunks_exact(frame_bytes))
+                .enumerate()
+            {
+                let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
 
-            assert_eq!(
-                differences, 0,
-                "{depth:?} frame {index}: {differences} different bytes"
-            );
+                assert_eq!(
+                    differences, 0,
+                    "{size} {depth:?} frame {index}: {differences} different bytes"
+                );
+            }
         }
     }
 }
