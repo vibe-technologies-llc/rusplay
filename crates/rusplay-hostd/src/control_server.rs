@@ -123,8 +123,7 @@ impl ControlContext {
         })?;
         let name = store
             .get(&id)
-            .map(|record| record.name().to_owned())
-            .unwrap_or_default();
+            .map_or_default(|record| record.name().to_owned());
         store.forget(&id).map_err(|error| store_failed(&error))?;
 
         Ok(format!("forgot {id} {name}\n"))

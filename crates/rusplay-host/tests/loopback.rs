@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #[path = "../src/hardware.rs"]
 mod hardware;
 

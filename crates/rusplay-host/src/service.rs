@@ -341,8 +341,7 @@ where
             .peers()
             .read()
             .get(&client.peer())
-            .map(|record| record.name().to_owned())
-            .unwrap_or_default();
+            .map_or_default(|record| record.name().to_owned());
         self.emit(HostEvent::ClientAdmitted {
             address,
             peer: client.peer(),

@@ -359,41 +359,31 @@ fn read_value(table: &Table, field: &Field) -> Value {
 
     match field.kind {
         Kind::Flag => Value::Flag(found.and_then(Toml::as_bool).unwrap_or_default()),
-        Kind::MultiChoice(_) => Value::Set(
-            found
-                .and_then(Toml::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Toml::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-        ),
-        Kind::Pairs => Value::Pairs(
-            found
-                .and_then(Toml::as_table)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .map(|(key, value)| Pair {
-                            key: key.clone(),
-                            value: value.as_str().unwrap_or_default().to_owned(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-        ),
-        Kind::Integer { .. } | Kind::Decimal => {
-            Value::Text(found.map(number_text).unwrap_or_default())
+        Kind::MultiChoice(_) => {
+            Value::Set(found.and_then(Toml::as_array).map_or_default(|items| {
+                items
+                    .iter()
+                    .filter_map(Toml::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }))
         }
+        Kind::Pairs => Value::Pairs(found.and_then(Toml::as_table).map_or_default(|entries| {
+            entries
+                .iter()
+                .map(|(key, value)| Pair {
+                    key: key.clone(),
+                    value: value.as_str().unwrap_or_default().to_owned(),
+                })
+                .collect()
+        })),
+        Kind::Integer { .. } | Kind::Decimal => Value::Text(found.map_or_default(number_text)),
         Kind::Choice(_) | Kind::Text | Kind::Address => {
             Value::Text(found.and_then(Toml::as_str).unwrap_or_default().to_owned())
         }
-        Kind::Resolution => Value::Text(found.map(resolution_text).unwrap_or_default()),
-        Kind::FrameRate => Value::Text(found.map(frame_rate_text).unwrap_or_default()),
-        Kind::Primaries => Value::Text(found.map(primaries::text_of).unwrap_or_default()),
+        Kind::Resolution => Value::Text(found.map_or_default(resolution_text)),
+        Kind::FrameRate => Value::Text(found.map_or_default(frame_rate_text)),
+        Kind::Primaries => Value::Text(found.map_or_default(primaries::text_of)),
     }
 }
 

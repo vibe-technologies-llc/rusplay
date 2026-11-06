@@ -169,8 +169,7 @@ mod portal {
     fn importable_modifiers(importer: Option<&DmaBufImporter>, fourcc: DrmFourcc) -> Vec<u64> {
         importer
             .zip(DmaBufFormat::from_fourcc(fourcc.0))
-            .map(|(importer, format)| importer.modifiers(format))
-            .unwrap_or_default()
+            .map_or_default(|(importer, format)| importer.modifiers(format))
     }
 
     pub(crate) fn capture_options(

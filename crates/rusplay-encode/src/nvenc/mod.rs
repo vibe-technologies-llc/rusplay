@@ -102,13 +102,9 @@ impl<'a> Probe<'a> {
         {
             return Ok(false);
         }
-        if format.depth != BitDepth::Eight
-            && self.encoder.caps(guid, ffi::CAPS_SUPPORT_10BIT_ENCODE)? == 0
-        {
-            return Ok(false);
-        }
 
-        Ok(true)
+        Ok(format.depth == BitDepth::Eight
+            || self.encoder.caps(guid, ffi::CAPS_SUPPORT_10BIT_ENCODE)? != 0)
     }
 }
 

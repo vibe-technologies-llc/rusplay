@@ -587,8 +587,7 @@ fn describe(device: &Device, path: &Path, sysfs: Option<&Path>) -> Option<NodeDe
         accelerometer: device.properties().contains(PropType::ACCELEROMETER),
         abs_axes: device
             .supported_absolute_axes()
-            .map(|axes| axes.iter().map(|axis| axis.0).collect())
-            .unwrap_or_default(),
+            .map_or_default(|axes| axes.iter().map(|axis| axis.0).collect()),
     };
     let role = caps.role()?;
 
