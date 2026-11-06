@@ -194,9 +194,11 @@ impl StreamWindow {
             ..wgpu::RequestAdapterOptions::default()
         }))
         .map_err(ClientError::WindowAdapter)?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
-                .map_err(ClientError::WindowDevice)?;
+        let (device, queue) = pollster::block_on(rusplay_scale::request_fence_wait_device(
+            &adapter,
+            "rusplay-client",
+        ))
+        .map_err(ClientError::WindowDevice)?;
         let gpu = Gpu::new(device, queue);
 
         let display = display_for(config)?;

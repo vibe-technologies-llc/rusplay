@@ -363,3 +363,7 @@ paths:
   ffmpeg's software decode. A scenario the driver gets wrong stays as an `#[ignore]`d test named
   in its `docs/BUGS.md` item, run with `cargo test -p rusplay-decode --features vaapi --lib --
   --ignored` to check a driver update.
+
+- `tests/vaapi_import.rs` compares both HEVC luma and chroma planes read through Vulkan with
+  libva image readback for 8-bit and 10-bit fixtures, repeating the sequence to reuse decoded
+  surfaces. It submits the same external ownership handoff as the client and checks every byte.

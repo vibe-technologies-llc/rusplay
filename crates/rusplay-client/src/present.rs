@@ -87,6 +87,21 @@ enum UnpackInput {
     Planes(DmaBufTexture),
 }
 
+impl UnpackInput {
+    fn submit(&self, gpu: &Gpu, mut encoder: wgpu::CommandEncoder) -> Result<(), ClientError> {
+        let (acquire, release) = match self {
+            Self::Upload => (None, None),
+            Self::Planes(planes) => (
+                planes.acquire(&gpu.device)?,
+                planes.release(&gpu.device, &mut encoder)?,
+            ),
+        };
+        gpu.queue
+            .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 struct Image {
     texture: Arc<wgpu::Texture>,
@@ -315,7 +330,7 @@ impl PresentStage {
                 &output.view,
             );
         }
-        self.gpu.queue.submit([encoder.finish()]);
+        input.submit(&self.gpu, encoder)?;
         if let Some(lease) = lease {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
@@ -356,7 +371,7 @@ fn unpack_input(
                 Some(importer) => importer,
                 None => importer.insert(DmaBufImporter::new(device)?),
             };
-            let planes = importer.import(&describe(frame.image())?)?;
+            let planes = importer.import_external(&describe(frame.image())?)?;
             Ok((PlaneLayout::SemiPlanar, UnpackInput::Planes(planes)))
         }
     }

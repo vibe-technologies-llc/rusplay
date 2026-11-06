@@ -8,6 +8,9 @@ use wgpu::hal::{self, api::Vulkan};
 
 use crate::ScaleError;
 
+pub(super) const EXTERNAL_STATE: wgpu::TextureUses =
+    wgpu::TextureUses::RESOURCE.union(wgpu::TextureUses::COPY_SRC);
+
 const DMA_BUF: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 const REQUIRED_EXTENSIONS: [&std::ffi::CStr; 3] = [
     khr::external_memory_fd::NAME,
@@ -54,10 +57,13 @@ pub(crate) struct MemoryPlane {
     pub stride: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct VulkanImporter {
     instance: ash::Instance,
     device: ash::Device,
     physical: vk::PhysicalDevice,
+    queue_family: u32,
+    foreign_family: u32,
     memory_fd: khr::external_memory_fd::Device,
 }
 
@@ -94,6 +100,12 @@ impl VulkanImporter {
 
         Ok(Self {
             physical: hal.raw_physical_device(),
+            queue_family: hal.queue_family_index(),
+            foreign_family: if enabled.contains(&ext::queue_family_foreign::NAME) {
+                vk::QUEUE_FAMILY_FOREIGN_EXT
+            } else {
+                vk::QUEUE_FAMILY_EXTERNAL
+            },
             instance,
             device: raw,
             memory_fd,
@@ -191,6 +203,7 @@ impl VulkanImporter {
         fd: BorrowedFd<'_>,
         planes: &[MemoryPlane],
         desc: &wgpu::TextureDescriptor<'_>,
+        external: bool,
     ) -> Result<wgpu::Texture, ScaleError> {
         let layouts: Vec<vk::SubresourceLayout> = planes
             .iter()
@@ -276,9 +289,84 @@ impl VulkanImporter {
             device.create_texture_from_hal::<Vulkan>(
                 hal_texture,
                 desc,
-                wgpu::TextureUses::UNINITIALIZED,
+                if external {
+                    EXTERNAL_STATE
+                } else {
+                    wgpu::TextureUses::UNINITIALIZED
+                },
             )
         })
+    }
+
+    pub fn transfer(
+        &self,
+        device: &wgpu::Device,
+        textures: &[&wgpu::Texture],
+        acquire: bool,
+    ) -> Result<wgpu::CommandBuffer, ScaleError> {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("rusplay-dmabuf-ownership"),
+        });
+        let barriers = textures
+            .iter()
+            .map(|texture| {
+                let hal =
+                    unsafe { texture.as_hal::<Vulkan>() }.ok_or(ScaleError::DmaBufNeedsVulkan)?;
+                let image = unsafe { hal.raw_handle() };
+                let (from, to, old, new, source, destination) = if acquire {
+                    (
+                        self.foreign_family,
+                        self.queue_family,
+                        vk::ImageLayout::GENERAL,
+                        vk::ImageLayout::GENERAL,
+                        vk::AccessFlags::empty(),
+                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
+                    )
+                } else {
+                    (
+                        self.queue_family,
+                        self.foreign_family,
+                        vk::ImageLayout::GENERAL,
+                        vk::ImageLayout::GENERAL,
+                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
+                        vk::AccessFlags::empty(),
+                    )
+                };
+
+                Ok(vk::ImageMemoryBarrier::default()
+                    .image(image)
+                    .old_layout(old)
+                    .new_layout(new)
+                    .src_queue_family_index(from)
+                    .dst_queue_family_index(to)
+                    .src_access_mask(source)
+                    .dst_access_mask(destination)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }))
+            })
+            .collect::<Result<Vec<_>, ScaleError>>()?;
+
+        unsafe {
+            encoder.as_hal_mut::<Vulkan, _, _>(|hal| {
+                let hal = hal.ok_or(ScaleError::DmaBufNeedsVulkan)?;
+                self.device.cmd_pipeline_barrier(
+                    hal.raw_handle(),
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &barriers,
+                );
+                Ok(())
+            })
+        }?;
+        Ok(encoder.finish())
     }
 
     fn import_memory(

@@ -21,5 +21,10 @@ rusplay-cuda = { workspace = true, optional = true }
 rusplay-va = { workspace = true, optional = true }
 thiserror.workspace = true
 
+[dev-dependencies]
+pollster.workspace = true
+rusplay-scale.workspace = true
+wgpu.workspace = true
+
 [lints]
 workspace = true

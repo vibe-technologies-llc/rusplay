@@ -4,12 +4,12 @@ mod gpu_fence;
 mod tests;
 mod vulkan;
 
-use std::{collections::VecDeque, os::fd::BorrowedFd};
+use std::{collections::VecDeque, os::fd::BorrowedFd, sync::Arc};
 
 use ash::vk;
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
-use self::vulkan::{ImageRequest, MemoryPlane, ModifierProperties, VulkanImporter};
+use self::vulkan::{EXTERNAL_STATE, ImageRequest, MemoryPlane, ModifierProperties, VulkanImporter};
 pub use self::{
     fence::{WriteFence, wait_for_writes},
     gpu_fence::{GpuFenceWait, GpuFenceWaiter, request_fence_wait_device},
@@ -248,6 +248,7 @@ struct ImportedPlane {
 
 #[derive(Debug, Clone)]
 pub struct DmaBufTexture {
+    ownership: Option<Arc<VulkanImporter>>,
     format: DmaBufFormat,
     resolution: Resolution,
     planes: Vec<ImportedPlane>,
@@ -256,6 +257,41 @@ pub struct DmaBufTexture {
 impl DmaBufTexture {
     pub fn format(&self) -> DmaBufFormat {
         self.format
+    }
+
+    pub fn acquire(
+        &self,
+        device: &wgpu::Device,
+    ) -> Result<Option<wgpu::CommandBuffer>, ScaleError> {
+        self.ownership
+            .as_ref()
+            .map(|ownership| {
+                let textures: Vec<_> = self.planes.iter().map(|plane| &plane.texture).collect();
+                ownership.transfer(device, &textures, true)
+            })
+            .transpose()
+    }
+
+    pub fn release(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<Option<wgpu::CommandBuffer>, ScaleError> {
+        self.ownership
+            .as_ref()
+            .map(|ownership| {
+                let textures: Vec<_> = self.planes.iter().map(|plane| &plane.texture).collect();
+                encoder.transition_resources(
+                    std::iter::empty(),
+                    textures.iter().map(|texture| wgpu::TextureTransition {
+                        texture: *texture,
+                        selector: None,
+                        state: EXTERNAL_STATE,
+                    }),
+                );
+                ownership.transfer(device, &textures, false)
+            })
+            .transpose()
     }
 
     pub fn resolution(&self) -> Resolution {
@@ -308,6 +344,7 @@ impl BufferIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImportKey {
+    external: bool,
     fourcc: u32,
     modifier: u64,
     width: u32,
@@ -381,6 +418,18 @@ impl DmaBufImporter {
     }
 
     pub fn import(&mut self, dmabuf: &DmaBuf<'_>) -> Result<DmaBufTexture, ScaleError> {
+        self.import_with_ownership(dmabuf, false)
+    }
+
+    pub fn import_external(&mut self, dmabuf: &DmaBuf<'_>) -> Result<DmaBufTexture, ScaleError> {
+        self.import_with_ownership(dmabuf, true)
+    }
+
+    fn import_with_ownership(
+        &mut self,
+        dmabuf: &DmaBuf<'_>,
+        external: bool,
+    ) -> Result<DmaBufTexture, ScaleError> {
         let format = DmaBufFormat::from_fourcc(dmabuf.fourcc)
             .ok_or(ScaleError::DmaBufFormatUnsupported(dmabuf.fourcc))?;
         let identities = dmabuf
@@ -389,6 +438,7 @@ impl DmaBufImporter {
             .map(|plane| BufferIdentity::of(plane.fd))
             .collect::<Result<Vec<_>, _>>()?;
         let key = ImportKey {
+            external,
             fourcc: dmabuf.fourcc,
             modifier: dmabuf.modifier,
             width: dmabuf.width,
@@ -404,7 +454,7 @@ impl DmaBufImporter {
             return Ok(texture.clone());
         }
 
-        let texture = self.import_uncached(format, dmabuf, &identities)?;
+        let texture = self.import_uncached(format, dmabuf, &identities, external)?;
         if self.cache.len() == IMPORT_CACHE_ENTRIES {
             self.cache.pop_front();
         }
@@ -417,6 +467,7 @@ impl DmaBufImporter {
         format: DmaBufFormat,
         dmabuf: &DmaBuf<'_>,
         identities: &[BufferIdentity],
+        external: bool,
     ) -> Result<DmaBufTexture, ScaleError> {
         let specs = format.planes();
         let groups = plane_groups(dmabuf, specs.len(), identities)?;
@@ -424,10 +475,11 @@ impl DmaBufImporter {
         let planes = specs
             .iter()
             .zip(groups)
-            .map(|(spec, group)| self.import_plane(dmabuf, spec, group, identities))
+            .map(|(spec, group)| self.import_plane(dmabuf, spec, group, identities, external))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(DmaBufTexture {
+            ownership: external.then(|| Arc::new(self.vulkan.clone())),
             format,
             resolution: Resolution::new(dmabuf.width, dmabuf.height),
             planes,
@@ -440,6 +492,7 @@ impl DmaBufImporter {
         spec: &PlaneSpec,
         group: PlaneGroup,
         identities: &[BufferIdentity],
+        external: bool,
     ) -> Result<ImportedPlane, ScaleError> {
         let unsupported = ScaleError::DmaBufModifierUnsupported {
             fourcc: dmabuf.fourcc,
@@ -515,6 +568,7 @@ impl DmaBufImporter {
             dmabuf.planes[group.first].fd,
             &memory_planes,
             &desc,
+            external,
         )?;
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let linear_view = linear.map(|format| {

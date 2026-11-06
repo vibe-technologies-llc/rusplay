@@ -197,6 +197,15 @@ paths:
   `UNDEFINED` may reinitialise compression metadata, so `modifiers` only advertises modifiers with
   a single memory plane (no DCC metadata planes); `import` still accepts a multi-plane RGB
   modifier it is handed, unverified.
+- Decoded VAAPI surfaces use `DmaBufImporter::import_external`, which preserves the imported
+  contents in `GENERAL` instead of discarding them through `UNDEFINED`. Its wgpu initial and
+  final state is the read-only combination `RESOURCE | COPY_SRC`, which maps to `GENERAL`.
+  Each use submits three command buffers together: `DmaBufTexture::acquire` takes ownership
+  from the foreign queue, normal wgpu processing reads the planes, then `release` returns them
+  to `GENERAL` and to the foreign queue. The raw Vulkan ownership barriers use separate encoders
+  because wgpu 30 prohibits mixing raw and normal encoding on one encoder. The decoder surface
+  lease stays alive until the whole submission completes. Device creation enables
+  `VK_EXT_queue_family_foreign` when supported, otherwise the barriers use `EXTERNAL`.
 - The device needs `wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`DMABUF_FEATURES`), which wgpu
   grants only when `VK_KHR_external_memory_fd`, `VK_EXT_external_memory_dma_buf` and
   `VK_EXT_image_drm_format_modifier` are present and then enables them. Every device that may

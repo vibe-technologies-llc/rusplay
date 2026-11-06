@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use ash::{khr, vk};
+use ash::{ext, khr, vk};
 use rustix::ioctl::{Ioctl, IoctlOutput, Opcode, opcode};
 use wgpu::hal::{self, api::Vulkan};
 
@@ -264,7 +264,13 @@ fn open_with_fence_wait(
             return None;
         }
 
-        let add_extension: Box<hal::vulkan::CreateDeviceCallback<'_>> = Box::new(|args| {
+        let foreign = hal_adapter
+            .physical_device_capabilities()
+            .supports_extension(ext::queue_family_foreign::NAME);
+        let add_extension: Box<hal::vulkan::CreateDeviceCallback<'_>> = Box::new(move |args| {
+            if foreign && !args.extensions.contains(&ext::queue_family_foreign::NAME) {
+                args.extensions.push(ext::queue_family_foreign::NAME);
+            }
             if !args.extensions.contains(&khr::external_semaphore_fd::NAME) {
                 args.extensions.push(khr::external_semaphore_fd::NAME);
             }
