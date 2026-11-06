@@ -312,7 +312,10 @@ paths:
   surface's lease, goes to `release_after_submission` after the submit, so the decoder reuses the
   surface only once the GPU has read it. CPU frames (software and NVDEC) keep their upload buffer, created on the first
   one. A test (`software` and `vaapi`) presents the AV1 fixtures through both decoders, at the
-  source size and upscaled, and requires identical output.
+  source size and upscaled, and requires identical output. Two more present the HEVC motion
+  fixtures through DMA-BUF import against `copy_output`: frame by frame, reporting the texels that
+  differ, and from a decode thread through the latest-frame slot, so superseded frames recycle
+  surfaces.
 - `stats_json.rs` turns a `ClientStats` into one JSON line, `stats_json_line(phase, unix_ms, &stats)`,
   in the same shape as the host's (`{"event":"client_stats","phase":"interval"|"final","unix_ms":..,`
   then every counter under its field name). The microsecond values are suffixed `_us` (`rtt_us`,

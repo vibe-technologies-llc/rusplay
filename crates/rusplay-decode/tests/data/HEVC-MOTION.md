@@ -37,6 +37,19 @@ waits for the dma-buf write fence before reading, and `Held` keeps each surface
 out of reuse until its readback is checked. A device and adapter on different
 GPUs, or a mode that alone comes back clean, names the cause.
 
+When that is clean too, compare the whole present stage, which also runs the
+unpack shaders:
+
+```sh
+RUSPLAY_REQUIRE_HW=1 cargo test -p rusplay-client --features software,vaapi --lib vaapi_dmabuf_hevc -- --nocapture --test-threads=1
+```
+
+One test presents every frame through DMA-BUF import and through `copy_output`
+side by side and prints the texels that differ. The other decodes on its own
+thread into the latest-frame slot, as the client does, so superseded frames
+recycle surfaces. `RUSPLAY_HEVC_FIXTURE_DIR` replays clips from another
+directory, such as a stream of the affected size.
+
 Regenerate from the repository root on hardware whose long-term references are
 verified, with FFmpeg installed:
 

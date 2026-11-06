@@ -784,10 +784,10 @@ mod siting_tests {
 
 #[cfg(all(test, feature = "software", feature = "vaapi"))]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{env, fs, path::PathBuf, thread};
 
     use rusplay_config::{Config, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig};
-    use rusplay_core::{Codec, EncodedFrame};
+    use rusplay_core::{Codec, ColorSpace, EncodedFrame};
 
     use super::*;
     use crate::stats::Counters;
@@ -795,6 +795,10 @@ mod tests {
     const IVF_HEADER_LEN: usize = 32;
     const IVF_FRAME_HEADER_LEN: usize = 12;
     const RGBA16F_BYTES: u32 = 8;
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    const SLOT_REPEATS: usize = 8;
+    const REPORTED_FRAMES: usize = 8;
 
     fn gpu() -> Option<Gpu> {
         crate::hardware::require(open_gpu(), "a wgpu device with dma-buf import")
@@ -879,73 +883,162 @@ mod tests {
         bytes
     }
 
-    fn present_clip(
-        gpu: &Gpu,
-        backend: &VideoDecoderConfig,
-        clip: &str,
-        target: Option<Resolution>,
-    ) -> Option<Vec<Vec<u8>>> {
-        let mut decoder = match rusplay_decode::open(Codec::Av1, backend) {
-            Ok(decoder) => decoder,
-            Err(rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
-                crate::hardware::unsupported("an av1 decoder");
-                return None;
-            }
-            Err(error) => panic!("opening the av1 decoder: {error}"),
-        };
-        let config = Config::default();
-        let presented = Arc::new(Mutex::new(Vec::new()));
-        let sink = {
-            let presented = Arc::clone(&presented);
-            move |frame: PresentedFrame| presented.lock().push(frame)
-        };
-        let mut links = PresentLinks {
-            input: Arc::new(Slot::new()),
-            target: Arc::new(Mutex::new(target)),
-            sink: Box::new(sink),
-            stop: Arc::new(AtomicBool::new(false)),
-            counters: Arc::new(Counters::default()),
-        };
-        let mut stage = PresentStage::new(
-            gpu.clone(),
-            PresentOptions {
-                scaling: config.scaling,
-                mapping: MappingOptions::from(&config.color),
-                display: ColorVolume::srgb_display(),
-            },
-        );
+    struct Playback {
+        codec: Codec,
+        decoder: Box<dyn rusplay_decode::VideoDecoder>,
+        stage: PresentStage,
+        links: PresentLinks,
+        presented: Arc<Mutex<Vec<PresentedFrame>>>,
+        color: ColorSpace,
+    }
 
-        for (number, data) in (0..).zip(ivf_frames(clip)) {
+    impl Playback {
+        fn open(
+            gpu: &Gpu,
+            backend: &VideoDecoderConfig,
+            codec: Codec,
+            target: Option<Resolution>,
+        ) -> Option<Self> {
+            let decoder = match rusplay_decode::open(codec, backend) {
+                Ok(decoder) => decoder,
+                Err(rusplay_decode::DecodeError::CodecUnsupported { .. }) => {
+                    crate::hardware::unsupported(format_args!("a {codec:?} decoder"));
+                    return None;
+                }
+                Err(error) => panic!("opening the {codec:?} decoder: {error}"),
+            };
+            let config = Config::default();
+            let presented = Arc::new(Mutex::new(Vec::new()));
+            let sink = {
+                let presented = Arc::clone(&presented);
+                move |frame: PresentedFrame| presented.lock().push(frame)
+            };
+            let links = PresentLinks {
+                input: Arc::new(Slot::new()),
+                target: Arc::new(Mutex::new(target)),
+                sink: Box::new(sink),
+                stop: Arc::new(AtomicBool::new(false)),
+                counters: Arc::new(Counters::default()),
+            };
+            let stage = PresentStage::new(
+                gpu.clone(),
+                PresentOptions {
+                    scaling: config.scaling,
+                    mapping: MappingOptions::from(&config.color),
+                    display: ColorVolume::srgb_display(),
+                },
+            );
+
+            Some(Self {
+                codec,
+                decoder,
+                stage,
+                links,
+                presented,
+                color: config.video.color,
+            })
+        }
+
+        fn play(&mut self, number: u32, data: Vec<u8>) {
             let frame = EncodedFrame {
-                codec: Codec::Av1,
+                codec: self.codec,
                 timestamp: Timestamp::ZERO,
                 keyframe: number == 0,
                 data: data.into(),
             };
-            let Some(picture) = decoder.decode(&frame).unwrap() else {
-                continue;
+            let Some(picture) = self.decoder.decode(&frame).unwrap() else {
+                return;
             };
             let siting = picture.color.chroma_siting;
             let video = DecodedVideo {
                 decoded: picture,
                 number,
                 keyframe: frame.keyframe,
-                color: config.video.color,
+                color: self.color,
                 siting,
                 captured_micros: 0,
                 received_at: Instant::now(),
                 decoded_at: Instant::now(),
             };
-            stage.present(video, &mut links).unwrap();
+            self.stage.present(video, &mut self.links).unwrap();
         }
 
-        let frames = presented.lock();
+        fn take_presented(&self) -> Vec<PresentedFrame> {
+            std::mem::take(&mut *self.presented.lock())
+        }
+    }
+
+    fn present_clip(
+        gpu: &Gpu,
+        backend: &VideoDecoderConfig,
+        clip: &str,
+        target: Option<Resolution>,
+    ) -> Option<Vec<Vec<u8>>> {
+        let mut playback = Playback::open(gpu, backend, Codec::Av1, target)?;
+
+        for (number, data) in (0..).zip(ivf_frames(clip)) {
+            playback.play(number, data);
+        }
+
         Some(
-            frames
+            playback
+                .take_presented()
                 .iter()
                 .map(|frame| read_texture(gpu, &frame.texture))
                 .collect(),
         )
+    }
+
+    fn motion_packets(name: &str) -> Vec<Vec<u8>> {
+        let root = env::var_os("RUSPLAY_HEVC_FIXTURE_DIR").map_or_else(
+            || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rusplay-decode/tests/data"),
+            PathBuf::from,
+        );
+        let encoded = fs::read(root.join(format!("{name}.hevc"))).unwrap();
+        let index = fs::read_to_string(root.join(format!("{name}.index"))).unwrap();
+        let mut offset = 0;
+
+        index
+            .lines()
+            .map(|line| {
+                let length: usize = line.split_whitespace().next().unwrap().parse().unwrap();
+                let packet = encoded[offset..offset + length].to_vec();
+                offset += length;
+                packet
+            })
+            .collect()
+    }
+
+    #[derive(Debug, Default)]
+    struct TexelDifference {
+        count: usize,
+        columns: Option<(usize, usize)>,
+        rows: Option<(usize, usize)>,
+    }
+
+    fn widen(range: Option<(usize, usize)>, value: usize) -> (usize, usize) {
+        range.map_or((value, value), |(low, high)| {
+            (low.min(value), high.max(value))
+        })
+    }
+
+    fn texel_difference(actual: &[u8], expected: &[u8], width: usize) -> TexelDifference {
+        let texel = RGBA16F_BYTES as usize;
+        let mut difference = TexelDifference::default();
+
+        for (index, (left, right)) in actual
+            .chunks_exact(texel)
+            .zip(expected.chunks_exact(texel))
+            .enumerate()
+        {
+            if left != right {
+                difference.count += 1;
+                difference.columns = Some(widen(difference.columns, index % width));
+                difference.rows = Some(widen(difference.rows, index / width));
+            }
+        }
+
+        difference
     }
 
     #[test]
@@ -976,6 +1069,160 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn vaapi_dmabuf_hevc_motion_presents_like_copied_frames() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let direct_config = VaapiDecoderConfig::default();
+        if !crate::hardware::device_present(&direct_config.device) {
+            return;
+        }
+        let copied_config = VaapiDecoderConfig {
+            copy_output: true,
+            ..direct_config.clone()
+        };
+        let direct = VideoDecoderConfig::Vaapi(direct_config);
+        let copied = VideoDecoderConfig::Vaapi(copied_config);
+
+        for clip in ["hevc-rusplay-motion-8bit", "hevc-rusplay-motion-10bit"] {
+            let Some(mut imported) = Playback::open(&gpu, &direct, Codec::Hevc, None) else {
+                return;
+            };
+            let mut uploaded = Playback::open(&gpu, &copied, Codec::Hevc, None).unwrap();
+            let mut wrong_frames = 0;
+            let packets = motion_packets(clip);
+            let total = packets.len();
+
+            for (number, packet) in (0..).zip(packets) {
+                imported.play(number, packet.clone());
+                uploaded.play(number, packet);
+                let left = imported.take_presented();
+                let right = uploaded.take_presented();
+
+                assert_eq!(left.len(), right.len(), "{clip} frame {number}");
+                for (left, right) in left.iter().zip(&right) {
+                    let difference = texel_difference(
+                        &read_texture(&gpu, &left.texture),
+                        &read_texture(&gpu, &right.texture),
+                        left.texture.width() as usize,
+                    );
+                    if difference.count > 0 {
+                        wrong_frames += 1;
+                        eprintln!("{clip} frame {number}: {difference:?}");
+                    }
+                }
+            }
+
+            eprintln!("{clip}: {total} frames, {wrong_frames} differ");
+            assert_eq!(wrong_frames, 0, "{clip}");
+        }
+    }
+
+    fn checksum(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(FNV_OFFSET, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
+        })
+    }
+
+    fn copied_checksums(gpu: &Gpu, backend: &VideoDecoderConfig, clip: &str) -> Option<Vec<u64>> {
+        let mut playback = Playback::open(gpu, backend, Codec::Hevc, None)?;
+
+        Some(
+            (0..)
+                .zip(motion_packets(clip))
+                .map(|(number, packet)| {
+                    playback.play(number, packet);
+                    let frames = playback.take_presented();
+                    checksum(&read_texture(gpu, &frames[0].texture))
+                })
+                .collect(),
+        )
+    }
+
+    fn feed_slot(backend: &VideoDecoderConfig, clip: &str, slot: &Slot<DecodedVideo>) {
+        let mut decoder = rusplay_decode::open(Codec::Hevc, backend).unwrap();
+        let color = Config::default().video.color;
+        let packets = motion_packets(clip);
+
+        for _ in 0..SLOT_REPEATS {
+            for (number, packet) in (0..).zip(&packets) {
+                let frame = EncodedFrame {
+                    codec: Codec::Hevc,
+                    timestamp: Timestamp::ZERO,
+                    keyframe: number == 0,
+                    data: packet.clone().into(),
+                };
+                let picture = decoder.decode(&frame).unwrap().unwrap();
+                let siting = picture.color.chroma_siting;
+                let video = DecodedVideo {
+                    decoded: picture,
+                    number,
+                    keyframe: frame.keyframe,
+                    color,
+                    siting,
+                    captured_micros: 0,
+                    received_at: Instant::now(),
+                    decoded_at: Instant::now(),
+                };
+                drop(slot.put(video).unwrap());
+            }
+        }
+        drop(slot.close());
+    }
+
+    #[test]
+    fn vaapi_dmabuf_hevc_motion_survives_the_latest_frame_slot() {
+        let Some(gpu) = gpu() else {
+            return;
+        };
+        let direct_config = VaapiDecoderConfig::default();
+        if !crate::hardware::device_present(&direct_config.device) {
+            return;
+        }
+        let copied = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
+            copy_output: true,
+            ..direct_config.clone()
+        });
+        let direct = VideoDecoderConfig::Vaapi(direct_config);
+
+        for clip in ["hevc-rusplay-motion-8bit", "hevc-rusplay-motion-10bit"] {
+            let Some(expected) = copied_checksums(&gpu, &copied, clip) else {
+                return;
+            };
+            let Some(mut playback) = Playback::open(&gpu, &direct, Codec::Hevc, None) else {
+                return;
+            };
+            let slot = Arc::new(Slot::new());
+            let feeder = {
+                let slot = Arc::clone(&slot);
+                let backend = direct.clone();
+                let clip = clip.to_owned();
+                thread::spawn(move || feed_slot(&backend, &clip, &slot))
+            };
+            let mut compared = 0;
+            let mut wrong = 0;
+
+            while let Some(video) = slot.take() {
+                playback.stage.present(video, &mut playback.links).unwrap();
+                for frame in playback.take_presented() {
+                    compared += 1;
+                    let actual = checksum(&read_texture(&gpu, &frame.texture));
+                    if actual != expected[frame.frame as usize] {
+                        wrong += 1;
+                        if wrong <= REPORTED_FRAMES {
+                            eprintln!("{clip} frame {} differs", frame.frame);
+                        }
+                    }
+                }
+            }
+            feeder.join().unwrap();
+
+            eprintln!("{clip}: {compared} frames through the slot, {wrong} differ");
+            assert_eq!(wrong, 0, "{clip}");
         }
     }
 }
