@@ -22,7 +22,10 @@ fn service(config: Config) -> (TempDir, HostService) {
         host.serve_with(client, &frames, fake_factory(&bitrate))
     };
 
-    (directory, HostService::spawn(host, serve, None).unwrap())
+    (
+        directory,
+        HostService::spawn(host, serve, None, false).unwrap(),
+    )
 }
 
 fn wait_for(

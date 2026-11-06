@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 use rusplay_config::Config;
 
@@ -8,6 +8,8 @@ pub struct PortalHost {
     pub feed: Arc<CaptureFeed>,
     pub input: Option<Arc<InputFeed>>,
     pub clipboard: Option<ClipboardOpener>,
+    pub input_unavailable: bool,
+    pub keepalive: Option<Box<dyn Any + Send>>,
 }
 
 impl std::fmt::Debug for PortalHost {
@@ -17,20 +19,36 @@ impl std::fmt::Debug for PortalHost {
             .field("feed", &self.feed)
             .field("input", &self.input)
             .field("clipboard", &self.clipboard.is_some())
+            .field("input_unavailable", &self.input_unavailable)
+            .field("keepalive", &self.keepalive.is_some())
             .finish()
     }
 }
 
 pub fn open_portal(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> {
-    if config.input.accept_remote {
-        shared::open(config, gpu)
-    } else {
-        Ok(PortalHost {
-            feed: open_portal_capture(config, gpu)?,
-            input: None,
-            clipboard: None,
-        })
+    if !config.input.accept_remote {
+        return capture_only(config, gpu, false);
     }
+
+    match shared::open(config, gpu) {
+        Ok(host) => Ok(host),
+        Err(error) if error.denies_input_permission() => capture_only(config, gpu, true),
+        Err(error) => Err(error),
+    }
+}
+
+fn capture_only(
+    config: &Config,
+    gpu: &Gpu,
+    input_unavailable: bool,
+) -> Result<PortalHost, HostError> {
+    Ok(PortalHost {
+        feed: open_portal_capture(config, gpu)?,
+        input: None,
+        clipboard: None,
+        input_unavailable,
+        keepalive: None,
+    })
 }
 
 #[cfg(all(feature = "pipewire", feature = "input"))]
@@ -91,8 +109,9 @@ mod shared {
 
     struct Opened {
         capture: PortalSession,
-        input: InputSession,
+        input: Option<InputSession>,
         clipboard: Option<ClipboardOpener>,
+        session: Arc<RemoteDesktopSession>,
     }
 
     pub(super) fn open(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> {
@@ -114,30 +133,43 @@ mod shared {
             store.store(token)?;
         }
 
-        let input = opened.input;
-        let input_config = config.input;
-        let feed = InputFeed::spawn(move || {
-            let options = LibeiOptions {
-                target: input.target,
-                ..LibeiOptions::default()
-            };
-            let mut injector = LibeiInjector::connect(input.eis, &input_config, options)?;
-            injector.attach_session(input.session);
-            match injector.wait_ready(READY_TIMEOUT) {
-                Ok(()) | Err(InputError::DevicesNotResumed) => {}
-                Err(error) => return Err(error.into()),
-            }
+        let input = match opened.input {
+            Some(desktop) => {
+                let input_config = config.input;
+                match InputFeed::spawn(move || {
+                    let options = LibeiOptions {
+                        target: desktop.target,
+                        ..LibeiOptions::default()
+                    };
+                    let mut injector = LibeiInjector::connect(desktop.eis, &input_config, options)?;
+                    injector.attach_session(desktop.session);
+                    match injector.wait_ready(READY_TIMEOUT) {
+                        Ok(()) | Err(InputError::DevicesNotResumed) => {}
+                        Err(error) => return Err(error.into()),
+                    }
 
-            Ok(SplitSink::new(
-                injector,
-                VirtualGamepads::from_config(input_config),
-            ))
-        })?;
+                    Ok(SplitSink::new(
+                        injector,
+                        VirtualGamepads::from_config(input_config),
+                    ))
+                }) {
+                    Ok(feed) => Some(feed),
+                    Err(error) if error.denies_input_permission() => None,
+                    Err(error) => return Err(error),
+                }
+            }
+            None => None,
+        };
+
+        let requested = config.input.keyboard || config.input.pointer || config.input.touch;
+        let input_unavailable = requested && input.is_none();
 
         Ok(PortalHost {
             feed: feed_from_session(opened.capture, config, gpu)?,
-            input: Some(feed),
+            input,
             clipboard: opened.clipboard,
+            input_unavailable,
+            keepalive: Some(Box::new(opened.session)),
         })
     }
 
@@ -174,25 +206,36 @@ mod shared {
             })
             .collect();
         let session = Arc::new(session);
+        let retained = Arc::clone(&session);
         let clipboard = requested.map(|requested| portal_opener(&session, requested));
         let capture = screencast
             .open_remote(session.session(), streams, started.restore_token.clone())
             .await?;
-        let eis = session.connect_to_eis().await?;
         let target = started
             .streams
             .first()
             .and_then(|stream| stream.mapping_id.clone())
             .map_or(AbsoluteTarget::Bounds, AbsoluteTarget::Mapping);
+        let granted = started.keyboard || started.pointer || started.touch;
+        let input = if granted {
+            match session.connect_to_eis().await {
+                Ok(eis) => Some(InputSession {
+                    session,
+                    eis,
+                    target,
+                }),
+                Err(error) if error.denies_input_permission() => None,
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            None
+        };
 
         Ok(Opened {
             capture,
-            input: InputSession {
-                session,
-                eis,
-                target,
-            },
+            input,
             clipboard,
+            session: retained,
         })
     }
 

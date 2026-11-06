@@ -143,6 +143,13 @@ pub enum HostError {
 }
 
 impl HostError {
+    pub fn denies_input_permission(&self) -> bool {
+        match self {
+            Self::Input(error) => error.denies_input_permission(),
+            _ => false,
+        }
+    }
+
     pub fn is_session_failure(&self) -> bool {
         matches!(
             self,
@@ -176,5 +183,7 @@ mod tests {
             .is_session_failure()
         );
         assert!(!HostError::Capture(CaptureError::StreamEnded).is_session_failure());
+        assert!(!HostError::NoGpuAdapter.denies_input_permission());
+        assert!(!HostError::Input(InputError::SinkClosed).denies_input_permission());
     }
 }

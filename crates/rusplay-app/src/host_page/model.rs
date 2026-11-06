@@ -158,6 +158,10 @@ impl HostModel {
         })
     }
 
+    pub fn restarts_for_saved_settings(&self) -> bool {
+        self.phase != Phase::Stopped
+    }
+
     pub fn begin_start(&mut self) -> bool {
         if self.phase != Phase::Stopped {
             return false;
@@ -255,6 +259,10 @@ impl HostModel {
                 "Clipboard sharing is off for this session: {}",
                 error_chain(&**error)
             ))),
+            HostEvent::InputForwardingDisabled => Some(Notice::Info(
+                "Input forwarding is off because the portal did not grant it. Screen sharing continues"
+                    .to_owned(),
+            )),
             HostEvent::SessionFailed(error) => Some(Notice::Failure(format!(
                 "A client session failed: {}",
                 error_chain(error)
@@ -442,6 +450,45 @@ mod tests {
         assert_eq!(model.phase(), Phase::Running);
         assert_eq!(model.address(), Some(listening()));
         assert_eq!(model.status(), "Waiting for a client on port 47800");
+    }
+
+    #[test]
+    fn saved_settings_restart_a_host_that_is_not_stopped() {
+        let mut model = HostModel::default();
+
+        assert!(!model.restarts_for_saved_settings());
+
+        model.begin_start();
+
+        assert!(model.restarts_for_saved_settings());
+
+        model.started(listening());
+
+        assert!(model.restarts_for_saved_settings());
+
+        model.begin_stop();
+
+        assert!(model.restarts_for_saved_settings());
+
+        model.stopped();
+
+        assert!(!model.restarts_for_saved_settings());
+    }
+
+    #[test]
+    fn a_denied_input_permission_keeps_the_host_running() {
+        let mut model = running();
+
+        let notice = model.apply(&HostEvent::InputForwardingDisabled, Instant::now());
+
+        assert_eq!(model.phase(), Phase::Running);
+        assert_eq!(
+            notice,
+            Some(Notice::Info(
+                "Input forwarding is off because the portal did not grant it. Screen sharing continues"
+                    .to_owned()
+            ))
+        );
     }
 
     #[test]

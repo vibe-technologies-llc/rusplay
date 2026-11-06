@@ -41,6 +41,7 @@ pub enum HostEvent {
         address: SocketAddr,
     },
     ClipboardUnavailable(Arc<ClipboardError>),
+    InputForwardingDisabled,
     SessionFailed(HostError),
     Stopped(Option<HostError>),
 }
@@ -119,6 +120,7 @@ struct Worker<S> {
     serve: S,
     control: Arc<Control>,
     events: Sender<HostEvent>,
+    input_disabled: bool,
     _responder: Option<Responder>,
 }
 
@@ -148,6 +150,7 @@ impl HostService {
         let gpu = Gpu::open()?;
         let portal = open_portal(&config, &gpu)?;
         let feed = portal.feed;
+        let keepalive = portal.keepalive;
         let mut host = HostSession::bind_shared(config, Arc::clone(peers))?;
         if let Some(input) = portal.input {
             host = host.with_input(input);
@@ -164,16 +167,19 @@ impl HostService {
             host_id,
             host.busy_flag(),
         )?;
-        let serve =
-            move |host: &HostSession, client: &Client| host.serve(client, gpu.clone(), &feed);
+        let serve = move |host: &HostSession, client: &Client| {
+            let _session = &keepalive;
+            host.serve(client, gpu.clone(), &feed)
+        };
 
-        Self::spawn(host, serve, Some(responder))
+        Self::spawn(host, serve, Some(responder), portal.input_unavailable)
     }
 
     pub(crate) fn spawn<S>(
         host: HostSession,
         serve: S,
         responder: Option<Responder>,
+        input_disabled: bool,
     ) -> Result<Self, HostError>
     where
         S: Fn(&HostSession, &Client) -> Result<HostStream, HostError> + Send + 'static,
@@ -187,6 +193,7 @@ impl HostService {
             serve,
             control: Arc::clone(&control),
             events,
+            input_disabled,
             _responder: responder,
         };
         let thread = thread::Builder::new()
@@ -275,6 +282,10 @@ where
     S: Fn(&HostSession, &Client) -> Result<HostStream, HostError>,
 {
     fn run(self) {
+        if self.input_disabled {
+            self.emit(HostEvent::InputForwardingDisabled);
+        }
+
         let outcome = self.serve_until_stopped();
 
         self.emit(HostEvent::Stopped(outcome.err()));
@@ -420,7 +431,7 @@ mod tests {
         };
         let peers = PeerStore::open(directory.path().join("paired-clients")).unwrap();
         let host = HostSession::bind(config, peers).unwrap();
-        let service = HostService::spawn(host, refuse, None).unwrap();
+        let service = HostService::spawn(host, refuse, None, false).unwrap();
 
         (directory, service)
     }

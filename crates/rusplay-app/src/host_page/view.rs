@@ -23,6 +23,7 @@ pub struct HostPageView {
     clients: Option<PairedClients>,
     clients_error: Option<String>,
     paired: Vec<PairedClient>,
+    restart_when_stopped: bool,
     transition: Option<Task<()>>,
     _poller: Task<()>,
 }
@@ -47,6 +48,7 @@ impl HostPageView {
             clients: None,
             clients_error: None,
             paired: Vec::new(),
+            restart_when_stopped: false,
             transition: None,
             _poller: poller,
         };
@@ -63,10 +65,27 @@ impl HostPageView {
     }
 
     pub fn shutdown(&mut self) {
+        self.restart_when_stopped = false;
         if let Some(handle) = self.handle.take() {
             handle.stop();
             self.model.stopped();
         }
+    }
+
+    pub fn apply_saved_settings(&mut self, cx: &mut Context<Self>) {
+        if !self.model.restarts_for_saved_settings() {
+            self.refresh(cx);
+            return;
+        }
+
+        self.restart_when_stopped = true;
+        if self.model.phase() == Phase::Running {
+            self.stop(cx);
+        }
+        cx.emit(NoticeRaised(Notice::Info(
+            "Restarting the host so the saved settings apply".to_owned(),
+        )));
+        cx.notify();
     }
 
     fn reopen_clients(&mut self) {
@@ -139,12 +158,18 @@ impl HostPageView {
                 self.clients_error = clients.exposure();
                 self.clients = Some(clients);
                 self.reload_paired();
+                if self.restart_when_stopped {
+                    self.stop(cx);
+                    cx.notify();
+                    return;
+                }
                 cx.emit(NoticeRaised(Notice::Info(format!(
                     "Hosting on port {}",
                     self.model.address().map_or(0, |address| address.port())
                 ))));
             }
             Err(error) => {
+                self.restart_when_stopped = false;
                 self.model.start_failed();
                 cx.emit(NoticeRaised(Notice::Failure(format!(
                     "Could not start the host: {}",
@@ -184,8 +209,14 @@ impl HostPageView {
                 cx.emit(NoticeRaised(notice));
             }
         }
+        let restart = self.restart_when_stopped && !failed;
+        self.restart_when_stopped = false;
         self.model.stopped();
 
+        if restart {
+            self.start(cx);
+            return;
+        }
         if !failed {
             cx.emit(NoticeRaised(Notice::Info("Host stopped".to_owned())));
         }

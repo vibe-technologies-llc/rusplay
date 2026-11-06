@@ -211,13 +211,15 @@ paths:
   file means defaults, a malformed one is a notice and nothing starts), opens the peer store and
   calls `HostService::start`, which opens the GPU and the portal (the permission dialog, with
   `input.accept_remote` the input session in the same dialog), binds, starts the discovery
-  responder and spawns the accept and serve thread. The config is read at start, so a Settings
-  save applies at the next start. Any failure is a failure notice and the page goes back to
-  `Stopped`.
+  responder and spawns the accept and serve thread. The config is read at start. A host settings
+  save restarts a host that is starting, running or stopping, so the new file is what the next
+  session uses and a connected client is dropped; a stopped host reads the file on the next start.
+  The headless daemon still reads `host.toml` only when that process starts. Any failure is a
+  failure notice and the page goes back to `Stopped`.
 - `rusplay_host::HostService` (`host.md`) is the one accept and serve loop the app runs. The page
   polls it every 250 ms on the foreground executor: `poll_events` yields `HostEvent`s
   (`PairingOpened` with the PIN and window length, `ClientAdmitted`, `ClientLeft`,
-  `PairingLocked`, `SessionFailed`, `Stopped`) that `HostModel::apply` folds into the page state
+  `PairingLocked`, `InputForwardingDisabled`, `SessionFailed`, `Stopped`) that `HostModel::apply` folds into the page state
   and, where they matter, into a `NoticeRaised`, and `snapshot` gives the live `HostStats` and
   negotiated format, from which `HostModel::observe` derives per-second rates over 500 ms
   windows. The countdown is computed from the window length and the time the event was seen.
@@ -286,8 +288,14 @@ paths:
   never the client values. The inactive role's form, saved config and unsaved flag are parked in
   `SettingsView::parked`, so switching keeps unsaved edits and the tab names which role has them.
   `Save` and `Revert` act on the active role only. Both go through `Config::save` (validate, then
-  write a sibling temporary file and rename it over the target). The client config is read again
-  at connect, so a client save takes effect without a restart; a host save does only once the
-  daemon restarts.
+  write a sibling temporary file and rename it over the target). Save is enabled only while the
+  form differs from the saved config: an unchanged form, including one edited and then put back,
+  does not write and does not say that it saved. The client config is read again at connect, so a
+  client save takes effect without a restart. A host save that writes the file restarts the in-app
+  host when it is not stopped (`HostPageView::apply_saved_settings`). Unset `color.target` fields
+  show the compositor's display, queried once when the page is created, as their empty choice and
+  their number placeholder, labelled `(display)`. The stored value stays unset, so a save does not
+  pin it and the client keeps following the display. A compositor that reports nothing leaves those
+  fields unset.
 - gpui's own transitive dependencies are C-backed on Linux (`xkbcommon`, `freetype` and
   `fontconfig` through `zed-font-kit`); that is accepted for gpui, see `dependencies.md`.

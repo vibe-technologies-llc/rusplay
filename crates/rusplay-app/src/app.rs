@@ -12,7 +12,7 @@ use crate::{
     hosts::{ConnectRequested, HostsView},
     notice::{Notice, NoticeRaised, error_chain},
     session,
-    settings::{FormModel, SettingsView},
+    settings::{FormModel, HostSettingsSaved, SettingsView},
     stream::{StreamEvent, StreamView},
     theme,
     widgets::controls::{Tone, brand_mark, status_dot, tab, tab_strip},
@@ -148,6 +148,12 @@ impl RusplayApp {
                         cx.notify();
                     }),
                 );
+                subscriptions.push(cx.subscribe(
+                    &settings,
+                    |this, _, _: &HostSettingsSaved, cx| {
+                        this.hosting.update(cx, HostPageView::apply_saved_settings);
+                    },
+                ));
                 Some(settings)
             }
             Err(error) => {

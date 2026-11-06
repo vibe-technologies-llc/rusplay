@@ -99,6 +99,11 @@ impl Supervisor {
                 eprintln!("rusplay-hostd: clipboard sharing is off for this session");
                 report(&*error);
             }
+            HostEvent::InputForwardingDisabled => {
+                eprintln!(
+                    "rusplay-hostd: input forwarding is off because the portal did not grant it"
+                );
+            }
             HostEvent::SessionFailed(error) => {
                 self.clear_pin_file();
                 self.stream = None;

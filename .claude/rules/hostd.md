@@ -58,6 +58,8 @@ paths:
   build time (the NVIDIA libraries are loaded when an encoder opens), so it is safe in any build.
 - `HostEvent::ClipboardUnavailable` is printed as `clipboard sharing is off for this session` with
   the cause chain; the session keeps streaming (`clipboard.md`).
+- `HostEvent::InputForwardingDisabled` is printed as `input forwarding is off because the portal
+  did not grant it`. The daemon keeps running with capture only (`host.md`).
 - `main.rs` opens the paired-client store (`PeerStore::open_host`, shared as an
   `Arc<RwLock<PeerStore>>`), opens the pin file, and hands the config to
   `HostService::start` (`host.md`), which opens the GPU (first, because the capture offers the

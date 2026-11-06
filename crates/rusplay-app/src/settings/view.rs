@@ -12,6 +12,7 @@ use rusplay_config::{Config, ConfigEnvironment, ConfigRole};
 use crate::{
     notice::{Notice, NoticeRaised, error_chain},
     settings::{
+        display::DisplayColorDefaults,
         form::{FormModel, Pair, Value},
         primaries,
         role::{ROLES, load_baseline, role_label},
@@ -52,12 +53,16 @@ struct RoleState {
     dirty: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct HostSettingsSaved;
+
 pub struct SettingsView {
     environment: ConfigEnvironment,
     role: ConfigRole,
     parked: Option<RoleState>,
     saved: Config,
     form: FormModel,
+    color_defaults: Option<DisplayColorDefaults>,
     section: Section,
     inputs: Vec<Option<Entity<TextField>>>,
     pair_inputs: HashMap<usize, Vec<PairInputs>>,
@@ -69,6 +74,7 @@ pub struct SettingsView {
 }
 
 impl EventEmitter<NoticeRaised> for SettingsView {}
+impl EventEmitter<HostSettingsSaved> for SettingsView {}
 
 fn uses_text_input(kind: Kind) -> bool {
     matches!(
@@ -83,7 +89,13 @@ fn uses_text_input(kind: Kind) -> bool {
     )
 }
 
-fn placeholder(field: &Field) -> &'static str {
+fn placeholder(field: &Field, defaults: Option<&DisplayColorDefaults>) -> String {
+    if matches!(field.kind, Kind::Integer { .. } | Kind::Decimal)
+        && let Some(label) = defaults.and_then(|defaults| defaults.label(field.path))
+    {
+        return label.to_owned();
+    }
+
     match field.kind {
         Kind::Resolution => "1920x1080, empty for the capture size",
         Kind::FrameRate => "60 or 60000/1001",
@@ -91,6 +103,7 @@ fn placeholder(field: &Field) -> &'static str {
         _ if field.optional => "not set",
         _ => "",
     }
+    .to_owned()
 }
 
 impl SettingsView {
@@ -102,12 +115,14 @@ impl SettingsView {
     ) -> Self {
         let mut subscriptions = Vec::new();
 
+        let color_defaults = DisplayColorDefaults::query();
         let mut view = Self {
             environment,
             role: ConfigRole::Client,
             parked: None,
             saved: config,
             form,
+            color_defaults,
             section: Section::Video,
             inputs: Vec::new(),
             pair_inputs: HashMap::new(),
@@ -121,7 +136,9 @@ impl SettingsView {
         for (index, field) in FIELDS.iter().enumerate() {
             if uses_text_input(field.kind) {
                 let text = view.form.text(index).to_owned();
-                let input = cx.new(|cx| TextField::new(&text, placeholder(field), cx));
+                let input = cx.new(|cx| {
+                    TextField::new(&text, &placeholder(field, view.color_defaults.as_ref()), cx)
+                });
                 let subscription =
                     cx.subscribe(&input, move |this, input, event, cx| match event {
                         TextFieldEvent::Changed => this.text_edited(index, &input, cx),
@@ -330,6 +347,10 @@ impl SettingsView {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
+        if !self.dirty {
+            return;
+        }
+
         self.errors.clear();
 
         let config = match self.form.build() {
@@ -361,6 +382,13 @@ impl SettingsView {
             }
         };
 
+        if config == self.saved {
+            self.dirty = false;
+            cx.notify();
+            return;
+        }
+
+        let host_settings = self.role == ConfigRole::Host;
         let written = self
             .environment
             .config_path(self.role)
@@ -374,6 +402,9 @@ impl SettingsView {
                     "Saved {}",
                     path.display()
                 ))));
+                if host_settings {
+                    cx.emit(HostSettingsSaved);
+                }
             }
             Err(error) => cx.emit(NoticeRaised(Notice::Failure(format!(
                 "Could not save: {}",
@@ -500,6 +531,14 @@ impl SettingsView {
         div().w(px(INPUT_WIDTH)).child(input).into_any_element()
     }
 
+    fn unset_label(&self, index: usize) -> String {
+        self.color_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.label(FIELDS[index].path))
+            .unwrap_or(UNSET_LABEL)
+            .to_owned()
+    }
+
     fn selected_choice(&self, index: usize) -> String {
         let text = self.form.text(index);
 
@@ -593,8 +632,9 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let current = self.selected_choice(index);
+        let unset = self.unset_label(index);
         let shown = if current.is_empty() {
-            UNSET_LABEL.to_owned()
+            unset.clone()
         } else {
             current.clone()
         };
@@ -629,9 +669,9 @@ impl SettingsView {
             }))
             .children(entries.into_iter().enumerate().map(|(position, option)| {
                 let label = if option.is_empty() {
-                    UNSET_LABEL
+                    unset.clone()
                 } else {
-                    option
+                    option.to_owned()
                 };
                 list_item(
                     ("dropdown-option", index * 100 + position),
@@ -866,7 +906,7 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _, _, cx| this.reset(cx))),
                     )
                     .child(
-                        button("settings-save", "Save", ButtonStyle::Primary, true)
+                        button("settings-save", "Save", ButtonStyle::Primary, self.dirty)
                             .on_click(cx.listener(|this, _, _, cx| this.save(cx))),
                     ),
             )

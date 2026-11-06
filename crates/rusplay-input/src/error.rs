@@ -198,6 +198,28 @@ impl InputError {
             _ => false,
         }
     }
+
+    pub fn denies_input_permission(&self) -> bool {
+        match self {
+            #[cfg(feature = "libei")]
+            Self::Portal { source, .. } => portal_denies_input(source),
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "libei")]
+fn portal_denies_input(error: &ashpd::Error) -> bool {
+    match error {
+        ashpd::Error::Portal(ashpd::PortalError::NotAllowed(_)) => true,
+        ashpd::Error::Portal(ashpd::PortalError::Failed(message)) => mentions_permission(message),
+        other => mentions_permission(&other.to_string()),
+    }
+}
+
+#[cfg(feature = "libei")]
+fn mentions_permission(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("permission")
 }
 
 #[cfg(all(test, feature = "gamepad"))]
@@ -232,5 +254,40 @@ mod tests {
         assert!(!missing.is_device_access_denied());
         assert!(!other_uinput.is_device_access_denied());
         assert!(!InputError::SinkClosed.is_device_access_denied());
+        assert!(!InputError::SinkClosed.denies_input_permission());
+    }
+}
+
+#[cfg(all(test, feature = "libei"))]
+mod portal_permission {
+    use ashpd::{Error, PortalError};
+
+    use super::InputError;
+    use crate::libei::PortalStep;
+
+    #[test]
+    fn a_portal_refusal_denies_input_permission() {
+        let denied = InputError::Portal {
+            step: PortalStep::ConnectToEis,
+            source: Box::new(Error::Portal(PortalError::NotAllowed(
+                "No permission to create input devices".to_owned(),
+            ))),
+        };
+        let described = InputError::Portal {
+            step: PortalStep::SelectDevices,
+            source: Box::new(Error::Portal(PortalError::Failed(
+                "No permissions for input".to_owned(),
+            ))),
+        };
+        let other = InputError::Portal {
+            step: PortalStep::Start,
+            source: Box::new(Error::Portal(PortalError::Failed(
+                "something else".to_owned(),
+            ))),
+        };
+
+        assert!(denied.denies_input_permission());
+        assert!(described.denies_input_permission());
+        assert!(!other.denies_input_permission());
     }
 }
