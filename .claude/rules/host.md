@@ -103,7 +103,13 @@ paths:
     session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels
     with the frame through the mailbox and `Outgoing` to the send stage; a keyframe repeat is
     stamped when it is produced. It first re-offers the feed's
-    retained frame, so a client joining a static screen still gets a picture.
+    retained frame, so a client joining a static screen still gets a picture. Frames are capped at
+    the frame rate before the mailbox (`Cadence` in `capture.rs`): `video.frame_rate`, or the
+    virtual output's refresh once `Shared::output` is set. A frame that arrives before the next
+    slot is held as pending, a newer one replaces it (`frames_superseded`), and the pending frame
+    goes out when its slot comes, so the last frame of a burst is never lost; a stall restarts
+    the cadence instead of releasing a burst. `src/tests.rs`'s `host_config` sets a 1000 Hz cap,
+    well above its 100 Hz synthetic source, because the tests count every frame they feed.
   - `rusplay-host-encode` runs the `PipelineFactory` on its own thread: `encodable` first
     (`GpuPipelineFactory` runs `rusplay_encode::capabilities` for `video.encoder` and builds the
     `ScalePipelines` while the handshake is still in flight) and offers the set on

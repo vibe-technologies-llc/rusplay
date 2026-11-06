@@ -18,8 +18,8 @@ use std::{
 use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
 use rusplay_config::{Config, NetworkConfig, RateControl, VaapiConfig, VideoEncoderConfig};
 use rusplay_core::{
-    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
-    Timestamp,
+    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, FrameRate, PixelFormat,
+    Resolution, Timestamp,
 };
 use rusplay_encode::OutputIndex;
 use rusplay_net::{
@@ -46,6 +46,7 @@ const FRAME_SIZE: Resolution = Resolution::new(64, 32);
 const RESIZED: Resolution = Resolution::new(96, 48);
 const FRAME_BYTES: usize = 5_000;
 const SOURCE_INTERVAL: Duration = Duration::from_millis(10);
+const CAPTURE_CAP_ABOVE_SOURCE_HZ: u32 = 1000;
 const WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(2);
 const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -76,6 +77,7 @@ fn host_config() -> Config {
         ..Config::default()
     };
     config.video.codec = Codec::Av1;
+    config.video.frame_rate = FrameRate::integer(CAPTURE_CAP_ABOVE_SOURCE_HZ);
 
     config
 }
