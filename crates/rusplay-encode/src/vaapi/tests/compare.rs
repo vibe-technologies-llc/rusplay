@@ -1,6 +1,6 @@
 use super::*;
 
-const MOTION_RESOLUTION: Resolution = Resolution::new(1280, 720);
+const MOTION_RESOLUTION: Resolution = Resolution::new(2560, 1440);
 const MOTION_FRAMES: u64 = 64;
 
 fn software_reference(format: PixelFormat, packets: &[EncodedFrame]) -> Option<Vec<u8>> {
@@ -79,7 +79,7 @@ fn motion_frames(depth: BitDepth) -> Option<Vec<Frame>> {
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=1280x720:rate=60",
+            "testsrc2=size=2560x1440:rate=60",
             "-frames:v",
             "64",
             "-threads",

@@ -17,6 +17,7 @@ mod host_book;
 mod input;
 mod microphone;
 mod name;
+mod packet_dump;
 mod present;
 mod receive;
 mod resize;

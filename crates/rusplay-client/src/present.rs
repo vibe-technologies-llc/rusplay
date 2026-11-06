@@ -1088,37 +1088,48 @@ mod tests {
         let direct = VideoDecoderConfig::Vaapi(direct_config);
         let copied = VideoDecoderConfig::Vaapi(copied_config);
 
-        for clip in ["hevc-rusplay-motion-8bit", "hevc-rusplay-motion-10bit"] {
-            let Some(mut imported) = Playback::open(&gpu, &direct, Codec::Hevc, None) else {
-                return;
-            };
-            let mut uploaded = Playback::open(&gpu, &copied, Codec::Hevc, None).unwrap();
-            let mut wrong_frames = 0;
-            let packets = motion_packets(clip);
-            let total = packets.len();
+        let clips = env::var("RUSPLAY_HEVC_FIXTURE_NAME").map_or_else(
+            |_| {
+                vec![
+                    "hevc-rusplay-motion-8bit".to_owned(),
+                    "hevc-rusplay-motion-10bit".to_owned(),
+                ]
+            },
+            |name| vec![name],
+        );
+        for target in [None, Some(Resolution::new(3072, 1728))] {
+            for clip in &clips {
+                let Some(mut imported) = Playback::open(&gpu, &direct, Codec::Hevc, target) else {
+                    return;
+                };
+                let mut uploaded = Playback::open(&gpu, &copied, Codec::Hevc, target).unwrap();
+                let mut wrong_frames = 0;
+                let packets = motion_packets(clip);
+                let total = packets.len();
 
-            for (number, packet) in (0..).zip(packets) {
-                imported.play(number, packet.clone());
-                uploaded.play(number, packet);
-                let left = imported.take_presented();
-                let right = uploaded.take_presented();
+                for (number, packet) in (0..).zip(packets) {
+                    imported.play(number, packet.clone());
+                    uploaded.play(number, packet);
+                    let left = imported.take_presented();
+                    let right = uploaded.take_presented();
 
-                assert_eq!(left.len(), right.len(), "{clip} frame {number}");
-                for (left, right) in left.iter().zip(&right) {
-                    let difference = texel_difference(
-                        &read_texture(&gpu, &left.texture),
-                        &read_texture(&gpu, &right.texture),
-                        left.texture.width() as usize,
-                    );
-                    if difference.count > 0 {
-                        wrong_frames += 1;
-                        eprintln!("{clip} frame {number}: {difference:?}");
+                    assert_eq!(left.len(), right.len(), "{clip} frame {number}");
+                    for (left, right) in left.iter().zip(&right) {
+                        let difference = texel_difference(
+                            &read_texture(&gpu, &left.texture),
+                            &read_texture(&gpu, &right.texture),
+                            left.texture.width() as usize,
+                        );
+                        if difference.count > 0 {
+                            wrong_frames += 1;
+                            eprintln!("{clip} frame {number}: {difference:?}");
+                        }
                     }
                 }
-            }
 
-            eprintln!("{clip}: {total} frames, {wrong_frames} differ");
-            assert_eq!(wrong_frames, 0, "{clip}");
+                eprintln!("{clip}: {total} frames, {wrong_frames} differ");
+                assert_eq!(wrong_frames, 0, "{clip}");
+            }
         }
     }
 

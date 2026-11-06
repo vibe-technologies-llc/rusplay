@@ -80,6 +80,7 @@ fn decoder_for<'a>(
 }
 
 fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), ClientError> {
+    let mut dump = crate::packet_dump::PacketDump::from_env();
     let mut active = None;
     let mut skipping = false;
 
@@ -112,6 +113,10 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
         } else if skipping {
             links.counters.frames_skipped.increment();
             continue;
+        }
+
+        if let Some(dump) = &mut dump {
+            dump.record(&video, &links.counters);
         }
 
         let result = decoder_for(&mut active, video.stream.codec, config)?.decode(&video.frame);
