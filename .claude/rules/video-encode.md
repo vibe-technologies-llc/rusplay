@@ -365,6 +365,13 @@ paths:
   this file's pattern frames, PSNR and VAAPI decode for the x264 recovery tests. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
   the format is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing.
 
+- `vaapi/tests/compare.rs` compares HEVC 8-bit and 10-bit motion and long-term reference
+  recovery byte-for-byte against FFmpeg software decoding, including both chroma planes.
+  `pipeline/tests/handoff/hevc.rs` in the host compares GPU handoff and readback streams
+  through FFmpeg at 1280x720 for 64 frames per depth. Setting `RUSPLAY_HEVC_FIXTURE_DIR` on
+  the encoder comparisons writes portable packet-indexed fixtures with software reference
+  plane checksums for client-side decode testing.
+
 ## NVENC (`nvenc` feature)
 
 - Nothing is linked at build time. `src/nvenc/driver.rs` loads `libcuda.so.1` through

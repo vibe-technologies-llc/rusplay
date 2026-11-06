@@ -1,3 +1,5 @@
+mod compare;
+
 use std::{
     fs::File,
     io::{Cursor, Write},

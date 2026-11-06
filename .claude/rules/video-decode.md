@@ -373,3 +373,9 @@ paths:
 - `tests/vaapi_import.rs` compares both HEVC luma and chroma planes read through Vulkan with
   libva image readback for 8-bit and 10-bit fixtures, repeating the sequence to reuse decoded
   surfaces. It submits the same external ownership handoff as the client and checks every byte.
+- `tests/vaapi_motion.rs` replays production-encoded HEVC motion and reference-recovery
+  fixtures at 1280x720. Rusplay CPU-copy decode and the installed FFmpeg VAAPI decode each
+  compare all three planes to FFmpeg software reference checksums. It needs no encoder,
+  network or Vulkan device, so it can isolate client hardware from host and presentation
+  behaviour. Fixture provenance, regeneration and the client command are in
+  `crates/rusplay-decode/tests/data/HEVC-MOTION.md`.

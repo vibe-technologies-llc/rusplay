@@ -1,3 +1,5 @@
+mod hevc;
+
 use std::{
     num::NonZeroU32,
     os::fd::OwnedFd,
