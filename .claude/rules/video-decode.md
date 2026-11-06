@@ -8,22 +8,26 @@ paths:
 - `VideoDecoder` is the backend-neutral trait: one `EncodedFrame` (a whole access unit / temporal
   unit; its `data` is a `FrameBytes` that derefs to the payload and may skip a leading prefix of
   its allocation, so decoders read it as `&[u8]`) in, at most one `DecodedFrame` out, plus `flush` for the frames a reordering stream
-  still holds. Backends are VAAPI, NVDEC and software, each behind
-  its own cargo feature. `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the
-  config's backend and returns `BackendNotCompiled` when that feature is off and
-  `CodecUnsupported` when the backend cannot decode the codec. The backend types
-  (`VaapiDecoder`, `NvdecDecoder`, `Rav1dDecoder`) are public too. Decoders are not `Send`: a
-  decoder lives on the thread that created it.
+  still holds. Backends are VAAPI, NVDEC and software. VAAPI and NVDEC each have their own cargo
+  feature. The software backend is compiled by `software` (rav1d AV1), `ffmpeg` (libavcodec H.264
+  and HEVC), or both; with both off, `open` returns `BackendNotCompiled`.
+  `rusplay_decode::open(codec, &VideoDecoderConfig)` dispatches on the config's backend and returns
+  `BackendNotCompiled` when that backend is not compiled and `CodecUnsupported` when it cannot
+  decode the codec. The backend types (`VaapiDecoder`, `NvdecDecoder`, `Rav1dDecoder`,
+  `FfmpegDecoder`) are public too. Decoders are not `Send`: a decoder lives on the thread that
+  created it.
 - `rusplay_decode::capabilities(&VideoDecoderConfig)` returns `Capabilities` (backend and a
   `FormatSet`), the formats the client announces in its `Hello`. Software: every AV1 chroma and
-  depth, nothing else. VAAPI (`src/vaapi/capabilities.rs`) opens the device and keeps a format
+  depth when `software` is on, and every H.264 and HEVC chroma and depth (4:2:0, 4:2:2 and 4:4:4
+  at 8, 10 and 12 bits) when `ffmpeg` is on and `avcodec_find_decoder` finds that codec. VAAPI
+  (`src/vaapi/capabilities.rs`) opens the device and keeps a format
   when its profile has a VLD entrypoint and the RT format attribute holds that chroma and depth:
   H.264 High, High10 and High422 (no 4:4:4, no 12-bit), HEVC through the same
   `hevc::profile_for` the decoder uses, AV1 Profile 0 for 8/10-bit 4:2:0, Profile 1 for 8/10-bit
   4:4:4 and Profile 2 for 4:2:2 or 12-bit. NVDEC loads the driver, opens `gpu_index` and keeps a
   format when `cuvidGetDecoderCaps` reports it supported with its output surface in the mask
   (`format::decodes`, unit tested); a missing library or device is the same specific error as
-  `NvdecDecoder::new`. A backend whose feature is off is `BackendNotCompiled`.
+  `NvdecDecoder::new`. A backend that is not compiled is `BackendNotCompiled`.
 - `video.decoder.copy_output` (VAAPI only, default false) reads the completed decoder output
   through a libva image and uploads planar CPU frames, bypassing Vulkan DMA-BUF import. It is a
   compatibility path for drivers with corrupt shared-surface output and costs a GPU readback and
@@ -43,7 +47,8 @@ paths:
     buffer is not reused by the decoder until it is dropped, so it must outlive the GPU work
     that reads it. Importers dup the fd if the API takes ownership.
   - `DecodedBuffer::Cpu(CpuFrame)` from the software decoder (three planes, Y, U, V, borrowed
-    from the decoder's own picture without a copy) and from NVDEC (the same three planes in a
+    from the decoder's own picture without a copy: a rav1d picture for AV1, an `AVFrame` for
+    H.264 and HEVC) and from NVDEC (the same three planes in a
     pooled host buffer, see below). Each `CpuPlane` has `data`, `stride` in
     bytes, `width`/`height` in samples and `bytes_per_sample` (1 for 8-bit, 2 for 10/12-bit,
     whose samples are little-endian `u16`s holding the value in the low bits).
@@ -98,8 +103,50 @@ paths:
   and signals 402) must not decode wider than it was captured. The `CpuPlane`s report that
   cropped `width`/`height` over the full coded buffer. A render size larger than the coded one
   (AV1 spatial resize) is not scaled up: the coded picture is returned.
-- H.264/HEVC software decode would need a C-backed crate and is not implemented: the software
-  backend decodes AV1 only.
+- H.264 and HEVC are the `ffmpeg` feature, below. It does not imply `software`, and `software`
+  does not imply it. A build with only `software` returns `CodecUnsupported` for H.264 and HEVC.
+  A build with only `ffmpeg` returns `CodecUnsupported` for AV1.
+
+## H.264 and HEVC (`ffmpeg` feature)
+
+- System `libavcodec` and `libavutil`. `crates/rusplay-decode/build.rs` generates the bindings
+  from the installed headers. `rusplay-client` and `rusplay-app` forward the feature. It is not a
+  default, and it is not a separate `video.decoder` backend: the config stays `software`, and
+  `SoftwareDecoderConfig::threads` is the libavcodec thread count (`None` is 0, automatic, at most
+  256, the same limit rav1d uses).
+- `FfmpegDecoder` opens `avcodec_find_decoder` for H.264 or HEVC. A null decoder is
+  `FfmpegDecoderMissing`, and `capabilities` omits that codec, so the advertised set stays what
+  `open` accepts. `thread_type` is `FF_THREAD_SLICE` only, set before `avcodec_open2`, so frame
+  threading adds no delay. `AV_CODEC_FLAG_LOW_DELAY` is not set. `pkt_timebase` is 1/1000000, so
+  capture timestamps round-trip as the picture `pts`. `apply_cropping` stays at its default: the
+  picture `width` and `height` are the visible size and the plane pointers are already cropped. A
+  non-zero `crop_left` or `crop_top` is `CropOriginUnsupported`. A width or height outside
+  `1..=16384` is `ResolutionUnsupported`.
+- Each packet is copied into a buffer padded by `AV_INPUT_BUFFER_PADDING_SIZE` zero bytes. The
+  `AVPacket` points at that buffer with no `buf`, so `avcodec_send_packet` copies it. An empty
+  packet returns `Ok(None)` without a send. `AVERROR(EAGAIN)` drains the pictures already waiting
+  and retries the send. `decode` returns the newest picture that send made available.
+  `flush` sends a null packet and returns every remaining picture in display order, including any
+  drained while the flush packet was waiting; a second flush is empty. The picture timestamp is
+  `pts`, or the packet timestamp when `pts` is missing. `AV_FRAME_FLAG_CORRUPT` is
+  `FfmpegCorruptPicture` and is not presented.
+- Accepted layouts are the little-endian planar ones: `YUV420P`, `YUV422P` and `YUV444P`, their
+  `P10LE` and `P12LE` forms, and the deprecated `YUVJ420P`, `YUVJ422P` and `YUVJ444P` as the
+  matching 8-bit format with full range. 10- and 12-bit samples stay in the low bits. `GRAY*` is
+  `Monochrome`. 9-, 14- and 16-bit layouts are `BitDepthUnsupported`. Anything else, including
+  semi-planar and hardware formats, is `FfmpegPictureFormat`. A negative `linesize` is rebased to
+  the first row with a positive stride. The `AVFrame` is the `CpuFrame` storage and is freed when
+  the frame drops.
+- Colour is read from the `AVFrame`, not from a second parser. `color_primaries`, `color_trc` and
+  `colorspace` go through `with_h273_codes` (a code above 255 is unspecified). `color_range` is
+  limited for `MPEG`, full for `JPEG`, and left unset when unspecified. `chroma_location` becomes
+  the VUI location `location - 1`; unspecified leaves siting unset, and a location that becomes
+  type 6 or more stays unset. Mastering display and content light come from
+  `av_frame_get_side_data` (`AV_FRAME_DATA_MASTERING_DISPLAY_METADATA` and
+  `AV_FRAME_DATA_CONTENT_LIGHT_LEVEL`). Side data shorter than the struct generated from the same
+  headers is ignored; a longer one is read from the front. Primaries are r, g, b rationals,
+  converted to ST 2086 units with rounding, and only when `has_primaries` and `has_luminance` are
+  set. `MaxCLL` and `MaxFALL` saturate to `u16`.
 
 ## VAAPI (`vaapi` feature)
 

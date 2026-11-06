@@ -323,7 +323,7 @@ paths:
   turns `input.gamepads` off so the tests never touch `/dev/input`.
 - Tests (`tests/loopback.rs`, `software` feature) run a test host from `rusplay-net` on loopback
   (`tests/common`): PIN pairing, the `Hello` exchange (`HostOptions::encodable` is the set the
-  test host answers with; an HEVC-only one checks `NoCommonFormat`) followed by a `StreamFormat`
+  test host answers with; one whose set shares nothing with the client's decodable formats, empty when libavcodec H.264 and HEVC are compiled in, checks `NoCommonFormat`) followed by a `StreamFormat`
   (`common::stream_description`: AV1, Display P3, sRGB, full range; the client config names
   H.264, and the fixture's limited range must win over the description's full range), the 8-frame AV1 fixture from
   `rusplay-decode/tests/data` cycled at 60 fps through a `Packetizer` with FEC, a drop rule per

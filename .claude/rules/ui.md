@@ -35,9 +35,10 @@ paths:
 - Features: `pipewire` and `flac` are on by default (audio playback and FLAC on the client, screen
   capture and audio capture on the host); the decoders and encoders are opt-in. `vaapi` forwards to
   `rusplay-client` and `rusplay-host` (decode and encode), `nvdec`, `software` and `software-asm`
-  to the client, and `nvenc`, `software-encoders` (`x264`, `x265`, `svt-av1`) and `input` (host
+  to the client, `ffmpeg` to the client (libavcodec H.264 and HEVC on the software decoder), and
+  `nvenc`, `software-encoders` (`x264`, `x265`, `svt-av1`) and `input` (host
   input injection) to the host, with the names and meaning `rusplay-hostd` uses. A build that can
-  stream and host is `cargo build --release -p rusplay-app --features vaapi,nvdec,software,input`;
+  stream and host is `cargo build --release -p rusplay-app --features vaapi,nvdec,software,ffmpeg,input`;
   a host config selecting an encoder whose feature is off fails at start with
   `BackendNotCompiled`, shown as a notice.
 

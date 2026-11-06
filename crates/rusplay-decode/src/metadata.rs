@@ -2,8 +2,11 @@ use rusplay_core::{
     Chromaticities, Chromaticity, ColorPrimaries, ContentLightLevel, Luminance, MasteringDisplay,
 };
 
+#[cfg(feature = "software")]
 const AV1_CHROMATICITY_UNITS: u64 = 1 << 16;
+#[cfg(feature = "software")]
 const AV1_MAX_LUMINANCE_UNITS: u64 = 1 << 8;
+#[cfg(feature = "software")]
 const AV1_MIN_LUMINANCE_UNITS: u64 = 1 << 14;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +38,7 @@ pub(crate) fn mastering_display(
     })
 }
 
+#[cfg(feature = "software")]
 pub(crate) fn av1_mastering_display(
     primaries: [[u16; 2]; 3],
     white: [u16; 2],
@@ -73,14 +77,17 @@ pub(crate) const fn content_light(max_cll: u16, max_fall: u16) -> ContentLightLe
     }
 }
 
+#[cfg(feature = "software")]
 const fn rescale(value: u64, to: u64, from: u64) -> u64 {
     (value * to + from / 2) / from
 }
 
+#[cfg(feature = "software")]
 fn saturate_u16(value: u64) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
 
+#[cfg(feature = "software")]
 fn saturate_u32(value: u64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
@@ -89,6 +96,7 @@ fn saturate_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "software")]
     #[test]
     fn av1_fixed_point_maps_onto_st2086_units() {
         let display = av1_mastering_display(
@@ -104,6 +112,7 @@ mod tests {
         assert_eq!(display.min_nits.units(), 50);
     }
 
+    #[cfg(feature = "software")]
     #[test]
     fn bt2020_av1_primaries_resolve_to_the_named_set() {
         let to_av1 = |units: u16| {

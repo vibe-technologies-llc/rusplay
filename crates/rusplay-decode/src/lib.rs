@@ -4,6 +4,8 @@ mod annexb;
 mod av1;
 mod capabilities;
 mod error;
+#[cfg(feature = "ffmpeg")]
+mod ffmpeg;
 #[cfg(all(test, any(feature = "software", feature = "vaapi", feature = "nvdec")))]
 #[path = "../tests/common/mod.rs"]
 mod fixtures;
@@ -13,7 +15,12 @@ mod frame;
 pub mod fuzzing;
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod hevc;
-#[cfg(any(feature = "software", feature = "vaapi", feature = "nvdec"))]
+#[cfg(any(
+    feature = "software",
+    feature = "vaapi",
+    feature = "nvdec",
+    feature = "ffmpeg"
+))]
 mod metadata;
 #[cfg(feature = "nvdec")]
 mod nvdec;
@@ -35,6 +42,10 @@ use rusplay_core::{Codec, EncodedFrame};
 
 #[cfg(feature = "nvdec")]
 pub use crate::error::CuvidCall;
+#[cfg(feature = "ffmpeg")]
+pub use crate::error::FfmpegCall;
+#[cfg(feature = "ffmpeg")]
+pub use crate::ffmpeg::FfmpegDecoder;
 #[cfg(feature = "nvdec")]
 pub use crate::nvdec::NvdecDecoder;
 #[cfg(feature = "software")]
@@ -132,27 +143,59 @@ fn open_nvdec(
     })
 }
 
-#[cfg(feature = "software")]
+#[cfg(any(feature = "software", feature = "ffmpeg"))]
 fn open_software(
     codec: Codec,
     config: &SoftwareDecoderConfig,
 ) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     match codec {
-        Codec::Av1 => Ok(Box::new(Rav1dDecoder::new(config)?)),
-        Codec::H264 | Codec::Hevc => Err(DecodeError::CodecUnsupported {
-            backend: Backend::Software,
-            codec,
-        }),
+        Codec::Av1 => open_av1(config),
+        Codec::H264 | Codec::Hevc => open_h26x(codec, config),
     }
 }
 
-#[cfg(not(feature = "software"))]
+#[cfg(not(any(feature = "software", feature = "ffmpeg")))]
 fn open_software(
     _codec: Codec,
     _config: &SoftwareDecoderConfig,
 ) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     Err(DecodeError::BackendNotCompiled {
         backend: Backend::Software,
+    })
+}
+
+#[cfg(all(any(feature = "software", feature = "ffmpeg"), feature = "software"))]
+fn open_av1(config: &SoftwareDecoderConfig) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Ok(Box::new(Rav1dDecoder::new(config)?))
+}
+
+#[cfg(all(
+    any(feature = "software", feature = "ffmpeg"),
+    not(feature = "software")
+))]
+fn open_av1(_config: &SoftwareDecoderConfig) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Err(DecodeError::CodecUnsupported {
+        backend: Backend::Software,
+        codec: Codec::Av1,
+    })
+}
+
+#[cfg(all(any(feature = "software", feature = "ffmpeg"), feature = "ffmpeg"))]
+fn open_h26x(
+    codec: Codec,
+    config: &SoftwareDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Ok(Box::new(FfmpegDecoder::new(codec, config)?))
+}
+
+#[cfg(all(any(feature = "software", feature = "ffmpeg"), not(feature = "ffmpeg")))]
+fn open_h26x(
+    codec: Codec,
+    _config: &SoftwareDecoderConfig,
+) -> Result<Box<dyn VideoDecoder>, DecodeError> {
+    Err(DecodeError::CodecUnsupported {
+        backend: Backend::Software,
+        codec,
     })
 }
 
@@ -193,11 +236,12 @@ mod tests {
 
         if cfg!(feature = "software") {
             assert!(av1.is_ok());
+        } else if cfg!(feature = "ffmpeg") {
             assert!(matches!(
-                h264,
+                av1,
                 Err(DecodeError::CodecUnsupported {
                     backend: Backend::Software,
-                    codec: Codec::H264,
+                    codec: Codec::Av1,
                 })
             ));
         } else {
@@ -208,6 +252,30 @@ mod tests {
                 })
             ));
         }
+
+        #[cfg(feature = "ffmpeg")]
+        assert!(
+            h264.is_ok()
+                || matches!(
+                    h264,
+                    Err(DecodeError::FfmpegDecoderMissing { codec: Codec::H264 })
+                )
+        );
+        #[cfg(all(not(feature = "ffmpeg"), feature = "software"))]
+        assert!(matches!(
+            h264,
+            Err(DecodeError::CodecUnsupported {
+                backend: Backend::Software,
+                codec: Codec::H264,
+            })
+        ));
+        #[cfg(not(any(feature = "ffmpeg", feature = "software")))]
+        assert!(matches!(
+            h264,
+            Err(DecodeError::BackendNotCompiled {
+                backend: Backend::Software
+            })
+        ));
     }
 
     #[test]

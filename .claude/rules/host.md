@@ -512,7 +512,7 @@ paths:
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
   amplitude and the final cursor position and image. Two more cover negotiation end to end:
   SVT-AV1 configured for 4:4:4 falls back to 4:2:0 and the client's description shows it, and
-  an x265 host against the AV1-only software client fails with `NoCommonFormat` on both ends. Each skips visibly without a GPU adapter or
+  an x265 host against a software client that cannot decode HEVC fails with `NoCommonFormat` on both ends. With the `ffmpeg` feature compiled in, that client decodes HEVC, so the test returns before opening a session. Each skips visibly without a GPU adapter or
   without the encoder backend and format. The assertions hold on a loaded machine: the client's
   decode queue is raised to its maximum so the warm-up cannot overflow it, and "the first
   presented frame is a keyframe" is written as "or it was superseded", since the latest-wins

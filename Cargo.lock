@@ -4804,7 +4804,9 @@ dependencies = [
 name = "rusplay-decode"
 version = "0.1.0"
 dependencies = [
+ "bindgen 0.73.2",
  "cros-codecs",
+ "pkg-config",
  "pollster 1.0.1",
  "rav1d",
  "rusplay-config",

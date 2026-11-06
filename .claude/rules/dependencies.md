@@ -32,13 +32,16 @@ paths:
   | Wayland input capture on gpui's connection | `wayland-client` and `wayland-backend` (`system` and `dlopen`: libwayland-client is loaded at run time, as gpui does) | `rusplay-input/wayland` |
   | Stream subsurface on gpui's connection | the same `wayland-client` `system` and `dlopen` features | `rusplay-client/window` |
   | rav1d SIMD | rav1d's hand-written x86/ARM assembly (`nasm` at build time on x86_64, the C compiler's assembler on aarch64) | `rusplay-decode/software-asm`, `rusplay-client/software-asm` |
+  | H.264 and HEVC software decode | system `libavcodec` + `libavutil` through own bindgen bindings in `crates/rusplay-decode/build.rs` | `rusplay-decode/ffmpeg`, forwarded by `rusplay-client/ffmpeg` and `rusplay-app/ffmpeg` |
 
   The published `x264-sys`, `x265-sys` and `svt-av1-sys` crates generate against vendored or
   ancient headers, so the software encoders generate their bindings in
   `crates/rusplay-encode/build.rs` from the headers `pkg-config` finds on the system. `bindgen`
   (with its `runtime` libclang loading) and `pkg-config` are optional build dependencies pulled in
-  only by the three software-encoder features, so the default build neither needs libclang nor
-  links anything C.
+  by the three software-encoder features and by `rusplay-decode/ffmpeg`, so the default build
+  neither needs libclang nor links anything C. H.264 and HEVC software decode stays
+  `video.decoder.backend = "software"`. The `ffmpeg` feature adds those codecs beside rav1d; it
+  does not decode AV1 and it does not replace the `software` feature.
 
   VAAPI follows the same pattern in `crates/rusplay-va/build.rs`, behind that crate's `libva`
   feature, which the `vaapi` features of `rusplay-encode` and `rusplay-decode` switch on. Neither

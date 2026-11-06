@@ -468,9 +468,22 @@ fn a_wrong_pin_is_refused_before_streaming() {
 }
 
 fn software_decodable() -> FormatSet {
-    CodecFormat::all()
-        .filter(|format| format.codec == Codec::Av1)
-        .collect()
+    rusplay_decode::capabilities(&common::client_config().video.decoder)
+        .expect("software decoder capabilities")
+        .formats()
+}
+
+fn nothing_the_client_decodes() -> FormatSet {
+    let decodable = software_decodable();
+    let outside: FormatSet = CodecFormat::all()
+        .filter(|format| !decodable.contains(*format))
+        .collect();
+
+    if outside.is_empty() {
+        FormatSet::EMPTY
+    } else {
+        outside
+    }
 }
 
 #[test]
@@ -620,11 +633,9 @@ fn a_host_encoding_nothing_the_client_decodes_is_a_specific_error() {
     let Some(gpu) = common::gpu() else {
         return;
     };
-    let hevc_only = CodecFormat::all()
-        .filter(|format| format.codec == Codec::Hevc)
-        .collect();
+    let encodable = nothing_the_client_decodes();
     let host = TestHost::start(HostOptions {
-        encodable: hevc_only,
+        encodable,
         ..HostOptions::default()
     });
     let session = ClientSession::new(common::client_config());
@@ -640,7 +651,7 @@ fn a_host_encoding_nothing_the_client_decodes_is_a_specific_error() {
     assert!(matches!(
         result,
         Err(ClientError::NoCommonFormat { decodable, encodable })
-            if decodable == software_decodable() && encodable == hevc_only
+            if decodable == software_decodable() && encodable == nothing_the_client_decodes()
     ));
 }
 

@@ -183,6 +183,15 @@ fn host_config(encoder: VideoEncoderConfig) -> Config {
     config
 }
 
+fn client_decodes(codec: Codec) -> bool {
+    rusplay_decode::capabilities(&client_config().video.decoder).is_ok_and(|capabilities| {
+        capabilities
+            .formats()
+            .iter()
+            .any(|format| format.codec == codec)
+    })
+}
+
 fn client_config() -> Config {
     let mut config = Config::default();
     config.network.bind_address = LOCALHOST;
@@ -537,6 +546,9 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
 
 #[test]
 fn a_host_and_client_without_a_shared_format_both_refuse() {
+    if client_decodes(Codec::Hevc) {
+        return;
+    }
     let config = host_config(VideoEncoderConfig::X265(X265Config::default()));
     if !encodes_anything(&config) {
         return;

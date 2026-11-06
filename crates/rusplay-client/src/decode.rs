@@ -240,9 +240,14 @@ mod tests {
         let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
 
         queue.send(DecodeInput::Open(Codec::H264)).unwrap();
+        drop(queue);
         let result = run(&config, &links);
 
-        assert!(matches!(result, Err(ClientError::Decode(_))));
+        if cfg!(feature = "ffmpeg") {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ClientError::Decode(_))));
+        }
         assert_eq!(links.counters.snapshot().frames_decoded, 0);
     }
 

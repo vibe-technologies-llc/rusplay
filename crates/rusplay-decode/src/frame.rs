@@ -139,7 +139,12 @@ pub struct CpuFrame {
 
 impl CpuFrame {
     #[cfg_attr(
-        not(any(feature = "software", feature = "nvdec", feature = "vaapi")),
+        not(any(
+            feature = "software",
+            feature = "nvdec",
+            feature = "vaapi",
+            feature = "ffmpeg"
+        )),
         allow(dead_code)
     )]
     pub(crate) fn new(storage: impl PlaneStorage + 'static) -> Self {

@@ -21,7 +21,7 @@ A Cargo workspace of `crates/rusplay-*`, Rust edition 2024 on the current stable
 | `rusplay-capture` | xdg ScreenCast portal + PipeWire capture into DMA-BUF or shared-memory frames |
 | `rusplay-scale` | GPU (wgpu compute) resampling with Hermite, Lanczos, EWA and other kernels |
 | `rusplay-encode` | Video encoder trait and backends: VAAPI, NVENC, x264, x265, SVT-AV1 |
-| `rusplay-decode` | Video decoder trait and backends: VAAPI, NVDEC, software |
+| `rusplay-decode` | Video decoder trait and backends: VAAPI, NVDEC, software (rav1d AV1, libavcodec H.264/HEVC) |
 | `rusplay-audio` | Opus (opus-rs) and optional FLAC audio codecs |
 | `rusplay-clipboard` | Text clipboard sync: the pure engine, `ClipboardLink`, data-control (ext and wlr) and portal backends (features `wayland`, `portal`) |
 | `rusplay-input` | Input event model, host injection, client capture |
@@ -69,7 +69,7 @@ the `decode` bitstream parsers (through its `fuzzing` feature).
 | Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `clipboard`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
-| App with decoders and host encoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software,input` |
+| App with decoders and host encoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software,ffmpeg,input` |
 
 Tests that need a GPU, a VAAPI render node or an NVIDIA driver skip when it is missing, writing
 `skipped <test>: <reason>` straight to stderr so `cargo test` shows it despite output capture. With

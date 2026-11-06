@@ -31,7 +31,9 @@ pub fn capabilities(config: &VideoDecoderConfig) -> Result<Capabilities, DecodeE
     let formats = match config {
         VideoDecoderConfig::Vaapi(vaapi) => vaapi_formats(vaapi)?,
         VideoDecoderConfig::Nvdec(nvdec) => nvdec_formats(nvdec)?,
-        VideoDecoderConfig::Software(_) if cfg!(feature = "software") => software_formats(),
+        VideoDecoderConfig::Software(_) if cfg!(any(feature = "software", feature = "ffmpeg")) => {
+            software_formats()
+        }
         VideoDecoderConfig::Software(_) => {
             return Err(DecodeError::BackendNotCompiled {
                 backend: Backend::Software,
@@ -68,8 +70,25 @@ fn nvdec_formats(_config: &NvdecDecoderConfig) -> Result<FormatSet, DecodeError>
 
 fn software_formats() -> FormatSet {
     CodecFormat::all()
-        .filter(|format| format.codec == Codec::Av1)
+        .filter(|format| software_codec_ready(format.codec))
         .collect()
+}
+
+fn software_codec_ready(codec: Codec) -> bool {
+    match codec {
+        Codec::Av1 => cfg!(feature = "software"),
+        Codec::H264 | Codec::Hevc => ffmpeg_codec_ready(codec),
+    }
+}
+
+#[cfg(feature = "ffmpeg")]
+fn ffmpeg_codec_ready(codec: Codec) -> bool {
+    crate::ffmpeg::decoder_available(codec)
+}
+
+#[cfg(not(feature = "ffmpeg"))]
+fn ffmpeg_codec_ready(_codec: Codec) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -80,41 +99,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn software_decodes_every_av1_format_and_nothing_else() {
+    fn software_formats_follow_the_compiled_codecs() {
         let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
 
         let result = capabilities(&config);
 
-        if cfg!(feature = "software") {
-            let capabilities = result.unwrap();
-            assert_eq!(capabilities.backend(), Backend::Software);
-            assert_eq!(capabilities.formats().iter().count(), 9);
-            assert!(
-                capabilities
-                    .formats()
-                    .iter()
-                    .all(|format| format.codec == Codec::Av1)
-            );
-            assert!(capabilities.supports(CodecFormat::new(
-                Codec::Av1,
-                PixelFormat {
-                    chroma: ChromaSubsampling::Yuv444,
-                    depth: BitDepth::Twelve,
-                },
-            )));
-        } else {
+        if !cfg!(any(feature = "software", feature = "ffmpeg")) {
             assert!(matches!(
                 result,
                 Err(DecodeError::BackendNotCompiled {
                     backend: Backend::Software
                 })
             ));
+            return;
+        }
+
+        let formats = result.unwrap().formats();
+        let count = |codec| {
+            formats
+                .iter()
+                .filter(|format| format.codec == codec)
+                .count()
+        };
+
+        assert_eq!(
+            count(Codec::Av1),
+            if cfg!(feature = "software") { 9 } else { 0 }
+        );
+        if cfg!(feature = "software") {
+            assert!(formats.iter().any(|format| {
+                format
+                    == CodecFormat::new(
+                        Codec::Av1,
+                        PixelFormat {
+                            chroma: ChromaSubsampling::Yuv444,
+                            depth: BitDepth::Twelve,
+                        },
+                    )
+            }));
+        }
+
+        for codec in [Codec::H264, Codec::Hevc] {
+            let decoded = count(codec);
+            if cfg!(feature = "ffmpeg") {
+                assert!(decoded == 0 || decoded == 9, "{codec} advertised {decoded}");
+            } else {
+                assert_eq!(decoded, 0);
+            }
         }
     }
 
     #[test]
     fn software_capabilities_match_what_opens() {
-        if !cfg!(feature = "software") {
+        if !cfg!(any(feature = "software", feature = "ffmpeg")) {
             return;
         }
         let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [features]
 default = ["flac", "pipewire"]
+ffmpeg = ["rusplay-client/ffmpeg"]
 flac = ["rusplay-client/flac", "rusplay-host/flac"]
 input = ["rusplay-host/input"]
 nvdec = ["rusplay-client/nvdec"]

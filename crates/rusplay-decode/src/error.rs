@@ -43,6 +43,32 @@ pub enum DecodeError {
     Rav1dSendData(#[source] io::Error),
     #[error("rav1d failed to output a picture")]
     Rav1dGetPicture(#[source] io::Error),
+    #[cfg(feature = "ffmpeg")]
+    #[error("this build of libavcodec has no {codec} decoder")]
+    FfmpegDecoderMissing { codec: Codec },
+    #[cfg(feature = "ffmpeg")]
+    #[error("{call} failed with status {status}")]
+    Ffmpeg { call: FfmpegCall, status: i32 },
+    #[cfg(feature = "ffmpeg")]
+    #[error("{call} returned null")]
+    FfmpegAlloc { call: FfmpegCall },
+    #[cfg(feature = "ffmpeg")]
+    #[error("libavcodec marked a {codec} picture corrupt")]
+    FfmpegCorruptPicture { codec: Codec },
+    #[cfg(feature = "ffmpeg")]
+    #[error("libavcodec returned {codec} picture format {format}")]
+    FfmpegPictureFormat { codec: Codec, format: i32 },
+    #[cfg(feature = "ffmpeg")]
+    #[error("a {codec} packet of {bytes} bytes does not fit a libavcodec packet")]
+    FfmpegPacketTooLarge { codec: Codec, bytes: usize },
+    #[cfg(feature = "ffmpeg")]
+    #[error("libavcodec returned {codec} plane {plane} with stride {stride} over {height} rows")]
+    FfmpegPlaneLayout {
+        codec: Codec,
+        plane: u8,
+        stride: i32,
+        height: u32,
+    },
     #[cfg(feature = "vaapi")]
     #[error(transparent)]
     Va(#[from] VaError),
@@ -184,6 +210,31 @@ impl fmt::Display for BitstreamUnit {
             Self::SequenceHeader => "sequence header",
             Self::FrameHeader => "frame header",
             Self::TileGroup => "tile group",
+        })
+    }
+}
+
+#[cfg(feature = "ffmpeg")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfmpegCall {
+    AllocContext,
+    Open,
+    SendPacket,
+    ReceiveFrame,
+    AllocPacket,
+    AllocFrame,
+}
+
+#[cfg(feature = "ffmpeg")]
+impl fmt::Display for FfmpegCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::AllocContext => "avcodec_alloc_context3",
+            Self::Open => "avcodec_open2",
+            Self::SendPacket => "avcodec_send_packet",
+            Self::ReceiveFrame => "avcodec_receive_frame",
+            Self::AllocPacket => "av_packet_alloc",
+            Self::AllocFrame => "av_frame_alloc",
         })
     }
 }
