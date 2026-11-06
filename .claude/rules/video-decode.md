@@ -127,9 +127,9 @@ paths:
   packet returns `Ok(None)` without a send. `AVERROR(EAGAIN)` drains the pictures already waiting
   and retries the send. `decode` returns the newest picture that send made available.
   `err_recognition` is `AV_EF_EXPLODE`, so a picture whose reference list names a frame the
-  decoder does not have fails the packet instead of being skipped and logged. The context is
-  flushed on that failure, which drops the broken reference state before the next packet. The
-  client treats the error as a lost frame and asks the host for a keyframe.
+  decoder does not have fails the packet instead of being skipped and logged. The decoded
+  picture buffer is left as it was, so a later recovery picture can still use a reference the
+  decoder does have. The client treats the error as a lost frame and asks the host to recover.
   `flush` sends a null packet and returns every remaining picture in display order, including any
   drained while the flush packet was waiting; a second flush is empty. The picture timestamp is
   `pts`, or the packet timestamp when `pts` is missing. `AV_FRAME_FLAG_CORRUPT` is

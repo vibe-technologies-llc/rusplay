@@ -128,14 +128,11 @@ impl FfmpegDecoder {
                 self.keep_available()?;
                 continue;
             }
-            return Err(self.abort(FfmpegCall::SendPacket, status));
+            return Err(DecodeError::Ffmpeg {
+                call: FfmpegCall::SendPacket,
+                status,
+            });
         }
-    }
-
-    fn abort(&mut self, call: FfmpegCall, status: i32) -> DecodeError {
-        unsafe { sys::avcodec_flush_buffers(self.context.0) };
-        self.pending = None;
-        DecodeError::Ffmpeg { call, status }
     }
 
     fn keep_available(&mut self) -> Result<(), DecodeError> {
@@ -166,7 +163,10 @@ impl FfmpegDecoder {
             return Ok(None);
         }
 
-        Err(self.abort(FfmpegCall::ReceiveFrame, status))
+        Err(DecodeError::Ffmpeg {
+            call: FfmpegCall::ReceiveFrame,
+            status,
+        })
     }
 }
 
