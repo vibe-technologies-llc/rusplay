@@ -8,6 +8,7 @@ mod clock;
 mod control;
 mod cursor;
 mod datagrams;
+mod display;
 mod encode;
 mod error;
 mod formats;

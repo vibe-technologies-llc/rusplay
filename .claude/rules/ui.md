@@ -221,6 +221,11 @@ paths:
   session uses and a connected client is dropped; a stopped host reads the file on the next start.
   The headless daemon still reads `host.toml` only when that process starts. Any failure is a
   failure notice and the page goes back to `Stopped`.
+- `Choose display` (enabled while the host runs) stops the host and starts it again through
+  `hosting::start_choosing_display`, which calls `HostService::start_choosing_display`: the portal
+  picker is shown even when a restore token exists (`host.md`). A connected client is dropped, as
+  with a settings save. The wish lives in `choose_display_on_start` and is cleared when the stop
+  fails, so a later plain `Start hosting` keeps using the remembered display.
 - `rusplay_host::HostService` (`host.md`) is the one accept and serve loop the app runs. The page
   polls it every 250 ms on the foreground executor: `poll_events` yields `HostEvent`s
   (`PairingOpened` with the PIN and window length, `ClientAdmitted`, `ClientLeft`,

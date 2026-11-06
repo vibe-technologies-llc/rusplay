@@ -17,7 +17,7 @@ use rusplay_protocol::PeerId;
 
 use crate::{
     Admission, Client, Gpu, HostError, HostSession, HostStats, HostStream, NegotiatedFormat,
-    Responder, open_portal,
+    Responder, display::RememberedDisplay, open_portal,
 };
 
 const HOST_ID_FILE: &str = "host-id";
@@ -145,6 +145,19 @@ pub struct HostService {
 }
 
 impl HostService {
+    pub fn start_choosing_display(
+        mut config: Config,
+        peers: &Arc<RwLock<PeerStore>>,
+    ) -> Result<Self, HostError> {
+        let remembered = RememberedDisplay::forget(&mut config)?;
+        let started = Self::start(config, peers);
+        if let (Err(_), Some(remembered)) = (&started, remembered) {
+            remembered.restore().ok();
+        }
+
+        started
+    }
+
     pub fn start(config: Config, peers: &Arc<RwLock<PeerStore>>) -> Result<Self, HostError> {
         let host_id = load_or_create_host_id(&peers.read().path().with_file_name(HOST_ID_FILE))?;
         let gpu = Gpu::open()?;

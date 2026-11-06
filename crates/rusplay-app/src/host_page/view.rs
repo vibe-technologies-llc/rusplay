@@ -28,6 +28,7 @@ pub struct HostPageView {
     clients_error: Option<String>,
     paired: Vec<PairedClient>,
     restart_when_stopped: bool,
+    choose_display_on_start: bool,
     transition: Option<Task<()>>,
     _poller: Task<()>,
 }
@@ -55,6 +56,7 @@ impl HostPageView {
             clients_error: None,
             paired: Vec::new(),
             restart_when_stopped: false,
+            choose_display_on_start: false,
             transition: None,
             _poller: poller,
         };
@@ -187,7 +189,14 @@ impl HostPageView {
         }
 
         let environment = self.environment.clone();
-        let starting = cx.background_spawn(async move { hosting::start(&environment) });
+        let choose_display = std::mem::take(&mut self.choose_display_on_start);
+        let starting = cx.background_spawn(async move {
+            if choose_display {
+                hosting::start_choosing_display(&environment)
+            } else {
+                hosting::start(&environment)
+            }
+        });
         self.transition = Some(cx.spawn(async move |this, cx| {
             let result = starting.await;
             this.update(cx, |this, cx| this.started(result, cx)).ok();
@@ -262,6 +271,7 @@ impl HostPageView {
         }
         let restart = self.restart_when_stopped && !failed;
         self.restart_when_stopped = false;
+        self.choose_display_on_start &= restart;
         self.model.stopped();
 
         if restart {
@@ -271,6 +281,20 @@ impl HostPageView {
         if !failed {
             cx.emit(NoticeRaised(Notice::Info("Host stopped".to_owned())));
         }
+        cx.notify();
+    }
+
+    fn choose_display(&mut self, cx: &mut Context<Self>) {
+        if self.model.phase() != Phase::Running {
+            return;
+        }
+
+        self.restart_when_stopped = true;
+        self.choose_display_on_start = true;
+        self.stop(cx);
+        cx.emit(NoticeRaised(Notice::Info(
+            "Restarting the host to choose a display".to_owned(),
+        )));
         cx.notify();
     }
 
@@ -415,15 +439,30 @@ impl HostPageView {
                     ),
             )
             .child(
-                button("toggle-hosting", label, style, enabled).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        if running {
-                            this.stop(cx);
-                        } else {
-                            this.start(cx);
-                        }
-                    },
-                )),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        button(
+                            "choose-display",
+                            "Choose display",
+                            ButtonStyle::Secondary,
+                            running,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_display(cx))),
+                    )
+                    .child(
+                        button("toggle-hosting", label, style, enabled).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                if running {
+                                    this.stop(cx);
+                                } else {
+                                    this.start(cx);
+                                }
+                            },
+                        )),
+                    ),
             )
     }
 

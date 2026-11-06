@@ -142,6 +142,16 @@ pub fn start(environment: &ConfigEnvironment) -> Result<(HostHandle, PairedClien
     Ok((HostHandle { service }, clients))
 }
 
+pub fn start_choosing_display(
+    environment: &ConfigEnvironment,
+) -> Result<(HostHandle, PairedClients), HostingError> {
+    let config = load_host_config(environment)?;
+    let clients = PairedClients::open(&config)?;
+    let service = HostService::start_choosing_display(config, &clients.store)?;
+
+    Ok((HostHandle { service }, clients))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};

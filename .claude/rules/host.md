@@ -73,6 +73,11 @@ paths:
   window events, timeout renewal, `renew_pin` and `stop`; `src/tests/service.rs` drives a paired
   client through a service whose `serve` is `serve_with` over the loopback test host (the
   disconnect and the reconnect after it).
+- `HostService::start_choosing_display(Config, peers)` is `start` with the display forgotten first
+  (`display.rs`, `RememberedDisplay`): the config's `capture.restore_token` is dropped and, with
+  `capture.persist_session`, the stored restore token is cleared, so the portal shows its picker
+  and the new choice is stored. The old token is written back if the start fails (a cancelled
+  picker), so a cancel keeps the previous display. The desktop app's `Choose display` button uses it.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
