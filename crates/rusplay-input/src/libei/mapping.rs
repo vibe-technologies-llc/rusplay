@@ -196,6 +196,16 @@ impl AbsoluteMapper {
         })
     }
 
+    pub fn new_or_bounds(
+        regions: &[MappedRegion],
+        target: &AbsoluteTarget,
+    ) -> Result<Self, InputError> {
+        Self::new(regions, target).or_else(|error| match target {
+            AbsoluteTarget::Mapping(_) => Self::new(regions, &AbsoluteTarget::Bounds),
+            AbsoluteTarget::Bounds => Err(error),
+        })
+    }
+
     pub fn map(&self, x: f32, y: f32) -> (f32, f32) {
         let bounds = &self.bounds;
         let mapped_x =
@@ -448,6 +458,24 @@ mod tests {
         let result = AbsoluteMapper::new(&regions, &AbsoluteTarget::Mapping("right".into()));
 
         assert!(matches!(result, Err(InputError::NoRegion { .. })));
+    }
+
+    #[test]
+    fn an_unknown_mapping_falls_back_to_the_bounds_of_every_region() {
+        let regions = [
+            region(0.0, 0.0, 1920.0, 1080.0, Some("left")),
+            region(1920.0, 0.0, 1280.0, 1024.0, Some("right")),
+        ];
+
+        let mapper =
+            AbsoluteMapper::new_or_bounds(&regions, &AbsoluteTarget::Mapping("other".into()))
+                .unwrap();
+        let known =
+            AbsoluteMapper::new_or_bounds(&regions, &AbsoluteTarget::Mapping("right".into()))
+                .unwrap();
+
+        assert_eq!(mapper.map(0.5, 0.0), (1600.0, 0.0));
+        assert_eq!(known.map(0.0, 0.0), (1920.0, 0.0));
     }
 
     #[test]

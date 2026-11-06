@@ -75,9 +75,10 @@ paths:
   disconnect and the reconnect after it).
 - `HostService::start_choosing_display(Config, peers)` is `start` with the display forgotten first
   (`display.rs`, `RememberedDisplay`): the config's `capture.restore_token` is dropped and, with
-  `capture.persist_session`, the stored restore token is cleared, so the portal shows its picker
-  and the new choice is stored. The old token is written back if the start fails (a cancelled
-  picker), so a cancel keeps the previous display. The desktop app's `Choose display` button uses it.
+  `capture.persist_session`, the stored capture restore token is cleared, so the portal shows its
+  screen chooser and the new choice is stored. The input session's own token is untouched, so
+  the input permission is not asked again. The old token is written back if the start fails (a
+  cancelled chooser), so a cancel keeps the previous display. The desktop app's `Choose display` button uses it.
 - `serve(&Client, Gpu, &Arc<CaptureFeed>)` returns a `HostStream` at once. The session's
   `ControlChannel` lives in a `ControlOutbox` (`src/outbox.rs`) behind a `parking_lot::Mutex`,
   shared by the control and encode stages; each lock is held for one channel call, never across
@@ -466,18 +467,23 @@ paths:
     a pad's force-feedback upload undrained.
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input, clipboard, input_unavailable }`;
     the GPU is needed for the capture's importable modifiers, so the GPU is opened before the portal.
-    With `input.accept_remote` it opens the combined RemoteDesktop + ScreenCast session (`input.md`)
-    and an `InputFeed` over `SplitSink<LibeiInjector, VirtualGamepads>`. A restore token that comes
+    The capture is always its own ScreenCast session (`open_capture_session`, the portal's screen
+    chooser, remembered in the capture restore token), because a RemoteDesktop session's dialog
+    is a permission prompt that offers no choice of display. With `input.accept_remote` a second,
+    RemoteDesktop session carries the input (`input.md`) and an `InputFeed` over
+    `SplitSink<LibeiInjector, VirtualGamepads>`; its restore token is the file
+    `input-restore-token` next to the capture one (`RestoreTokenStore::sibling`). A restore token that comes
     back without the requested keyboard, pointer or touch (or whose EIS connection is refused) is
     discarded and the session is started again without it, which is what makes the portal show its
     permission dialog; a token that still grants those devices keeps skipping the dialog. After that
-    prompt, if the session grants the screen but no keyboard, pointer or touch, or connecting to EIS
+    prompt, if the session grants no keyboard, pointer or touch, or connecting to EIS
     fails because input permission was denied (`InputError::denies_input_permission`: a portal
     `NotAllowed`, or a failure whose text says permission), the capture is kept and `input` stays
-    empty. The same denial of the combined session, with no token left to retry, falls back to the
-    plain ScreenCast session. The remote desktop session stays alive for
-    the host (`PortalHost::keepalive`, held by the serve closure) so the capture survives when no
-    injector holds it. Either way `input_unavailable` is set when a requested device was not granted,
+    empty. The remote desktop session stays alive for
+    the host (`PortalHost::keepalive`, held by the serve closure) so the clipboard and the injector
+    keep it. The absolute pointer maps onto the capture stream's `mapping_id`
+    (`AbsoluteMapper::new_or_bounds` falls back to the bounds of every region when the compositor's
+    regions carry no such id, so the pointer still works but spans all outputs). Either way `input_unavailable` is set when a requested device was not granted,
     and `HostService` emits `InputForwardingDisabled` once before
     the first pairing window. A cancelled dialog or any other portal error still fails the host. A
     build without the `input` feature (or without `pipewire`) fails with `InputNotCompiled`

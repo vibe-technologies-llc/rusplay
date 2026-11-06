@@ -30,11 +30,7 @@ pub fn open_portal(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> 
         return capture_only(config, gpu, false);
     }
 
-    match shared::open(config, gpu) {
-        Ok(host) => Ok(host),
-        Err(error) if error.denies_input_permission() => capture_only(config, gpu, true),
-        Err(error) => Err(error),
-    }
+    shared::open(config, gpu)
 }
 
 fn restore_hid_the_prompt(used_token: bool, wanted_input: bool, input_missing: bool) -> bool {
@@ -59,9 +55,7 @@ fn capture_only(
 mod shared {
     use std::{os::fd::OwnedFd, sync::Arc, time::Duration};
 
-    use rusplay_capture::{
-        PortalSession, PortalStream, RestoreTokenStore, SharedScreencast, portal_resolution,
-    };
+    use rusplay_capture::RestoreTokenStore;
     use rusplay_clipboard::{
         Clipboard, ClipboardError, ClipboardPolicy, PortalClipboard, probe_data_control,
         request_clipboard,
@@ -77,10 +71,12 @@ mod shared {
 
     use super::PortalHost;
     use crate::{
-        ClipboardOpener, Gpu, HostError, InputFeed, InputTarget, source::feed_from_session,
+        ClipboardOpener, Gpu, HostError, InputFeed, InputTarget,
+        source::{feed_from_session, open_capture_session},
     };
 
     const READY_TIMEOUT: Duration = Duration::from_secs(2);
+    const INPUT_TOKEN_FILE: &str = "input-restore-token";
 
     type DesktopTarget = SplitSink<LibeiInjector, VirtualGamepads>;
 
@@ -105,64 +101,48 @@ mod shared {
         }
     }
 
-    struct InputSession {
-        session: Arc<RemoteDesktopSession>,
-        eis: OwnedFd,
-        target: AbsoluteTarget,
-    }
-
     struct Opened {
-        capture: PortalSession,
-        input: Option<InputSession>,
-        clipboard: Option<ClipboardOpener>,
         session: Arc<RemoteDesktopSession>,
+        eis: Option<OwnedFd>,
+        clipboard: Option<ClipboardOpener>,
+        restore_token: Option<String>,
     }
 
     pub(super) fn open(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> {
-        let capture = &config.capture;
-        let store = capture
-            .persist_session
-            .then(|| RestoreTokenStore::from_config(capture))
-            .transpose()?;
-        let stored = match (&capture.restore_token, &store) {
-            (Some(token), _) => Some(token.clone()),
-            (None, Some(store)) => store.load()?,
-            (None, None) => None,
+        let capture = open_capture_session(config)?;
+        let target = capture
+            .streams
+            .first()
+            .and_then(|stream| stream.mapping_id.clone())
+            .map_or(AbsoluteTarget::Bounds, AbsoluteTarget::Mapping);
+        let opened = match open_input(config) {
+            Ok(opened) => Some(opened),
+            Err(error) if error.denies_input_permission() => None,
+            Err(error) => return Err(error),
         };
 
-        let portal_clipboard =
-            ClipboardPolicy::host(&config.input).is_enabled() && probe_data_control().is_err();
-        let wanted_input = config.input.keyboard || config.input.pointer || config.input.touch;
-        let used_token = stored.is_some();
-        let first = pollster::block_on(open_session(config, stored, portal_clipboard));
-        let restored_without_input = match &first {
-            Ok(opened) => opened.input.is_none(),
-            Err(error) => error.denies_input_permission(),
+        let requested = config.input.keyboard || config.input.pointer || config.input.touch;
+        let Some(opened) = opened else {
+            return Ok(PortalHost {
+                feed: feed_from_session(capture, config, gpu)?,
+                input: None,
+                clipboard: None,
+                input_unavailable: requested,
+                keepalive: None,
+            });
         };
-        let opened =
-            if super::restore_hid_the_prompt(used_token, wanted_input, restored_without_input) {
-                drop(first);
-                if let Some(store) = &store {
-                    store.clear()?;
-                }
-                pollster::block_on(open_session(config, None, portal_clipboard))?
-            } else {
-                first?
-            };
-        if let (Some(store), Some(token)) = (&store, &opened.capture.restore_token) {
-            store.store(token)?;
-        }
 
-        let input = match opened.input {
-            Some(desktop) => {
+        let input = match opened.eis {
+            Some(eis) => {
                 let input_config = config.input;
+                let session = Arc::clone(&opened.session);
                 match InputFeed::spawn(move || {
                     let options = LibeiOptions {
-                        target: desktop.target,
+                        target,
                         ..LibeiOptions::default()
                     };
-                    let mut injector = LibeiInjector::connect(desktop.eis, &input_config, options)?;
-                    injector.attach_session(desktop.session);
+                    let mut injector = LibeiInjector::connect(eis, &input_config, options)?;
+                    injector.attach_session(session);
                     match injector.wait_ready(READY_TIMEOUT) {
                         Ok(()) | Err(InputError::DevicesNotResumed) => {}
                         Err(error) => return Err(error.into()),
@@ -181,16 +161,53 @@ mod shared {
             None => None,
         };
 
-        let requested = config.input.keyboard || config.input.pointer || config.input.touch;
         let input_unavailable = requested && input.is_none();
 
         Ok(PortalHost {
-            feed: feed_from_session(opened.capture, config, gpu)?,
+            feed: feed_from_session(capture, config, gpu)?,
             input,
             clipboard: opened.clipboard,
             input_unavailable,
             keepalive: Some(Box::new(opened.session)),
         })
+    }
+
+    fn open_input(config: &Config) -> Result<Opened, HostError> {
+        let store = config
+            .capture
+            .persist_session
+            .then(|| RestoreTokenStore::from_config(&config.capture))
+            .transpose()?
+            .map(|store| store.sibling(INPUT_TOKEN_FILE));
+        let stored = match &store {
+            Some(store) => store.load()?,
+            None => None,
+        };
+
+        let portal_clipboard =
+            ClipboardPolicy::host(&config.input).is_enabled() && probe_data_control().is_err();
+        let wanted_input = config.input.keyboard || config.input.pointer || config.input.touch;
+        let used_token = stored.is_some();
+        let first = pollster::block_on(open_session(config, stored, portal_clipboard));
+        let restored_without_input = match &first {
+            Ok(opened) => opened.eis.is_none(),
+            Err(error) => error.denies_input_permission(),
+        };
+        let opened =
+            if super::restore_hid_the_prompt(used_token, wanted_input, restored_without_input) {
+                drop(first);
+                if let Some(store) = &store {
+                    store.clear()?;
+                }
+                pollster::block_on(open_session(config, None, portal_clipboard))?
+            } else {
+                first?
+            };
+        if let (Some(store), Some(token)) = (&store, &opened.restore_token) {
+            store.store(token)?;
+        }
+
+        Ok(opened)
     }
 
     async fn open_session(
@@ -211,39 +228,14 @@ mod shared {
         };
 
         session.select_devices(&options).await?;
-        let screencast =
-            SharedScreencast::select_sources(&config.capture, session.session()).await?;
         let started = session.start_selected().await?;
 
-        let streams = started
-            .streams
-            .iter()
-            .map(|stream| PortalStream {
-                node_id: stream.node_id,
-                size: stream
-                    .size
-                    .and_then(|(width, height)| portal_resolution(width, height)),
-            })
-            .collect();
         let session = Arc::new(session);
-        let retained = Arc::clone(&session);
         let clipboard = requested.map(|requested| portal_opener(&session, requested));
-        let capture = screencast
-            .open_remote(session.session(), streams, started.restore_token.clone())
-            .await?;
-        let target = started
-            .streams
-            .first()
-            .and_then(|stream| stream.mapping_id.clone())
-            .map_or(AbsoluteTarget::Bounds, AbsoluteTarget::Mapping);
         let granted = started.keyboard || started.pointer || started.touch;
-        let input = if granted {
+        let eis = if granted {
             match session.connect_to_eis().await {
-                Ok(eis) => Some(InputSession {
-                    session,
-                    eis,
-                    target,
-                }),
+                Ok(eis) => Some(eis),
                 Err(error) if error.denies_input_permission() => None,
                 Err(error) => return Err(error.into()),
             }
@@ -252,10 +244,10 @@ mod shared {
         };
 
         Ok(Opened {
-            capture,
-            input,
+            session,
+            eis,
             clipboard,
-            session: retained,
+            restore_token: started.restore_token,
         })
     }
 

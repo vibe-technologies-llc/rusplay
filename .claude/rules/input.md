@@ -97,8 +97,10 @@ wraps the session in an `Arc` after `start_selected`. The clipboard is requested
 before `Start` (`rusplay_clipboard::request_clipboard`), in the same permission dialog, and only
 when clipboard sync is on and the compositor offers no data-control protocol.
 
-The RemoteDesktop session type also implements ashpd's `IsScreencastSession`, so the host can ask
-for screen and input in a single portal session and a single permission dialog:
+The RemoteDesktop session type also implements ashpd's `IsScreencastSession`, so a host can ask
+for screen and input in a single portal session and a single permission dialog. Rusplay's host
+does not (see below), because that dialog has no display choice; the steps are kept for callers
+that want it (`SharedScreencast`):
 
 1. `RemoteDesktopSession::create()`.
 2. Hand `session.session()` to `Screencast::select_sources` (and `open_pipe_wire_remote` later)
@@ -110,14 +112,14 @@ for screen and input in a single portal session and a single permission dialog:
    `injector.attach_session(session)` keeps the session alive for as long as the injector.
 
 `LibeiInjector::open_standalone` runs steps 1, 3 and 4 for a host that wants input without a
-ScreenCast session of its own. The host runs the combined flow in `rusplay-host/src/portal.rs`
-(`open_portal`): `RemoteDesktopSession::select_devices`, then
-`rusplay_capture::SharedScreencast::select_sources` on `session.session()` (cursor mode and source
-types only, because persistence and the restore token belong to `select_devices` in a RemoteDesktop
-session), then `start_selected`, then `SharedScreencast::open_remote` with the streams the start
-returned and `connect_to_eis`. Its restore token covers both and is stored in the capture
-`RestoreTokenStore`. The absolute pointer maps onto the first stream's `mapping_id`, or onto the
-bounds when the compositor reports none.
+ScreenCast session of its own. The host (`rusplay-host/src/portal.rs`, `open_portal`) runs the two
+sessions apart: the capture is a plain ScreenCast session whose screen chooser decides the display
+(`host.md`), and the input is a RemoteDesktop session with `select_devices`, `start_selected` and
+`connect_to_eis`, whose restore token is stored beside the capture one as `input-restore-token`.
+A restore token from before the split (one file covering both) is just stale for the ScreenCast
+session, so the first start after an update shows the chooser and the input dialog once. The
+absolute pointer maps onto the capture stream's `mapping_id`, and onto the bounds of every region
+when no region carries that id (`AbsoluteMapper::new_or_bounds`).
 
 Live tests need a Wayland session with the portal and a person to confirm its dialog, so they are
 `#[ignore]`d.

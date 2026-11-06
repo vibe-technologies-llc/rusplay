@@ -214,8 +214,9 @@ paths:
   resolver `rusplay-hostd` and the Host settings use, so all three read the same file; a missing
   file means defaults, a malformed one is a notice and nothing starts), opens the peer store and
   calls `HostService::start`, which opens the GPU and the portal (the permission dialog, with
-  `input.accept_remote` the input session in the same dialog; a restore token skips that dialog
-  only when its grant still includes the requested input), binds, starts the discovery
+  `input.accept_remote` a second permission dialog for the input session; the capture token skips the
+  screen chooser, and the input token skips the permission dialog only when its grant still
+  includes the requested input), binds, starts the discovery
   responder and spawns the accept and serve thread. The config is read at start. A host settings
   save restarts a host that is starting, running or stopping, so the new file is what the next
   session uses and a connected client is dropped; a stopped host reads the file on the next start.
@@ -223,7 +224,7 @@ paths:
   failure notice and the page goes back to `Stopped`.
 - `Choose display` (enabled while the host runs) stops the host and starts it again through
   `hosting::start_choosing_display`, which calls `HostService::start_choosing_display`: the portal
-  picker is shown even when a restore token exists (`host.md`). A connected client is dropped, as
+  screen chooser is shown even when a restore token exists (`host.md`). A connected client is dropped, as
   with a settings save. The wish lives in `choose_display_on_start` and is cleared when the stop
   fails, so a later plain `Start hosting` keeps using the remembered display.
 - `rusplay_host::HostService` (`host.md`) is the one accept and serve loop the app runs. The page

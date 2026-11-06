@@ -33,6 +33,11 @@ impl RestoreTokenStore {
         }
     }
 
+    #[must_use]
+    pub fn sibling(&self, file_name: &str) -> Self {
+        Self::new(self.path.with_file_name(file_name))
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -109,6 +114,18 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    #[test]
+    fn a_sibling_store_lives_in_the_same_directory() {
+        let store = RestoreTokenStore::new(PathBuf::from("/state/rusplay/restore-token"));
+
+        let sibling = store.sibling("input-restore-token");
+
+        assert_eq!(
+            sibling.path(),
+            Path::new("/state/rusplay/input-restore-token")
+        );
+    }
 
     #[test]
     fn xdg_state_home_wins() {

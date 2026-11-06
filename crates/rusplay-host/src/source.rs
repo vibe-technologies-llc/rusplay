@@ -140,6 +140,10 @@ mod portal {
     }
 
     pub fn open_portal_capture(config: &Config, gpu: &Gpu) -> Result<Arc<CaptureFeed>, HostError> {
+        feed_from_session(open_capture_session(config)?, config, gpu)
+    }
+
+    pub(crate) fn open_capture_session(config: &Config) -> Result<PortalSession, HostError> {
         let capture = &config.capture;
         let session = if capture.persist_session {
             let store = RestoreTokenStore::from_config(capture)?;
@@ -148,7 +152,7 @@ mod portal {
             pollster::block_on(PortalSession::open(capture))?
         };
 
-        feed_from_session(session, config, gpu)
+        Ok(session)
     }
 
     pub(crate) fn feed_from_session(
@@ -283,10 +287,10 @@ mod portal {
     }
 }
 
-#[cfg(all(feature = "pipewire", feature = "input"))]
-pub(crate) use self::portal::feed_from_session;
 #[cfg(feature = "pipewire")]
 pub use self::portal::open_portal_capture;
+#[cfg(all(feature = "pipewire", feature = "input"))]
+pub(crate) use self::portal::{feed_from_session, open_capture_session};
 
 #[cfg(not(feature = "pipewire"))]
 pub fn open_portal_capture(

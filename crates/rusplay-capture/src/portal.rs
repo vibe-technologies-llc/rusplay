@@ -15,10 +15,11 @@ use rusplay_core::Resolution;
 
 use crate::{CaptureError, RestoreTokenStore};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortalStream {
     pub node_id: u32,
     pub size: Option<Resolution>,
+    pub mapping_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -86,6 +87,7 @@ impl PortalSession {
             .map(|stream| PortalStream {
                 node_id: stream.pipe_wire_node_id(),
                 size: stream.size().and_then(resolution_from_portal),
+                mapping_id: stream.mapping_id().map(str::to_owned),
             })
             .collect();
         if streams.is_empty() {

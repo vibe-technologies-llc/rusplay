@@ -353,7 +353,7 @@ impl LibeiInjector {
             })
             .collect();
 
-        AbsoluteMapper::new(&regions, &self.options.target).ok()
+        AbsoluteMapper::new_or_bounds(&regions, &self.options.target).ok()
     }
 
     fn send(&mut self, request: EiRequest) -> Result<(), InputError> {
