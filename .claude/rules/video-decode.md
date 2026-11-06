@@ -24,6 +24,12 @@ paths:
   format when `cuvidGetDecoderCaps` reports it supported with its output surface in the mask
   (`format::decodes`, unit tested); a missing library or device is the same specific error as
   `NvdecDecoder::new`. A backend whose feature is off is `BackendNotCompiled`.
+- `video.decoder.copy_output` (VAAPI only, default false) reads the completed decoder output
+  through a libva image and uploads planar CPU frames, bypassing Vulkan DMA-BUF import. It is a
+  compatibility path for drivers with corrupt shared-surface output and costs a GPU readback and
+  upload per frame. Copy mode advertises only 4:2:0, at every depth the driver decodes, and splits
+  NV12/P010/P012 into three planes with high-depth samples shifted to the low bits. The hardware
+  pixel test compares copied HEVC 8-bit and 10-bit luma and chroma to native libva readback.
 - The decoder backend and its options are `video.decoder` in `rusplay-config`
   (`VideoDecoderConfig`, tagged by `backend`: `vaapi`, `nvdec`, `software`).
 - `DecodedFrame` carries the display `resolution`, the `PixelFormat` (chroma and bit depth) the

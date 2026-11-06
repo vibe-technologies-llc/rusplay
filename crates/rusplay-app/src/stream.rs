@@ -16,7 +16,7 @@ use rusplay_client::{
     Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
     announced_display,
 };
-use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord};
+use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord, VideoDecoderConfig};
 use rusplay_core::{FrameRate, Resolution};
 
 use crate::{
@@ -113,6 +113,7 @@ pub struct StreamView {
     live: Rc<RefCell<Live>>,
     format_generation: Option<u32>,
     input: InputConfig,
+    decoder: VideoDecoderConfig,
     engaged: bool,
     pointer: Option<(PointerMode, ActivePointer)>,
     clipboard_slot: FocusSlot,
@@ -144,6 +145,7 @@ impl StreamView {
         let sink = TimingSink::new(stream_window.sink(), Arc::clone(&timings));
         let address = host.address;
         let input = config.input;
+        let decoder = config.video.decoder.clone();
         let stats_overlay = config.video.stats_overlay;
         let refresh = config.video.frame_rate;
         let requested_bitrate_kbps = config.video.bitrate_kbps;
@@ -189,6 +191,7 @@ impl StreamView {
             })),
             format_generation: None,
             input,
+            decoder,
             engaged: false,
             pointer: None,
             clipboard_slot,

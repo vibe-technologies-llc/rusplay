@@ -377,6 +377,96 @@ mod tests {
     const ROUNDTRIPS: usize = 8;
 
     #[test]
+    #[ignore = "needs a running wayland compositor and a Vulkan GPU"]
+    fn resizing_while_frames_are_submitted_keeps_the_surface_configured() {
+        let connection = Connection::connect_to_env().unwrap();
+        let (globals, mut queue) = registry_queue_init::<SurfaceEvents>(&connection).unwrap();
+        let handle = queue.handle();
+        let compositor: WlCompositor = globals.bind(&handle, COMPOSITOR_VERSIONS, ()).unwrap();
+        let native = compositor.create_surface(&handle, ());
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        let feedback = Arc::new(FeedbackLog::new());
+        queue
+            .roundtrip(&mut SurfaceEvents::new(&entered, &feedback))
+            .unwrap();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                raw_display_handle: Some(wgpu::rwh::RawDisplayHandle::Wayland(
+                    wgpu::rwh::WaylandDisplayHandle::new(
+                        NonNull::new(connection.backend().display_ptr().cast()).unwrap(),
+                    ),
+                )),
+                raw_window_handle: wgpu::rwh::RawWindowHandle::Wayland(
+                    wgpu::rwh::WaylandWindowHandle::new(
+                        NonNull::new(native.id().as_ptr().cast()).unwrap(),
+                    ),
+                ),
+            })
+        }
+        .unwrap();
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..wgpu::RequestAdapterOptions::default()
+        }))
+        .unwrap();
+        let (device, gpu_queue) =
+            pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
+                .unwrap();
+        let gpu = crate::Gpu::new(device, gpu_queue);
+        let mut config = surface.get_default_config(&adapter, 640, 360).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let started = std::sync::Barrier::new(2);
+
+        std::thread::scope(|threads| {
+            let worker = threads.spawn(|| {
+                let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("resize-race-workload"),
+                    size: 8 * 1024 * 1024,
+                    usage: wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                started.wait();
+                while !stop.load(Ordering::Relaxed) {
+                    gpu.guard(|| {
+                        let mut encoder = gpu
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                        encoder.clear_buffer(&buffer, 0, None);
+                        gpu.queue.submit([encoder.finish()]);
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            });
+            started.wait();
+            let result = (|| {
+                for side in (64..164).cycle().take(200) {
+                    config.width = side * 2;
+                    config.height = side;
+                    gpu.guard(|| {
+                        gpu.configure_surface(&surface, &config)?;
+                        match surface.get_current_texture() {
+                            wgpu::CurrentSurfaceTexture::Success(frame)
+                            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => drop(frame),
+                            wgpu::CurrentSurfaceTexture::Validation => {
+                                return Err(ClientError::SurfaceValidation);
+                            }
+                            _ => {}
+                        }
+                        Ok(())
+                    })?;
+                }
+                Ok::<_, ClientError>(())
+            })();
+            stop.store(true, Ordering::Relaxed);
+            worker.join().unwrap();
+
+            result.unwrap();
+        });
+    }
+
+    #[test]
     #[ignore = "needs a running wayland compositor with wp_presentation"]
     fn feedback_for_a_commit_comes_back_through_the_surface_queue() {
         let connection = Connection::connect_to_env().unwrap();

@@ -1,5 +1,6 @@
 use gpui::{Context, FontWeight, IntoElement, div, prelude::*, px};
 use rusplay_client::ClientStream;
+use rusplay_config::VideoDecoderConfig;
 
 use super::StreamView;
 use crate::{
@@ -21,7 +22,16 @@ impl StreamView {
             ("Host", self.host.name.clone()),
             ("Address", self.host.address.to_string()),
         ];
-        let mut video = Vec::new();
+        let (decoder, transfer) = match &self.decoder {
+            VideoDecoderConfig::Vaapi(config) if config.copy_output => ("VAAPI", "CPU copy"),
+            VideoDecoderConfig::Vaapi(_) => ("VAAPI", "GPU surfaces"),
+            VideoDecoderConfig::Nvdec(_) => ("NVDEC", "CPU upload"),
+            VideoDecoderConfig::Software(_) => ("Software", "CPU upload"),
+        };
+        let mut video = vec![
+            ("Decoder", decoder.to_owned()),
+            ("Frame transfer", transfer.to_owned()),
+        ];
         let (performance, latency) = performance_rows(self.rates);
 
         if let Some(format) = format {

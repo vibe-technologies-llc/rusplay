@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, ReentrantMutex};
 use rusplay_audio::{AudioInput, CODEC_THREAD_STACK_BYTES};
 use rusplay_clipboard::{ClipboardPolicy, ClipboardState};
 use rusplay_config::{AudioConfig, Config, InputConfig};
@@ -48,6 +48,7 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub faults: GpuFaults,
+    access: Arc<ReentrantMutex<()>>,
 }
 
 impl Gpu {
@@ -57,11 +58,12 @@ impl Gpu {
         Self::with_faults(device, queue, faults)
     }
 
-    pub const fn with_faults(device: wgpu::Device, queue: wgpu::Queue, faults: GpuFaults) -> Self {
+    pub fn with_faults(device: wgpu::Device, queue: wgpu::Queue, faults: GpuFaults) -> Self {
         Self {
             device,
             queue,
             faults,
+            access: Arc::new(ReentrantMutex::new(())),
         }
     }
 
@@ -69,7 +71,21 @@ impl Gpu {
         &self,
         work: impl FnOnce() -> Result<T, ClientError>,
     ) -> Result<T, ClientError> {
+        let _access = self.access.lock();
+
         self.faults.guard(&self.device, work)
+    }
+
+    #[cfg(feature = "window")]
+    pub(crate) fn configure_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> Result<(), ClientError> {
+        self.faults.guard(&self.device, || {
+            surface.configure(&self.device, config);
+            Ok(())
+        })
     }
 
     pub fn check_extent(&self, resolution: Resolution) -> Result<(), ClientError> {

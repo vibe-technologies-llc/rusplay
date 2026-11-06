@@ -320,6 +320,7 @@ mod tests {
         let mut global = Config::default();
         global.video.decoder = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
             device: PathBuf::from("/dev/dri/renderD129"),
+            ..VaapiDecoderConfig::default()
         });
 
         let rows = rows(&HostProfile::default(), &global);

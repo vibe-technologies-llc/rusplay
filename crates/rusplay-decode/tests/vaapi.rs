@@ -138,6 +138,7 @@ fn rejects_frames_of_another_codec() {
 fn missing_device_is_reported() {
     let config = VaapiDecoderConfig {
         device: "/dev/dri/rusplay-missing-node".into(),
+        ..VaapiDecoderConfig::default()
     };
 
     assert!(matches!(

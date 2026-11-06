@@ -68,6 +68,25 @@ pub enum DecodeError {
     SurfacePoolExhausted { capacity: usize },
     #[error("the vaapi driver exported a surface as {layers} layers instead of one")]
     ExportLayers { layers: u32 },
+    #[error("vaapi CPU copy does not support image format {fourcc:#010x}")]
+    ReadbackFormat { fourcc: u32 },
+    #[error("vaapi CPU copy object {object} size {size} exceeds the import limit")]
+    ReadbackObjectSize { object: usize, size: u64 },
+    #[error("vaapi CPU copy plane {plane} object index {object} exceeds the import limit")]
+    ReadbackObjectIndex { plane: usize, object: usize },
+    #[error("vaapi CPU copy plane {plane} offset {offset} exceeds the import limit")]
+    ReadbackPlaneOffset { plane: usize, offset: u64 },
+    #[error("vaapi CPU copy plane {plane} pitch {pitch} exceeds the import limit")]
+    ReadbackPlanePitch { plane: usize, pitch: u64 },
+    #[error(
+        "vaapi CPU copy plane {plane} row at {offset} with {bytes} bytes exceeds its {size} byte image"
+    )]
+    ReadbackPlane {
+        plane: usize,
+        offset: usize,
+        bytes: usize,
+        size: usize,
+    },
     #[cfg(feature = "nvdec")]
     #[error(transparent)]
     Cuda(#[from] CudaError),

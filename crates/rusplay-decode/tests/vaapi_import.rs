@@ -6,8 +6,8 @@ mod hardware;
 
 use std::{os::fd::AsFd, rc::Rc};
 
-use rusplay_config::VaapiDecoderConfig;
-use rusplay_core::{Codec, Resolution};
+use rusplay_config::{VaapiDecoderConfig, VideoDecoderConfig};
+use rusplay_core::{ChromaSubsampling, Codec, Resolution};
 use rusplay_decode::{DecodeError, DecodedBuffer, DecodedFrame, VaapiDecoder, VideoDecoder};
 use rusplay_scale::{DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture};
 use rusplay_va::{Display, DmaBufImport, DmaBufObjectRef, DmaBufPlaneLayout, Image, Surface, ffi};
@@ -238,6 +238,93 @@ fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
                     "{name} frame {index} plane {plane}, modifier {:#x}",
                     image.modifier
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn copied_hevc_output_matches_native_luma_and_chroma() {
+    let config = VaapiDecoderConfig::default();
+    if !hardware::device_present(&config.device) {
+        return;
+    }
+    let display = Display::open(&config.device).unwrap();
+    let copied_config = VaapiDecoderConfig {
+        copy_output: true,
+        ..config.clone()
+    };
+    let formats = rusplay_decode::capabilities(&VideoDecoderConfig::Vaapi(copied_config.clone()))
+        .unwrap()
+        .formats();
+
+    assert!(
+        formats
+            .iter()
+            .all(|format| format.format.chroma == ChromaSubsampling::Yuv420)
+    );
+
+    for name in ["hevc-420-8bit.hevc", "hevc-420-10bit.hevc"] {
+        let packets = common::annexb_access_units(Codec::Hevc, &common::fixture(name));
+        let mut native = match VaapiDecoder::new(Codec::Hevc, &config) {
+            Ok(decoder) => decoder,
+            Err(error @ DecodeError::CodecUnsupported { .. }) => {
+                hardware::unsupported(error);
+                continue;
+            }
+            Err(error) => panic!("opening HEVC: {error}"),
+        };
+        let mut copied = VaapiDecoder::new(Codec::Hevc, &copied_config).unwrap();
+
+        for packet in &packets {
+            let frame = match native.decode(packet) {
+                Ok(Some(frame)) => frame,
+                Err(
+                    error @ (DecodeError::BitDepthUnsupported { .. }
+                    | DecodeError::ChromaUnsupported { .. }),
+                ) => {
+                    hardware::unsupported(error);
+                    break;
+                }
+                other => panic!("{name}: {other:?}"),
+            };
+            let output = copied.decode(packet).unwrap().unwrap();
+            let DecodedBuffer::Cpu(cpu) = &output.buffer else {
+                panic!("copy mode produced a DMA-BUF")
+            };
+            let expected = reference(&display, &frame);
+            let shift = if frame.format.depth.bits() > 8 {
+                16 - frame.format.depth.bits()
+            } else {
+                0
+            };
+
+            assert_eq!(output.resolution, frame.resolution);
+            assert_eq!(output.format, frame.format);
+            assert_eq!(output.color, frame.color);
+            assert_eq!(output.timestamp, frame.timestamp);
+            assert_eq!(cpu.plane_count(), 3);
+            for (index, plane) in cpu.planes().enumerate() {
+                let sample = usize::from(plane.bytes_per_sample);
+                let step = sample * if index == 0 { 1 } else { 2 };
+                let offset = usize::from(index == 2) * sample;
+                let source = &expected[usize::from(index > 0)];
+                let expected: Vec<_> = source
+                    .chunks_exact(step)
+                    .flat_map(|pixel| {
+                        if sample == 1 {
+                            vec![pixel[offset]]
+                        } else {
+                            (u16::from_le_bytes([pixel[offset], pixel[offset + 1]]) >> shift)
+                                .to_le_bytes()
+                                .to_vec()
+                        }
+                    })
+                    .collect();
+
+                assert_eq!(plane.stride, plane.width as usize * sample);
+                assert_eq!(plane.data.len(), plane.stride * plane.height as usize);
+                assert_eq!(plane.data, expected, "{name} plane {index}");
             }
         }
     }

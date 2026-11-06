@@ -37,12 +37,14 @@ impl VideoDecoderConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct VaapiDecoderConfig {
     pub device: PathBuf,
+    pub copy_output: bool,
 }
 
 impl Default for VaapiDecoderConfig {
     fn default() -> Self {
         Self {
             device: PathBuf::from("/dev/dri/renderD128"),
+            copy_output: false,
         }
     }
 }
@@ -63,6 +65,21 @@ pub struct SoftwareDecoderConfig {
 mod tests {
     use super::*;
     use crate::Config;
+
+    #[test]
+    fn vaapi_copy_output_is_opt_in_and_round_trips() {
+        let parsed: Config =
+            toml::from_str("[video.decoder]\nbackend = \"vaapi\"\ncopy_output = true\n").unwrap();
+        let VideoDecoderConfig::Vaapi(vaapi) = &parsed.video.decoder else {
+            panic!("expected VAAPI")
+        };
+        let encoded = toml::to_string(&parsed).unwrap();
+        let restored: Config = toml::from_str(&encoded).unwrap();
+
+        assert!(!VaapiDecoderConfig::default().copy_output);
+        assert!(vaapi.copy_output);
+        assert_eq!(restored.video.decoder, parsed.video.decoder);
+    }
 
     #[test]
     fn software_decoder_section_parses() {

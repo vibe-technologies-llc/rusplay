@@ -3,6 +3,7 @@ mod capabilities;
 mod crop;
 mod h264;
 mod hevc;
+mod readback;
 mod reorder;
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ pub struct VaapiDecoder {
     codec: Codec,
     display: Rc<Display>,
     state: CodecState,
+    copy_output: bool,
 }
 
 enum CodecState {
@@ -70,7 +72,10 @@ impl VaapiDecoder {
             });
         }
 
-        Ok(Self::with_display(codec, display))
+        let mut decoder = Self::with_display(codec, display);
+        decoder.copy_output = config.copy_output;
+
+        Ok(decoder)
     }
 
     #[cfg(feature = "fuzzing")]
@@ -90,6 +95,17 @@ impl VaapiDecoder {
             codec,
             display,
             state,
+            copy_output: false,
+        }
+    }
+}
+
+impl VaapiDecoder {
+    fn output(&self, frame: DecodedFrame) -> Result<DecodedFrame, DecodeError> {
+        if self.copy_output {
+            readback::copy(&self.display, frame)
+        } else {
+            Ok(frame)
         }
     }
 }
@@ -110,19 +126,23 @@ impl VideoDecoder for VaapiDecoder {
             });
         }
 
-        match &mut self.state {
+        let output = match &mut self.state {
             CodecState::H264(decoder) => decoder.decode(&self.display, frame),
             CodecState::Hevc(decoder) => decoder.decode(&self.display, frame),
             CodecState::Av1(decoder) => decoder.decode(&self.display, frame),
-        }
+        }?;
+
+        output.map(|frame| self.output(frame)).transpose()
     }
 
     fn flush(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
-        Ok(match &mut self.state {
+        let frames = match &mut self.state {
             CodecState::H264(decoder) => decoder.drain()?,
             CodecState::Hevc(decoder) => decoder.drain(),
             CodecState::Av1(_) => Vec::new(),
-        })
+        };
+
+        frames.into_iter().map(|frame| self.output(frame)).collect()
     }
 }
 

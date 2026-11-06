@@ -618,6 +618,14 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Video,
         "Decoder",
+        "video.decoder.copy_output",
+        "Copy VAAPI output through CPU (4:2:0)",
+        Kind::Flag,
+    )
+    .when(VAAPI_DECODER),
+    field(
+        Section::Video,
+        "Decoder",
         "video.decoder.gpu_index",
         "GPU index",
         U32,

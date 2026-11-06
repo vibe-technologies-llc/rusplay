@@ -178,7 +178,8 @@ paths:
   `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
   counter deltas into per-second rates and the timing deltas into average and peak client latency
   (`received_at` to `submitted_at`, split at `decoded_at`). A scrollable vertical connection
-  details panel beside the picture shows the host and address, RTT, negotiated codec, resolution,
+  details panel beside the picture shows the host and address, RTT, decoder backend and frame
+  transfer path, negotiated codec, resolution,
   bit depth, chroma and colour, the configured format on fallback, requested bitrate and adaptive
   bitrate target, frame rates, loss and recovery rates, and latency stages. Unavailable timings
   have a waiting state. The `Hide details`/`Connection details` button, panel Close button and stats

@@ -684,8 +684,8 @@ impl Presenter {
         self.gpu.check_extent(layout.pixels)?;
 
         if self.configured != Some(layout.pixels) {
-            self.surface
-                .configure(&self.gpu.device, &self.options.configuration(layout.pixels));
+            self.gpu
+                .configure_surface(&self.surface, &self.options.configuration(layout.pixels))?;
             self.configured = Some(layout.pixels);
         }
 

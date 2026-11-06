@@ -96,6 +96,14 @@ paths:
   `frames_skipped`). A recovery frame is usable when its reference is at or before the last good
   frame and not before the last keyframe (`Resync::can_resume_from`, `reference_recoveries`). A
   decode error on a keyframe is fatal.
+- `Gpu::guard` uses a mutex shared by every clone of the client GPU to serialize GPU work
+  and the device's error scopes across the processing and window threads. A window resize must
+  keep the queue idle throughout `Surface::configure`; concurrent processing submissions can
+  otherwise fail configuration with `GpuWaitTimeout`. Configuration has its own checked error
+  scope, and the presenter marks the surface configured only after that scope succeeds, before
+  acquiring a texture. The ignored Wayland test
+  `resizing_while_frames_are_submitted_keeps_the_surface_configured` exercises 200 size changes
+  while another thread submits GPU work; it reproduces the configure failure without the mutex.
 - The last good frame comes from the decode stage: every frame its decoder accepts is sent back
   as `Feedback::Decoded`, and the receive stage keeps the newest (`Resync::last_good`, cleared when
   a new codec reopens the decoder). It is acknowledged to the host as `AcknowledgeFrame` at most

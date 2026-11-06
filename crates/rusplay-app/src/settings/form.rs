@@ -581,6 +581,19 @@ mod tests {
         custom
     }
 
+    fn populated_decoders() -> [VideoDecoderConfig; 3] {
+        [
+            VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
+                device: "/dev/dri/renderD129".into(),
+                copy_output: true,
+            }),
+            VideoDecoderConfig::Nvdec(NvdecDecoderConfig { gpu_index: 1 }),
+            VideoDecoderConfig::Software(SoftwareDecoderConfig {
+                threads: NonZeroU32::new(4),
+            }),
+        ]
+    }
+
     fn populated_configs() -> Vec<Config> {
         let mut base = Config::default();
         base.video.resolution = Some(Resolution::new(2560, 1440));
@@ -664,15 +677,7 @@ mod tests {
             }),
         ];
 
-        let decoders = [
-            VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
-                device: "/dev/dri/renderD129".into(),
-            }),
-            VideoDecoderConfig::Nvdec(NvdecDecoderConfig { gpu_index: 1 }),
-            VideoDecoderConfig::Software(SoftwareDecoderConfig {
-                threads: NonZeroU32::new(4),
-            }),
-        ];
+        let decoders = populated_decoders();
 
         let with_encoders = encoders.into_iter().map(|encoder| {
             let mut config = base.clone();

@@ -131,6 +131,7 @@ mod tests {
     fn vaapi_capabilities_match_their_feature() {
         let config = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
             device: "/dev/dri/rusplay-missing-node".into(),
+            ..VaapiDecoderConfig::default()
         });
 
         let result = capabilities(&config);

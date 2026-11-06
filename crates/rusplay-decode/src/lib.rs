@@ -214,6 +214,7 @@ mod tests {
     fn vaapi_open_matches_its_feature() {
         let config = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
             device: "/dev/dri/rusplay-missing-node".into(),
+            ..VaapiDecoderConfig::default()
         });
 
         let result = open(Codec::Av1, &config);

@@ -14,6 +14,9 @@ pub(crate) fn probe(config: &VaapiDecoderConfig) -> Result<FormatSet, DecodeErro
     let mut formats = FormatSet::EMPTY;
 
     for format in CodecFormat::all() {
+        if config.copy_output && format.format.chroma != ChromaSubsampling::Yuv420 {
+            continue;
+        }
         let Some(profile) = profile_for(format) else {
             continue;
         };
@@ -154,6 +157,7 @@ mod tests {
     fn a_missing_device_is_a_device_error() {
         let config = VaapiDecoderConfig {
             device: "/dev/dri/rusplay-missing-node".into(),
+            ..VaapiDecoderConfig::default()
         };
 
         assert!(matches!(probe(&config), Err(error) if error.is_device_open()));
