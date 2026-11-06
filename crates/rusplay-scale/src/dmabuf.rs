@@ -259,6 +259,10 @@ impl DmaBufTexture {
         self.format
     }
 
+    pub(crate) fn preserved(&self) -> bool {
+        self.ownership.is_some()
+    }
+
     pub fn acquire(
         &self,
         device: &wgpu::Device,

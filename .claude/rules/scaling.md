@@ -203,7 +203,12 @@ paths:
   Each use submits three command buffers together: `DmaBufTexture::acquire` takes ownership
   from the foreign queue, normal wgpu processing reads the planes, then `release` returns them
   to `GENERAL` and to the foreign queue. The raw Vulkan ownership barriers use separate encoders
-  because wgpu 30 prohibits mixing raw and normal encoding on one encoder. The decoder surface
+  because wgpu 30 prohibits mixing raw and normal encoding on one encoder. The acquire barrier's
+  source access is every memory read and write, so a reused surface's texture cache is dropped;
+  a preserved import (a VAAPI decode surface) is still not sampled directly. `RgbConverter`
+  transfer-copies its planes into owned textures first and the unpack shader reads those, because
+  a shader load of the imported image can observe a stale tile cache after the decoder reuses the
+  surface while a transfer copy sees the same bytes as `vaGetImage`. The decoder surface
   lease stays alive until the whole submission completes. Device creation enables
   `VK_EXT_queue_family_foreign` when supported, otherwise the barriers use `EXTERNAL`.
 - The device needs `wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF` (`DMABUF_FEATURES`), which wgpu

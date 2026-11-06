@@ -243,6 +243,127 @@ fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
     }
 }
 
+fn indexed_packets(name: &str) -> Vec<rusplay_core::EncodedFrame> {
+    let encoded = common::fixture(&format!("{name}.hevc"));
+    let index = common::fixture(&format!("{name}.index"));
+    let text = std::str::from_utf8(&index).unwrap();
+    let mut offset = 0;
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let length: usize = line.split_whitespace().next().unwrap().parse().unwrap();
+            let packet = rusplay_core::EncodedFrame {
+                codec: Codec::Hevc,
+                timestamp: rusplay_core::Timestamp::from_micros(
+                    u64::try_from(index).unwrap() * 16_666,
+                ),
+                keyframe: index == 0,
+                data: encoded[offset..offset + length].to_vec().into(),
+            };
+            offset += length;
+            packet
+        })
+        .collect()
+}
+
+#[test]
+fn motion_hevc_planes_survive_vulkan_import() {
+    let config = VaapiDecoderConfig::default();
+    if !hardware::device_present(&config.device) {
+        return;
+    }
+    let Some(gpu) = gpu() else {
+        hardware::missing("a DMA-BUF capable Vulkan adapter");
+        return;
+    };
+    let display = Display::open(&config.device).unwrap();
+    let mut importer = DmaBufImporter::new(&gpu.device).unwrap();
+
+    for name in ["hevc-rusplay-motion-8bit", "hevc-rusplay-motion-10bit"] {
+        let packets = indexed_packets(name);
+        let mut decoder = match VaapiDecoder::new(Codec::Hevc, &config) {
+            Ok(decoder) => decoder,
+            Err(error @ DecodeError::CodecUnsupported { .. }) => {
+                hardware::unsupported(error);
+                return;
+            }
+            Err(error) => panic!("opening HEVC: {error}"),
+        };
+        for (index, packet) in packets.iter().enumerate() {
+            let frame = match decoder.decode(packet) {
+                Ok(Some(frame)) => frame,
+                Ok(None) => continue,
+                Err(
+                    error @ (DecodeError::BitDepthUnsupported { .. }
+                    | DecodeError::ChromaUnsupported { .. }),
+                ) => {
+                    hardware::unsupported(error);
+                    break;
+                }
+                other => panic!("{name} frame {index}: {other:?}"),
+            };
+            let DecodedBuffer::DmaBuf(buffer) = &frame.buffer else {
+                panic!("expected DMA-BUF")
+            };
+            let image = buffer.image();
+            let planes: Vec<_> = image
+                .planes
+                .iter()
+                .enumerate()
+                .map(|(plane, plane_layout)| DmaBufPlane {
+                    fd: image.plane_fd(plane).unwrap(),
+                    offset: plane_layout.offset,
+                    stride: plane_layout.pitch,
+                })
+                .collect();
+            let texture = importer
+                .import_external(&DmaBuf {
+                    fourcc: image.fourcc.as_u32(),
+                    modifier: image.modifier,
+                    width: image.width,
+                    height: image.height,
+                    planes,
+                })
+                .unwrap();
+            let bytes_per_sample = if frame.format.depth.bits() > 8 { 2 } else { 1 };
+            let actual: Vec<_> = (0..2)
+                .map(|plane| {
+                    let size = if plane == 0 {
+                        frame.resolution
+                    } else {
+                        Resolution::new(
+                            frame.resolution.width.div_ceil(2),
+                            frame.resolution.height.div_ceil(2),
+                        )
+                    };
+                    download(
+                        &gpu,
+                        &texture,
+                        plane,
+                        bytes_per_sample * if plane == 0 { 1 } else { 2 },
+                        size,
+                    )
+                })
+                .collect();
+            let expected = reference(&display, &frame);
+
+            for (plane, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
+                assert_eq!(
+                    differences,
+                    0,
+                    "{name} frame {index} plane {plane}, modifier {:#x}, exported {}x{}, visible {}x{}",
+                    image.modifier,
+                    image.width,
+                    image.height,
+                    frame.resolution.width,
+                    frame.resolution.height
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn copied_hevc_output_matches_native_luma_and_chroma() {
     let config = VaapiDecoderConfig::default();

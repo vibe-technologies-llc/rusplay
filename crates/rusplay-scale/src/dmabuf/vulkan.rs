@@ -319,7 +319,7 @@ impl VulkanImporter {
                         self.queue_family,
                         vk::ImageLayout::GENERAL,
                         vk::ImageLayout::GENERAL,
-                        vk::AccessFlags::empty(),
+                        vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
                         vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
                     )
                 } else {
@@ -329,7 +329,7 @@ impl VulkanImporter {
                         vk::ImageLayout::GENERAL,
                         vk::ImageLayout::GENERAL,
                         vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
-                        vk::AccessFlags::empty(),
+                        vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
                     )
                 };
 

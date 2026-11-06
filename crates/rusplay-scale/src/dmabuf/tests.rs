@@ -301,6 +301,80 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
     }
 }
 
+#[test]
+fn preserved_semi_planar_planes_unpack_like_the_upload_buffer() {
+    let Some(mut fixture) = fixture() else {
+        return;
+    };
+    let gpu = fixture.gpu;
+    let pipelines = ScalePipelines::new(&gpu.device);
+
+    for (format, depth) in [
+        (DmaBufFormat::Nv12, BitDepth::Eight),
+        (DmaBufFormat::P010, BitDepth::Ten),
+    ] {
+        for size in [(64, 36), (37, 23)] {
+            let settings = yuv_settings(size, depth);
+            let mut converter = RgbConverter::new(&pipelines, &gpu.device, settings).unwrap();
+            let bytes = encode_yuv(gpu, &pipelines, &settings);
+            let fd = udmabuf(&bytes).unwrap();
+            let upload = converter.create_frame(&gpu.device);
+            let from_buffer = testing::storage_target(gpu, size.0, size.1);
+            let from_planes = testing::storage_target(gpu, size.0, size.1);
+            let texture = fixture
+                .importer
+                .import_external(&semi_planar(&fd, format, converter.layout()))
+                .unwrap();
+
+            assert!(texture.preserved());
+            assert!(
+                texture
+                    .texture(0)
+                    .unwrap()
+                    .usage()
+                    .contains(wgpu::TextureUsages::COPY_SRC)
+            );
+            assert!(
+                texture
+                    .texture(1)
+                    .unwrap()
+                    .usage()
+                    .contains(wgpu::TextureUsages::COPY_SRC)
+            );
+
+            gpu.queue.write_buffer(upload.buffer(), 0, &bytes);
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            converter
+                .encode(
+                    &gpu.device,
+                    &mut encoder,
+                    &upload,
+                    &testing::view(&from_buffer),
+                )
+                .unwrap();
+            converter
+                .encode_planes(
+                    &gpu.device,
+                    &mut encoder,
+                    &texture,
+                    &testing::view(&from_planes),
+                )
+                .unwrap();
+            let acquire = texture.acquire(&gpu.device).unwrap();
+            let release = texture.release(&gpu.device, &mut encoder).unwrap();
+            gpu.queue
+                .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
+
+            let expected = testing::download(gpu, &from_buffer);
+            let actual = testing::download(gpu, &from_planes);
+
+            assert_eq!(actual.max_difference(&expected), 0.0, "{format:?} {size:?}");
+        }
+    }
+}
+
 fn unpack_through_lut(
     gpu: &Gpu,
     pipelines: &ScalePipelines,

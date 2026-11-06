@@ -131,6 +131,16 @@ pub struct RgbConverter {
     targets: GroupCache<wgpu::TextureView>,
     lut_targets: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
     chain_targets: GroupCache<(wgpu::TextureView, wgpu::TextureView)>,
+    staged_luma: Option<PlaneCopy>,
+    staged_chroma: Option<PlaneCopy>,
+}
+
+#[derive(Debug)]
+struct PlaneCopy {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: wgpu::Extent3d,
+    format: wgpu::TextureFormat,
 }
 
 impl RgbConverter {
@@ -152,6 +162,8 @@ impl RgbConverter {
             targets: GroupCache::default(),
             lut_targets: GroupCache::default(),
             chain_targets: GroupCache::default(),
+            staged_luma: None,
+            staged_chroma: None,
         })
     }
 
@@ -196,6 +208,8 @@ impl RgbConverter {
         self.plan = UnpackPlan::new(&self.pipelines, device, &settings, &layout)?;
         self.settings = settings;
         self.layout = layout;
+        self.staged_luma = None;
+        self.staged_chroma = None;
         Ok(Reconfigured::Tables)
     }
 
@@ -318,6 +332,10 @@ impl RgbConverter {
         {
             return Err(mismatch);
         }
+        let (Some(luma_texture), Some(chroma_texture)) = (source.texture(0), source.texture(1))
+        else {
+            return Err(mismatch);
+        };
         let (Some(luma), Some(chroma)) = (source.view(0), source.view(1)) else {
             return Err(mismatch);
         };
@@ -328,12 +346,25 @@ impl RgbConverter {
             return Err(ScaleError::DmaBufTooSmall { found, needed });
         }
 
+        let (luma, chroma) = if source.preserved()
+            && luma_texture.usage().contains(wgpu::TextureUsages::COPY_SRC)
+            && chroma_texture
+                .usage()
+                .contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            let luma = stage_plane(device, encoder, luma_texture, &mut self.staged_luma);
+            let chroma = stage_plane(device, encoder, chroma_texture, &mut self.staged_chroma);
+            (luma, chroma)
+        } else {
+            (luma.clone(), chroma.clone())
+        };
+
         let output = self.output(device, encoder, fused, target)?;
         let pipelines = &self.pipelines;
         let input_group = self
             .planes
             .get_or_create(&(luma.clone(), chroma.clone()), || {
-                planes_group(device, &pipelines.unpack.planes_layout, luma, chroma)
+                planes_group(device, &pipelines.unpack.planes_layout, &luma, &chroma)
             });
         let rgb = match output {
             Output::Transfer(_) => &pipelines.unpack.planes_rgb,
@@ -450,6 +481,48 @@ fn lut_target_group(
             },
         ],
     })
+}
+
+fn stage_plane(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    source: &wgpu::Texture,
+    staged: &mut Option<PlaneCopy>,
+) -> wgpu::TextureView {
+    let size = source.size();
+    let format = source.format();
+    match staged.as_mut() {
+        Some(plane) if plane.size == size && plane.format == format => {
+            encoder.copy_texture_to_texture(
+                source.as_image_copy(),
+                plane.texture.as_image_copy(),
+                size,
+            );
+            plane.view.clone()
+        }
+        _ => {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("rusplay-decoded-plane"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), size);
+            let stored = view.clone();
+            *staged = Some(PlaneCopy {
+                texture,
+                view,
+                size,
+                format,
+            });
+            stored
+        }
+    }
 }
 
 fn planes_group(
