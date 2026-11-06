@@ -45,6 +45,7 @@ impl CodecFormat {
 
     fn fallback_rank(self, preferred: Self) -> FallbackRank {
         FallbackRank {
+            codec: codec_rank(self.codec, preferred.codec),
             chroma: AxisRank::of(
                 chroma_index(self.format.chroma),
                 chroma_index(preferred.format.chroma),
@@ -53,7 +54,6 @@ impl CodecFormat {
                 depth_index(self.format.depth),
                 depth_index(preferred.format.depth),
             ),
-            codec: codec_rank(self.codec, preferred.codec),
         }
     }
 }
@@ -89,9 +89,9 @@ impl AxisRank {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct FallbackRank {
+    codec: usize,
     chroma: AxisRank,
     depth: AxisRank,
-    codec: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -279,17 +279,31 @@ mod tests {
     }
 
     #[test]
-    fn chroma_is_kept_over_depth_and_codec() {
+    fn codec_is_kept_over_chroma() {
         let candidates = set(&[HEVC_420_10, AV1_444_10, H264_420_8]);
 
-        assert_eq!(candidates.closest_to(HEVC_444_10), Some(AV1_444_10));
+        assert_eq!(candidates.closest_to(HEVC_444_10), Some(HEVC_420_10));
     }
 
     #[test]
-    fn depth_is_kept_over_codec() {
+    fn codec_is_kept_over_depth() {
         let candidates = set(&[HEVC_420_8, AV1_420_10]);
 
-        assert_eq!(candidates.closest_to(HEVC_420_10), Some(AV1_420_10));
+        assert_eq!(candidates.closest_to(HEVC_420_10), Some(HEVC_420_8));
+    }
+
+    #[test]
+    fn the_preferred_codec_wins_whenever_any_of_its_formats_is_supported() {
+        for preferred in CodecFormat::all() {
+            for supported in CodecFormat::all().filter(|format| format.codec == preferred.codec) {
+                let candidates: FormatSet = CodecFormat::all()
+                    .filter(|format| format.codec != preferred.codec)
+                    .chain([supported])
+                    .collect();
+
+                assert_eq!(candidates.closest_to(preferred), Some(supported));
+            }
+        }
     }
 
     #[test]

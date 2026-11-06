@@ -136,12 +136,13 @@ paths:
   `rusplay-fuzz`'s `control` target covers it through `ControlMessage::decode`.
 - Format negotiation: the host picks
   `FormatSet::closest_to(configured)` from encodable ∩ decodable, where `configured` is the
-  host's `video.codec` and `video.pixel_format`. The fallback order is lexicographic: chroma
-  first, then depth, then codec. On the chroma and depth axes the configured value comes first,
+  host's `video.codec` and `video.pixel_format`. The fallback order is lexicographic: codec
+  first, then chroma, then depth. On the chroma and depth axes the configured value comes first,
   then higher values nearest first (nothing asked for is lost), then lower values nearest first;
-  codecs are the configured one, then AV1, HEVC, H.264. So pixel format, which the user sees,
-  outranks the codec, and HEVC 4:2:2 8-bit on a radeonsi host (HEVC 4:2:0 only) becomes HEVC 4:2:0
-  8-bit. An empty intersection is `NoCommonFormat { encodable, decodable }` on both ends: the host
+  codecs are the configured one, then AV1, HEVC, H.264. The configured codec is kept whenever
+  both ends support any of its formats, even if another codec matches the configured pixel format
+  more closely. HEVC 4:2:2 8-bit on a radeonsi host (HEVC 4:2:0 only) becomes HEVC 4:2:0 8-bit.
+  An empty intersection is `NoCommonFormat { encodable, decodable }` on both ends: the host
   still answers the `Hello` with its set before its `Goodbye`, and the client computes the same
   empty intersection from it. The order is unit tested in `rusplay-core/src/format.rs`.
 - The control channel (hello, keyframe and recovery requests, frame acknowledgements, loss

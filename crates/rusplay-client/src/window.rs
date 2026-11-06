@@ -696,11 +696,7 @@ impl Presenter {
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 return Ok(());
             }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.configured = None;
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.configured = None;
                 return Ok(());
             }

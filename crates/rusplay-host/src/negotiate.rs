@@ -131,6 +131,19 @@ mod tests {
     }
 
     #[test]
+    fn hevc_is_kept_when_only_av1_matches_the_configured_depth() {
+        let configured = format(Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Ten);
+        let encodable = set(&[configured, HEVC_420_8, AV1_420_10]);
+        let decodable = set(&[HEVC_420_8, AV1_420_10]);
+
+        let negotiated = negotiate(configured, encodable, decodable).unwrap();
+
+        assert_eq!(negotiated.chosen, HEVC_420_8);
+        assert_eq!(negotiated.configured, configured);
+        assert!(negotiated.is_fallback());
+    }
+
+    #[test]
     fn no_shared_format_is_a_specific_error_naming_both_sets() {
         let encodable = set(&[HEVC_422_8, HEVC_420_8]);
         let decodable = set(&[AV1_420_8]);
