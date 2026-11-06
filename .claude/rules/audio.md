@@ -49,11 +49,12 @@ paths:
   `playback` loopback test.
 - Playback (`AudioPlayback`, feature `pipewire`) mirrors capture: a PipeWire output stream on its
   own thread whose `process` callback (`Playout::render`) reads an `rtrb` ring and never blocks or
-  allocates. The ring holds `max(250 ms, 3 * jitter_buffer_ms)` at 192 kHz, because it is built
-  before the device rate is known and must fit twice the jitter floor at any device rate;
-  `Playout::retarget` recomputes the floor in native-rate frames when the stream negotiates its
-  format. `submit` writes decoded frames into the ring, through `PcmResampler` if the stream
-  negotiated another rate, and counts frames dropped when the ring is full as `overflows`.
+  allocates. The ring holds `max(250 ms, 3 * max(jitter_buffer_max_ms, jitter_buffer_ms))` at
+  192 kHz, because it is built before the device rate is known and must fit twice the jitter
+  floor at any device rate; `Playout::retarget` stores the negotiated rate, from which the
+  callback computes the floor in native-rate frames. `submit` writes decoded frames into the
+  ring, through `PcmResampler` if the stream negotiated another rate, and counts frames dropped
+  when the ring is full as `overflows`.
 - `AudioPlayback::start_to(config, PlaybackTarget::VirtualSource)` publishes the stream as a
   PipeWire `Audio/Source` node (`media.class`, `node.name = rusplay-microphone`) instead of
   autoconnecting to a sink, which is how the host exposes the client's microphone to games. A
@@ -62,13 +63,23 @@ paths:
   on this side). With no consumer `process` is not called, the ring fills and drops its newest
   frames (`overflows`); the first callback after a consumer appears trims the backlog down to the
   jitter floor, so stale audio never plays.
-- The jitter buffer is `audio.jitter_buffer_ms` (default 10, at most 500). The callback outputs
-  silence until at least `max(target, one quantum)` frames are queued, then plays. If a quantum
-  arrives short it pads the rest with silence and counts an `underrun` but keeps playing, so a
-  decode thread that briefly delays the audio thread does not open a hole the size of the jitter
-  target. A quantum that finds the ring empty counts an `underrun` and re-buffers up to the
-  target. If the queue grows past twice that floor (clock drift, a burst) it drops the surplus
-  down to the floor and counts a `trim`, so latency cannot creep up.
+- The jitter buffer is `audio.jitter_buffer_ms` (default 10, at most 500) of audio kept queued
+  *beyond* the quantum the callback is about to play, so it is the lateness the decode side can
+  absorb whatever the graph's quantum is. The callback outputs silence until `target + quantum`
+  frames are queued, then plays. A quantum that arrives short plays what there is, pads with
+  silence, counts an `underrun` and re-buffers up to the target before playing again, so small
+  refills under load do not stutter between sound and silence. If the queue grows past twice
+  `target + quantum` (clock drift, a burst) the surplus above it is dropped and counted as a
+  `trim`, so latency cannot creep up.
+- The target adapts (`JitterPolicy`): each underrun raises it by one codec frame up to
+  `audio.jitter_buffer_max_ms` (default 50, at most 500, never below `jitter_buffer_ms`; equal
+  disables growth), and after `audio.jitter_relax_ms` (default 10 000, 0 never relaxes) of
+  playback without an underrun it falls back one codec frame toward `jitter_buffer_ms`, dropping
+  up to one codec frame of the backlog it no longer needs. Time is counted in rendered frames,
+  so the realtime callback makes no clock calls. A drop while audio is playing (trim or relax)
+  crossfades linearly over the quantum from the audio that would have played to the audio after
+  the drop, so it does not click. The ring is sized from the ceiling, and the current target is
+  published as `AudioOutputStats::jitter_target_us` (the client's `audio_jitter_target_us`).
 - Lost packets are the caller's to conceal before `submit`: `AudioDecoder::conceal` runs Opus
   PLC (`decode` with an empty packet) for mono and stereo, `recover` rebuilds the lost frame from
   the in-band FEC of the packet that followed. opus-rs's multistream decoder has no loss path, so
@@ -88,8 +99,9 @@ paths:
   client is streaming.
 - The microphone (client to host) reuses all of it with the derived config
   `AudioConfig::microphone_stream`: Opus, mono, `audio.sample_rate`, with the bitrate, frame
-  duration, in-band FEC, jitter buffer and FEC overhead of `audio.microphone`, and the queue and
-  concealment limits of the main audio. The client captures with `CaptureTarget::Source`, encodes
+  duration, in-band FEC, jitter buffer and FEC overhead of `audio.microphone`, and the queue,
+  concealment and adaptive jitter limits (`jitter_buffer_max_ms`, `jitter_relax_ms`) of the main
+  audio. The client captures with `CaptureTarget::Source`, encodes
   and sends on `StreamKind::Microphone`; the host decodes with `ConcealingPlayer` into an
   `AudioPlayback` on `PlaybackTarget::VirtualSource`. Opus decoding needs the frame duration, so
   both ends must use the same `audio.microphone.frame_duration`.

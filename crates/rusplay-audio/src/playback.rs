@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use pipewire::{
@@ -25,6 +28,7 @@ use crate::{
 };
 
 const BYTES_PER_SAMPLE: usize = size_of::<f32>();
+const MICROS_PER_SECOND: u64 = 1_000_000;
 const VIRTUAL_SOURCE_NAME: &str = "rusplay-microphone";
 const VIRTUAL_SOURCE_DESCRIPTION: &str = "Rusplay Microphone";
 const VIRTUAL_SOURCE_CLASS: &str = "Audio/Source";
@@ -40,88 +44,226 @@ pub enum PlaybackTarget {
 struct PlaybackCounters {
     underruns: AtomicU64,
     trims: AtomicU64,
+    jitter_target_us: AtomicU32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JitterPolicy {
+    floor: Duration,
+    ceiling: Duration,
+    step: Duration,
+    relax: Duration,
+}
+
+impl JitterPolicy {
+    fn from_config(config: &AudioConfig) -> Self {
+        let frame_micros = config.frame_samples() as u64 * MICROS_PER_SECOND
+            / u64::from(config.sample_rate.hz().max(1));
+        let millis = |value: u32| Duration::from_millis(u64::from(value));
+
+        Self {
+            floor: millis(config.jitter_buffer_ms),
+            ceiling: millis(config.jitter_buffer_max_ms.max(config.jitter_buffer_ms)),
+            step: Duration::from_micros(frame_micros.max(1)),
+            relax: millis(config.jitter_relax_ms),
+        }
+    }
 }
 
 struct Playout {
     consumer: Consumer<f32>,
     channels: usize,
-    jitter_ms: u32,
-    target_frames: AtomicUsize,
+    policy: JitterPolicy,
+    target: Duration,
+    negotiated_rate: AtomicU32,
+    calm_frames: usize,
     playing: bool,
     counters: Arc<PlaybackCounters>,
 }
 
-fn frames_for(rate: u32, milliseconds: u32) -> usize {
-    rate as usize * milliseconds as usize / 1000
+fn frames_for(rate: u32, span: Duration) -> usize {
+    let frames = u128::from(rate) * span.as_micros() / u128::from(MICROS_PER_SECOND);
+
+    usize::try_from(frames).unwrap_or(usize::MAX)
+}
+
+fn whole_micros(span: Duration) -> u32 {
+    u32::try_from(span.as_micros()).unwrap_or(u32::MAX)
+}
+
+fn blend_weight(frame: usize, span: usize) -> f32 {
+    let frame = f32::from(u16::try_from(frame + 1).unwrap_or(u16::MAX));
+    let span = f32::from(u16::try_from(span).unwrap_or(u16::MAX));
+
+    (frame / span).min(1.0)
 }
 
 impl Playout {
     fn new(
         consumer: Consumer<f32>,
         channels: usize,
-        jitter_ms: u32,
+        policy: JitterPolicy,
         rate: u32,
         counters: Arc<PlaybackCounters>,
     ) -> Self {
+        counters
+            .jitter_target_us
+            .store(whole_micros(policy.floor), Ordering::Relaxed);
+
         Self {
             consumer,
             channels,
-            jitter_ms,
-            target_frames: AtomicUsize::new(frames_for(rate, jitter_ms)),
+            policy,
+            target: policy.floor,
+            negotiated_rate: AtomicU32::new(rate),
+            calm_frames: 0,
             playing: false,
             counters,
         }
     }
 
     fn retarget(&self, rate: u32) {
-        self.target_frames
-            .store(frames_for(rate, self.jitter_ms), Ordering::Relaxed);
+        self.negotiated_rate.store(rate, Ordering::Relaxed);
+    }
+
+    fn rate(&self) -> u32 {
+        self.negotiated_rate.load(Ordering::Relaxed)
+    }
+
+    fn floor_frames(&self, wanted: usize) -> usize {
+        frames_for(self.rate(), self.target) + wanted
+    }
+
+    fn step_frames(&self) -> usize {
+        frames_for(self.rate(), self.policy.step)
+    }
+
+    fn set_target(&mut self, target: Duration) {
+        self.target = target;
+        self.calm_frames = 0;
+        self.counters
+            .jitter_target_us
+            .store(whole_micros(target), Ordering::Relaxed);
+    }
+
+    fn raise_target(&mut self) {
+        let raised = (self.target + self.policy.step).min(self.policy.ceiling);
+        self.set_target(raised);
+    }
+
+    fn relax_due(&self) -> bool {
+        !self.policy.relax.is_zero()
+            && self.target > self.policy.floor
+            && self.calm_frames >= frames_for(self.rate(), self.policy.relax)
+    }
+
+    fn lower_target(&mut self) {
+        let lowered = self
+            .target
+            .saturating_sub(self.policy.step)
+            .max(self.policy.floor);
+        self.set_target(lowered);
+    }
+
+    fn surplus_to_discard(&mut self, available: usize, wanted: usize) -> usize {
+        let floor = self.floor_frames(wanted);
+        if available > floor * 2 {
+            self.counters.trims.fetch_add(1, Ordering::Relaxed);
+            return available - floor;
+        }
+
+        if self.relax_due() {
+            self.lower_target();
+            return available
+                .saturating_sub(self.floor_frames(wanted))
+                .min(self.step_frames());
+        }
+
+        0
     }
 
     fn render(&mut self, out: &mut [u8]) -> usize {
         let frame_bytes = self.channels * BYTES_PER_SAMPLE;
         let wanted = out.len() / frame_bytes;
-        let mut available = self.consumer.slots() / self.channels;
+        let available = self.consumer.slots() / self.channels;
+        let was_playing = self.playing;
 
-        let floor = self.target_frames.load(Ordering::Relaxed).max(wanted);
-
-        if !self.playing && available >= floor {
+        if !self.playing && available >= self.floor_frames(wanted) {
             self.playing = true;
         }
 
-        if self.playing && available > floor * 2 {
-            let surplus = (available - floor) * self.channels;
-            if let Ok(chunk) = self.consumer.read_chunk(surplus) {
-                chunk.commit_all();
-            }
-            self.counters.trims.fetch_add(1, Ordering::Relaxed);
-            available = floor;
-        }
+        let discarded = if self.playing {
+            self.surplus_to_discard(available, wanted)
+        } else {
+            0
+        };
 
         let taken = if self.playing {
-            available.min(wanted)
+            (available - discarded).min(wanted)
         } else {
             0
         };
         if self.playing && taken < wanted {
             self.counters.underruns.fetch_add(1, Ordering::Relaxed);
             self.playing = false;
+            self.raise_target();
+        }
+        if self.playing {
+            self.calm_frames = self.calm_frames.saturating_add(wanted);
         }
 
-        let mut written = 0;
-        if taken > 0
-            && let Ok(chunk) = self.consumer.read_chunk(taken * self.channels)
-        {
-            let (first, second) = chunk.as_slices();
-            for sample in first.iter().chain(second) {
-                out[written..written + BYTES_PER_SAMPLE].copy_from_slice(&sample.to_le_bytes());
-                written += BYTES_PER_SAMPLE;
-            }
-            chunk.commit_all();
-        }
+        let crossfade = was_playing && discarded > 0;
+        let written = self.copy_out(out, discarded, taken, crossfade);
         out[written..wanted * frame_bytes].fill(0);
 
         wanted
+    }
+
+    fn copy_out(
+        &mut self,
+        out: &mut [u8],
+        discarded: usize,
+        taken: usize,
+        crossfade: bool,
+    ) -> usize {
+        let channels = self.channels;
+        if taken == 0 && discarded == 0 {
+            return 0;
+        }
+        let Ok(chunk) = self.consumer.read_chunk((discarded + taken) * channels) else {
+            return 0;
+        };
+
+        let (first, second) = chunk.as_slices();
+        let sample = |index: usize| {
+            first
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| second[index - first.len()])
+        };
+
+        let mut written = 0;
+        for frame in 0..taken {
+            let weight = if crossfade {
+                blend_weight(frame, taken)
+            } else {
+                1.0
+            };
+            for channel in 0..channels {
+                let fresh = sample((discarded + frame) * channels + channel);
+                let value = if crossfade {
+                    let stale = sample(frame * channels + channel);
+                    stale * (1.0 - weight) + fresh * weight
+                } else {
+                    fresh
+                };
+                out[written..written + BYTES_PER_SAMPLE].copy_from_slice(&value.to_le_bytes());
+                written += BYTES_PER_SAMPLE;
+            }
+        }
+        chunk.commit_all();
+
+        written
     }
 }
 
@@ -290,14 +432,14 @@ impl AudioPlayback {
         let (writer, consumer) = sample_ring(
             playback_ring_rate(settings.rate),
             channels,
-            ring_milliseconds(config.jitter_buffer_ms),
+            ring_milliseconds(config.jitter_buffer_max_ms.max(config.jitter_buffer_ms)),
         );
         let counters = Arc::new(PlaybackCounters::default());
 
         let playout = Playout::new(
             consumer,
             channels,
-            config.jitter_buffer_ms,
+            JitterPolicy::from_config(config),
             settings.rate,
             Arc::clone(&counters),
         );
@@ -354,6 +496,10 @@ impl AudioPlayback {
         self.counters.trims.load(Ordering::Relaxed)
     }
 
+    pub fn jitter_target_us(&self) -> u32 {
+        self.counters.jitter_target_us.load(Ordering::Relaxed)
+    }
+
     pub fn overflows(&self) -> u64 {
         self.overflows
     }
@@ -386,6 +532,7 @@ impl AudioOutput for AudioPlayback {
             underruns: self.underruns(),
             trims: self.trims(),
             overflows: self.overflows(),
+            jitter_target_us: self.jitter_target_us(),
         }
     }
 }
@@ -403,14 +550,31 @@ mod tests {
         counters: Arc<PlaybackCounters>,
     }
 
-    fn fixture(jitter_ms: u32) -> Fixture {
+    fn fixed(jitter_ms: u64) -> JitterPolicy {
+        adaptive(jitter_ms, jitter_ms, 0)
+    }
+
+    fn adaptive(floor_ms: u64, ceiling_ms: u64, relax_ms: u64) -> JitterPolicy {
+        JitterPolicy {
+            floor: Duration::from_millis(floor_ms),
+            ceiling: Duration::from_millis(ceiling_ms),
+            step: Duration::from_millis(5),
+            relax: Duration::from_millis(relax_ms),
+        }
+    }
+
+    fn fixture(jitter_ms: u64) -> Fixture {
+        fixture_with(fixed(jitter_ms))
+    }
+
+    fn fixture_with(policy: JitterPolicy) -> Fixture {
         let (writer, consumer) = sample_ring(
             playback_ring_rate(48_000),
             CHANNELS,
-            ring_milliseconds(jitter_ms),
+            ring_milliseconds(u32::try_from(policy.ceiling.as_millis()).unwrap()),
         );
         let counters = Arc::new(PlaybackCounters::default());
-        let playout = Playout::new(consumer, CHANNELS, jitter_ms, 48_000, Arc::clone(&counters));
+        let playout = Playout::new(consumer, CHANNELS, policy, 48_000, Arc::clone(&counters));
         Fixture {
             writer,
             playout,
@@ -440,12 +604,20 @@ mod tests {
         fixture.counters.trims.load(Ordering::Relaxed)
     }
 
+    fn jitter_target_us(fixture: &Fixture) -> u32 {
+        fixture.counters.jitter_target_us.load(Ordering::Relaxed)
+    }
+
+    fn silent(out: &[u8]) -> bool {
+        samples(out).iter().all(|sample| *sample == 0.0)
+    }
+
     #[test]
     fn silence_plays_until_the_target_is_buffered() {
         let mut fixture = fixture(10);
         let mut out = vec![9; 240 * FRAME_BYTES];
 
-        fixture.writer.write(&ramp(300, 0));
+        fixture.writer.write(&ramp(700, 0));
         fixture.playout.render(&mut out);
 
         assert!(out.iter().all(|byte| *byte == 0));
@@ -457,7 +629,7 @@ mod tests {
         let mut fixture = fixture(10);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
-        fixture.writer.write(&ramp(600, 0));
+        fixture.writer.write(&ramp(800, 0));
         let rendered = fixture.playout.render(&mut out);
 
         assert_eq!(rendered, 240);
@@ -468,35 +640,134 @@ mod tests {
     }
 
     #[test]
+    fn the_jitter_target_stays_queued_beyond_the_quantum() {
+        let mut fixture = fixture(5);
+        let mut out = vec![0; 1024 * FRAME_BYTES];
+
+        fixture.writer.write(&ramp(1200, 0));
+        fixture.playout.render(&mut out);
+        assert!(silent(&out));
+
+        fixture.writer.write(&ramp(64, 1200));
+        fixture.playout.render(&mut out);
+
+        assert_eq!(samples(&out), ramp(1024, 0));
+        assert_eq!(fixture.writer.buffered_frames(), 240);
+    }
+
+    #[test]
     fn an_underrun_pads_with_silence_and_rebuffers() {
         let mut fixture = fixture(5);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
-        fixture.writer.write(&ramp(300, 0));
+        fixture.writer.write(&ramp(500, 0));
+        fixture.playout.render(&mut out);
         fixture.playout.render(&mut out);
         fixture.playout.render(&mut out);
 
         let tail = samples(&out);
-        assert_eq!(&tail[..60 * CHANNELS], &ramp(60, 240)[..]);
-        assert!(tail[60 * CHANNELS..].iter().all(|sample| *sample == 0.0));
+        assert_eq!(&tail[..20 * CHANNELS], &ramp(20, 480)[..]);
+        assert!(tail[20 * CHANNELS..].iter().all(|sample| *sample == 0.0));
         assert_eq!(underruns(&fixture), 1);
 
-        fixture.writer.write(&ramp(100, 300));
+        fixture.writer.write(&ramp(100, 500));
         fixture.playout.render(&mut out);
-        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+        assert!(silent(&out));
+
+        fixture.writer.write(&ramp(100, 600));
+        fixture.playout.render(&mut out);
+        assert!(silent(&out));
         assert_eq!(underruns(&fixture), 1);
 
-        fixture.writer.write(&ramp(100, 400));
+        fixture.writer.write(&ramp(300, 700));
         fixture.playout.render(&mut out);
-        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+        assert_eq!(samples(&out), ramp(240, 500));
+        fixture.playout.render(&mut out);
+        assert_eq!(samples(&out), ramp(240, 740));
         assert_eq!(underruns(&fixture), 1);
+    }
 
-        fixture.writer.write(&ramp(280, 500));
+    #[test]
+    fn an_underrun_raises_the_target_by_one_codec_frame_up_to_the_ceiling() {
+        let mut fixture = fixture_with(adaptive(5, 15, 0));
+        let mut out = vec![0; 240 * FRAME_BYTES];
+
+        fixture.writer.write(&ramp(480, 0));
         fixture.playout.render(&mut out);
-        assert_eq!(samples(&out), ramp(240, 300));
         fixture.playout.render(&mut out);
-        assert_eq!(samples(&out), ramp(240, 540));
+        fixture.playout.render(&mut out);
         assert_eq!(underruns(&fixture), 1);
+        assert_eq!(jitter_target_us(&fixture), 10_000);
+
+        fixture.writer.write(&ramp(700, 480));
+        fixture.playout.render(&mut out);
+        assert!(silent(&out));
+
+        fixture.writer.write(&ramp(20, 1180));
+        fixture.playout.render(&mut out);
+        assert_eq!(samples(&out), ramp(240, 480));
+
+        for _ in 0..4 {
+            fixture.playout.render(&mut out);
+        }
+        assert_eq!(underruns(&fixture), 2);
+        assert_eq!(jitter_target_us(&fixture), 15_000);
+
+        fixture.writer.write(&ramp(1500, 0));
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        fixture.playout.render(&mut out);
+        assert_eq!(underruns(&fixture), 3);
+        assert_eq!(jitter_target_us(&fixture), 15_000);
+    }
+
+    #[test]
+    fn a_calm_stretch_relaxes_the_target_and_crossfades_out_one_step() {
+        let mut fixture = fixture_with(adaptive(5, 15, 20));
+        let mut out = vec![0; 240 * FRAME_BYTES];
+        fixture.writer.write(&ramp(480, 0));
+        for _ in 0..3 {
+            fixture.playout.render(&mut out);
+        }
+        assert_eq!(jitter_target_us(&fixture), 10_000);
+
+        fixture.writer.write(&ramp(1200, 0));
+        for block in 0..4 {
+            fixture.playout.render(&mut out);
+            fixture.writer.write(&ramp(240, 1200 + block * 240));
+        }
+        assert_eq!(fixture.writer.buffered_frames(), 1200);
+        assert_eq!(jitter_target_us(&fixture), 10_000);
+
+        fixture.playout.render(&mut out);
+
+        let blended = samples(&out);
+        assert_eq!(jitter_target_us(&fixture), 5_000);
+        assert_eq!(fixture.writer.buffered_frames(), 720);
+        assert_eq!(trims(&fixture), 0);
+        assert!(blended[0] > ramp(1, 960)[0] && blended[0] < ramp(1, 1200)[0]);
+        assert_eq!(&blended[239 * CHANNELS..], &ramp(1, 1439)[..]);
+        assert_eq!(underruns(&fixture), 1);
+    }
+
+    #[test]
+    fn a_target_at_its_floor_never_relaxes() {
+        let mut fixture = fixture_with(adaptive(5, 15, 5));
+        let mut out = vec![0; 240 * FRAME_BYTES];
+
+        fixture.writer.write(&ramp(720, 0));
+        for block in 0..4 {
+            fixture.playout.render(&mut out);
+            fixture.writer.write(&ramp(240, 720 + block * 240));
+        }
+
+        assert_eq!(samples(&out), ramp(240, 720));
+        assert_eq!(fixture.writer.buffered_frames(), 720);
+        assert_eq!(jitter_target_us(&fixture), 5_000);
     }
 
     #[test]
@@ -511,7 +782,8 @@ mod tests {
         fixture.playout.render(&mut out);
 
         assert_eq!(trims(&fixture), 1);
-        assert_eq!(fixture.writer.buffered_frames(), 0);
+        assert_eq!(samples(&out), ramp(240, 1760));
+        assert_eq!(fixture.writer.buffered_frames(), 240);
     }
 
     #[test]
@@ -519,7 +791,7 @@ mod tests {
         let mut fixture = fixture(500);
         let mut out = vec![0; 240 * FRAME_BYTES];
 
-        let dropped = fixture.writer.write(&ramp(24_000, 0));
+        let dropped = fixture.writer.write(&ramp(24_240, 0));
         fixture.playout.render(&mut out);
 
         assert_eq!(dropped, 0);
@@ -530,7 +802,7 @@ mod tests {
     fn the_largest_jitter_buffer_still_trims_drift() {
         let mut fixture = fixture(500);
         let mut out = vec![0; 240 * FRAME_BYTES];
-        fixture.writer.write(&ramp(24_000, 0));
+        fixture.writer.write(&ramp(24_240, 0));
         fixture.playout.render(&mut out);
 
         let dropped = fixture.writer.write(&vec![0.5; 25_000 * CHANNELS]);
@@ -538,7 +810,7 @@ mod tests {
 
         assert_eq!(dropped, 0);
         assert_eq!(trims(&fixture), 1);
-        assert_eq!(fixture.writer.buffered_frames(), 24_000 - 240);
+        assert_eq!(fixture.writer.buffered_frames(), 24_000);
     }
 
     #[test]
@@ -549,7 +821,7 @@ mod tests {
 
         fixture.writer.write(&ramp(6_000, 0));
         fixture.playout.render(&mut out);
-        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+        assert!(silent(&out));
 
         fixture.writer.write(&ramp(4_000, 6_000));
         fixture.playout.render(&mut out);
@@ -563,11 +835,33 @@ mod tests {
 
         fixture.writer.write(&ramp(100, 0));
         fixture.playout.render(&mut out);
-        assert!(samples(&out).iter().all(|sample| *sample == 0.0));
+        assert!(silent(&out));
 
         fixture.writer.write(&ramp(200, 100));
         fixture.playout.render(&mut out);
         assert_eq!(samples(&out), ramp(240, 0));
+    }
+
+    #[test]
+    fn the_policy_steps_by_one_codec_frame_and_never_caps_below_the_floor() {
+        let config = AudioConfig {
+            jitter_buffer_ms: 80,
+            jitter_buffer_max_ms: 50,
+            jitter_relax_ms: 2_000,
+            ..AudioConfig::default()
+        };
+
+        let policy = JitterPolicy::from_config(&config);
+
+        assert_eq!(
+            policy,
+            JitterPolicy {
+                floor: Duration::from_millis(80),
+                ceiling: Duration::from_millis(80),
+                step: Duration::from_millis(5),
+                relax: Duration::from_secs(2),
+            }
+        );
     }
 }
 

@@ -16,6 +16,8 @@ pub struct AudioConfig {
     pub sample_rate: SampleRate,
     pub channels: ChannelLayout,
     pub jitter_buffer_ms: u32,
+    pub jitter_buffer_max_ms: u32,
+    pub jitter_relax_ms: u32,
     pub decode_queue_packets: u16,
     pub max_conceal_ms: u16,
     pub fec_overhead_percent: u8,
@@ -31,6 +33,8 @@ impl Default for AudioConfig {
             sample_rate: SampleRate::default(),
             channels: ChannelLayout::default(),
             jitter_buffer_ms: 10,
+            jitter_buffer_max_ms: 50,
+            jitter_relax_ms: 10_000,
             decode_queue_packets: 32,
             max_conceal_ms: 50,
             fec_overhead_percent: 0,
@@ -84,6 +88,12 @@ impl AudioConfig {
 
         if self.jitter_buffer_ms > MAX_JITTER_BUFFER_MS {
             return Err(ConfigError::JitterBufferOutOfRange(self.jitter_buffer_ms));
+        }
+
+        if self.jitter_buffer_max_ms > MAX_JITTER_BUFFER_MS {
+            return Err(ConfigError::JitterBufferMaxOutOfRange(
+                self.jitter_buffer_max_ms,
+            ));
         }
 
         if !FLAC_BLOCK_SIZES.contains(&self.flac.block_size) {
@@ -212,6 +222,37 @@ mod tests {
     #[test]
     fn jitter_buffer_defaults_to_ten_milliseconds() {
         assert_eq!(AudioConfig::default().jitter_buffer_ms, 10);
+    }
+
+    #[test]
+    fn the_adaptive_jitter_buffer_defaults_to_fifty_milliseconds_relaxing_every_ten_seconds() {
+        let config = AudioConfig::default();
+
+        assert_eq!(config.jitter_buffer_max_ms, 50);
+        assert_eq!(config.jitter_relax_ms, 10_000);
+    }
+
+    #[test]
+    fn an_adaptive_jitter_ceiling_above_the_limit_is_rejected() {
+        let config = AudioConfig {
+            jitter_buffer_max_ms: 501,
+            ..AudioConfig::default()
+        };
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::JitterBufferMaxOutOfRange(501))
+        ));
+    }
+
+    #[test]
+    fn the_adaptive_jitter_settings_parse_from_toml() {
+        let parsed: AudioConfig =
+            toml::from_str("jitter_buffer_max_ms = 80\njitter_relax_ms = 0").unwrap();
+
+        assert_eq!(parsed.jitter_buffer_max_ms, 80);
+        assert_eq!(parsed.jitter_relax_ms, 0);
+        assert!(parsed.validate().is_ok());
     }
 
     #[test]

@@ -37,6 +37,7 @@ pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) ->
         .number("audio_underruns", stats.audio_underruns)
         .number("audio_trims", stats.audio_trims)
         .number("audio_overflows", stats.audio_overflows)
+        .number("audio_jitter_target_us", stats.audio_jitter_target_us)
         .number("microphone_packets_sent", stats.microphone_packets_sent)
         .number("microphone_overruns", stats.microphone_overruns)
         .number("cursor_updates", stats.cursor_updates)

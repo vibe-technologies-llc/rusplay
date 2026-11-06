@@ -122,6 +122,7 @@ fn performance_rows(rates: Option<StreamRates>) -> (Rows, Rows) {
             ("Keyframe requests", rate(rates.keyframe_requests)),
             ("Decode errors", rate(rates.decode_errors)),
             ("Audio underruns", rate(rates.audio_underruns)),
+            ("Audio jitter buffer", time(rates.audio_buffer)),
         ]);
         if let Some(end_to_end) = rates.end_to_end {
             latency.push(("Capture → present", time(end_to_end.present)));

@@ -811,6 +811,22 @@ pub static FIELDS: &[Field] = &[
     field(
         Section::Audio,
         "Stream",
+        "audio.jitter_buffer_max_ms",
+        "Adaptive jitter ceiling",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Audio,
+        "Stream",
+        "audio.jitter_relax_ms",
+        "Jitter relax interval",
+        U32,
+    )
+    .unit("ms"),
+    field(
+        Section::Audio,
+        "Stream",
         "audio.decode_queue_packets",
         "Decode queue",
         U16,

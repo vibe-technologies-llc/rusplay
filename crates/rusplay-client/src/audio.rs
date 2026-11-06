@@ -92,6 +92,9 @@ impl AudioPipeline {
         self.counters.audio_underruns.set(output.underruns);
         self.counters.audio_trims.set(output.trims);
         self.counters.audio_overflows.set(output.overflows);
+        self.counters
+            .audio_jitter_target_us
+            .set(u64::from(output.jitter_target_us));
     }
 }
 
@@ -208,6 +211,7 @@ mod tests {
                 underruns: 3,
                 trims: 2,
                 overflows: 1,
+                jitter_target_us: 15_000,
             }
         }
     }
@@ -431,9 +435,10 @@ mod tests {
             (
                 stats.audio_underruns,
                 stats.audio_trims,
-                stats.audio_overflows
+                stats.audio_overflows,
+                stats.audio_jitter_target_us
             ),
-            (3, 2, 1)
+            (3, 2, 1, 15_000)
         );
     }
 

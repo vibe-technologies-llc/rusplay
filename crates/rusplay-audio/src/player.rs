@@ -9,6 +9,7 @@ pub struct AudioOutputStats {
     pub underruns: u64,
     pub trims: u64,
     pub overflows: u64,
+    pub jitter_target_us: u32,
 }
 
 pub trait AudioOutput: Send + 'static {
