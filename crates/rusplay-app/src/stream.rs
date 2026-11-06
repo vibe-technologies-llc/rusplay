@@ -3,18 +3,22 @@ mod details;
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use gpui::{
-    Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels, Size,
+    Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Pixels,
     Subscription, Task, Window, canvas, div, prelude::*, px,
 };
+use parking_lot::{Condvar, Mutex};
 use rusplay_client::{
-    ActivePointer, BackendKind, ClientAction, ClientError, ClientStream, ClipboardState,
-    Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow, WindowLayout,
-    announced_display,
+    ActivePointer, BackendKind, ClientAction, ClientDisplay, ClientError, ClientStream,
+    ClipboardState, Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow,
+    WindowLayout, announced_display,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord, VideoDecoderConfig};
 use rusplay_core::{FrameRate, Resolution};
@@ -58,21 +62,28 @@ struct Live {
     failure: Option<ClientError>,
     refresh: FrameRate,
     announced: Option<Resolution>,
+    connect: CanvasConnect,
 }
 
 impl Live {
     fn apply_layout(&mut self, bounds: Bounds<Pixels>, scale: f32) {
-        let (Some(stream), Some(window)) = (&self.stream, &mut self.window) else {
-            return;
-        };
-
         let area = LogicalArea {
             x: bounds.origin.x.as_f32(),
             y: bounds.origin.y.as_f32(),
             width: bounds.size.width.as_f32(),
             height: bounds.size.height.as_f32(),
         };
-        let wanted = area_size(area, scale);
+        let Some(wanted) = canvas_size(area, scale) else {
+            return;
+        };
+        let Some(stream) = &self.stream else {
+            self.offer_connect(wanted);
+            return;
+        };
+        let Some(window) = &mut self.window else {
+            return;
+        };
+
         if self.announced != Some(wanted) {
             self.announced = Some(wanted);
             if let Ok(display) = announced_display(wanted, self.refresh, &window.color_target()) {
@@ -90,6 +101,22 @@ impl Live {
         }
     }
 
+    fn offer_connect(&mut self, wanted: Resolution) {
+        if self.announced.is_some() {
+            return;
+        }
+
+        let Some(volume) = self.window.as_ref().map(StreamWindow::color_target) else {
+            return;
+        };
+        let Ok(display) = announced_display(wanted, self.refresh, &volume) else {
+            return;
+        };
+        if self.connect.offer(display) {
+            self.announced = Some(wanted);
+        }
+    }
+
     fn has_ended(&self) -> bool {
         self.failure.is_some()
             || self.stream.as_ref().is_some_and(ClientStream::is_finished)
@@ -97,6 +124,7 @@ impl Live {
     }
 
     fn stop(&mut self) -> Result<(), ClientError> {
+        self.connect.cancel();
         let stream = self.stream.take().map_or(Ok(()), ClientStream::stop);
         let window = self.window.take().map_or(Ok(()), StreamWindow::stop);
 
@@ -150,31 +178,31 @@ impl StreamView {
         let refresh = config.video.frame_rate;
         let requested_bitrate_kbps = config.video.bitrate_kbps;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
-
-        let announced_size = swapchain_size(window.viewport_size(), window.scale_factor());
-        let display = announced_display(
-            announced_size,
-            config.video.frame_rate,
-            &stream_window.color_target(),
-        )
-        .ok();
+        let connect = CanvasConnect::new();
+        let connect_wait = connect.waiter();
 
         let clipboard_slot = FocusSlot::default();
         let clipboard_opener = clipboard::session_opener(Arc::clone(&clipboard_slot));
 
         let connecting = cx.background_spawn(async move {
-            session::connect(
+            let display = connect_wait.wait()?;
+
+            Some(session::connect(
                 config,
                 address,
                 &credentials,
                 gpu,
                 sink,
-                display,
+                Some(display),
                 clipboard_opener,
-            )
+            ))
         });
         let task = cx.spawn_in(window, async move |this, cx| {
-            let result = connecting.await;
+            let Some(result) = connecting.await else {
+                this.update_in(cx, |this, _, cx| this.connect_cancelled(cx))
+                    .ok();
+                return;
+            };
             this.update_in(cx, |this, window, cx| this.connected(result, window, cx))
                 .ok();
         });
@@ -187,7 +215,8 @@ impl StreamView {
                 stream: None,
                 failure: None,
                 refresh,
-                announced: Some(announced_size),
+                announced: None,
+                connect,
             })),
             format_generation: None,
             input,
@@ -267,6 +296,19 @@ impl StreamView {
             ClientAction::ToggleStats => self.toggle_stats(cx),
             ClientAction::Disconnect => self.disconnect(cx),
         }
+    }
+
+    fn connect_cancelled(&mut self, cx: &mut Context<Self>) {
+        if self.phase == Phase::Ended || self.phase == Phase::Streaming {
+            return;
+        }
+
+        self.live.borrow_mut().stop().ok();
+        self.phase = Phase::Ended;
+        cx.emit(StreamEvent::Ended(Notice::Info(format!(
+            "Connection to {} cancelled",
+            self.host.name
+        ))));
     }
 
     fn connected(
@@ -538,11 +580,87 @@ fn area_size(area: LogicalArea, scale: f32) -> Resolution {
     Resolution::new(device(area.width), device(area.height))
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn swapchain_size(viewport: Size<Pixels>, scale: f32) -> Resolution {
-    let device = |logical: Pixels| (logical.as_f32() * scale).round().max(1.0) as u32;
+fn canvas_size(area: LogicalArea, scale: f32) -> Option<Resolution> {
+    if area.width < 1.0 || area.height < 1.0 {
+        return None;
+    }
 
-    Resolution::new(device(viewport.width), device(viewport.height))
+    Some(area_size(area, scale))
+}
+
+struct HeldOnce<T> {
+    value: Mutex<Option<T>>,
+    ready: Condvar,
+    cancelled: AtomicBool,
+}
+
+impl<T> HeldOnce<T> {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            value: Mutex::new(None),
+            ready: Condvar::new(),
+            cancelled: AtomicBool::new(false),
+        })
+    }
+
+    fn offer(&self, value: T) -> bool {
+        let mut slot = self.value.lock();
+        if self.cancelled.load(Ordering::Relaxed) || slot.is_some() {
+            return false;
+        }
+
+        *slot = Some(value);
+        self.ready.notify_one();
+        true
+    }
+
+    fn cancel(&self) {
+        let _slot = self.value.lock();
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.ready.notify_one();
+    }
+
+    fn wait(&self) -> Option<T> {
+        let mut slot = self.value.lock();
+        while slot.is_none() && !self.cancelled.load(Ordering::Relaxed) {
+            self.ready.wait(&mut slot);
+        }
+        if self.cancelled.load(Ordering::Relaxed) {
+            None
+        } else {
+            slot.take()
+        }
+    }
+}
+
+struct CanvasConnect {
+    gate: Arc<HeldOnce<ClientDisplay>>,
+}
+
+impl CanvasConnect {
+    fn new() -> Self {
+        Self {
+            gate: HeldOnce::new(),
+        }
+    }
+
+    fn waiter(&self) -> Arc<HeldOnce<ClientDisplay>> {
+        Arc::clone(&self.gate)
+    }
+
+    fn offer(&self, display: ClientDisplay) -> bool {
+        self.gate.offer(display)
+    }
+
+    fn cancel(&self) {
+        self.gate.cancel();
+    }
+}
+
+impl Drop for CanvasConnect {
+    fn drop(&mut self) {
+        self.gate.cancel();
+    }
 }
 
 fn hotkey_hint(input: &InputConfig) -> String {
@@ -708,21 +826,7 @@ impl Render for StreamView {
 
 #[cfg(test)]
 mod tests {
-    use gpui::size;
-
     use super::*;
-
-    #[test]
-    fn the_swapchain_size_is_the_viewport_in_device_pixels() {
-        assert_eq!(
-            swapchain_size(size(px(1280.0), px(720.0)), 1.5),
-            Resolution::new(1920, 1080)
-        );
-        assert_eq!(
-            swapchain_size(size(px(0.0), px(-4.0)), 2.0),
-            Resolution::new(1, 1)
-        );
-    }
 
     #[test]
     fn the_announced_area_is_the_canvas_in_device_pixels_and_never_empty() {
@@ -734,10 +838,28 @@ mod tests {
         };
 
         assert_eq!(
-            area_size(area(1280.0, 680.0), 1.5),
-            Resolution::new(1920, 1020)
+            canvas_size(area(1280.0, 680.0), 1.5),
+            Some(Resolution::new(1920, 1020))
         );
-        assert_eq!(area_size(area(0.0, -3.0), 2.0), Resolution::new(1, 1));
+        assert_eq!(canvas_size(area(0.0, 0.0), 2.0), None);
+        assert_eq!(canvas_size(area(0.0, -3.0), 2.0), None);
+    }
+
+    #[test]
+    fn the_connect_gate_keeps_the_first_offer_and_a_cancel_wakes_the_waiter() {
+        let gate = HeldOnce::new();
+
+        assert!(gate.offer(Resolution::new(1280, 720)));
+        assert!(!gate.offer(Resolution::new(800, 600)));
+        assert_eq!(gate.wait(), Some(Resolution::new(1280, 720)));
+
+        let gate = HeldOnce::new();
+        let waiting = Arc::clone(&gate);
+        let thread = std::thread::spawn(move || waiting.wait());
+        gate.cancel();
+
+        assert_eq!(thread.join().unwrap(), None);
+        assert!(!gate.offer(Resolution::new(640, 360)));
     }
 
     #[test]

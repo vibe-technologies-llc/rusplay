@@ -139,8 +139,11 @@ paths:
   stream description's resolution, calls `ClientStream::set_target` with the device size and
   `StreamWindow::set_layout` with the rectangle, and `ClientStream::announce_display` with the
   canvas area in device pixels (`area_size`, only when it changed), so the host's virtual output
-  follows the window (`client.md`). Doing it in prepaint means the subsurface
-  position (applied on the parent's commit) lands with the frame gpui is drawing.
+  follows the window (`client.md`). The first measurement, once both axes are at least one logical
+  pixel, is the handshake `Display`: connect waits for it instead of announcing the whole window,
+  so the host does not resize when the picture turns out to be the area below the header. Doing it
+  in prepaint means the subsurface position (applied on the parent's commit) lands with the frame
+  gpui is drawing.
 - Clipboard: the client library's data-control backend does the work, because gpui has no
   clipboard change notification (only `read_from_clipboard`, which the `TextField` uses for paste).
   `clipboard::session_opener` wraps it: where data-control cannot open (GNOME) it falls back to the

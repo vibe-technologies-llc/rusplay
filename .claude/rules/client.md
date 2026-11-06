@@ -23,12 +23,13 @@ paths:
   `color.target` resolves to over the sRGB fallback. `announced_display` builds one from a size, a
   `FrameRate` and a `ColorVolume`, clamping what the protocol would refuse (an axis outside
   `1..=16384`, a refresh outside 1 to 1000 Hz, nits outside 1 to 10000, a black level at or above
-  the reference white), so a real display never fails the connect. The app announces its window's
-  viewport times the scale factor at connect, `video.frame_rate` as the refresh and
-  `StreamWindow::color_target` as the volume (`StreamView::new`); the stream area and the display's
-  true refresh are not known before the window has laid out, so the first layout announces the
-  canvas size (below the header) a settle time after connect, one resize at the start of a stream.
-  Only a host with a virtual source uses it. The client upscale does not run
+  the reference white), so a real display never fails the connect. The app waits until the picture
+  canvas has laid out (`StreamView`, below the header and beside the details panel) and sends that
+  size as the connect `Display`, with `video.frame_rate` as the refresh and
+  `StreamWindow::color_target` as the volume, so a virtual source's first keyframe is already the
+  stream area. The display's true refresh is not known and `video.frame_rate` stands in for it. A
+  later layout change still goes through `announce_display`. Only a host with a virtual source uses
+  it. The client upscale does not run
   when the stream size equals the window's target (`target != source` in the present stage), which is
   the point of sizing the host's output to it.
 - `ClientStream::announce_display(ClientDisplay)` stores the newest wanted display in a slot the
