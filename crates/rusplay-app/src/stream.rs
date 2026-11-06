@@ -17,8 +17,8 @@ use gpui::{
 use parking_lot::{Condvar, Mutex};
 use rusplay_client::{
     ActivePointer, BackendKind, ClientAction, ClientDisplay, ClientError, ClientStream,
-    ClipboardState, Credentials, FocusClipboardHandle, LogicalArea, PeerRecord, StreamWindow,
-    WindowLayout, announced_display,
+    ClipboardState, Credentials, FocusClipboardHandle, LogicalArea, OverlayText, PeerRecord,
+    StreamWindow, WindowLayout, announced_display,
 };
 use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord, VideoDecoderConfig};
 use rusplay_core::{FrameRate, Resolution};
@@ -152,6 +152,7 @@ pub struct StreamView {
     sampler: StatsSampler,
     json_reporter: Option<JsonReporter>,
     rates: Option<StreamRates>,
+    screen: Screen,
     focus_handle: FocusHandle,
     tasks: Vec<Task<()>>,
     _activation: Subscription,
@@ -231,6 +232,7 @@ impl StreamView {
             sampler: StatsSampler::new(timings),
             json_reporter,
             rates: None,
+            screen: Screen::from_window(window.is_fullscreen()),
             focus_handle: cx.focus_handle(),
             tasks: vec![task],
             _activation: cx.observe_window_activation(window, |this, window, cx| {
@@ -281,9 +283,19 @@ impl StreamView {
     }
 
     fn sync_overlay(&self) {
-        let text = (self.stats_overlay && self.show_stats)
+        let hint = if self.screen.shows_hint() {
+            fullscreen_hint(&self.input)
+        } else {
+            Vec::new()
+        };
+        let stats = (self.stats_overlay && self.show_stats)
             .then(|| self.rates.as_ref().map(StreamRates::overlay))
             .flatten();
+        let lines: Vec<String> = hint
+            .into_iter()
+            .chain(stats.iter().flat_map(|text| text.lines().iter().cloned()))
+            .collect();
+        let text = (!lines.is_empty()).then(|| OverlayText::new(lines));
 
         if let Some(window) = &self.live.borrow().window {
             window.set_overlay(text);
@@ -293,8 +305,23 @@ impl StreamView {
     fn run_action(&mut self, action: ClientAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             ClientAction::ToggleFullscreen => window.toggle_fullscreen(),
+            ClientAction::ExitFullscreen => {
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            }
             ClientAction::ToggleStats => self.toggle_stats(cx),
             ClientAction::Disconnect => self.disconnect(cx),
+        }
+    }
+
+    fn follow_fullscreen(&mut self, fullscreen: bool, now: Instant) {
+        let hint = Duration::from_millis(u64::from(self.input.fullscreen_hint_ms));
+        let previous = self.screen;
+        self.screen = previous.follow(fullscreen, now, hint);
+
+        if previous.shows_hint() != self.screen.shows_hint() {
+            self.sync_overlay();
         }
     }
 
@@ -459,6 +486,8 @@ impl StreamView {
             return false;
         }
 
+        self.follow_fullscreen(window.is_fullscreen(), Instant::now());
+
         let generation = self
             .live
             .borrow()
@@ -558,9 +587,10 @@ impl StreamView {
         match self.phase {
             Phase::Connecting => format!("Connecting to {}", self.host.name),
             Phase::Streaming if self.engaged => format!(
-                "Input captured by {}. Press {} to release it{}",
+                "Input captured by {}. Press {}{} to release it{}",
                 self.host.name,
                 chord_label(self.input.release_chord),
+                escape_hint(&self.input),
                 hotkey_hint(&self.input)
             ),
             Phase::Streaming => format!(
@@ -676,6 +706,72 @@ fn hotkey_hint(input: &InputConfig) -> String {
         input.hotkey_disconnect,
         input.hotkey_pointer_mode
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    Windowed,
+    Fullscreen { hint_until: Option<Instant> },
+}
+
+impl Screen {
+    fn from_window(fullscreen: bool) -> Self {
+        if fullscreen {
+            Self::Fullscreen { hint_until: None }
+        } else {
+            Self::Windowed
+        }
+    }
+
+    fn follow(self, fullscreen: bool, now: Instant, hint: Duration) -> Self {
+        match (self, fullscreen) {
+            (_, false) => Self::Windowed,
+            (Self::Windowed, true) => Self::Fullscreen {
+                hint_until: (!hint.is_zero()).then(|| now + hint),
+            },
+            (Self::Fullscreen { hint_until }, true) => Self::Fullscreen {
+                hint_until: hint_until.filter(|until| now < *until),
+            },
+        }
+    }
+
+    fn shows_hint(self) -> bool {
+        matches!(
+            self,
+            Self::Fullscreen {
+                hint_until: Some(_)
+            }
+        )
+    }
+}
+
+fn escape_hint(input: &InputConfig) -> &'static str {
+    if input.escape_hold_ms == 0 {
+        ""
+    } else {
+        " or hold Esc"
+    }
+}
+
+fn fullscreen_hint(input: &InputConfig) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if input.escape_hold_ms != 0 {
+        lines.push("HOLD ESC TO EXIT FULLSCREEN".to_owned());
+    }
+    if input.hotkeys {
+        lines.push(format!(
+            "{}+{:?} TOGGLES FULLSCREEN",
+            chord_label(input.hotkey_chord),
+            input.hotkey_fullscreen
+        ));
+    }
+    lines.push(format!(
+        "{} RELEASES INPUT",
+        chord_label(input.release_chord)
+    ));
+
+    lines
 }
 
 fn pointer_label(mode: PointerMode, active: ActivePointer) -> String {
@@ -887,6 +983,46 @@ mod tests {
             ", Ctrl+Alt+F fullscreen, S statistics, D disconnect, P pointer"
         );
         assert_eq!(hotkey_hint(&off), "");
+    }
+
+    #[test]
+    fn the_fullscreen_hint_names_every_way_out_that_is_turned_on() {
+        let on = InputConfig::default();
+        let bare = InputConfig {
+            hotkeys: false,
+            escape_hold_ms: 0,
+            ..InputConfig::default()
+        };
+
+        assert_eq!(
+            fullscreen_hint(&on),
+            [
+                "HOLD ESC TO EXIT FULLSCREEN",
+                "Ctrl+Alt+F TOGGLES FULLSCREEN",
+                "Ctrl+Alt+Shift RELEASES INPUT"
+            ]
+        );
+        assert_eq!(fullscreen_hint(&bare), ["Ctrl+Alt+Shift RELEASES INPUT"]);
+        assert_eq!(escape_hint(&on), " or hold Esc");
+        assert_eq!(escape_hint(&bare), "");
+    }
+
+    #[test]
+    fn the_hint_shows_from_entering_fullscreen_until_it_expires_or_the_window_leaves() {
+        let start = Instant::now();
+        let hint = Duration::from_secs(3);
+
+        let entered = Screen::Windowed.follow(true, start, hint);
+        let showing = entered.follow(true, start + Duration::from_millis(2999), hint);
+        let expired = showing.follow(true, start + hint, hint);
+        let left = entered.follow(false, start, hint);
+        let silent = Screen::Windowed.follow(true, start, Duration::ZERO);
+        let already = Screen::from_window(true).follow(true, start, hint);
+
+        assert!(entered.shows_hint() && showing.shows_hint());
+        assert!(!expired.shows_hint());
+        assert_eq!(left, Screen::Windowed);
+        assert!(!silent.shows_hint() && !already.shows_hint());
     }
 
     #[test]

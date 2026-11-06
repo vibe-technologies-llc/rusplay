@@ -323,6 +323,13 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   modifier of the release chord (`HotkeyChordShadowsRelease`), and rejects one key bound to two
   actions (`HotkeyKeyReused`). Function keys are not defaults because Ctrl+Alt+Fn is the compositor's
   VT switch, which no client can inhibit.
+- Holding Esc is the way out that needs no chord: while engaged, an Esc held for
+  `input.escape_hold_ms` (default 1000, 0 turns it off) releases input and queues
+  `ClientAction::ExitFullscreen`, which the app applies only when the window is fullscreen. Esc is
+  forwarded as usual, so a tap reaches the game and a hold reaches it as one long press that the
+  release lifts. `CaptureCore::hold_escape(now, out)` keeps the timer, started by the first
+  capture-thread `tick` that sees Esc down and restarted by every Esc press or release, so the
+  core stays clock free; an Esc already down when input engaged (suppressed) never counts.
 - Touch (`input.touch`): `CaptureCore::touch_down/motion/up/cancel` take the compositor's touch
   ids and hand out the lowest free slot below `MAX_TOUCHES`, so the wire only ever sees small
   slots. A touch never engages (unlike a click): a touch that goes down while released, outside the

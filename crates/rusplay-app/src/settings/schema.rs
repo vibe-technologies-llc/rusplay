@@ -1413,6 +1413,22 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Section::Input,
+        "Hotkeys",
+        "input.escape_hold_ms",
+        "Hold Esc to leave",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Input,
+        "Hotkeys",
+        "input.fullscreen_hint_ms",
+        "Fullscreen hint",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Section::Input,
         "Tuning",
         "input.pointer_sensitivity",
         "Pointer sensitivity",

@@ -7,6 +7,7 @@ use rusplay_config::{ChordModifiers, HotkeyKey, InputConfig, PointerMode, Releas
 
 use crate::{InputEvent, LockState, MAX_TOUCHES, TouchEvent};
 
+const KEY_ESC: u32 = 1;
 const KEY_LEFT_CTRL: u32 = 29;
 const KEY_LEFT_SHIFT: u32 = 42;
 const KEY_RIGHT_SHIFT: u32 = 54;
@@ -74,6 +75,7 @@ impl From<&InputConfig> for Hotkeys {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientAction {
     ToggleFullscreen,
+    ExitFullscreen,
     ToggleStats,
     Disconnect,
 }
@@ -140,6 +142,7 @@ pub struct CaptureOptions {
     pub sync_locks: bool,
     pub touch: bool,
     pub auto_delay: Duration,
+    pub escape_hold: Option<Duration>,
 }
 
 impl From<&InputConfig> for CaptureOptions {
@@ -155,6 +158,8 @@ impl From<&InputConfig> for CaptureOptions {
             sync_locks: config.sync_locks,
             touch: config.touch,
             auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
+            escape_hold: (config.escape_hold_ms != 0)
+                .then(|| Duration::from_millis(u64::from(config.escape_hold_ms))),
         }
     }
 }
@@ -198,6 +203,7 @@ pub struct CaptureCore {
     suppressed_keys: BTreeSet<u32>,
     suppressed_buttons: BTreeSet<u32>,
     actions: Vec<ClientAction>,
+    escape_since: Option<Instant>,
     locks: Option<LockState>,
     locks_sent: Option<LockState>,
     touches: BTreeMap<i32, u8>,
@@ -226,6 +232,7 @@ impl CaptureCore {
             suppressed_keys: BTreeSet::new(),
             suppressed_buttons: BTreeSet::new(),
             actions: Vec::new(),
+            escape_since: None,
             locks: None,
             locks_sent: None,
             touches: BTreeMap::new(),
@@ -329,6 +336,28 @@ impl CaptureCore {
         true
     }
 
+    pub fn hold_escape(&mut self, now: Instant, out: &mut Vec<InputEvent>) -> Transition {
+        let Some(hold) = self.options.escape_hold else {
+            return Transition::Unchanged;
+        };
+        let holding = self.engaged
+            && self.down.contains(&KEY_ESC)
+            && !self.suppressed_keys.contains(&KEY_ESC);
+        if !holding {
+            self.escape_since = None;
+            return Transition::Unchanged;
+        }
+
+        let since = *self.escape_since.get_or_insert(now);
+        if now.saturating_duration_since(since) < hold {
+            return Transition::Unchanged;
+        }
+
+        self.escape_since = None;
+        self.run(Hotkey::Client(ClientAction::ExitFullscreen));
+        self.release(out)
+    }
+
     fn pointer_for_host_cursor(&self, visible: bool) -> ActivePointer {
         if visible || !self.relative_available {
             ActivePointer::Absolute
@@ -412,6 +441,9 @@ impl CaptureCore {
             self.down.insert(keycode);
         } else {
             self.down.remove(&keycode);
+        }
+        if keycode == KEY_ESC {
+            self.escape_since = None;
         }
 
         if pressed && self.completes_chord(keycode) {
@@ -658,6 +690,7 @@ mod tests {
             sync_locks: true,
             touch: true,
             auto_delay: Duration::from_millis(100),
+            escape_hold: Some(Duration::from_millis(1000)),
         }
     }
 
@@ -1125,6 +1158,7 @@ mod tests {
                 touch: true,
                 inhibit_shortcuts: true,
                 auto_delay: Duration::from_millis(250),
+                escape_hold: Some(Duration::from_secs(1)),
             }
         );
     }
@@ -1437,5 +1471,97 @@ mod tests {
         assert!(relative);
         assert!(!absolute);
         assert!(!released);
+    }
+
+    #[test]
+    fn a_tapped_escape_reaches_the_host_and_leaves_nothing_behind() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        let early = core.hold_escape(start, &mut out);
+        core.key(KEY_ESC, false, &mut out);
+        let after = core.hold_escape(start + Duration::from_secs(5), &mut out);
+
+        assert_eq!(
+            (early, after),
+            (Transition::Unchanged, Transition::Unchanged)
+        );
+        assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
+        assert!(core.is_engaged());
+        assert_eq!(core.take_actions(), Vec::new());
+    }
+
+    #[test]
+    fn holding_escape_releases_input_and_asks_to_leave_fullscreen() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.hold_escape(start, &mut out);
+        let short = core.hold_escape(start + Duration::from_millis(999), &mut out);
+        let held = core.hold_escape(start + Duration::from_millis(1000), &mut out);
+        core.key(KEY_ESC, false, &mut out);
+
+        assert_eq!(short, Transition::Unchanged);
+        assert_eq!(held, Transition::Released);
+        assert!(!core.is_engaged());
+        assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
+        assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
+    }
+
+    #[test]
+    fn pressing_escape_again_restarts_the_hold() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.hold_escape(start, &mut out);
+        core.key(KEY_ESC, false, &mut out);
+        core.key(KEY_ESC, true, &mut out);
+        core.hold_escape(start + Duration::from_millis(600), &mut out);
+        let restarted = core.hold_escape(start + Duration::from_millis(1200), &mut out);
+        let held = core.hold_escape(start + Duration::from_millis(1600), &mut out);
+
+        assert_eq!(restarted, Transition::Unchanged);
+        assert_eq!(held, Transition::Released);
+    }
+
+    #[test]
+    fn an_escape_held_since_before_engaging_or_a_disabled_hold_never_leaves() {
+        let mut out = Vec::new();
+        let start = Instant::now();
+        let mut early = CaptureCore::new(options());
+        let mut off = engaged(CaptureOptions {
+            escape_hold: None,
+            ..options()
+        });
+
+        early.key(KEY_ESC, true, &mut out);
+        early.engage();
+        early.hold_escape(start, &mut out);
+        let held_early = early.hold_escape(start + Duration::from_secs(5), &mut out);
+        off.key(KEY_ESC, true, &mut out);
+        off.hold_escape(start, &mut out);
+        let held_off = off.hold_escape(start + Duration::from_secs(5), &mut out);
+
+        assert_eq!(held_early, Transition::Unchanged);
+        assert_eq!(held_off, Transition::Unchanged);
+        assert!(early.is_engaged() && off.is_engaged());
+    }
+
+    #[test]
+    fn the_escape_hold_follows_the_config() {
+        let default = CaptureOptions::from(&InputConfig::default());
+        let off = CaptureOptions::from(&InputConfig {
+            escape_hold_ms: 0,
+            ..InputConfig::default()
+        });
+
+        assert_eq!(default.escape_hold, Some(Duration::from_secs(1)));
+        assert_eq!(off.escape_hold, None);
     }
 }

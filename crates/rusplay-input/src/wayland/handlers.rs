@@ -179,9 +179,18 @@ impl State {
     }
 
     pub(super) fn tick(&mut self) {
-        if self.core.lock().tick(Instant::now()) {
+        let now = Instant::now();
+        let mut out = Vec::new();
+        let (switched, transition) = {
+            let mut core = self.core.lock();
+            (core.tick(now), core.hold_escape(now, &mut out))
+        };
+
+        self.apply(transition);
+        if switched {
             self.sync_pointer_lock();
         }
+        self.deliver(out);
     }
 
     pub(super) fn shutdown(&mut self) {
