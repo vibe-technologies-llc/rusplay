@@ -39,6 +39,7 @@ pub(crate) struct EncodedVideo {
     pub frame: EncodedFrame,
     pub number: u32,
     pub stream: StreamDescription,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub recovers_from: Option<u32>,
     pub captured_micros: u64,
     pub received_at: Instant,
@@ -81,6 +82,7 @@ struct Resync {
     last_frame: Option<u32>,
     last_good: Option<u32>,
     recovery_tried: bool,
+    keyframe_only: bool,
 }
 
 impl Resync {
@@ -91,11 +93,12 @@ impl Resync {
         {
             self.last_good = Some(frame);
         }
-        if (self.awaiting_keyframe || self.recovery_tried)
+        if (self.awaiting_keyframe || self.recovery_tried || self.keyframe_only)
             && frame.wrapping_sub(self.missing_frame).cast_signed() >= 0
         {
             self.awaiting_keyframe = false;
             self.recovery_tried = false;
+            self.keyframe_only = false;
         }
     }
 
@@ -567,7 +570,11 @@ impl ReceiveStage {
 
         if frame.keyframe {
             self.resync.awaiting_keyframe = false;
+            self.resync.keyframe_only = false;
             self.resync.last_keyframe = Some(number);
+        } else if self.resync.keyframe_only {
+            self.links.counters.frames_skipped.increment();
+            return Ok(Flow::Continue);
         } else if self.resync.awaiting_keyframe {
             match header.recovers_from {
                 Some(reference) if self.resync.can_resume_from(reference) => {
@@ -782,7 +789,7 @@ impl ReceiveStage {
                 Feedback::Decoded { frame } => self.resync.decoded(frame),
                 Feedback::DecodeFailed { frame } => {
                     self.congested(now);
-                    self.request_refresh(frame, now)?;
+                    self.force_keyframe(frame, now)?;
                 }
             }
         }
@@ -843,6 +850,13 @@ impl ReceiveStage {
             Err(NetError::ControlWindowFull { .. }) => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn force_keyframe(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
+        self.resync.recovery_tried = true;
+        self.resync.keyframe_only = true;
+        self.resync.awaiting_keyframe = false;
+        self.request_refresh(frame, now)
     }
 
     fn request_refresh(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
@@ -1410,6 +1424,46 @@ mod tests {
         ));
         assert_eq!(stats.recovery_requests_sent, 1);
         assert!(stats.keyframe_requests_sent >= 1);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_decode_failure_asks_for_a_keyframe_and_drops_the_following_frames() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 2);
+        rig.feedback
+            .send(Feedback::DecodeFailed { frame: 1 })
+            .unwrap();
+        let keyframe = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestKeyframe { .. })
+        });
+        rig.send(
+            &packetizer
+                .packetize(2, false, &recovery_frame(0, Some(1), 64, 2))
+                .unwrap(),
+        );
+        rig.send(
+            &packetizer
+                .packetize(3, false, &video_frame(0, 64, 3))
+                .unwrap(),
+        );
+        rig.send(
+            &packetizer
+                .packetize(4, true, &video_frame(0, 64, 4))
+                .unwrap(),
+        );
+        let resumed = rig.next_video();
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(keyframe, Some(ControlMessage::RequestKeyframe { frame: 1 }));
+        assert_eq!(stats.recovery_requests_sent, 0);
+        assert!(stats.keyframe_requests_sent >= 1);
+        assert!(resumed.frame.keyframe);
+        assert_eq!(resumed.number, 4);
+        assert!(stats.frames_skipped >= 2);
         assert!(rig.finish().is_ok());
     }
 

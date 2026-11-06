@@ -90,13 +90,17 @@ paths:
 - Feedback, all over the control channel, never blocking the frame path: `PacketsMissing` becomes
   `ReportLoss` (dropped and counted when the control window is full, since reports are advisory);
   a `FrameLost` newer than the last keyframe, a gap in completed frame numbers, a frame dropped
-  because the decode queue is full, or a decode error on a non-keyframe enters resync. The first
-  request of a resync is `RequestRecovery { frame, last_good }` when
-  `network.loss_recovery = "reference"` (the default) and the decoder has a last good frame, else
-  `RequestKeyframe { frame }`, naming the first missing frame. A recovery frame that the
-  decoder rejects is not requested again: the next request is a keyframe. While the decoder
-  accepts pictures, a later loss may try recovery once more. An unanswered request is repeated
-  every `network.keyframe_request_interval_ms` as `RequestKeyframe` until a keyframe or a usable
+  because the decode queue is full enters resync. The first request of that resync is
+  `RequestRecovery { frame, last_good }` when `network.loss_recovery = "reference"` (the default)
+  and the decoder has a last good frame, else `RequestKeyframe { frame }`, naming the first missing
+  frame. A decode error is not that path. FFmpeg 9 frees every reference it has already output
+  while building the failed list, so a recovery frame would name a picture the decoder no longer
+  holds (`Could not find ref with POC`). `DecodeFailed` asks for a keyframe at once
+  (`keyframe_only`) and both the receive and decode stages drop every later frame until that
+  keyframe arrives. A recovery frame the decoder still rejects, on the loss path, is not requested
+  again: the next request is a keyframe. While the decoder accepts pictures, a later loss may try
+  recovery once more. An unanswered request is repeated every
+  `network.keyframe_request_interval_ms` as `RequestKeyframe` until a keyframe or a usable
   recovery frame arrives, and every other frame until then is skipped (counted in
   `frames_skipped`). A recovery frame is usable when its reference is at or before the last good
   frame and not before the last keyframe (`Resync::can_resume_from`, `reference_recoveries`). A
@@ -113,8 +117,9 @@ paths:
   as `Feedback::Decoded`, and the receive stage keeps the newest (`Resync::last_good`, cleared when
   a new codec reopens the decoder). It is acknowledged to the host as `AcknowledgeFrame` at most
   every `network.frame_ack_interval_ms` (default 50, 0 sends none) and only when it changed
-  (`frame_acks_sent`). The decode stage, skipping after its own decode error, resumes on a
-  keyframe or on a recovery frame whose reference is at or before the last frame it decoded. Nothing
+  (`frame_acks_sent`). The decode stage, skipping after its own decode error, resumes only on a
+  keyframe. A loss that never reached the decoder still resumes on a recovery frame whose reference
+  is at or before the last frame it decoded. Nothing
   arriving for `network.peer_timeout_ms` ends the stream with `HostSilent`.
 - `frames_lost` counts each frame once: a `FrameLost` and a completed frame both advance
   `last_frame` (`Resync::advance_to`), and only the frame numbers that never produced a packet

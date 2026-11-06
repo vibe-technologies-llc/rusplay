@@ -127,9 +127,11 @@ paths:
   packet returns `Ok(None)` without a send. `AVERROR(EAGAIN)` drains the pictures already waiting
   and retries the send. `decode` returns the newest picture that send made available.
   `err_recognition` is `AV_EF_EXPLODE`, so a picture whose reference list names a frame the
-  decoder does not have fails the packet instead of being skipped and logged. The decoded
-  picture buffer is left as it was, so a later recovery picture can still use a reference the
-  decoder does have. The client treats the error as a lost frame and asks the host to recover.
+  decoder does not have fails the packet (`Could not find ref with POC`, then `Error constructing
+  the frame RPS`) instead of being skipped. FFmpeg 9 clears every reference flag before that
+  failure returns and frees each picture it has already output, so the decoded picture buffer does
+  not survive the error and a recovery frame would look for a picture that is gone. The client
+  asks for a keyframe and submits nothing else until that keyframe arrives.
   `flush` sends a null packet and returns every remaining picture in display order, including any
   drained while the flush packet was waiting; a second flush is empty. The picture timestamp is
   `pts`, or the packet timestamp when `pts` is missing. `AV_FRAME_FLAG_CORRUPT` is

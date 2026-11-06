@@ -82,7 +82,6 @@ fn decoder_for<'a>(
 fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), ClientError> {
     let mut active = None;
     let mut skipping = false;
-    let mut last_decoded: Option<u32> = None;
 
     loop {
         let input = match links.queue.recv_timeout(STOP_POLL) {
@@ -103,13 +102,12 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
         let video = match input {
             DecodeInput::Open(codec) => {
                 decoder_for(&mut active, codec, config)?;
-                last_decoded = None;
                 continue;
             }
             DecodeInput::Video(video) => video,
         };
 
-        if video.frame.keyframe || resumes(video.recovers_from, last_decoded) {
+        if video.frame.keyframe {
             skipping = false;
         } else if skipping {
             links.counters.frames_skipped.increment();
@@ -118,7 +116,6 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
 
         let result = decoder_for(&mut active, video.stream.codec, config)?.decode(&video.frame);
         if result.is_ok() {
-            last_decoded = Some(video.number);
             links
                 .feedback
                 .send(Feedback::Decoded {
@@ -179,12 +176,6 @@ fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), C
     Ok(())
 }
 
-fn resumes(recovers_from: Option<u32>, last_decoded: Option<u32>) -> bool {
-    recovers_from
-        .zip(last_decoded)
-        .is_some_and(|(reference, decoded)| decoded.wrapping_sub(reference).cast_signed() >= 0)
-}
-
 const fn resolve_siting(bitstream: Option<ChromaSiting>, described: ChromaSiting) -> ChromaSiting {
     match bitstream {
         Some(siting) => siting,
@@ -199,16 +190,6 @@ mod tests {
     use rusplay_config::SoftwareDecoderConfig;
 
     use super::*;
-
-    #[test]
-    fn a_recovery_frame_resumes_only_from_a_decoded_reference() {
-        assert!(resumes(Some(4), Some(4)));
-        assert!(resumes(Some(4), Some(9)));
-        assert!(resumes(Some(u32::MAX), Some(1)));
-        assert!(!resumes(Some(5), Some(4)));
-        assert!(!resumes(Some(4), None));
-        assert!(!resumes(None, Some(4)));
-    }
 
     #[test]
     fn the_bitstream_siting_wins_over_the_described_one() {
