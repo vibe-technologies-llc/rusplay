@@ -432,3 +432,8 @@ paths:
   network or Vulkan device, so it can isolate client hardware from host and presentation
   behaviour. Fixture provenance, regeneration and the client command are in
   `crates/rusplay-decode/tests/data/HEVC-MOTION.md`.
+- `tests/vaapi_pipeline.rs` (`#[ignore]`d, minutes long) runs the motion fixtures with decode and
+  Vulkan readback on separate threads and frames in flight, against the same software checksums.
+  It compares the client's path with waiting for the dma-buf write fence and with holding surfaces
+  out of reuse, and prints the device, adapter and surface layout, to separate causes on a client
+  whose DMA-BUF output is corrupt while `copy_output` is clean.
