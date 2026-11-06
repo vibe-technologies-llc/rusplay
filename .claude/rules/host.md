@@ -461,11 +461,15 @@ paths:
   - `open_portal(&Config, &Gpu)` returns a `PortalHost { feed, input, clipboard, input_unavailable }`;
     the GPU is needed for the capture's importable modifiers, so the GPU is opened before the portal.
     With `input.accept_remote` it opens the combined RemoteDesktop + ScreenCast session (`input.md`)
-    and an `InputFeed` over `SplitSink<LibeiInjector, VirtualGamepads>`. If that session grants the
-    screen but no keyboard, pointer or touch, or connecting to EIS fails because input permission was
-    denied (`InputError::denies_input_permission`: a portal `NotAllowed`, or a failure whose text
-    says permission), the capture is kept and `input` stays empty. The same denial of the combined
-    session falls back to the plain ScreenCast session. The remote desktop session stays alive for
+    and an `InputFeed` over `SplitSink<LibeiInjector, VirtualGamepads>`. A restore token that comes
+    back without the requested keyboard, pointer or touch (or whose EIS connection is refused) is
+    discarded and the session is started again without it, which is what makes the portal show its
+    permission dialog; a token that still grants those devices keeps skipping the dialog. After that
+    prompt, if the session grants the screen but no keyboard, pointer or touch, or connecting to EIS
+    fails because input permission was denied (`InputError::denies_input_permission`: a portal
+    `NotAllowed`, or a failure whose text says permission), the capture is kept and `input` stays
+    empty. The same denial of the combined session, with no token left to retry, falls back to the
+    plain ScreenCast session. The remote desktop session stays alive for
     the host (`PortalHost::keepalive`, held by the serve closure) so the capture survives when no
     injector holds it. Either way `input_unavailable` is set when a requested device was not granted,
     and `HostService` emits `InputForwardingDisabled` once before

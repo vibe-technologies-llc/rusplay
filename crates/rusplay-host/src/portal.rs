@@ -37,6 +37,10 @@ pub fn open_portal(config: &Config, gpu: &Gpu) -> Result<PortalHost, HostError> 
     }
 }
 
+fn restore_hid_the_prompt(used_token: bool, wanted_input: bool, input_missing: bool) -> bool {
+    used_token && wanted_input && input_missing
+}
+
 fn capture_only(
     config: &Config,
     gpu: &Gpu,
@@ -128,7 +132,23 @@ mod shared {
 
         let portal_clipboard =
             ClipboardPolicy::host(&config.input).is_enabled() && probe_data_control().is_err();
-        let opened = pollster::block_on(open_session(config, stored, portal_clipboard))?;
+        let wanted_input = config.input.keyboard || config.input.pointer || config.input.touch;
+        let used_token = stored.is_some();
+        let first = pollster::block_on(open_session(config, stored, portal_clipboard));
+        let restored_without_input = match &first {
+            Ok(opened) => opened.input.is_none(),
+            Err(error) => error.denies_input_permission(),
+        };
+        let opened =
+            if super::restore_hid_the_prompt(used_token, wanted_input, restored_without_input) {
+                drop(first);
+                if let Some(store) = &store {
+                    store.clear()?;
+                }
+                pollster::block_on(open_session(config, None, portal_clipboard))?
+            } else {
+                first?
+            };
         if let (Some(store), Some(token)) = (&store, &opened.capture.restore_token) {
             store.store(token)?;
         }
@@ -267,5 +287,18 @@ mod shared {
         } else {
             Err(HostError::CaptureNotCompiled)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_hid_the_prompt;
+
+    #[test]
+    fn a_restore_token_that_skipped_input_asks_again() {
+        assert!(restore_hid_the_prompt(true, true, true));
+        assert!(!restore_hid_the_prompt(true, true, false));
+        assert!(!restore_hid_the_prompt(false, true, true));
+        assert!(!restore_hid_the_prompt(true, false, true));
     }
 }
