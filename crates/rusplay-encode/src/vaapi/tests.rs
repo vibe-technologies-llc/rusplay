@@ -908,7 +908,12 @@ fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
         };
         let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, COUNT));
         let received: Vec<u64> = (0..=LAST_GOOD).chain(RESUMED..COUNT).collect();
-        let Some(pictures) = decode_vaapi(codec, &pick(&packets, &received)) else {
+        let survivors = pick(&packets, &received);
+        if codec == Codec::Hevc {
+            assert_refused_after_the_loss(&survivors, LAST_GOOD);
+            continue;
+        }
+        let Some(pictures) = decode_vaapi(codec, &survivors) else {
             continue;
         };
 
@@ -923,16 +928,45 @@ fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
     }
 }
 
+fn assert_refused_after_the_loss(survivors: &[EncodedFrame], last_good: u64) {
+    let mut decoder = VaapiDecoder::new(Codec::Hevc, &VaapiDecoderConfig::default()).unwrap();
+    let refused = survivors
+        .iter()
+        .enumerate()
+        .find_map(|(index, frame)| decoder.decode(frame).err().map(|error| (index, error)));
+    let resumed = usize::try_from(last_good + 1).unwrap();
+
+    assert!(
+        matches!(
+            refused,
+            Some((
+                index,
+                rusplay_decode::DecodeError::ReferenceMissing {
+                    codec: Codec::Hevc,
+                    ..
+                }
+            )) if index == resumed
+        ),
+        "{refused:?}"
+    );
+}
+
 struct LossEvent {
     first_lost: u64,
     resumed: u64,
 }
 
+struct LossRun<'a> {
+    count: u64,
+    events: &'a [LossEvent],
+    acknowledged_until: u64,
+}
+
 const ACK_DELAY: u64 = 2;
 
-fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConfig) {
-    const COUNT: u64 = 90;
-    let events = [
+const REPEATED_LOSSES: LossRun<'static> = LossRun {
+    count: 90,
+    events: &[
         LossEvent {
             first_lost: 19,
             resumed: 23,
@@ -961,27 +995,51 @@ fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConf
             first_lost: 72,
             resumed: 75,
         },
-    ];
+    ],
+    acknowledged_until: u64::MAX,
+};
 
+const LOSSES_PAST_THE_ORDER_COUNT_RANGE: LossRun<'static> = LossRun {
+    count: 1100,
+    events: &[
+        LossEvent {
+            first_lost: 268,
+            resumed: 272,
+        },
+        LossEvent {
+            first_lost: 520,
+            resumed: 523,
+        },
+        LossEvent {
+            first_lost: 1050,
+            resumed: 1053,
+        },
+    ],
+    acknowledged_until: 600,
+};
+
+fn survive_losses(codec: Codec, format: PixelFormat, config: &VideoConfig, run: &LossRun) {
     let Some(mut encoder) = try_open(config) else {
         return;
     };
     let mut packets = Vec::new();
     let mut received = Vec::new();
 
-    for index in 0..COUNT {
-        let lost = events
+    for index in 0..run.count {
+        let lost = run
+            .events
             .iter()
             .any(|event| (event.first_lost..event.resumed).contains(&index));
         let acknowledged = received
             .iter()
             .rev()
             .find(|&&frame| frame + ACK_DELAY <= index)
-            .copied();
+            .copied()
+            .filter(|_| index < run.acknowledged_until);
         if let Some(frame) = acknowledged {
             encoder.acknowledge(OutputIndex(frame));
         }
-        if let Some(event) = events.iter().find(|event| event.resumed == index) {
+        if let Some(event) = run.events.iter().find(|event| event.resumed == index) {
             let last_good = event.first_lost - 1;
             let recovery = encoder.recover(OutputIndex(last_good));
 
@@ -996,7 +1054,7 @@ fn survive_repeated_losses(codec: Codec, format: PixelFormat, config: &VideoConf
 
         let frame = pattern_frame(format, RESOLUTION, index);
         let packet = encoder.encode(&frame).unwrap().unwrap();
-        if events.iter().any(|event| event.resumed == index) {
+        if run.events.iter().any(|event| event.resumed == index) {
             assert!(!packet.keyframe, "{codec} at frame {index}");
         }
         packets.push(packet);
@@ -1017,8 +1075,26 @@ fn h26x_survives_repeated_losses_with_acknowledgements() {
     for (codec, format) in h26x_cases() {
         let config = video(codec, format, RESOLUTION);
 
-        survive_repeated_losses(codec, format, &config);
-        survive_repeated_losses(codec, format, &without_intra_refresh(config));
+        survive_losses(codec, format, &config, &REPEATED_LOSSES);
+        survive_losses(
+            codec,
+            format,
+            &without_intra_refresh(config),
+            &REPEATED_LOSSES,
+        );
+    }
+}
+
+#[test]
+fn h26x_long_term_references_survive_past_the_order_count_lsb_range() {
+    if !device_present() || !long_term_verified() {
+        return;
+    }
+
+    for (codec, format) in h26x_cases() {
+        let config = without_intra_refresh(video(codec, format, RESOLUTION));
+
+        survive_losses(codec, format, &config, &LOSSES_PAST_THE_ORDER_COUNT_RANGE);
     }
 }
 

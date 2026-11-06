@@ -90,6 +90,8 @@ pub enum DecodeError {
         unit: BitstreamUnit,
         id: u8,
     },
+    #[error("{codec} picture {poc} predicts from a picture the decoder does not hold")]
+    ReferenceMissing { codec: Codec, poc: i32 },
     #[error("all {capacity} decode surfaces are in use")]
     SurfacePoolExhausted { capacity: usize },
     #[error("the vaapi driver exported a surface as {layers} layers instead of one")]

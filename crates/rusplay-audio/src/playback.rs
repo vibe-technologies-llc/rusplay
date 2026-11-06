@@ -105,9 +105,6 @@ impl Playout {
         };
         if self.playing && taken < wanted {
             self.counters.underruns.fetch_add(1, Ordering::Relaxed);
-            // Even a partial underrun exhausts the queued audio. Rebuild the
-            // jitter buffer before consuming another packet, otherwise small
-            // refills produce repeated sound/silence cycles under load.
             self.playing = false;
         }
 

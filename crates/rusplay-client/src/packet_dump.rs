@@ -1,4 +1,3 @@
-//! Opt-in, bounded capture of the packets actually submitted to the decoder.
 use std::{
     fs::{self, File},
     io::{self, BufWriter, Write},
@@ -80,8 +79,6 @@ impl PacketDump {
             eprintln!("HEVC capture reached its size limit");
             return;
         }
-        // First column is the access-unit size, as expected by the present
-        // replay tests. Remaining fields preserve loss and stream metadata.
         let record = format!(
             "{length} {} {} {} {:?}",
             video.number, video.frame.keyframe, video.captured_micros, video.stream
@@ -92,7 +89,6 @@ impl PacketDump {
             .try_send((video.frame.data.to_vec(), record))
             .is_err()
         {
-            // Stop instead of silently creating an incomplete predictive stream.
             self.remaining = 0;
             eprintln!("HEVC capture stopped: writer could not keep up");
         } else {
@@ -103,12 +99,14 @@ impl PacketDump {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::Instant;
+
     use rusplay_core::{
         ChromaSiting, CodecFormat, ColorSpace, EncodedFrame, PixelFormat, Resolution, Timestamp,
     };
     use rusplay_protocol::StreamDescription;
-    use std::time::Instant;
+
+    use super::*;
 
     fn packet(keyframe: bool) -> EncodedVideo {
         EncodedVideo {

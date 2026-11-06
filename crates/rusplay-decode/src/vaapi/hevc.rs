@@ -69,6 +69,14 @@ struct ReferenceSet {
 }
 
 impl ReferenceSet {
+    fn missing_reference(&self) -> bool {
+        self.before
+            .iter()
+            .chain(&self.after)
+            .chain(&self.long_term)
+            .any(Option::is_none)
+    }
+
     fn flags(&self, index: usize) -> u32 {
         if self.before.contains(&Some(index)) {
             ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE
@@ -274,6 +282,10 @@ impl HevcDecoder {
         } else {
             apply_reference_set(&mut self.references, &sps, header, poc, max_lsb)
         };
+
+        if set.missing_reference() {
+            return Err(DecodeError::ReferenceMissing { codec: CODEC, poc });
+        }
 
         let surface = stream.pool.acquire()?;
         let picture = Picture {

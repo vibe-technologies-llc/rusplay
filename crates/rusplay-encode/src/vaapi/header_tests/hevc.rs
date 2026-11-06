@@ -366,7 +366,7 @@ fn sps_carries_every_field_the_writer_sets() {
             assert_eq!(rect.max.y, geometry.resolution.height);
             assert_eq!(sps.bit_depth_luma_minus8, case.format.depth.bits() - 8);
             assert_eq!(sps.bit_depth_chroma_minus8, case.format.depth.bits() - 8);
-            assert_eq!(sps.log2_max_pic_order_cnt_lsb_minus4, 12);
+            assert_eq!(sps.log2_max_pic_order_cnt_lsb_minus4, 4);
             assert!(sps.sub_layer_ordering_info_present_flag);
             assert_eq!(sps.max_dec_pic_buffering_minus1[0], 3);
             assert_eq!(sps.max_num_reorder_pics[0], 0);
@@ -517,11 +517,12 @@ fn slice_headers_carry_type_poc_and_sao() {
     let orders = [
         (0, 0),
         (1, 1),
-        (65_535, 65_535),
-        (65_536, 0),
-        (65_537, 1),
+        (255, 255),
+        (256, 0),
+        (257, 1),
+        (65_535, 255),
         (131_075, 3),
-        (i32::MAX, 65_535),
+        (i32::MAX, 255),
     ];
 
     for (order, lsb) in orders {
@@ -939,10 +940,10 @@ fn the_long_term_lsb_wraps_with_the_picture_order_count() {
     let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
     let mut stream = stream(format, Resolution::new(402, 226));
     let pictures = [
-        picture(65_534, true),
-        picture(65_535, false),
-        picture(65_536, false),
-        picture(65_537, false),
+        picture(254, true),
+        picture(255, false),
+        picture(256, false),
+        picture(257, false),
     ];
     let mut lsbs = Vec::new();
 
@@ -955,7 +956,7 @@ fn the_long_term_lsb_wraps_with_the_picture_order_count() {
         }
     });
 
-    assert_eq!(lsbs, [(65_535, 65_534), (0, 65_534), (1, 65_534)]);
+    assert_eq!(lsbs, [(255, 254), (0, 254), (1, 254)]);
 }
 
 #[test]

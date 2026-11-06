@@ -209,6 +209,12 @@ paths:
     depth is `sps_max_num_reorder_pics` of the highest sub-layer, always present in an SPS;
     `sps_max_latency_increase` is not applied, so a stream relying on it for earlier output waits
     for the reorder depth instead. Pictures with `pic_output_flag` 0 are decoded but not held.
+    A picture whose current reference set (`StCurrBefore`, `StCurrAfter`, `LtCurr`) names a
+    picture the DPB does not hold is refused with `ReferenceMissing { codec, poc }` before
+    anything reaches the driver, after the RPS has been applied: submitting it would predict
+    from whatever an invalid entry points at and acknowledge the result as good, so the client
+    would never ask for a clean frame. The error takes the client's decode-failure path
+    (`DecodeFailed`, a keyframe). A missing `Foll` picture is allowed, as the spec says.
   - `av1.rs`: OBUs from the packet, the eight reference slots, `show_existing_frame`, tile
     groups (a frame is submitted as soon as its last tile arrives, so the parser sees the updated
     reference state for the next header), film grain into a separate display surface. AV1 output

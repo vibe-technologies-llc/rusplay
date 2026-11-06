@@ -2,7 +2,8 @@ use crate::OutputIndex;
 
 const LONG_TERM_INTERVAL: u64 = 8;
 const LONG_TERM_STALE: u64 = 60;
-const MAX_RECOVERY_DISTANCE: u64 = 120;
+pub(super) const MAX_RECOVERY_DISTANCE: u64 = 120;
+pub(super) const MAX_HELD_DISTANCE: u64 = MAX_RECOVERY_DISTANCE + LONG_TERM_INTERVAL + 1;
 pub(super) const LONG_TERM_SLOTS: usize = 2;
 pub(super) const RECONSTRUCTED_SURFACES: usize = LONG_TERM_SLOTS + 2;
 const VERIFIED_MESA: (u32, u32) = (26, 2);
@@ -132,6 +133,10 @@ impl LongTermReferences {
         self.acknowledged.is_some_and(|known| held.output <= known)
     }
 
+    fn recoverable(&self, held: Held) -> bool {
+        self.confirmed(held) && self.age(held) <= MAX_RECOVERY_DISTANCE
+    }
+
     pub(super) fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
         if !self.enabled {
             return None;
@@ -173,7 +178,7 @@ impl LongTermReferences {
 
     fn marking_slot(&self) -> Option<usize> {
         let keeper = (0..LONG_TERM_SLOTS)
-            .filter(|&slot| self.long_term[slot].is_some_and(|held| self.confirmed(held)))
+            .filter(|&slot| self.long_term[slot].is_some_and(|held| self.recoverable(held)))
             .max_by_key(|&slot| self.long_term[slot].map(|held| held.output));
         let candidate = (0..LONG_TERM_SLOTS)
             .filter(|&slot| Some(slot) != keeper)
@@ -496,6 +501,79 @@ mod tests {
         references.next_output = OutputIndex(121);
 
         assert_eq!(references.recover(OutputIndex(50)), None);
+    }
+
+    #[test]
+    fn a_keeper_past_the_recovery_distance_is_replaced() {
+        const ACKNOWLEDGED: u64 = 9;
+        let mut references = LongTermReferences::new(true);
+
+        run(&mut references, 10);
+        references.acknowledge(OutputIndex(ACKNOWLEDGED));
+        let keeper = references
+            .long_term
+            .iter()
+            .position(|held| held.is_some_and(|held| held.output == OutputIndex(ACKNOWLEDGED)))
+            .unwrap();
+        let mut marked = Vec::new();
+        for index in 10..300_u64 {
+            references.begin(false);
+            if let Some(slot) = references.plan().mark_long_term {
+                marked.push((index, slot));
+            }
+            references.commit(1, i32::try_from(index).unwrap());
+        }
+        let replaced = marked
+            .iter()
+            .find(|&&(_, slot)| slot == keeper)
+            .map(|&(index, _)| index);
+
+        assert!(
+            replaced.is_some_and(|index| index > ACKNOWLEDGED + MAX_RECOVERY_DISTANCE
+                && index <= ACKNOWLEDGED + MAX_HELD_DISTANCE),
+            "{marked:?}"
+        );
+    }
+
+    #[test]
+    fn nothing_held_is_older_than_the_held_distance() {
+        let mut references = LongTermReferences::new(true);
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut oldest = 0;
+
+        for index in 0..100_000_u64 {
+            let roll = next() % 1000;
+            let acknowledging = (index / 2000) % 2 == 0;
+            if acknowledging && roll < 100 {
+                references.acknowledge(OutputIndex(index.saturating_sub(1 + next() % 8)));
+            }
+            if roll >= 995 && index > 0 {
+                references.recover(OutputIndex(index.saturating_sub(1 + next() % 16)));
+            }
+
+            references.begin(index == 0 || roll == 999);
+            let plan = references.plan();
+            let held = references
+                .previous
+                .iter()
+                .chain(plan.long_term.iter().flatten());
+            for held in held {
+                oldest = oldest.max(references.age(*held));
+            }
+            references.commit(
+                u32::try_from(index % 4).unwrap(),
+                i32::try_from(index).unwrap(),
+            );
+        }
+
+        assert!(oldest <= MAX_HELD_DISTANCE, "{oldest}");
+        assert!(oldest > MAX_RECOVERY_DISTANCE, "{oldest}");
     }
 
     #[test]

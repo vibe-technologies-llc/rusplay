@@ -534,3 +534,32 @@ fn without_a_conformance_window_nothing_is_cropped() {
 
     assert_eq!(crop_offsets(&sps), CropOffsets::default());
 }
+
+#[test]
+fn a_reference_set_missing_a_current_picture_is_reported() {
+    let incomplete = [
+        ReferenceSet {
+            before: vec![None],
+            ..Default::default()
+        },
+        ReferenceSet {
+            after: vec![None],
+            ..Default::default()
+        },
+        ReferenceSet {
+            long_term: vec![Some(0), None],
+            ..Default::default()
+        },
+    ];
+    let complete = ReferenceSet {
+        before: vec![Some(0)],
+        after: vec![Some(1)],
+        long_term: vec![Some(2)],
+    };
+
+    for set in incomplete {
+        assert!(set.missing_reference(), "{set:?}");
+    }
+    assert!(!ReferenceSet::default().missing_reference());
+    assert!(!complete.missing_reference());
+}

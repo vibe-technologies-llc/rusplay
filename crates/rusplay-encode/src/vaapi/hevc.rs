@@ -9,7 +9,9 @@ use crate::{
         format::{colour_primaries, full_range, matrix_coefficients, transfer_characteristics},
         hdr::{SeiNal, sei},
         level::{self, Demand, Level},
-        long_term::{Held, LongTermReferences, Reference},
+        long_term::{
+            Held, LongTermReferences, MAX_HELD_DISTANCE, MAX_RECOVERY_DISTANCE, Reference,
+        },
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, PackedHeader, Profile},
     },
@@ -20,8 +22,11 @@ const LOG2_CTB: u32 = 6;
 const LOG2_MIN_TB: u32 = 2;
 const LOG2_MAX_TB: u32 = 5;
 const MAX_TRANSFORM_HIERARCHY_DEPTH: u32 = 2;
-const LOG2_MAX_POC_LSB: u32 = 16;
+const MESA_LONG_TERM_LSB_BITS: u32 = u8::BITS;
+const LOG2_MAX_POC_LSB: u32 = MESA_LONG_TERM_LSB_BITS;
 const POC_LSB_MASK: i32 = (1 << LOG2_MAX_POC_LSB) - 1;
+const _: () = assert!(MAX_HELD_DISTANCE < 1 << LOG2_MAX_POC_LSB);
+const _: () = assert!(MAX_RECOVERY_DISTANCE < 1 << (LOG2_MAX_POC_LSB - 1));
 const MAX_MERGE_CANDIDATES: u8 = 5;
 const DEFAULT_QP: u8 = 26;
 const MAX_MV_LENGTH_LOG2: u32 = 15;

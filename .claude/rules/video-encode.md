@@ -223,8 +223,8 @@ paths:
   `max_num_ref_frames` = `max_dec_frame_buffering` = 3; HEVC uses 64x64 CTBs, 8x8 minimum CBs,
   `sps_max_dec_pic_buffering_minus1` 3, two SPS short-term RPSs ({-1} and the empty set) and no
   temporal MVP (the VA parameters carry the unwrapped picture order count since the
-  last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 16-bit
-  LSB; radeonsi decodes identically across the 65536th frame either way); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
+  last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 8-bit
+  LSB, `log2_max_pic_order_cnt_lsb_minus4` 4); AV1 uses 8-bit order hints, refreshes slot 0 from LAST
   (`primary_ref_frame` 0) and one tile unless the size forces more.
 - AV1 reference slots (`vaapi/av1.rs`, `Av1Stream`): slot 0 holds the previous frame, slots 1 and 2
   are long-term slots, and the stream tracks each slot's surface and `OutputIndex`; a keyframe
@@ -249,9 +249,12 @@ paths:
   reconstructed surfaces counting the current one. A keyframe is long-term in slot 0 at once and
   the first frame after it fills the empty slot 1, as does any frame after a recovery that forgot
   a slot. Otherwise the AV1 rule picks the slot (`marking_slot`): the slot holding the newest
-  acknowledged frame is kept, the other is replaced every 8 frames (`LONG_TERM_INTERVAL`, counted
+  acknowledged frame is kept while it is within `MAX_RECOVERY_DISTANCE` (older, `recover` could
+  not use it), the other is replaced every 8 frames (`LONG_TERM_INTERVAL`, counted
   from the newest slot), when its frame is acknowledged, no ack has come at all, or it waited 60
-  frames (`LONG_TERM_STALE`). The frame after a candidate references the newest slot as long-term,
+  frames (`LONG_TERM_STALE`). So nothing is held for more than `MAX_HELD_DISTANCE` (129) frames,
+  even when acknowledgements stop (`nothing_held_is_older_than_the_held_distance` drives the
+  policy with random acknowledgements, outages and recoveries). The frame after a candidate references the newest slot as long-term,
   and `recover(last_good)` picks the newest slot at or before `last_good` within 120 frames
   (`MAX_RECOVERY_DISTANCE`), so a loss reported while the newest candidate is unacknowledged and
   newer than `last_good` recovers from the older slot. It forgets the previous frame and the slots
@@ -279,8 +282,7 @@ paths:
     it at its largest picture except level 1.1 (900/396 is 2), so `H264Stream::new` steps a picture
     above 300 macroblocks up to level 1.2 (`level::select_if` with `MAX_DPB_MBS`).
   - HEVC: every P slice lists the held long-term slots in `num_long_term_pics` with `poc_lsb_lt`
-    (no SPS candidates, `num_long_term_ref_pics_sps` 0, and no `delta_poc_msb` because the frame is
-    far younger than the 16-bit LSB range), `used_by_curr_pic_lt_flag` 1 on the one it references
+    (no SPS candidates, `num_long_term_ref_pics_sps` 0, and no `delta_poc_msb`), `used_by_curr_pic_lt_flag` 1 on the one it references
     and 0 on the other, with `short_term_ref_pic_set_idx` 1 (the empty set) when it references a
     long-term frame. A recovery frame lists only the picture it predicts from and drops the other
     slot: a picture named in the set and missing from the decoder makes the frame undecodable
@@ -288,12 +290,24 @@ paths:
     after a candidate still finds the one picture that remains, since the long-term lookup
     matches any reference picture.
     A decoded picture buffer of 4 is below the smallest level limit of 6.
+  - The HEVC picture order count LSB is 8 bits (`LOG2_MAX_POC_LSB`) because Mesa 26.2 parses the
+    packed slice header into `pipe_h265_enc_slice_param`, whose `poc_lsb_lt` is a `uint8_t`
+    (`p_video_state.h`), and radeonsi writes it back at the SPS width: with the former 16-bit
+    LSB every long-term reference from POC 256 on named a picture the decoder never had
+    (`Could not find ref with POC`), corrupting every session after about four seconds at 60 fps.
+    An 8-bit LSB is exact through that field. It is safe without `delta_poc_msb` because no two
+    pictures the decoder holds are 256 or more apart (`MAX_HELD_DISTANCE`), and a recovery
+    frame's POC MSB is derived correctly because it is at most `MAX_RECOVERY_DISTANCE` (120,
+    under half the LSB range) after its reference; both are compile-time assertions in
+    `vaapi/hevc.rs`. `h26x_long_term_references_survive_past_the_order_count_lsb_range` (1100
+    frames, losses past POC 256 and 512 and acknowledgements stopping at 600) decodes clean
+    through `VaapiDecoder` and FFmpeg; with the 16-bit LSB it fails at frame 258.
   - The VA parameters list exactly the frames kept (`ReferenceFrames`/`reference_frames`), since
     Mesa evicts the others, with `CurrPic` flagged long-term on a marked frame (H.264 `frame_idx`
     the long-term index).
   - radeonsi follows this: Mesa parses the packed slice header, including MMCO, list modification,
-    the long-term RPS and the SPS gaps flag, and rewrites them verbatim
-    (`frontends/va/picture_h264_enc.c`, `picture_hevc_enc.c`, `radeon_enc_slice_header*`), and
+    the long-term RPS and the SPS gaps flag, and rewrites them verbatim except `poc_lsb_lt`, which
+    it narrows to 8 bits (above) (`frontends/va/picture_h264_enc.c`, `picture_hevc_enc.c`, `radeon_enc_slice_header*`), and
     the firmware predicts from the `reference_picture_index` Mesa takes from `RefPicList0`; its own
     marking does not get in the way on the encode side. Checked on Mesa 26.2.6, RX 9070 (VCN 5):
     `ffmpeg -bsf:v trace_headers` shows Rusplay's marking in the driver's output, and the
@@ -304,7 +318,8 @@ paths:
     and through the `ffmpeg` binary (which must report no error) at 34 dB against the source, with
     intra refresh on and off, H.264 High, HEVC Main and Main10, repeated losses and acknowledgements
     included. The recovery frame decodes at 54 dB (H.264) and 61 dB (HEVC); the control stream
-    without a recovery frame decodes that frame at 18 and 13 dB. Not checked: NVDEC as the client
+    without a recovery frame decodes that frame at 18 dB (H.264), and `VaapiDecoder` refuses the
+    HEVC one with `ReferenceMissing`. Not checked: NVDEC as the client
     decoder.
   - `driver_honours_long_term` (the `vaQueryVendorString` text) gates all of it to what was
     verified: radeonsi, `gfx12`, Mesa 26.2 or newer. Another driver, GPU generation or older Mesa

@@ -276,8 +276,6 @@ impl Stream {
         self.session.display().sync(surface.id)?;
 
         let image = self.pool.export_output(surface)?;
-        // Keep the original pool token leased even if export returned a new
-        // allocation. The renderer releases it only after GPU completion.
         let lease = Arc::clone(&surface.image);
 
         let coded = self.format.coded;

@@ -156,9 +156,6 @@ impl SurfacePool {
         &self,
         surface: &PoolSurface,
     ) -> Result<Arc<DmaBufImage>, DecodeError> {
-        // A VA surface ID is stable, but its backing storage need not be. Ask
-        // the driver for the completed picture rather than reusing the handle
-        // exported when the pool entry was first allocated.
         let owned = self
             .owned
             .iter()
