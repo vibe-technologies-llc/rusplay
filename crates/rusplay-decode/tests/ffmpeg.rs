@@ -246,6 +246,25 @@ fn rejects_frames_of_another_codec() {
 }
 
 #[test]
+fn a_hevc_frame_that_lost_its_reference_fails_and_the_next_keyframe_decodes() {
+    let mut decoder = open(Codec::Hevc, Some(1));
+    let frames = packets(Codec::Hevc, "hevc-420-8bit.hevc");
+    assert!(
+        frames.len() >= 3,
+        "the fixture needs a frame after the lost one"
+    );
+
+    assert!(decoder.decode(&frames[0]).unwrap().is_some());
+    let lost = decoder.decode(&frames[2]);
+
+    assert!(
+        matches!(lost, Err(DecodeError::Ffmpeg { .. })),
+        "a missing reference was {lost:?}"
+    );
+    assert!(decoder.decode(&frames[0]).unwrap().is_some());
+}
+
+#[test]
 fn an_empty_packet_produces_nothing() {
     let mut decoder = open(Codec::H264, Some(1));
     let mut frame = packets(Codec::H264, "h264-420-8bit.h264").remove(0);

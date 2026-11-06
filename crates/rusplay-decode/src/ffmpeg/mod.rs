@@ -64,6 +64,7 @@ impl FfmpegDecoder {
             let context = &mut *context.0;
             context.thread_count = thread_count(config);
             context.thread_type = sys::FF_THREAD_SLICE;
+            context.err_recognition = sys::RUSPLAY_AV_EF_EXPLODE;
             context.pkt_timebase = sys::AVRational {
                 num: 1,
                 den: 1_000_000,
@@ -127,11 +128,14 @@ impl FfmpegDecoder {
                 self.keep_available()?;
                 continue;
             }
-            return Err(DecodeError::Ffmpeg {
-                call: FfmpegCall::SendPacket,
-                status,
-            });
+            return Err(self.abort(FfmpegCall::SendPacket, status));
         }
+    }
+
+    fn abort(&mut self, call: FfmpegCall, status: i32) -> DecodeError {
+        unsafe { sys::avcodec_flush_buffers(self.context.0) };
+        self.pending = None;
+        DecodeError::Ffmpeg { call, status }
     }
 
     fn keep_available(&mut self) -> Result<(), DecodeError> {
@@ -162,10 +166,7 @@ impl FfmpegDecoder {
             return Ok(None);
         }
 
-        Err(DecodeError::Ffmpeg {
-            call: FfmpegCall::ReceiveFrame,
-            status,
-        })
+        Err(self.abort(FfmpegCall::ReceiveFrame, status))
     }
 }
 

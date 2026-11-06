@@ -29,13 +29,15 @@ mod bindings {
         "#include <libavutil/mastering_display_metadata.h>\n",
         "enum RusplayAvError {\n",
         "    RUSPLAY_AVERROR_EAGAIN = AVERROR(EAGAIN),\n",
-        "    RUSPLAY_AVERROR_EOF = AVERROR_EOF\n",
+        "    RUSPLAY_AVERROR_EOF = AVERROR_EOF,\n",
+        "    RUSPLAY_AV_EF_EXPLODE = AV_EF_EXPLODE\n",
         "};\n",
     );
 
     const FUNCTIONS: &str = concat!(
         "^avcodec_find_decoder$|^avcodec_alloc_context3$|^avcodec_open2$|",
-        "^avcodec_free_context$|^avcodec_send_packet$|^avcodec_receive_frame$|",
+        "^avcodec_free_context$|^avcodec_flush_buffers$|",
+        "^avcodec_send_packet$|^avcodec_receive_frame$|",
         "^av_packet_alloc$|^av_packet_free$|^av_packet_unref$|",
         "^av_frame_alloc$|^av_frame_free$|^av_frame_unref$|^av_frame_get_side_data$",
     );
