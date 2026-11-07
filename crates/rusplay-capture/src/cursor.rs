@@ -64,12 +64,21 @@ impl CursorBitmap {
             rgba,
         })
     }
+
+    pub fn is_transparent(&self) -> bool {
+        self.rgba
+            .as_chunks::<BYTES_PER_PIXEL>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == 0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CursorShape {
     Unchanged,
     Hidden,
+    Absent,
     Bitmap(CursorBitmap),
 }
 
@@ -98,38 +107,46 @@ impl CursorUpdate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CursorTracker {
     position: Option<(i32, i32)>,
-    visible: bool,
+    sprite_hidden: bool,
+    absent: bool,
     bitmap: Option<CursorBitmap>,
-}
-
-impl Default for CursorTracker {
-    fn default() -> Self {
-        Self {
-            position: None,
-            visible: true,
-            bitmap: None,
-        }
-    }
 }
 
 impl CursorTracker {
     pub fn observe(&mut self, observation: CursorObservation) -> Option<CursorUpdate> {
+        let was_visible = self.visible();
+
+        if observation.shape == CursorShape::Absent {
+            self.absent = true;
+            let (x, y) = self.position?;
+            return (was_visible != self.visible()).then_some(CursorUpdate {
+                x,
+                y,
+                visible: false,
+                bitmap: None,
+            });
+        }
+
         let position = (observation.x, observation.y);
         let moved = self.position != Some(position);
         self.position = Some(position);
+        self.absent = false;
 
-        let was_visible = self.visible;
         let bitmap = match observation.shape {
-            CursorShape::Unchanged => None,
+            CursorShape::Unchanged | CursorShape::Absent => None,
             CursorShape::Hidden => {
-                self.visible = false;
+                self.sprite_hidden = true;
+                None
+            }
+            CursorShape::Bitmap(bitmap) if bitmap.is_transparent() => {
+                self.sprite_hidden = true;
                 None
             }
             CursorShape::Bitmap(bitmap) => {
-                self.visible = true;
+                self.sprite_hidden = false;
                 (self.bitmap.as_ref() != Some(&bitmap)).then(|| {
                     self.bitmap = Some(bitmap.clone());
                     bitmap
@@ -137,12 +154,16 @@ impl CursorTracker {
             }
         };
 
-        (moved || bitmap.is_some() || was_visible != self.visible).then_some(CursorUpdate {
+        (moved || bitmap.is_some() || was_visible != self.visible()).then_some(CursorUpdate {
             x: observation.x,
             y: observation.y,
-            visible: self.visible,
+            visible: self.visible(),
             bitmap,
         })
+    }
+
+    fn visible(&self) -> bool {
+        !self.sprite_hidden && !self.absent
     }
 }
 
@@ -262,6 +283,59 @@ mod tests {
         assert!(!hidden.visible);
         assert!(shown.visible);
         assert_eq!(shown.bitmap, None);
+    }
+
+    #[test]
+    fn an_absent_cursor_is_hidden_until_the_next_valid_observation() {
+        let mut tracker = CursorTracker::default();
+        tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
+
+        let absent = tracker
+            .observe(observation(0, CursorShape::Absent))
+            .unwrap();
+        let still_absent = tracker.observe(observation(0, CursorShape::Absent));
+        let back = tracker
+            .observe(observation(1, CursorShape::Unchanged))
+            .unwrap();
+
+        assert!(!absent.visible);
+        assert_eq!((absent.x, absent.y), (1, 7));
+        assert_eq!(still_absent, None);
+        assert!(back.visible);
+    }
+
+    #[test]
+    fn a_hidden_sprite_stays_hidden_while_the_cursor_moves() {
+        let mut tracker = CursorTracker::default();
+        tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
+        tracker.observe(observation(1, CursorShape::Hidden));
+
+        let moved = tracker
+            .observe(observation(2, CursorShape::Unchanged))
+            .unwrap();
+
+        assert!(!moved.visible);
+    }
+
+    #[test]
+    fn a_transparent_sprite_hides_the_cursor() {
+        let mut tracker = CursorTracker::default();
+        tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
+
+        let transparent = CursorBitmap {
+            rgba: vec![9, 9, 9, 0],
+            ..bitmap(1)
+        };
+        let hidden = tracker
+            .observe(observation(1, CursorShape::Bitmap(transparent)))
+            .unwrap();
+        let shown = tracker
+            .observe(observation(1, CursorShape::Bitmap(bitmap(1))))
+            .unwrap();
+
+        assert!(!hidden.visible);
+        assert_eq!(hidden.bitmap, None);
+        assert!(shown.visible);
     }
 
     #[test]

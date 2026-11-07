@@ -177,9 +177,14 @@ paths:
 - With `capture.cursor = "metadata"` (`StreamOptions::cursor_metadata`) the stream asks for
   `SPA_META_Cursor` sized for bitmaps up to 512×512. Every dequeued buffer, including the
   cursor-only ones and the stale ones drained before the newest, is parsed by
-  `parse_cursor_meta` (pure, over the meta's bytes: id 0 means no news, a bitmap offset below the
-  cursor struct means the shape is unchanged, a zero-sized bitmap means hidden). The bitmap is
-  normalised to tightly packed RGBA8. `CursorTracker` drops unchanged updates and strips a bitmap
+  `parse_cursor_meta` (pure, over the meta's bytes: id 0 is `CursorShape::Absent`, the cursor
+  is not in this stream, which is how OBS reads it and how Mutter writes a cursor it does not
+  show; a bitmap offset below the cursor struct means the shape is unchanged, a zero-sized bitmap
+  means hidden). The bitmap is normalised to tightly packed RGBA8. `CursorTracker` keeps two
+  reasons apart: an absent cursor is hidden at its last position until the next valid meta,
+  whatever its shape field says, while a hidden sprite (a zero-sized bitmap, or a fully
+  transparent one, which is how Wine and SDL hide the cursor of a game) stays hidden as the
+  cursor moves until a visible bitmap arrives. It drops unchanged updates and strips a bitmap
   identical to the last one, so a bitmap travels only when it changes.
 - Cursor updates have their own `latest` handoff, independent of frames, obtained with
   `CaptureSource::cursor_feed` (a cloneable `Subscriber<CursorUpdate>`, `None` for sources without

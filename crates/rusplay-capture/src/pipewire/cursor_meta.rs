@@ -50,8 +50,15 @@ fn pixel_order(format: u32) -> Option<CursorPixelOrder> {
 }
 
 pub(crate) fn parse_cursor_meta(meta: &[u8]) -> Option<CursorObservation> {
-    if meta.len() < CURSOR_SIZE || read_u32(meta, 0)? == 0 {
+    if meta.len() < CURSOR_SIZE {
         return None;
+    }
+    if read_u32(meta, 0)? == 0 {
+        return Some(CursorObservation {
+            x: 0,
+            y: 0,
+            shape: CursorShape::Absent,
+        });
     }
 
     let x = read_i32(meta, 8)?;
@@ -195,10 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn invalid_cursor_id_means_no_data() {
+    fn invalid_cursor_id_means_the_cursor_is_not_in_the_stream() {
         let meta = MetaBuilder::cursor(0, (5, 6), (0, 0), 0).bytes;
 
-        assert_eq!(parse_cursor_meta(&meta), None);
+        let observation = parse_cursor_meta(&meta).unwrap();
+
+        assert_eq!(observation.shape, CursorShape::Absent);
         assert_eq!(parse_cursor_meta(&meta[..10]), None);
     }
 
