@@ -34,15 +34,7 @@ how easily the fix itself goes wrong.
 
 | # | Finding | Category | Impact | Effort | Risk | Confidence |
 |---|---|---|---|---|---|---|
-| 6 | Parity storage is not recycled across frames | Performance | Per-frame block/slab allocations remain | S | MED | HIGH |
 | 15 | Several recent fixes have tests that would still pass if the fix were reverted | Tests | FFmpeg retention, conversion fallback and caller coverage remain | M | LOW | HIGH |
-
-### 6. Reuse parity storage across reassembled frames
-
-The completed video buffer now returns through `FrameBytes` to a bounded pool,
-and reused buffers clear only the final shard padding. Parity shards share a
-slab per block, but block slabs and metadata still allocate for each new frame.
-Retain and recycle that storage across pending frames before closing this item.
 
 ### 15. Lock the remaining regression properties
 

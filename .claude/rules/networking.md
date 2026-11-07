@@ -418,7 +418,10 @@ paths:
   final fragment that arrives before the shard length is known waits in a side buffer until it is.
   Completed frames return their storage through `FrameBytes` to a bounded channel on drop. Only
   the final shard padding is cleared on reuse; FEC reads only received or recovered slots.
-  Parity shards share a slab per block. Paced sends use fixed stack arrays for syscall metadata.
+  Parity shards share a slab per block. A frame that completes, is lost or is reset hands its
+  received flags, block list and blocks (shard index and slab) to a spare pool in the
+  `Reassembler`, bounded by `max_pending_frames` lists and `max_fragments` blocks, and the next
+  frame takes them back, so steady FEC traffic allocates no parity storage. Paced sends use fixed stack arrays for syscall metadata.
   Fragment count is capped by `ReassemblyLimits::max_fragments`
   (`network.reassembly_max_fragments`, default 65535, the most the wire format can number) and
   the pending frames by `network.reassembly_max_pending_frames` (default 8). A sender that lowers

@@ -71,6 +71,7 @@ pub struct Reassembler {
     stats: ReassemblyStats,
     returned: Receiver<Vec<u8>>,
     recycle: SyncSender<Vec<u8>>,
+    spare: SpareStorage,
 }
 
 impl Reassembler {
@@ -85,6 +86,7 @@ impl Reassembler {
             floor: None,
             next_sequence: None,
             stats: ReassemblyStats::default(),
+            spare: SpareStorage::default(),
         }
     }
 
@@ -97,7 +99,9 @@ impl Reassembler {
     }
 
     pub fn reset(&mut self) {
-        self.pending.clear();
+        for pending in self.pending.drain(..) {
+            self.spare.reclaim(pending, &self.limits);
+        }
         self.floor = None;
         self.next_sequence = None;
     }
@@ -130,13 +134,14 @@ impl Reassembler {
         let mut pending = existing.unwrap_or_else(|| {
             let mut pending = PendingFrame::new(header.frame, now);
             pending.buffer = self.returned.try_recv().unwrap_or_default();
+            self.spare.lend(&mut pending);
             pending
         });
 
         let inserted = match packet {
             Packet::Data(payload) => pending.insert_data(&header, payload, &self.limits),
             Packet::Parity(fec, parity) => {
-                pending.insert_parity(&header, &fec, parity, &self.limits)
+                pending.insert_parity(&header, &fec, parity, &self.limits, &mut self.spare)
             }
         };
         let outcome = inserted.and_then(|inserted| {
@@ -146,7 +151,9 @@ impl Reassembler {
 
         match outcome {
             Err(error) => {
-                if !is_new {
+                if is_new {
+                    self.spare.reclaim(pending, &self.limits);
+                } else {
                     self.insert_pending(pending);
                 }
                 Err(error)
@@ -258,6 +265,7 @@ impl Reassembler {
         {
             self.stats.frames_lost += 1;
             events.push(ReassemblyEvent::FrameLost { frame: lost.frame });
+            self.spare.reclaim(lost, &self.limits);
         }
 
         if self.floor.is_none_or(|floor| is_newer(frame, floor)) {
@@ -267,11 +275,12 @@ impl Reassembler {
 
     fn complete(
         &mut self,
-        pending: PendingFrame,
+        mut pending: PendingFrame,
         events: &mut Vec<ReassemblyEvent>,
     ) -> Result<(), NetError> {
         let frame = pending.frame;
         self.drop_lost_through(frame, events);
+        self.spare.take_back(&mut pending, &self.limits);
 
         match pending.assemble() {
             Ok(mut assembled) => {
@@ -304,6 +313,68 @@ enum Packet<'a> {
 enum Inserted {
     New,
     Duplicate,
+}
+
+#[derive(Debug, Default)]
+struct SpareStorage {
+    flags: Vec<Vec<bool>>,
+    block_lists: Vec<Vec<ParityBlock>>,
+    blocks: Vec<ParityBlock>,
+}
+
+impl SpareStorage {
+    fn lend(&mut self, pending: &mut PendingFrame) {
+        pending.have = self.flags.pop().unwrap_or_default();
+        pending.blocks = self.block_lists.pop().unwrap_or_default();
+    }
+
+    fn block(&mut self, block: FecBlock) -> ParityBlock {
+        let shards = usize::from(block.parity_shards);
+        let Some(mut parity) = self.blocks.pop() else {
+            return ParityBlock {
+                block,
+                shards: vec![None; shards],
+                slab: Vec::new(),
+                received: 0,
+                decoded_with: 0,
+            };
+        };
+
+        parity.block = block;
+        parity.shards.clear();
+        parity.shards.resize(shards, None);
+        parity.slab.clear();
+        parity.received = 0;
+        parity.decoded_with = 0;
+        parity
+    }
+
+    fn reclaim(&mut self, mut pending: PendingFrame, limits: &ReassemblyLimits) {
+        self.take_back(&mut pending, limits);
+    }
+
+    fn take_back(&mut self, pending: &mut PendingFrame, limits: &ReassemblyLimits) {
+        let max_lists = limits.max_pending_frames.max(1);
+        let max_blocks = usize::from(limits.max_fragments);
+
+        let room = max_blocks.saturating_sub(self.blocks.len());
+        self.blocks.extend(pending.blocks.drain(..).take(room));
+        pending.blocks.clear();
+
+        if self.block_lists.len() < max_lists {
+            self.block_lists.push(std::mem::take(&mut pending.blocks));
+        }
+        if self.flags.len() < max_lists {
+            let mut have = std::mem::take(&mut pending.have);
+            have.clear();
+            self.flags.push(have);
+        }
+    }
+
+    #[cfg(test)]
+    fn slab_capacity(&self) -> usize {
+        self.blocks.iter().map(|block| block.slab.capacity()).sum()
+    }
 }
 
 #[derive(Debug)]
@@ -461,6 +532,7 @@ impl PendingFrame {
         fec: &FecHeader,
         parity: &[u8],
         limits: &ReassemblyLimits,
+        spare: &mut SpareStorage,
     ) -> Result<Inserted, NetError> {
         let shard_len = parity.len();
         if shard_len == 0 || !shard_len.is_multiple_of(2) {
@@ -521,17 +593,11 @@ impl PendingFrame {
         self.prepare(count);
 
         let position = known.unwrap_or_else(|| {
-            self.blocks.push(ParityBlock {
-                block: FecBlock {
-                    first_fragment: fec.first_fragment,
-                    data_shards: fec.data_shards,
-                    parity_shards: fec.parity_shards,
-                },
-                shards: vec![None; usize::from(fec.parity_shards)],
-                slab: Vec::new(),
-                received: 0,
-                decoded_with: 0,
-            });
+            self.blocks.push(spare.block(FecBlock {
+                first_fragment: fec.first_fragment,
+                data_shards: fec.data_shards,
+                parity_shards: fec.parity_shards,
+            }));
             self.blocks.len() - 1
         });
 
@@ -798,6 +864,58 @@ mod tests {
             .map(|(_, packet)| packet);
         let events = feed(&mut rx, Instant::now(), surviving);
         assert_eq!(frames(&events)[0].data, data);
+    }
+
+    #[test]
+    fn parity_storage_is_reused_by_the_next_frame() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let now = Instant::now();
+
+        let first = frame_data(SHARD_LEN * 4, 17);
+        let packets = tx.packetize(0, false, &first).unwrap();
+        let events = feed(&mut rx, now, packets.iter().skip(1));
+        let spare_slabs = rx.spare.slab_capacity();
+        let spare_blocks = rx.spare.blocks.len();
+
+        assert_eq!(frames(&events)[0].data, first);
+        assert!(spare_blocks > 0);
+        assert!(spare_slabs > 0);
+
+        let second = frame_data(SHARD_LEN * 4, 201);
+        let packets = tx.packetize(1, false, &second).unwrap();
+        let surviving = packets
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 2)
+            .map(|(_, packet)| packet);
+        let events = feed(&mut rx, now, surviving);
+
+        assert_eq!(frames(&events)[0].data, second);
+        assert_eq!(frames(&events)[0].recovered_fragments, 1);
+        assert_eq!(rx.spare.blocks.len(), spare_blocks);
+        assert_eq!(rx.spare.slab_capacity(), spare_slabs);
+    }
+
+    #[test]
+    fn a_lost_frame_returns_its_parity_storage() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let now = Instant::now();
+
+        let packets = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 5))
+            .unwrap();
+        let parity = packets
+            .iter()
+            .filter(|datagram| parity_of(datagram))
+            .take(1);
+        drop(feed(&mut rx, now, parity));
+        rx.poll_timeouts(now + Duration::from_secs(60), &mut Vec::new());
+
+        assert_eq!(rx.pending_frames(), 0);
+        assert_eq!(rx.spare.blocks.len(), 1);
+        assert_eq!(rx.spare.flags.len(), 1);
     }
 
     #[test]
