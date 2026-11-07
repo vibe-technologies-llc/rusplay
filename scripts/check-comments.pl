@@ -5,12 +5,30 @@ use warnings;
 my $found = 0;
 
 sub rust_comment {
-    my ($line) = @_;
-    my $code = $line;
-    $code =~ s/r(#*)".*?"\1//g;
-    $code =~ s/"(?:\\.|[^"\\])*"//g;
-    $code =~ s/'(?:\\.|[^'\\])'//g;
-    return $code =~ m{//|/\*};
+    my ($line, $state) = @_;
+    while (length $line) {
+        if ($$state ne 'code' && $$state ne 'string') {
+            my $end = index($line, '"' . substr($$state, 4));
+            return 0 if $end < 0;
+            $line = substr($line, $end + 1 + length($$state) - 4);
+            $$state = 'code';
+        } elsif ($$state eq 'string') {
+            if ($line =~ s/^\\.//s) { next; }
+            if ($line =~ s/^"//) { $$state = 'code'; next; }
+            $line = substr($line, 1);
+        } elsif ($line =~ s/^r(\#*)"//) {
+            $$state = 'raw:' . $1;
+        } elsif ($line =~ s/^"//) {
+            $$state = 'string';
+        } elsif ($line =~ s/^'(?:\\.|[^'\\])'//) {
+            next;
+        } elsif ($line =~ m{^//|^/\*}) {
+            return 1;
+        } else {
+            $line = substr($line, 1);
+        }
+    }
+    return 0;
 }
 
 sub toml_comment {
@@ -68,7 +86,7 @@ for my $path (@ARGV) {
     my $is_toml = $path =~ /\.toml\z/;
     my $state = 'code';
     while (my $line = <$handle>) {
-        my $comment = $is_toml ? toml_comment($line, \$state) : rust_comment($line);
+        my $comment = $is_toml ? toml_comment($line, \$state) : rust_comment($line, \$state);
         next unless $comment;
         print "$path:$.: $line";
         $found = 1;

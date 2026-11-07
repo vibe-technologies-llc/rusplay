@@ -554,6 +554,7 @@ struct UnpackPlan {
     chroma_target: wgpu::BindGroup,
     chroma_source: wgpu::BindGroup,
     chroma_pass_size: (u32, u32),
+    direct_chroma: bool,
     rgb_pass_size: (u32, u32),
 }
 
@@ -605,6 +606,7 @@ impl UnpackPlan {
             ),
             chroma_source: pipelines.source_group(device, &intermediate),
             chroma_pass_size: (size.0, chroma_height),
+            direct_chroma: settings.chroma_size() == size,
             rgb_pass_size: size,
         })
     }
@@ -618,13 +620,15 @@ impl UnpackPlan {
     ) {
         let [chroma_pass, rgb_pass] = passes;
 
-        gpu::dispatch(
-            encoder,
-            "rusplay-unpack-chroma",
-            chroma_pass,
-            &[input_group, &self.chroma_target, &self.chroma_group],
-            self.chroma_pass_size,
-        );
+        if !self.direct_chroma {
+            gpu::dispatch(
+                encoder,
+                "rusplay-unpack-chroma",
+                chroma_pass,
+                &[input_group, &self.chroma_target, &self.chroma_group],
+                self.chroma_pass_size,
+            );
+        }
         gpu::dispatch(
             encoder,
             "rusplay-unpack-rgb",

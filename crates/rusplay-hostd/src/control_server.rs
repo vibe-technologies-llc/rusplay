@@ -4,7 +4,7 @@ use std::{
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr},
     os::unix::{
-        fs::{DirBuilderExt, PermissionsExt},
+        fs::{DirBuilderExt, MetadataExt, PermissionsExt},
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -154,6 +154,25 @@ impl ControlServer {
                     source,
                 })?;
         }
+        if let Some(parent) = path.parent() {
+            let metadata =
+                fs::symlink_metadata(parent).map_err(|source| ControlError::CreateDirectory {
+                    path: parent.to_owned(),
+                    source,
+                })?;
+            if !metadata.is_dir()
+                || metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o077 != 0
+            {
+                return Err(ControlError::CreateDirectory {
+                    path: parent.to_owned(),
+                    source: io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "control directory must be owned by this user with mode 0700",
+                    ),
+                });
+            }
+        }
         control::remove_stale(path)?;
 
         let bind_error = |source| ControlError::Bind {
@@ -214,6 +233,13 @@ fn accept_loop(listener: &UnixListener, context: &ControlContext, stop: &AtomicB
 }
 
 fn answer(stream: &UnixStream, context: &ControlContext) -> io::Result<()> {
+    let credentials = rustix::net::sockopt::socket_peercred(stream)?;
+    if credentials.uid != rustix::process::geteuid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "control peer uid differs from the daemon",
+        ));
+    }
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
     stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;

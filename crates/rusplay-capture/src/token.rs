@@ -1,9 +1,7 @@
 use std::{
     env,
     ffi::OsString,
-    fs::{self, OpenOptions},
-    io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -13,8 +11,6 @@ use crate::CaptureError;
 
 const APP_DIR: &str = "rusplay";
 const TOKEN_FILE: &str = "restore-token";
-const STAGING_SUFFIX: &str = "new";
-const OWNER_ONLY: u32 = 0o600;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreTokenStore {
@@ -43,7 +39,7 @@ impl RestoreTokenStore {
     }
 
     pub fn load(&self) -> Result<Option<String>, CaptureError> {
-        match fs::read_to_string(&self.path) {
+        match rusplay_core::read_regular(&self.path) {
             Ok(contents) => {
                 let token = contents.trim();
                 Ok((!token.is_empty()).then(|| token.to_owned()))
@@ -62,21 +58,7 @@ impl RestoreTokenStore {
             source,
         };
 
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(write_error)?;
-        }
-
-        let staging = self.path.with_extension(STAGING_SUFFIX);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(OWNER_ONLY)
-            .open(&staging)
-            .map_err(write_error)?;
-        file.write_all(token.as_bytes()).map_err(write_error)?;
-        file.sync_all().map_err(write_error)?;
-        fs::rename(&staging, &self.path).map_err(write_error)
+        rusplay_core::write_owner_only(&self.path, token).map_err(write_error)
     }
 
     pub fn clear(&self) -> Result<(), CaptureError> {
@@ -178,7 +160,7 @@ mod tests {
 
         assert_eq!(before, None);
         assert_eq!(after.as_deref(), Some("abc-123"));
-        assert_eq!(mode & 0o777, OWNER_ONLY);
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

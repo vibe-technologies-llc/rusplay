@@ -40,3 +40,5 @@ paths:
   client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the
   matching `Config` values and `apply` validates the merged result with `Config::validate`, so a
   profile is never checked on its own.
+
+Config saves, portal tokens, PIN files and peer stores share `rusplay_core::write_owner_only`: owner-only creation, exclusive sibling staging, sync and rename. Token and PIN reads reject symlinks and non-regular files.

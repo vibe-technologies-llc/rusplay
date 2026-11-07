@@ -316,3 +316,5 @@ paths:
   fault instead of panicking; `GpuFaults::guard` runs work inside the three error scopes and returns the
   scoped or recorded fault ahead of the work's own error; `check_extent` refuses a resolution beyond
   `max_texture_dimension_2d`. Both session crates hold the `GpuFaults` in their `Gpu`.
+
+The RGB unpack shader samples source chroma directly at 4:4:4. The plan skips the horizontal chroma dispatch when both chroma dimensions equal luma dimensions; buffer, plane, LUT and fused chain inputs use the same path.

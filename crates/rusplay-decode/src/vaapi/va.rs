@@ -156,6 +156,11 @@ impl SurfacePool {
         &self,
         surface: &PoolSurface,
     ) -> Result<Arc<DmaBufImage>, DecodeError> {
+        #[cfg(feature = "fuzzing")]
+        if self.display.is_detached() {
+            return Ok(Arc::clone(&surface.image));
+        }
+
         let owned = self
             .owned
             .iter()

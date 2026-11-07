@@ -185,7 +185,9 @@ fn run_capture(
 
             let dropped = state.writer.write_le_bytes(payload);
             if dropped > 0 {
-                state.overruns.fetch_add(dropped as u64, Ordering::Relaxed);
+                state
+                    .overruns
+                    .fetch_add((dropped / state.channels) as u64, Ordering::Relaxed);
             }
             wake(&state.waiter);
         })

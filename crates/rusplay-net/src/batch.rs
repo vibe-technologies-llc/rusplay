@@ -15,7 +15,7 @@ use rustix::{
 
 use crate::{DatagramArena, NetError, Transport, transport::seal_with};
 
-const MAX_MESSAGES_PER_CALL: usize = 1024;
+const MAX_MESSAGES_PER_CALL: usize = 64;
 const MIN_READ_TIMEOUT: Duration = Duration::from_micros(1);
 const SOCKADDR_LEN: usize = 28;
 const SOCKADDR_LEN_C: libc::socklen_t = 28;
@@ -166,9 +166,23 @@ impl Transport {
         if let Some(cipher) = self.current_cipher() {
             arena.seal(range.clone(), &cipher)?;
         }
-        let wire: Vec<[IoSlice<'_>; 2]> = range.map(|index| arena.wire(index)).collect();
-
-        self.send_wire(&wire, peer)
+        let mut sent = 0;
+        for first in (range.start..range.end).step_by(MAX_MESSAGES_PER_CALL) {
+            let count = (range.end - first).min(MAX_MESSAGES_PER_CALL);
+            let wire: [[IoSlice<'_>; 2]; MAX_MESSAGES_PER_CALL] = std::array::from_fn(|index| {
+                if index < count {
+                    arena.wire(first + index)
+                } else {
+                    [IoSlice::new(&[]), IoSlice::new(&[])]
+                }
+            });
+            let progress = self.send_wire(&wire[..count], peer)?;
+            sent += progress;
+            if progress < count {
+                break;
+            }
+        }
+        Ok(sent)
     }
 
     fn send_wire(&self, wire: &[[IoSlice<'_>; 2]], peer: SocketAddr) -> Result<usize, NetError> {
@@ -177,17 +191,22 @@ impl Transport {
 
         while sent < wire.len() {
             let chunk = &wire[sent..wire.len().min(sent + MAX_MESSAGES_PER_CALL)];
-            let mut controls: Vec<SendAncillaryBuffer<'_, '_, '_>> = chunk
-                .iter()
-                .map(|_| SendAncillaryBuffer::default())
-                .collect();
-            let mut messages: Vec<MMsgHdr<'_>> = chunk
-                .iter()
-                .zip(controls.iter_mut())
-                .map(|(slices, control)| MMsgHdr::new_with_addr(&address, slices, control))
-                .collect();
+            let mut controls: [SendAncillaryBuffer<'_, '_, '_>; MAX_MESSAGES_PER_CALL] =
+                std::array::from_fn(|_| SendAncillaryBuffer::default());
+            let mut controls = controls.iter_mut();
+            let mut messages: [MMsgHdr<'_>; MAX_MESSAGES_PER_CALL] = std::array::from_fn(|index| {
+                MMsgHdr::new_with_addr(
+                    &address,
+                    &chunk[index.min(chunk.len() - 1)],
+                    controls.next().unwrap(),
+                )
+            });
 
-            match sendmmsg(self.socket(), &mut messages, SendFlags::DONTWAIT) {
+            match sendmmsg(
+                self.socket(),
+                &mut messages[..chunk.len()],
+                SendFlags::DONTWAIT,
+            ) {
                 Ok(0) | Err(Errno::AGAIN) => break,
                 Ok(count) => sent += count,
                 Err(_) if sent > 0 => break,

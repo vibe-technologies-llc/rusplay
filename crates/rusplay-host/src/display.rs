@@ -50,11 +50,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (mut config, store) = persisting(&directory);
         store.store("remembered").unwrap();
+        let input = store.sibling("input-restore-token");
+        input.store("input-session").unwrap();
 
         let remembered = RememberedDisplay::forget(&mut config).unwrap().unwrap();
         let cleared = store.load().unwrap();
         remembered.restore().unwrap();
 
+        assert_eq!(input.load().unwrap().as_deref(), Some("input-session"));
         assert_eq!(cleared, None);
         assert_eq!(store.load().unwrap().as_deref(), Some("remembered"));
     }

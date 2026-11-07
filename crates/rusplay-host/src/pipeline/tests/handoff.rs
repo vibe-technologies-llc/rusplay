@@ -160,23 +160,40 @@ fn handed_off_frames_of_an_odd_size_decode_like_read_back_frames() {
 
 #[test]
 fn a_refused_handoff_falls_back_to_the_readback() {
-    let mut config = vaapi_config(Codec::Av1, BitDepth::Eight, true);
+    let config = vaapi_config(Codec::Av1, BitDepth::Eight, true);
     if !supported(&config) {
         return;
-    }
-    if let VideoEncoderConfig::Vaapi(vaapi) = &mut config.video.encoder {
-        vaapi.device = "/dev/null".into();
     }
     let Some(mut pipeline) = pipeline(config) else {
         return;
     };
-    let handed_off = pipeline.hands_off();
-
-    let refused = pipeline.encode(&shm_frame(Resolution::new(640, 360), 0), true);
-
-    assert!(handed_off);
+    if !pipeline.hands_off() {
+        return;
+    }
+    pipeline.encoder = Some(OpenEncoder {
+        resolution: Resolution::new(640, 360),
+        encoder: Box::new(RejectHandoff),
+        epoch: 0,
+        next_output: OutputIndex(0),
+    });
+    let encoded = pipeline
+        .encode(&shm_frame(Resolution::new(640, 360), 0), true)
+        .unwrap();
+    assert!(encoded.is_some());
     assert!(!pipeline.hands_off());
-    assert!(matches!(refused, Err(HostError::Encode(_))));
+    assert_eq!(pipeline.take_notices().handoff_disabled, 1);
+}
+
+struct RejectHandoff;
+
+impl VideoEncoder for RejectHandoff {
+    fn encode(&mut self, _: &Frame) -> Result<Option<EncodedFrame>, rusplay_encode::EncodeError> {
+        Err(rusplay_encode::EncodeError::PlanesUnsupported)
+    }
+    fn request_keyframe(&mut self) {}
+    fn set_bitrate(&mut self, _: u32) -> Result<(), rusplay_encode::EncodeError> {
+        Ok(())
+    }
 }
 
 fn dmabuf_source(resolution: Resolution, index: u32) -> Option<OwnedFd> {

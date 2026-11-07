@@ -3,6 +3,7 @@ mod color;
 mod format;
 mod frame;
 mod media;
+mod private_file;
 mod scale;
 mod stats_report;
 mod time;
@@ -18,6 +19,7 @@ pub use color::{
 pub use format::{CodecFormat, FormatSet};
 pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane, ShmBytes};
 pub use media::{EncodedFrame, FrameBytes};
+pub use private_file::{read_regular, write_owner_only};
 pub use scale::{ChromaSiting, ScaleFilter};
 pub use stats_report::{JsonLine, StatsPhase, StatsSchedule, unix_millis_now};
 pub use time::Timestamp;

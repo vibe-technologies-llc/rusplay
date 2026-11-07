@@ -906,3 +906,16 @@ fn hevc_stream_format_reports_the_conformance_window_size() {
         Err(DecodeError::Malformed { .. })
     ));
 }
+
+#[cfg(feature = "fuzzing")]
+#[test]
+fn detached_decode_outputs_a_valid_picture() {
+    for (codec, name) in [
+        (Codec::H264, "h264-420-8bit.h264"),
+        (Codec::Hevc, "hevc-420-8bit.hevc"),
+    ] {
+        let mut decoder = VaapiDecoder::detached(codec);
+        let packets = common::annexb_access_units(codec, &common::fixture(name));
+        assert!(decoder.decode(&packets[0]).unwrap().is_some());
+    }
+}

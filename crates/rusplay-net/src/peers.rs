@@ -2,8 +2,8 @@ use std::{
     env,
     ffi::OsString,
     fmt, fs,
-    io::{self, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    io::{self},
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -23,7 +23,9 @@ pub const MAX_PEERS: usize = 256;
 const APP_DIR: &str = "rusplay";
 const HOST_FILE: &str = "paired-clients";
 const CLIENT_FILE: &str = "paired-hosts";
+#[cfg(test)]
 const STAGING_SUFFIX: &str = "new";
+#[cfg(test)]
 const OWNER_ONLY_FILE: u32 = 0o600;
 const OWNER_ONLY_DIRECTORY: u32 = 0o700;
 const GROUP_AND_OTHER_BITS: u32 = 0o077;
@@ -380,33 +382,7 @@ fn tighten_owned_directory(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub fn write_owner_only(path: &Path, text: &str) -> io::Result<()> {
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(OWNER_ONLY_DIRECTORY)
-            .create(parent)?;
-    }
-
-    let staging = path.with_added_extension(STAGING_SUFFIX);
-    match fs::remove_file(&staging) {
-        Err(source) if source.kind() != io::ErrorKind::NotFound => return Err(source),
-        _ => {}
-    }
-
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(OWNER_ONLY_FILE)
-        .open(&staging)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()?;
-
-    fs::rename(&staging, path)
-}
+pub use rusplay_core::write_owner_only;
 
 fn default_path(
     role: PeerRole,

@@ -1,7 +1,5 @@
 use std::{
     env, fs, io,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -10,9 +8,6 @@ use thiserror::Error;
 
 const RUNTIME_DIRECTORY: &str = "rusplay";
 const FILE_NAME: &str = "pin";
-const TEMPORARY_SUFFIX: &str = ".tmp";
-const DIRECTORY_MODE: u32 = 0o700;
-const FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Error)]
 pub enum PinFileError {
@@ -20,12 +15,6 @@ pub enum PinFileError {
         "no pin file path: peers.pin_file is unset and XDG_RUNTIME_DIR is not an absolute path"
     )]
     NoRuntimeDirectory,
-    #[error("failed to create the pin directory {}", path.display())]
-    CreateDirectory {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
     #[error("failed to write the pin file {}", path.display())]
     Write {
         path: PathBuf,
@@ -58,7 +47,7 @@ pub fn resolve(peers: &PeersConfig, runtime_dir: Option<&Path>) -> Result<PathBu
 }
 
 pub fn read(path: &Path) -> Result<String, PinFileError> {
-    match fs::read_to_string(path) {
+    match rusplay_core::read_regular(path) {
         Ok(text) => Ok(text.trim().to_owned()),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             Err(PinFileError::NoWindowOpen {
@@ -101,30 +90,7 @@ impl PinFile {
             source,
         };
 
-        if let Some(parent) = self.path.parent() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(DIRECTORY_MODE)
-                .create(parent)
-                .map_err(|source| PinFileError::CreateDirectory {
-                    path: parent.to_owned(),
-                    source,
-                })?;
-        }
-
-        let mut temporary = self.path.clone().into_os_string();
-        temporary.push(TEMPORARY_SUFFIX);
-        let temporary = PathBuf::from(temporary);
-
-        fs::remove_file(&temporary).ok();
-        fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(FILE_MODE)
-            .open(&temporary)
-            .and_then(|mut file| writeln!(file, "{pin}"))
-            .and_then(|()| fs::rename(&temporary, &self.path))
-            .map_err(write_error)
+        rusplay_core::write_owner_only(&self.path, &format!("{pin}\n")).map_err(write_error)
     }
 
     pub fn clear(&self) {
@@ -202,8 +168,8 @@ mod tests {
             & 0o777;
 
         assert_eq!(read(file.path()).unwrap(), "583014");
-        assert_eq!(file_mode, FILE_MODE);
-        assert_eq!(directory_mode, DIRECTORY_MODE);
+        assert_eq!(file_mode, 0o600);
+        assert_eq!(directory_mode, 0o700);
     }
 
     #[test]

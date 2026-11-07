@@ -20,6 +20,8 @@ x265 = ["rusplay-host/x265"]
 lexopt.workspace = true
 parking_lot.workspace = true
 rusplay-config.workspace = true
+rusplay-core.workspace = true
+rustix = { workspace = true, features = ["net", "process"] }
 rusplay-host.workspace = true
 thiserror.workspace = true
 
@@ -30,7 +32,6 @@ required-features = ["pipewire", "svt-av1"]
 [dev-dependencies]
 pollster.workspace = true
 rusplay-client = { workspace = true, features = ["software"] }
-rusplay-core.workspace = true
 rusplay-net.workspace = true
 rustix = { workspace = true, features = ["event", "fs", "process"] }
 tempfile.workspace = true

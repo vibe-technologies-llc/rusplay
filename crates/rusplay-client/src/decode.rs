@@ -80,8 +80,15 @@ fn decoder_for<'a>(
 }
 
 fn decode_loop(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<(), ClientError> {
+    decode_with_active(config, links, None)
+}
+
+fn decode_with_active(
+    config: &VideoDecoderConfig,
+    links: &DecodeLinks,
+    mut active: Option<OpenDecoder>,
+) -> Result<(), ClientError> {
     let mut dump = crate::packet_dump::PacketDump::from_env();
-    let mut active = None;
     let mut skipping = false;
 
     loop {
@@ -223,17 +230,14 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             counters: Arc::new(Counters::default()),
         };
-        let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
-
+        let config = VideoDecoderConfig::Vaapi(rusplay_config::VaapiDecoderConfig {
+            device: "/dev/null".into(),
+            ..Default::default()
+        });
         queue.send(DecodeInput::Open(Codec::H264)).unwrap();
         drop(queue);
         let result = run(&config, &links);
-
-        if cfg!(feature = "ffmpeg") {
-            assert!(result.is_ok());
-        } else {
-            assert!(matches!(result, Err(ClientError::Decode(_))));
-        }
+        assert!(matches!(result, Err(ClientError::Decode(_))));
         assert_eq!(links.counters.snapshot().frames_decoded, 0);
     }
 
@@ -264,5 +268,81 @@ mod tests {
         assert!(matches!(result, Ok(Ok(()))));
         assert!(output.take().is_none());
         drop(queue);
+    }
+    struct FailingInter;
+    impl VideoDecoder for FailingInter {
+        fn decode(
+            &mut self,
+            frame: &rusplay_core::EncodedFrame,
+        ) -> Result<Option<DecodedFrame>, DecodeError> {
+            if frame.keyframe {
+                Ok(None)
+            } else {
+                Err(DecodeError::SurfacePoolExhausted { capacity: 0 })
+            }
+        }
+    }
+
+    #[test]
+    fn decode_failure_skips_inter_frames_until_a_keyframe() {
+        use rusplay_core::{CodecFormat, PixelFormat, Resolution, Timestamp};
+        use rusplay_protocol::StreamDescription;
+
+        use crate::receive::EncodedVideo;
+        let (queue, queued) = mpsc::channel();
+        let (feedback, received) = mpsc::channel();
+        let links = DecodeLinks {
+            queue: queued,
+            output: Arc::new(Slot::new()),
+            feedback,
+            stop: Arc::new(AtomicBool::new(false)),
+            counters: Arc::new(Counters::default()),
+        };
+        let codec = Codec::H264;
+        for (number, keyframe) in [(0, false), (1, false), (2, true)] {
+            queue
+                .send(DecodeInput::Video(EncodedVideo {
+                    number,
+                    frame: rusplay_core::EncodedFrame {
+                        codec,
+                        timestamp: Timestamp::from_micros(0),
+                        keyframe,
+                        data: vec![1].into(),
+                    },
+                    stream: StreamDescription {
+                        generation: 0,
+                        codec,
+                        resolution: Resolution::new(64, 64),
+                        format: PixelFormat::default(),
+                        color: ColorSpace::default(),
+                        configured: CodecFormat::new(codec, PixelFormat::default()),
+                        siting: ChromaSiting::Left,
+                    },
+                    recovers_from: None,
+                    captured_micros: 0,
+                    received_at: Instant::now(),
+                }))
+                .unwrap();
+        }
+        drop(queue);
+        let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+        decode_with_active(
+            &config,
+            &links,
+            Some(OpenDecoder {
+                codec,
+                decoder: Box::new(FailingInter),
+            }),
+        )
+        .unwrap();
+        assert_eq!(links.counters.snapshot().frames_skipped, 1);
+        assert_eq!(links.counters.snapshot().decode_errors, 1);
+        assert_eq!(
+            received.try_iter().collect::<Vec<_>>(),
+            [
+                Feedback::DecodeFailed { frame: 0 },
+                Feedback::Decoded { frame: 2 }
+            ]
+        );
     }
 }

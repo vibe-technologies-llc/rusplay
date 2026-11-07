@@ -443,3 +443,5 @@ paths:
   It compares the client's path with waiting for the dma-buf write fence and with holding surfaces
   out of reuse, and prints the device, adapter and surface layout, to separate causes on a client
   whose DMA-BUF output is corrupt while `copy_output` is clean.
+
+HEVC retains every picture named by the RPS, including the oldest picture when the stored DPB reaches sixteen pictures. The fifteen VA reference slots describe references before the current picture is inserted. Detached VAAPI output returns the detached surface image.

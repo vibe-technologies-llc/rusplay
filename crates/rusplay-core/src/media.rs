@@ -38,6 +38,12 @@ impl FrameBytes {
         }
     }
 
+    #[must_use]
+    pub fn skip(mut self, skip: usize) -> Self {
+        self.start = self.start.saturating_add(skip).min(self.bytes.len());
+        self
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.bytes[self.start..]
     }

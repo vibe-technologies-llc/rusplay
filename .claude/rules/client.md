@@ -520,3 +520,5 @@ paths:
   book through `rusplay_net::write_owner_only` (the peer store's `0700` directory, `0600` synced
   staging file and rename), then forgets store records no host references. A failed write leaves
   the in-memory list as it was.
+
+Composition caches up to sixteen bind groups by picture, cursor and overlay texture views; uniform uploads occur only when their bytes change.

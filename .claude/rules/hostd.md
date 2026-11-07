@@ -159,3 +159,5 @@ paths:
   `rusplay-client`, `wayland-client` and the Plasma and xdg protocol bindings are dev-dependencies
   of the daemon for these tests only. They show a nested virtual backend over loopback; none of it
   is a second machine or a real display (`hostd-service-live-check`).
+
+Control connections require the effective uid from SO_PEERCRED before parsing requests. The socket parent must be an owned directory without group or other permissions.

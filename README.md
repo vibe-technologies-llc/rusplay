@@ -23,7 +23,7 @@ cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,
 Desktop app, `rusplay` (client, and host through the same encoder features as the daemon):
 
 ```sh
-cargo build --release -p rusplay-app --features vaapi,nvdec,software,input
+cargo build --release -p rusplay-app --features vaapi,nvdec,software,ffmpeg,nvenc,software-encoders,input
 ```
 
 Drop the features of the backends you do not need. `vaapi,pipewire,input` is enough for a host
@@ -76,3 +76,5 @@ Start the host first, then connect from the client app.
 ## License
 
 AGPL-3.0-only.
+
+The `software` decoder feature provides AV1. H.264 and HEVC software decoding use `ffmpeg`, which requires libavcodec, libavutil and libclang development packages.

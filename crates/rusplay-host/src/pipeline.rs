@@ -543,6 +543,7 @@ impl GpuPipeline {
             self.handoff,
         ) {
             Err(_) if matches!(self.handoff, HandoffState::Trying(_)) => {
+                self.notices.handoff_disabled += 1;
                 self.handoff = HandoffState::Off;
                 let settings = convert_settings(&self.config, stream, route.input, None);
                 ensure_conversion(

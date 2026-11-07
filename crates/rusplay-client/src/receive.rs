@@ -11,7 +11,7 @@ use std::{
 use parking_lot::Mutex;
 use rusplay_clipboard::{ClipboardError, ClipboardLink};
 use rusplay_config::{LossRecovery, NetworkConfig};
-use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
+use rusplay_core::{Codec, EncodedFrame, FormatSet, Timestamp};
 use rusplay_input::{PadFeedback, RumbleCommand};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
@@ -487,7 +487,7 @@ impl ReceiveStage {
             self.links.counters.audio_packets_received.increment();
             let packet = EncodedAudio {
                 number: frame.frame,
-                data: frame.data,
+                data: frame.data.into_vec(),
             };
             if let Err(TrySendError::Full(_)) = audio.queue.try_send(packet) {
                 self.links.counters.audio_packets_dropped.increment();
@@ -595,7 +595,7 @@ impl ReceiveStage {
         }
 
         let captured_micros = header.captured_micros;
-        let data = FrameBytes::skipping(frame.data, VideoFrameHeader::SIZE);
+        let data = frame.data.skip(VideoFrameHeader::SIZE);
 
         if let Some(latency) = self
             .links

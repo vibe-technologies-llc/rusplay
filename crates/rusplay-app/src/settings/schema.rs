@@ -57,6 +57,7 @@ pub struct Condition {
 #[derive(Debug, Clone, Copy)]
 pub struct Field {
     pub section: Section,
+    pub audience: Audience,
     pub group: &'static str,
     pub path: &'static str,
     pub label: &'static str,
@@ -270,6 +271,7 @@ const CONSTANT_QUALITY: &[Condition] = &[
 ];
 
 const fn field(
+    audience: Audience,
     section: Section,
     group: &'static str,
     path: &'static str,
@@ -277,6 +279,7 @@ const fn field(
     kind: Kind,
 ) -> Field {
     Field {
+        audience,
         section,
         group,
         path,
@@ -323,69 +326,15 @@ impl Audience {
 }
 
 pub fn audience(path: &str) -> Audience {
-    const HOST_PREFIXES: &[&str] = &[
-        "capture.",
-        "video.encoder",
-        "video.color.",
-        "video.pixel_format.",
-        "scaling.downscale.",
-    ];
-    const CLIENT_PREFIXES: &[&str] = &[
-        "video.decoder",
-        "video.present",
-        "scaling.upscale.",
-        "color.target.",
-        "color.output.",
-        "color.processing.",
-        "input.hotkey",
-    ];
-    const HOST_PATHS: &[&str] = &[
-        "video.resolution",
-        "video.codec",
-        "video.vbv_frames",
-        "peers.host_name",
-        "peers.host_file",
-        "peers.write_pin_file",
-        "peers.pin_file",
-        "peers.control_socket",
-        "peers.control_socket_path",
-        "peers.host_on_launch",
-        "input.gamepad_personality",
-        "input.sync_locks",
-        "input.accept_remote",
-    ];
-    const CLIENT_PATHS: &[&str] = &[
-        "video.decode_queue_frames",
-        "video.stats_overlay",
-        "video.display_debounce_ms",
-        "peers.client_name",
-        "peers.client_file",
-        "input.pointer_mode",
-        "input.pointer_auto_delay_ms",
-        "input.release_chord",
-        "input.inhibit_shortcuts",
-        "input.pointer_sensitivity",
-        "input.gamepad_deadzone",
-        "input.rumble_max_ms",
-        "input.resend_delay_ms",
-        "input.snapshot_interval_ms",
-    ];
-
-    if HOST_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) || HOST_PATHS.contains(&path) {
-        Audience::Host
-    } else if CLIENT_PREFIXES
+    FIELDS
         .iter()
-        .any(|prefix| path.starts_with(prefix))
-        || CLIENT_PATHS.contains(&path)
-    {
-        Audience::Client
-    } else {
-        Audience::Shared
-    }
+        .find(|field| field.path == path)
+        .map_or(Audience::Shared, |field| field.audience)
 }
 
 pub static FIELDS: &[Field] = &[
     field(
+        Audience::Host,
         Section::Video,
         "Stream",
         "video.resolution",
@@ -394,6 +343,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Shared,
         Section::Video,
         "Stream",
         "video.frame_rate",
@@ -402,6 +352,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("fps"),
     field(
+        Audience::Host,
         Section::Video,
         "Stream",
         "video.codec",
@@ -409,6 +360,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CODECS),
     ),
     field(
+        Audience::Shared,
         Section::Video,
         "Stream",
         "video.bitrate_kbps",
@@ -417,6 +369,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Host,
         Section::Video,
         "Stream",
         "video.vbv_frames",
@@ -425,6 +378,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("frames"),
     field(
+        Audience::Host,
         Section::Video,
         "Pixel format",
         "video.pixel_format.chroma",
@@ -432,6 +386,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CHROMA),
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Pixel format",
         "video.pixel_format.depth",
@@ -439,6 +394,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(BIT_DEPTHS),
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.primaries",
@@ -446,6 +402,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Primaries,
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.transfer",
@@ -453,6 +410,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(TRANSFERS),
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.matrix",
@@ -461,6 +419,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.range",
@@ -468,6 +427,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(RANGES),
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.hdr.reference_white_nits",
@@ -476,6 +436,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("nits"),
     field(
+        Audience::Host,
         Section::Video,
         "Colour",
         "video.color.hdr.peak_nits",
@@ -484,6 +445,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("nits"),
     field(
+        Audience::Host,
         Section::Video,
         "HDR metadata",
         "video.color.hdr.mastering.primaries",
@@ -492,6 +454,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "HDR metadata",
         "video.color.hdr.mastering.max_nits",
@@ -501,6 +464,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "HDR metadata",
         "video.color.hdr.mastering.min_nits",
@@ -510,6 +474,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "HDR metadata",
         "video.color.hdr.content_light.max_cll_nits",
@@ -519,6 +484,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "HDR metadata",
         "video.color.hdr.content_light.max_fall_nits",
@@ -528,6 +494,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         BACKEND_PATH,
@@ -535,6 +502,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(BACKENDS),
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.device",
@@ -543,6 +511,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(VAAPI),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.low_power",
@@ -551,6 +520,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(VAAPI),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.gpu_index",
@@ -559,6 +529,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(NVENC),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.preset",
@@ -567,6 +538,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(NVENC),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.tuning",
@@ -575,6 +547,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(NVENC),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         MODE_PATH,
@@ -583,6 +556,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(HARDWARE_RATE_CONTROL),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.rate_control.max_bitrate_kbps",
@@ -592,6 +566,7 @@ pub static FIELDS: &[Field] = &[
     .unit("kbps")
     .when(VARIABLE_BITRATE),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.rate_control.qp",
@@ -600,6 +575,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(CONSTANT_QUALITY),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.preset",
@@ -608,6 +584,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(SOFTWARE_X26X),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.tune",
@@ -616,6 +593,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(X264),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.tune",
@@ -625,6 +603,7 @@ pub static FIELDS: &[Field] = &[
     .optional()
     .when(X265),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.preset",
@@ -633,6 +612,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(SVT_AV1),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.low_latency",
@@ -641,6 +621,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(SVT_AV1),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.log_level",
@@ -649,6 +630,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(SVT_AV1),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.threads",
@@ -658,6 +640,7 @@ pub static FIELDS: &[Field] = &[
     .optional()
     .when(SOFTWARE_THREADED),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder.params",
@@ -665,6 +648,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Pairs,
     ),
     field(
+        Audience::Host,
         Section::Video,
         "Encoder",
         "video.encoder_gpu_handoff",
@@ -672,6 +656,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         DECODER_BACKEND_PATH,
@@ -679,6 +664,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(DECODER_BACKENDS),
     ),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         "video.decode_queue_frames",
@@ -687,6 +673,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("frames"),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         "video.decoder.device",
@@ -695,6 +682,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(VAAPI_DECODER),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         "video.decoder.copy_output",
@@ -703,6 +691,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(VAAPI_DECODER),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         "video.decoder.gpu_index",
@@ -711,6 +700,7 @@ pub static FIELDS: &[Field] = &[
     )
     .when(NVDEC_DECODER),
     field(
+        Audience::Client,
         Section::Video,
         "Decoder",
         "video.decoder.threads",
@@ -720,6 +710,7 @@ pub static FIELDS: &[Field] = &[
     .optional()
     .when(SOFTWARE_DECODER),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.present_mode",
@@ -727,6 +718,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(PRESENT_MODES),
     ),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.present_frame_latency",
@@ -735,6 +727,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("frames"),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.present_pacing",
@@ -742,6 +735,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(PRESENT_PACINGS),
     ),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.present_margin_us",
@@ -753,6 +747,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("us"),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.present_jitter_us",
@@ -764,6 +759,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("us"),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.stats_overlay",
@@ -771,6 +767,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Video,
         "Presentation",
         "video.display_debounce_ms",
@@ -779,6 +776,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.codec",
@@ -786,6 +784,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(AUDIO_CODECS),
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.sample_rate",
@@ -794,6 +793,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("Hz"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.channels",
@@ -801,6 +801,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CHANNEL_LAYOUTS),
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.jitter_buffer_ms",
@@ -809,6 +810,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.jitter_buffer_max_ms",
@@ -817,6 +819,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.jitter_relax_ms",
@@ -825,6 +828,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.decode_queue_packets",
@@ -833,6 +837,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("packets"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.max_conceal_ms",
@@ -841,6 +846,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Stream",
         "audio.fec_overhead_percent",
@@ -849,6 +855,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Opus",
         "audio.opus.bitrate_kbps",
@@ -857,6 +864,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Opus",
         "audio.opus.frame_duration",
@@ -864,6 +872,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(OPUS_FRAME_DURATIONS),
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Opus",
         "audio.opus.inband_fec",
@@ -871,6 +880,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "FLAC",
         "audio.flac.compression_level",
@@ -878,6 +888,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "FLAC",
         "audio.flac.block_size",
@@ -886,6 +897,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("samples"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.enabled",
@@ -893,6 +905,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.bitrate_kbps",
@@ -901,6 +914,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.frame_duration",
@@ -908,6 +922,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(OPUS_FRAME_DURATIONS),
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.inband_fec",
@@ -915,6 +930,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.jitter_buffer_ms",
@@ -923,6 +939,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Audio,
         "Microphone",
         "audio.microphone.fec_overhead_percent",
@@ -931,14 +948,23 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Network,
         "Socket",
         "network.bind_address",
         "Bind address",
         Kind::Address,
     ),
-    field(Section::Network, "Socket", "network.port", "Port", U16),
     field(
+        Audience::Shared,
+        Section::Network,
+        "Socket",
+        "network.port",
+        "Port",
+        U16,
+    ),
+    field(
+        Audience::Shared,
         Section::Network,
         "Socket",
         "network.socket_buffer_bytes",
@@ -946,8 +972,17 @@ pub static FIELDS: &[Field] = &[
         U32,
     )
     .unit("bytes"),
-    field(Section::Network, "Transport", "network.mtu", "MTU", U16).unit("bytes"),
     field(
+        Audience::Shared,
+        Section::Network,
+        "Transport",
+        "network.mtu",
+        "MTU",
+        U16,
+    )
+    .unit("bytes"),
+    field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.fec_overhead_percent",
@@ -956,6 +991,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.pacing",
@@ -963,6 +999,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.pacing_window_percent",
@@ -971,6 +1008,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.pacing_max_mbps",
@@ -979,6 +1017,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("Mbps"),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.frame_thread_nice",
@@ -986,6 +1025,7 @@ pub static FIELDS: &[Field] = &[
         NICE,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.rtkit_priority",
@@ -993,6 +1033,7 @@ pub static FIELDS: &[Field] = &[
         RTKIT_PRIORITY,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.send_timer_slack_us",
@@ -1001,6 +1042,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("us"),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.reassembly_timeout_ms",
@@ -1009,6 +1051,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.reassembly_max_pending_frames",
@@ -1016,6 +1059,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Transport",
         "network.reassembly_max_fragments",
@@ -1023,6 +1067,7 @@ pub static FIELDS: &[Field] = &[
         U16,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Control",
         "network.control_retransmit_ms",
@@ -1031,6 +1076,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Control",
         "network.control_max_retransmits",
@@ -1038,6 +1084,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Discovery",
         "network.discovery_port",
@@ -1045,6 +1092,7 @@ pub static FIELDS: &[Field] = &[
         U16,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Discovery",
         "network.discovery_group",
@@ -1052,6 +1100,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Address,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Discovery",
         "network.discovery_scan_ms",
@@ -1060,6 +1109,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Pairing",
         "network.pairing_pin_digits",
@@ -1067,6 +1117,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Pairing",
         "network.pairing_max_attempts",
@@ -1074,6 +1125,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Pairing",
         "network.pairing_timeout_ms",
@@ -1082,6 +1134,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Pairing",
         "network.reconnect_timeout_ms",
@@ -1090,6 +1143,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.handshake_timeout_ms",
@@ -1098,6 +1152,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.peer_timeout_ms",
@@ -1106,6 +1161,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.keepalive_interval_ms",
@@ -1114,6 +1170,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.keyframe_request_interval_ms",
@@ -1122,6 +1179,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.loss_recovery",
@@ -1129,6 +1187,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(LOSS_RECOVERIES),
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.frame_ack_interval_ms",
@@ -1137,6 +1196,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.cursor_image_repeat_ms",
@@ -1145,6 +1205,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.stats_log_interval_ms",
@@ -1153,6 +1214,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.stats_json",
@@ -1160,6 +1222,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate",
@@ -1167,6 +1230,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate_floor_kbps",
@@ -1175,6 +1239,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate_step_kbps",
@@ -1183,6 +1248,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate_window_ms",
@@ -1191,6 +1257,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Session",
         "network.clock_sync_interval_ms",
@@ -1199,6 +1266,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.adaptive_bitrate_backoff_percent",
@@ -1207,6 +1275,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.bitrate_hint_min_kbps",
@@ -1215,6 +1284,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Shared,
         Section::Network,
         "Bitrate adaptation",
         "network.bitrate_hint_max_kbps",
@@ -1223,6 +1293,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
+        Audience::Host,
         Section::Network,
         "Hosting",
         "peers.host_on_launch",
@@ -1230,6 +1301,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.host_name",
@@ -1238,6 +1310,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Client,
         Section::Network,
         "Peers",
         "peers.client_name",
@@ -1246,6 +1319,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.host_file",
@@ -1254,6 +1328,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Client,
         Section::Network,
         "Peers",
         "peers.client_file",
@@ -1262,6 +1337,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.write_pin_file",
@@ -1269,6 +1345,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.pin_file",
@@ -1277,6 +1354,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.control_socket",
@@ -1284,6 +1362,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Network,
         "Peers",
         "peers.control_socket_path",
@@ -1292,6 +1371,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Shared,
         Section::Input,
         "Forwarding",
         "input.keyboard",
@@ -1299,6 +1379,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Forwarding",
         "input.pointer",
@@ -1306,6 +1387,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Forwarding",
         "input.touch",
@@ -1313,6 +1395,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Forwarding",
         "input.gamepads",
@@ -1320,6 +1403,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Forwarding",
         "input.max_gamepads",
@@ -1327,6 +1411,7 @@ pub static FIELDS: &[Field] = &[
         U8,
     ),
     field(
+        Audience::Host,
         Section::Input,
         "Forwarding",
         "input.gamepad_personality",
@@ -1334,6 +1419,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(GAMEPAD_PERSONALITIES),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Forwarding",
         "input.pointer_mode",
@@ -1341,6 +1427,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(POINTER_MODES),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Forwarding",
         "input.pointer_auto_delay_ms",
@@ -1349,6 +1436,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Client,
         Section::Input,
         "Forwarding",
         "input.release_chord",
@@ -1356,6 +1444,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(RELEASE_CHORDS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Forwarding",
         "input.inhibit_shortcuts",
@@ -1363,6 +1452,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Input,
         "Forwarding",
         "input.sync_locks",
@@ -1370,6 +1460,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkeys",
@@ -1377,6 +1468,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkey_chord",
@@ -1384,6 +1476,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(RELEASE_CHORDS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkey_fullscreen",
@@ -1391,6 +1484,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(HOTKEY_KEYS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkey_stats",
@@ -1398,6 +1492,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(HOTKEY_KEYS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkey_disconnect",
@@ -1405,6 +1500,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(HOTKEY_KEYS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.hotkey_pointer_mode",
@@ -1412,6 +1508,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(HOTKEY_KEYS),
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.escape_hold_ms",
@@ -1420,6 +1517,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Client,
         Section::Input,
         "Hotkeys",
         "input.fullscreen_hint_ms",
@@ -1428,6 +1526,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Client,
         Section::Input,
         "Tuning",
         "input.pointer_sensitivity",
@@ -1435,6 +1534,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Tuning",
         "input.gamepad_deadzone",
@@ -1442,6 +1542,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Input,
         "Rumble",
         "input.rumble_max_ms",
@@ -1450,6 +1551,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Client,
         Section::Input,
         "Tuning",
         "input.resend_delay_ms",
@@ -1458,6 +1560,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Client,
         Section::Input,
         "Tuning",
         "input.snapshot_interval_ms",
@@ -1466,6 +1569,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Host,
         Section::Input,
         "Forwarding",
         "input.accept_remote",
@@ -1473,6 +1577,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Clipboard",
         "input.clipboard",
@@ -1480,6 +1585,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CLIPBOARD_DIRECTIONS),
     ),
     field(
+        Audience::Shared,
         Section::Input,
         "Clipboard",
         "input.clipboard_max_bytes",
@@ -1488,6 +1594,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("bytes"),
     field(
+        Audience::Host,
         Section::Capture,
         "Source",
         "capture.source",
@@ -1495,6 +1602,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(SOURCE_KINDS),
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Source",
         "capture.cursor",
@@ -1502,6 +1610,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CURSOR_MODES),
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Source",
         "capture.prefer_dmabuf",
@@ -1509,6 +1618,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Source",
         "capture.dmabuf_gpu_fence_wait",
@@ -1516,6 +1626,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Source",
         "capture.dmabuf_fence_timeout_ms",
@@ -1523,6 +1634,7 @@ pub static FIELDS: &[Field] = &[
         U32,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Virtual output",
         "capture.virtual_max_resolution",
@@ -1530,6 +1642,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Resolution,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Virtual output",
         "capture.virtual_max_refresh_hz",
@@ -1538,6 +1651,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("Hz"),
     field(
+        Audience::Host,
         Section::Capture,
         "Virtual output",
         "capture.virtual_min_resolution",
@@ -1545,6 +1659,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Resolution,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Virtual output",
         "capture.virtual_resize_min_interval_ms",
@@ -1556,6 +1671,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Host,
         Section::Capture,
         "Virtual output",
         "capture.virtual_first_frame_timeout_ms",
@@ -1567,6 +1683,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("ms"),
     field(
+        Audience::Host,
         Section::Capture,
         "Session",
         "capture.persist_session",
@@ -1574,6 +1691,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Host,
         Section::Capture,
         "Session",
         "capture.restore_token",
@@ -1582,6 +1700,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Host,
         Section::Capture,
         "Session",
         "capture.restore_token_file",
@@ -1590,6 +1709,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Shared,
         Section::Scaling,
         "Chroma",
         "scaling.chroma_siting",
@@ -1597,6 +1717,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CHROMA_SITINGS),
     ),
     field(
+        Audience::Host,
         Section::Scaling,
         "Downscale",
         "scaling.downscale.filter",
@@ -1604,6 +1725,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(SCALE_FILTERS),
     ),
     field(
+        Audience::Host,
         Section::Scaling,
         "Downscale",
         "scaling.downscale.chroma_filter",
@@ -1611,6 +1733,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(SCALE_FILTERS),
     ),
     field(
+        Audience::Host,
         Section::Scaling,
         "Downscale",
         "scaling.downscale.linear_light",
@@ -1618,6 +1741,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.filter",
@@ -1625,6 +1749,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(SCALE_FILTERS),
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.chroma_filter",
@@ -1632,6 +1757,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(SEPARABLE_SCALE_FILTERS),
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.sigmoid",
@@ -1639,6 +1765,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.sigmoid_center",
@@ -1646,6 +1773,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.sigmoid_slope",
@@ -1653,6 +1781,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Scaling,
         "Upscale",
         "scaling.upscale.antiringing",
@@ -1660,6 +1789,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.primaries",
@@ -1668,6 +1798,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.transfer",
@@ -1676,6 +1807,7 @@ pub static FIELDS: &[Field] = &[
     )
     .optional(),
     field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.reference_white_nits",
@@ -1685,6 +1817,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.peak_nits",
@@ -1694,6 +1827,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.black_nits",
@@ -1703,6 +1837,7 @@ pub static FIELDS: &[Field] = &[
     .unit("nits")
     .optional(),
     field(
+        Audience::Shared,
         Section::Color,
         "Tone mapping",
         "color.tone_mapping.operator",
@@ -1710,6 +1845,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(TONE_OPERATORS),
     ),
     field(
+        Audience::Shared,
         Section::Color,
         "Tone mapping",
         "color.tone_mapping.dynamic_peak",
@@ -1717,6 +1853,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Flag,
     ),
     field(
+        Audience::Shared,
         Section::Color,
         "Tone mapping",
         "color.tone_mapping.peak_percentile",
@@ -1725,6 +1862,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("%"),
     field(
+        Audience::Shared,
         Section::Color,
         "Tone mapping",
         "color.tone_mapping.smoothing_frames",
@@ -1733,6 +1871,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("frames"),
     field(
+        Audience::Shared,
         Section::Color,
         "Tone mapping",
         "color.tone_mapping.scene_threshold_db",
@@ -1741,6 +1880,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("dB"),
     field(
+        Audience::Shared,
         Section::Color,
         "Gamut mapping",
         "color.gamut_mapping.mode",
@@ -1748,6 +1888,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(GAMUT_MODES),
     ),
     field(
+        Audience::Shared,
         Section::Color,
         "Gamut mapping",
         "color.gamut_mapping.knee",
@@ -1755,6 +1896,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Decimal,
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Processing",
         "color.processing.method",
@@ -1762,6 +1904,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(COLOR_METHODS),
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Processing",
         "color.processing.lut_size",
@@ -1770,6 +1913,7 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("points per axis"),
     field(
+        Audience::Client,
         Section::Color,
         "Output",
         "color.output.color_space",
@@ -1777,6 +1921,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(OUTPUT_COLOR_SPACES),
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Output",
         "color.output.format",
@@ -1784,6 +1929,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(OUTPUT_FORMATS),
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Output",
         "color.output.dither",
@@ -1791,6 +1937,7 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(DITHER_MODES),
     ),
     field(
+        Audience::Client,
         Section::Color,
         "Output",
         "color.output.query_display",

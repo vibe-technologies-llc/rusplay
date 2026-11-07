@@ -5,6 +5,9 @@
 @group(3) @binding(2) var<storage, read> weights: array<f32>;
 
 fn filtered_chroma(x: u32, y: u32) -> vec2<f32> {
+    if all(unpacking.chroma_size == unpacking.luma_size) {
+        return chroma_at(x, y);
+    }
     let source_last = i32(unpacking.chroma_size.y) - 1;
     let first = firsts[y];
 

@@ -11,10 +11,7 @@ mod profile;
 mod scaling;
 mod video;
 
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::{fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,26 +86,9 @@ impl Config {
         self.validate()?;
         let text = self.to_toml_string()?;
 
-        if let Some(directory) = path
-            .parent()
-            .filter(|directory| !directory.as_os_str().is_empty())
-        {
-            fs::create_dir_all(directory).map_err(|source| ConfigError::CreateDirectory {
-                path: directory.to_owned(),
-                source,
-            })?;
-        }
-
-        let staging = staging_path(path);
-        let write_error = |source| ConfigError::Write {
+        rusplay_core::write_owner_only(path, &text).map_err(|source| ConfigError::Write {
             path: path.to_owned(),
             source,
-        };
-
-        fs::write(&staging, text).map_err(write_error)?;
-        fs::rename(&staging, path).map_err(|source| {
-            let _ = fs::remove_file(&staging);
-            write_error(source)
         })
     }
 
@@ -124,15 +104,10 @@ impl Config {
     }
 }
 
-fn staging_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().unwrap_or_default().to_owned();
-    name.push(".tmp");
-
-    path.with_file_name(name)
-}
-
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use rusplay_core::{ColorPrimaries, MatrixCoefficients, TransferFunction};
 
     use super::*;

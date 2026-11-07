@@ -411,11 +411,14 @@ paths:
 - `Reassembler` (one per stream) validates before it stores: the first packet of a frame fixes
   the fragment count, shard length and frame size, and any later packet that contradicts them is
   rejected with a specific `NetError` and leaves the frame intact. A rejected packet of an unseen
-  frame creates no state. A pending frame owns one zero-initialised buffer of
-  `fragment_count * shard_len`, allocated once the count and shard length are known (the first
+  frame creates no state. A pending frame owns a recycled buffer of
+  `fragment_count * shard_len`, sized once the count and shard length are known (the first
   non-final data fragment or any parity packet); fragments are written at `index * shard_len` and
   FEC decodes straight from those slots, so assembly truncates the buffer instead of copying. A
   final fragment that arrives before the shard length is known waits in a side buffer until it is.
+  Completed frames return their storage through `FrameBytes` to a bounded channel on drop. Only
+  the final shard padding is cleared on reuse; FEC reads only received or recovered slots.
+  Parity shards share a slab per block. Paced sends use fixed stack arrays for syscall metadata.
   Fragment count is capped by `ReassemblyLimits::max_fragments`
   (`network.reassembly_max_fragments`, default 65535, the most the wire format can number) and
   the pending frames by `network.reassembly_max_pending_frames` (default 8). A sender that lowers

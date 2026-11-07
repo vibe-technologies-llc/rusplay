@@ -316,9 +316,6 @@ impl HevcDecoder {
             self.reorder.push(poc, output);
         }
 
-        if self.references.len() >= MAX_REFERENCE_FRAMES {
-            self.references.remove(0);
-        }
         self.references.push(Reference {
             surface,
             poc,

@@ -176,14 +176,18 @@ fn send_frame(
         &outgoing.frame.data,
     )?;
 
-    match pacing {
+    let sent = match pacing {
         Some(pacing) => send_paced(arena, pacing, outgoing.suspensions, links)?,
         None => send_all(arena, 0..arena.len(), outgoing.suspensions, links)?,
-    }
+    };
 
     let counters = &links.shared.counters;
+    counters.datagrams_sent.add(sent as u64);
+    if sent != arena.len() {
+        counters.frames_dropped.increment();
+        return Ok(());
+    }
     counters.frames_sent.increment();
-    counters.datagrams_sent.add(arena.len() as u64);
     if outgoing.frame.keyframe {
         counters.keyframes_sent.increment();
     }
@@ -196,11 +200,12 @@ fn send_paced(
     pacing: FramePacing,
     suspensions: u32,
     links: &SendLinks,
-) -> Result<(), HostError> {
+) -> Result<usize, HostError> {
     let count = arena.len();
     let plan = BurstPlan::new(count, arena.plain_bytes(0..count), pacing);
     let started = Instant::now();
     let mut sent_bytes = 0;
+    let mut sent = 0;
 
     for (index, first) in (0..count).step_by(plan.datagrams_per_burst).enumerate() {
         if index > 0 {
@@ -212,11 +217,15 @@ fn send_paced(
         }
 
         let burst = first..count.min(first + plan.datagrams_per_burst);
-        send_all(arena, burst.clone(), suspensions, links)?;
+        let progress = send_all(arena, burst.clone(), suspensions, links)?;
+        sent += progress;
+        if progress != burst.len() {
+            return Ok(sent);
+        }
         sent_bytes += arena.plain_bytes(burst);
     }
 
-    Ok(())
+    Ok(sent)
 }
 
 fn send_all(
@@ -224,13 +233,13 @@ fn send_all(
     range: Range<usize>,
     suspensions: u32,
     links: &SendLinks,
-) -> Result<(), HostError> {
+) -> Result<usize, HostError> {
     let mut sent = range.start;
 
     while sent < range.end {
         let client = links.shared.client.address();
         if links.shared.stopped() || links.shared.mailbox.suspensions() != suspensions {
-            return Ok(());
+            return Ok(sent - range.start);
         }
 
         let progress = links.transport.send_arena(arena, sent..range.end, client)?;
@@ -240,7 +249,7 @@ fn send_all(
         sent += progress;
     }
 
-    Ok(())
+    Ok(sent - range.start)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

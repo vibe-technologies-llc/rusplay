@@ -516,7 +516,7 @@ impl AudioPlayback {
             self.resampler.push(pcm, &mut self.converted)?;
             self.writer.write(&self.converted)
         };
-        self.overflows += dropped as u64;
+        self.overflows += self.writer.dropped_frames(dropped) as u64;
 
         Ok(dropped)
     }

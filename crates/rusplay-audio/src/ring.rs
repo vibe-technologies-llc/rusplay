@@ -45,6 +45,10 @@ impl RingWriter {
         chunks.len() - filled
     }
 
+    pub(crate) fn dropped_frames(&self, samples: usize) -> usize {
+        samples / self.channels
+    }
+
     pub(crate) fn buffered_frames(&self) -> usize {
         (self.capacity - self.producer.slots()) / self.channels
     }

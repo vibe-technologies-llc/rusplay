@@ -1,6 +1,10 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::{self, Receiver, SyncSender},
+    time::{Duration, Instant},
+};
 
 use rusplay_config::NetworkConfig;
+use rusplay_core::FrameBytes;
 use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, StreamKind};
 
 use crate::{FecBlock, NetError};
@@ -36,7 +40,7 @@ impl From<&NetworkConfig> for ReassemblyLimits {
 pub struct ReassembledFrame {
     pub frame: u32,
     pub keyframe: bool,
-    pub data: Vec<u8>,
+    pub data: FrameBytes,
     pub recovered_fragments: u16,
 }
 
@@ -65,11 +69,16 @@ pub struct Reassembler {
     floor: Option<u32>,
     next_sequence: Option<u32>,
     stats: ReassemblyStats,
+    returned: Receiver<Vec<u8>>,
+    recycle: SyncSender<Vec<u8>>,
 }
 
 impl Reassembler {
     pub fn new(stream: StreamKind, limits: ReassemblyLimits) -> Self {
+        let (recycle, returned) = mpsc::sync_channel(limits.max_pending_frames.max(1));
         Self {
+            returned,
+            recycle,
             stream,
             limits,
             pending: Vec::new(),
@@ -118,7 +127,11 @@ impl Reassembler {
 
         let existing = self.take_pending(header.frame);
         let is_new = existing.is_none();
-        let mut pending = existing.unwrap_or_else(|| PendingFrame::new(header.frame, now));
+        let mut pending = existing.unwrap_or_else(|| {
+            let mut pending = PendingFrame::new(header.frame, now);
+            pending.buffer = self.returned.try_recv().unwrap_or_default();
+            pending
+        });
 
         let inserted = match packet {
             Packet::Data(payload) => pending.insert_data(&header, payload, &self.limits),
@@ -261,7 +274,11 @@ impl Reassembler {
         self.drop_lost_through(frame, events);
 
         match pending.assemble() {
-            Ok(assembled) => {
+            Ok(mut assembled) => {
+                let recycle = self.recycle.clone();
+                assembled.data = FrameBytes::recycled(assembled.data.into_vec(), move |bytes| {
+                    let _ = recycle.try_send(bytes);
+                });
                 self.stats.frames_completed += 1;
                 if assembled.recovered_fragments > 0 {
                     self.stats.frames_recovered += 1;
@@ -292,7 +309,8 @@ enum Inserted {
 #[derive(Debug)]
 struct ParityBlock {
     block: FecBlock,
-    shards: Vec<Option<Vec<u8>>>,
+    shards: Vec<Option<usize>>,
+    slab: Vec<u8>,
     received: usize,
     decoded_with: usize,
 }
@@ -306,6 +324,7 @@ struct PendingFrame {
     shard_len: Option<usize>,
     frame_bytes: Option<u32>,
     buffer: Vec<u8>,
+    prepared: bool,
     tail: Option<Vec<u8>>,
     last_len: Option<usize>,
     have: Vec<bool>,
@@ -324,6 +343,7 @@ impl PendingFrame {
             shard_len: None,
             frame_bytes: None,
             buffer: Vec::new(),
+            prepared: false,
             tail: None,
             last_len: None,
             have: Vec::new(),
@@ -413,8 +433,11 @@ impl PendingFrame {
             return;
         };
 
-        if self.buffer.is_empty() {
-            self.buffer = vec![0; usize::from(count) * shard_len];
+        if !self.prepared {
+            self.buffer.resize(usize::from(count) * shard_len, 0);
+            let tail_start = (usize::from(count) - 1) * shard_len;
+            self.buffer[tail_start..].fill(0);
+            self.prepared = true;
             if let Some(tail) = self.tail.take() {
                 let start = (usize::from(count) - 1) * shard_len;
                 self.buffer[start..start + tail.len()].copy_from_slice(&tail);
@@ -505,18 +528,21 @@ impl PendingFrame {
                     parity_shards: fec.parity_shards,
                 },
                 shards: vec![None; usize::from(fec.parity_shards)],
+                slab: Vec::new(),
                 received: 0,
                 decoded_with: 0,
             });
             self.blocks.len() - 1
         });
 
-        let slot = &mut self.blocks[position].shards[usize::from(fec.parity_index)];
+        let block = &mut self.blocks[position];
+        let slot = &mut block.shards[usize::from(fec.parity_index)];
         if slot.is_some() {
             return Ok(Inserted::Duplicate);
         }
 
-        *slot = Some(parity.to_vec());
+        *slot = Some(block.slab.len());
+        block.slab.extend_from_slice(parity);
         self.blocks[position].received += 1;
         Ok(Inserted::New)
     }
@@ -605,11 +631,17 @@ impl PendingFrame {
                     let start = index * shard_len;
                     (index - first, &self.buffer[start..start + shard_len])
                 });
-            let parity = self.blocks[position]
-                .shards
-                .iter()
-                .enumerate()
-                .filter_map(|(index, shard)| Some((index, shard.as_deref()?)));
+            let parity =
+                self.blocks[position]
+                    .shards
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, shard)| {
+                        Some((
+                            index,
+                            &self.blocks[position].slab[(*shard)?..(*shard)? + shard_len],
+                        ))
+                    });
             let restored = block.recover(present, parity)?;
 
             for (relative, shard) in restored {
@@ -652,7 +684,7 @@ impl PendingFrame {
         Ok(ReassembledFrame {
             frame: self.frame,
             keyframe: self.keyframe,
-            data,
+            data: data.into(),
             recovered_fragments: self.recovered,
         })
     }
@@ -748,6 +780,27 @@ mod tests {
     }
 
     #[test]
+    fn a_recycled_buffer_has_zero_tail_padding_for_recovery() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let first = frame_data(SHARD_LEN * 4, 91);
+        let packets = tx.packetize(0, false, &first).unwrap();
+        drop(feed(&mut rx, Instant::now(), &packets));
+        let mut buffer = rx.returned.try_recv().unwrap();
+        buffer.fill(255);
+        rx.recycle.try_send(buffer).unwrap();
+        let data = frame_data(SHARD_LEN * 2 + 7, 3);
+        let packets = tx.packetize(1, false, &data).unwrap();
+        let surviving = packets
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != 0)
+            .map(|(_, packet)| packet);
+        let events = feed(&mut rx, Instant::now(), surviving);
+        assert_eq!(frames(&events)[0].data, data);
+    }
+
+    #[test]
     fn frame_in_order_round_trips() {
         let mut tx = packetizer(StreamKind::Video, FecScheme::None);
         let mut rx = reassembler(StreamKind::Video);
@@ -772,7 +825,7 @@ mod tests {
         let datagrams = tx.packetize(3, false, &[1, 2, 3]).unwrap();
         let events = feed(&mut rx, Instant::now(), &datagrams);
 
-        assert_eq!(frames(&events)[0].data, [1, 2, 3]);
+        assert_eq!(frames(&events)[0].data.as_slice(), [1, 2, 3]);
         assert!(!frames(&events)[0].keyframe);
     }
 

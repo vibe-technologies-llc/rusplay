@@ -35,6 +35,8 @@ pub(crate) struct Composer {
     no_cursor: wgpu::TextureView,
     no_overlay: wgpu::TextureView,
     noise: wgpu::TextureView,
+    groups: Vec<([wgpu::TextureView; 3], wgpu::BindGroup)>,
+    last_params: Vec<u8>,
 }
 
 impl Composer {
@@ -103,6 +105,8 @@ impl Composer {
             no_cursor,
             no_overlay,
             noise,
+            groups: Vec::new(),
+            last_params: Vec::new(),
         }
     }
 
@@ -131,36 +135,50 @@ impl Composer {
                 |(_, placement)| placement,
             )
         });
-        queue.write_buffer(&self.params, 0, &params_bytes(placements, &self.encoding));
+        let bytes = params_bytes(placements, &self.encoding);
+        if self.last_params != bytes {
+            queue.write_buffer(&self.params, 0, &bytes);
+            self.last_params = bytes;
+        }
 
         let cursor_view = cursor.map_or(&self.no_cursor, |(view, _)| view);
         let overlay_view = overlay.map_or(&self.no_overlay, |(view, _)| view);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rusplay-compose"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(picture),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(cursor_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.noise),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(overlay_view),
-                },
-            ],
-        });
+        let key = [picture.clone(), cursor_view.clone(), overlay_view.clone()];
+        let group = if let Some((_, group)) = self.groups.iter().find(|(views, _)| *views == key) {
+            group.clone()
+        } else {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rusplay-compose"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(picture),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(cursor_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&self.noise),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(overlay_view),
+                    },
+                ],
+            });
+            if self.groups.len() >= 16 {
+                self.groups.remove(0);
+            }
+            self.groups.push((key, group.clone()));
+            group
+        };
         let pipeline = self.pipeline(device, format);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

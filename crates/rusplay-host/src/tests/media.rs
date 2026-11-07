@@ -110,7 +110,7 @@ fn publish(publisher: &Publisher<CursorUpdate>, update: CursorUpdate) {
 }
 
 fn final_peak(packets: &[ReassembledFrame]) -> f32 {
-    let packets: Vec<Vec<u8>> = packets.iter().map(|packet| packet.data.clone()).collect();
+    let packets: Vec<Vec<u8>> = packets.iter().map(|packet| packet.data.to_vec()).collect();
 
     thread::Builder::new()
         .stack_size(CODEC_THREAD_STACK_BYTES)
