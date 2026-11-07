@@ -27,25 +27,35 @@ impl HostProfile {
     }
 
     pub fn overlay(&self, config: &mut Config) {
-        if let Some(decoder) = &self.decoder {
+        let Self {
+            decoder,
+            present_mode,
+            present_frame_latency,
+            keyboard,
+            pointer,
+            gamepads,
+            pointer_mode,
+        } = self;
+
+        if let Some(decoder) = decoder {
             config.video.decoder = decoder.clone();
         }
-        if let Some(present_mode) = self.present_mode {
+        if let Some(present_mode) = *present_mode {
             config.video.present_mode = present_mode;
         }
-        if let Some(latency) = self.present_frame_latency {
+        if let Some(latency) = *present_frame_latency {
             config.video.present_frame_latency = latency;
         }
-        if let Some(keyboard) = self.keyboard {
+        if let Some(keyboard) = *keyboard {
             config.input.keyboard = keyboard;
         }
-        if let Some(pointer) = self.pointer {
+        if let Some(pointer) = *pointer {
             config.input.pointer = pointer;
         }
-        if let Some(gamepads) = self.gamepads {
+        if let Some(gamepads) = *gamepads {
             config.input.gamepads = gamepads;
         }
-        if let Some(pointer_mode) = self.pointer_mode {
+        if let Some(pointer_mode) = *pointer_mode {
             config.input.pointer_mode = pointer_mode;
         }
     }
@@ -84,7 +94,7 @@ mod tests {
             present_mode: Some(PresentMode::Fifo),
             present_frame_latency: Some(2),
             keyboard: Some(false),
-            pointer: Some(true),
+            pointer: Some(false),
             gamepads: Some(false),
             pointer_mode: Some(PointerMode::Relative),
         }
@@ -113,9 +123,24 @@ mod tests {
         assert_eq!(merged.video.present_mode, PresentMode::Fifo);
         assert_eq!(merged.video.present_frame_latency, 2);
         assert!(!merged.input.keyboard);
-        assert!(merged.input.pointer);
+        assert!(!merged.input.pointer);
         assert!(!merged.input.gamepads);
         assert_eq!(merged.input.pointer_mode, PointerMode::Relative);
+    }
+
+    #[test]
+    fn each_field_alone_changes_the_merged_config() {
+        let base = Config::default();
+        let text = full_profile().to_toml_string().unwrap();
+        let table: toml::Table = toml::from_str(&text).unwrap();
+
+        assert_eq!(table.len(), 7);
+        for (key, value) in table {
+            let single = toml::Table::from_iter([(key.clone(), value)]);
+            let profile = HostProfile::from_toml_str(&toml::to_string(&single).unwrap()).unwrap();
+
+            assert_ne!(profile.apply(&base).unwrap(), base, "{key} is not applied");
+        }
     }
 
     #[test]

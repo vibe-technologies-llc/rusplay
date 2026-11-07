@@ -35,7 +35,6 @@ how easily the fix itself goes wrong.
 | # | Finding | Category | Impact | Effort | Risk | Confidence |
 |---|---|---|---|---|---|---|
 | 6 | Parity storage is not recycled across frames | Performance | Per-frame block/slab allocations remain | S | MED | HIGH |
-| 12 | Profile overlay and control variants need exhaustive coverage | Tests | Future fields or messages can be silently ignored | S | LOW | HIGH |
 | 15 | Several recent fixes have tests that would still pass if the fix were reverted | Tests | FFmpeg retention, conversion fallback and caller coverage remain | M | LOW | HIGH |
 
 ### 6. Reuse parity storage across reassembled frames
@@ -44,13 +43,6 @@ The completed video buffer now returns through `FrameBytes` to a bounded pool,
 and reused buffers clear only the final shard padding. Parity shards share a
 slab per block, but block slabs and metadata still allocate for each new frame.
 Retain and recycle that storage across pending frames before closing this item.
-
-### 12. Close the remaining hand-maintained settings/control gaps
-
-Settings rows now carry explicit `Audience` values, including both client-only
-Esc timing settings. The following adjacent coverage gaps remain:
-
-`HostProfile::overlay` (`crates/rusplay-config/src/profile.rs:29`) is a third hand-written list of the same shape. Adding a field fails `full_profile()` at compile time, but a field that is added to the fixture and not to `overlay` is stored in the host book and never applied. One exhaustive test that every set field changes the merged `Config` closes it. The same client receive match ends in `ControlEvent::Received(_) => {}` (`crates/rusplay-client/src/receive.rs:697`). Every host-to-client message that exists today is named above that wildcard. The next one is acknowledged and dropped, and the host side would not compile if it forgot a variant.
 
 ### 15. Lock the remaining regression properties
 

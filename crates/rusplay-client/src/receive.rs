@@ -700,7 +700,16 @@ impl ReceiveStage {
                 ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
                     self.receive_clipboard(&chunk);
                 }
-                ControlEvent::Received(_) => {}
+                ControlEvent::Received(
+                    ControlMessage::Keepalive
+                    | ControlMessage::RequestKeyframe { .. }
+                    | ControlMessage::ReportLoss { .. }
+                    | ControlMessage::BitrateHint { .. }
+                    | ControlMessage::ClockPing { .. }
+                    | ControlMessage::AcknowledgeFrame { .. }
+                    | ControlMessage::RequestRecovery { .. }
+                    | ControlMessage::Display(_),
+                ) => {}
             }
         }
 
