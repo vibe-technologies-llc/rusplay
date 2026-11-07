@@ -8,7 +8,8 @@ mod slots;
 pub use self::{
     coalesce::EventCoalescer,
     core::{
-        ActivePointer, CaptureCore, CaptureOptions, ClientAction, Hotkeys, StreamRegion, Transition,
+        ActivePointer, Advance, CaptureCore, CaptureOptions, ClientAction, Hotkeys, StreamRegion,
+        Transition,
     },
     pad::{FaceLayout, PadCaps, PadTranslator, RawAxis, RawEvent},
     sensor::{MotionCaps, MotionTranslator, SiblingTranslator, TouchpadRange, TouchpadTranslator},

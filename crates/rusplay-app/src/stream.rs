@@ -307,13 +307,11 @@ impl StreamView {
     }
 
     fn run_action(&mut self, action: ClientAction, window: &mut Window, cx: &mut Context<Self>) {
+        if toggles_fullscreen(action, window.is_fullscreen()) {
+            window.toggle_fullscreen();
+        }
         match action {
-            ClientAction::ToggleFullscreen => window.toggle_fullscreen(),
-            ClientAction::ExitFullscreen => {
-                if window.is_fullscreen() {
-                    window.toggle_fullscreen();
-                }
-            }
+            ClientAction::ToggleFullscreen | ClientAction::ExitFullscreen => {}
             ClientAction::ToggleStats => self.toggle_stats(cx),
             ClientAction::Disconnect => self.disconnect(cx),
         }
@@ -924,9 +922,27 @@ impl Render for StreamView {
     }
 }
 
+const fn toggles_fullscreen(action: ClientAction, fullscreen: bool) -> bool {
+    match action {
+        ClientAction::ToggleFullscreen => true,
+        ClientAction::ExitFullscreen => fullscreen,
+        ClientAction::ToggleStats | ClientAction::Disconnect => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exit_fullscreen_leaves_fullscreen_and_never_enters_it() {
+        assert!(toggles_fullscreen(ClientAction::ExitFullscreen, true));
+        assert!(!toggles_fullscreen(ClientAction::ExitFullscreen, false));
+        assert!(toggles_fullscreen(ClientAction::ToggleFullscreen, true));
+        assert!(toggles_fullscreen(ClientAction::ToggleFullscreen, false));
+        assert!(!toggles_fullscreen(ClientAction::ToggleStats, true));
+        assert!(!toggles_fullscreen(ClientAction::Disconnect, true));
+    }
 
     #[test]
     fn the_announced_area_is_the_canvas_in_device_pixels_and_never_empty() {

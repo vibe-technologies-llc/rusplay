@@ -333,7 +333,8 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   pressed while Esc is withheld sends the Esc press first and cancels the hold, so Esc combinations
   and an Esc held as a game key still work. With the hold off Esc is forwarded as it happens.
   `CaptureCore::hold_escape(now, out)` keeps the timer, started by the first capture-thread `tick`
-  that sees Esc down and restarted by every Esc press or release, so the core stays clock free; a
+  (which calls `CaptureCore::advance`, the pending auto switch and the hold together, so the tests
+  drive the same step) that sees Esc down and restarted by every Esc press or release, so the core stays clock free; a
   hold fires once per press, and an Esc already down when input engaged (suppressed) never counts.
 - Touch (`input.touch`): `CaptureCore::touch_down/motion/up/cancel` take the compositor's touch
   ids and hand out the lowest free slot below `MAX_TOUCHES`, so the wire only ever sees small

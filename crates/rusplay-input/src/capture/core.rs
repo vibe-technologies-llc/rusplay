@@ -176,6 +176,12 @@ pub enum Transition {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Advance {
+    pub switched: bool,
+    pub transition: Transition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePointer {
     Absolute,
     Relative,
@@ -343,6 +349,13 @@ impl CaptureCore {
         self.active = pending.target;
 
         true
+    }
+
+    pub fn advance(&mut self, now: Instant, out: &mut Vec<InputEvent>) -> Advance {
+        Advance {
+            switched: self.tick(now),
+            transition: self.hold_escape(now, out),
+        }
     }
 
     pub fn hold_escape(&mut self, now: Instant, out: &mut Vec<InputEvent>) -> Transition {
@@ -1571,6 +1584,42 @@ mod tests {
         assert_eq!(held, Transition::Released);
         assert_eq!(again, Transition::Unchanged);
         assert!(!core.is_engaged());
+        assert_eq!(out, Vec::new());
+        assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
+    }
+
+    #[test]
+    fn the_periodic_advance_releases_a_held_escape_and_leaves_fullscreen() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        let first = core.advance(start, &mut out);
+        let short = core.advance(start + Duration::from_millis(999), &mut out);
+        let held = core.advance(start + Duration::from_millis(1000), &mut out);
+        let after = core.advance(start + Duration::from_millis(1100), &mut out);
+
+        assert_eq!(first.transition, Transition::Unchanged);
+        assert_eq!(short.transition, Transition::Unchanged);
+        assert_eq!(held.transition, Transition::Released);
+        assert_eq!(after.transition, Transition::Unchanged);
+        assert!(!core.is_engaged());
+        assert_eq!(out, Vec::new());
+        assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
+    }
+
+    #[test]
+    fn the_periodic_advance_leaves_fullscreen_on_a_hold_while_released() {
+        let mut core = CaptureCore::new(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.advance(start, &mut out);
+        let held = core.advance(start + Duration::from_millis(1000), &mut out);
+
+        assert_eq!(held.transition, Transition::Unchanged);
         assert_eq!(out, Vec::new());
         assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
     }
