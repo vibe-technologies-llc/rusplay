@@ -125,12 +125,16 @@ impl Live {
 
     fn stop(&mut self) -> Result<(), ClientError> {
         self.connect.cancel();
+        let input = self
+            .window
+            .as_mut()
+            .map_or(Ok(()), StreamWindow::stop_input);
         let stream = self.stream.take().map_or(Ok(()), ClientStream::stop);
         let window = self.window.take().map_or(Ok(()), StreamWindow::stop);
 
         match self.failure.take() {
             Some(failure) => Err(failure),
-            None => stream.and(window),
+            None => stream.and(input).and(window),
         }
     }
 }

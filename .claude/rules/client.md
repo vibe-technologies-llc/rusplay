@@ -50,7 +50,10 @@ paths:
   sends `ControlMessage::StreamFormat` with a newer generation; the client decodes and labels
   video only from it, never from its own `video.codec` or `video.color`. Its `configured` is the
   host's configured format, so `ClientStream::stream_format()` and `is_fallback` show a
-  negotiated downgrade instead of hiding it. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`.
+  negotiated downgrade instead of hiding it. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop` and, like the
+  host, retransmits it until it is acknowledged or four retransmit intervals pass, retrying the
+  send when the control window was full, so the host lifts held input at once instead of after
+  `network.peer_timeout_ms`.
   The host's periodic `Keepalive` only needs the channel's acknowledgement, which every received
   message gets; `rusplay-host` (`.claude/rules/host.md`) is the host side of this contract.
 - Three named threads (`rusplay-client-receive`, `-decode`, `-present`), plus `-audio` when an
@@ -425,7 +428,8 @@ paths:
   updates it (`WindowLayout::region`, `None` while there is no layout, which drops absolute
   positions). `is_engaged` and `release` pass through. `is_finished` also reports a capture
   thread that ended, and `stop` stops the capture first (which releases every held key and
-  button) and then the presenter, returning the capture's error before the presenter's.
+  button) and then the presenter, returning the capture's error before the presenter's. `stop_input` stops the capture alone, so
+  a caller can release held input while the client's input stage still runs.
 - Surface results: `Timeout`/`Occluded` skip the draw, `Outdated`/`Suboptimal` reconfigure,
   `Lost` and `Validation` end the thread with `SurfaceLost`/`SurfaceValidation`; the app polls
   `is_finished`. `stop` (or drop) joins the thread, which drops the wgpu surface before the

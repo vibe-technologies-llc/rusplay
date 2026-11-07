@@ -182,7 +182,8 @@ paths:
 - A 50 ms poll on the foreground executor (`spawn_in`, so it can reach the `Window`) runs the
   client actions queued by the hotkeys, ends the session when any client stage, the window's
   presenter or a layout update failed, and re-renders when a newer stream description arrives so
-  the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the stream first, then the window, and
+  the letterbox follows the stream's aspect, and when the engaged state changes. Teardown stops the window's input capture first (`StreamWindow::stop_input`, so its key
+  and button releases still reach the client input stage), then the stream, then the window, and
   emits `StreamEvent::Ended` with the notice for the status bar.
 - Statistics: the same poll feeds `StatsSampler` with `ClientStream::stats()` and the
   `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the

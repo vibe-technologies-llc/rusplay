@@ -33,6 +33,7 @@ use crate::{
 
 const RECV_BATCH_DATAGRAMS: usize = 64;
 const IDLE_WAKE: Duration = Duration::from_millis(10);
+const GOODBYE_LINGER_RETRANSMITS: u32 = 4;
 
 #[derive(Debug)]
 pub(crate) struct EncodedVideo {
@@ -71,6 +72,7 @@ struct Timing {
     keyframe_interval: Duration,
     ack_interval: Option<Duration>,
     loss_recovery: LossRecovery,
+    goodbye_linger: Duration,
 }
 
 #[derive(Debug, Default)]
@@ -305,6 +307,8 @@ impl ReceiveStage {
                 ack_interval: (network.frame_ack_interval_ms > 0)
                     .then(|| Duration::from_millis(u64::from(network.frame_ack_interval_ms))),
                 loss_recovery: network.loss_recovery,
+                goodbye_linger: Duration::from_millis(u64::from(network.control_retransmit_ms))
+                    * GOODBYE_LINGER_RETRANSMITS,
             },
             control: ControlChannel::new(ControlConfig::from(network)),
             video: Reassembler::new(StreamKind::Video, limits),
@@ -951,12 +955,45 @@ impl ReceiveStage {
     }
 
     fn say_goodbye(&mut self) {
-        if self
-            .control
-            .send(ControlMessage::Goodbye, Instant::now())
-            .is_ok()
-        {
-            self.control.flush(&self.transport, self.host).ok();
+        let deadline = Instant::now() + self.timing.goodbye_linger;
+        let mut batch = RecvBatch::new(RECV_BATCH_DATAGRAMS, usize::from(self.transport.mtu()));
+        let mut events = Vec::new();
+        let mut goodbye = None;
+
+        loop {
+            let now = Instant::now();
+            if goodbye.is_none() {
+                goodbye = self.control.send(ControlMessage::Goodbye, now).ok();
+            }
+            if self.control.flush(&self.transport, self.host).is_err() {
+                return;
+            }
+            let acknowledged =
+                goodbye.is_some_and(|id| events.contains(&ControlEvent::Acked { id }));
+            if now >= deadline || acknowledged {
+                return;
+            }
+
+            let wait = self
+                .control
+                .next_deadline()
+                .unwrap_or(deadline)
+                .min(deadline)
+                .saturating_duration_since(now);
+            if self.transport.recv_batch_timeout(&mut batch, wait).is_err() {
+                return;
+            }
+            for (datagram, from) in batch.iter() {
+                if from == self.host
+                    && PacketHeader::read(datagram)
+                        .is_ok_and(|header| header.stream == StreamKind::Control)
+                {
+                    self.control
+                        .handle_datagram(datagram, Instant::now(), &mut events)
+                        .ok();
+                }
+            }
+            self.control.poll(Instant::now(), &mut events);
         }
     }
 }
@@ -1223,6 +1260,36 @@ mod tests {
             configured: CodecFormat::new(Codec::Hevc, PixelFormat::default()),
             siting: ChromaSiting::Left,
         }
+    }
+
+    #[test]
+    fn an_unacknowledged_goodbye_is_sent_again_until_the_linger_ends() {
+        let mut rig = Rig::start(None);
+        let mut buf = vec![0; usize::from(rig.host.mtu())];
+        let mut goodbyes = 0;
+
+        rig.stop.store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + WAIT;
+        while goodbyes < 2 && Instant::now() < deadline {
+            let Some((len, _)) = rig
+                .host
+                .recv_from_timeout(&mut buf, Duration::from_millis(10))
+                .unwrap()
+            else {
+                continue;
+            };
+            if let Ok(ControlPacket::Message {
+                message: ControlMessage::Goodbye,
+                ..
+            }) = ControlPacket::read(&buf[..len])
+            {
+                goodbyes += 1;
+            }
+        }
+        let ended = rig.stage.take().unwrap().join().unwrap();
+
+        assert_eq!(goodbyes, 2);
+        assert!(ended.is_ok());
     }
 
     #[test]

@@ -404,12 +404,16 @@ impl StreamWindow {
                 .is_some_and(WaylandCapture::is_finished)
     }
 
+    pub fn stop_input(&mut self) -> Result<(), ClientError> {
+        Ok(self.capture.take().map_or(Ok(()), WaylandCapture::stop)?)
+    }
+
     pub fn stop(mut self) -> Result<(), ClientError> {
         self.shut_down()
     }
 
     fn shut_down(&mut self) -> Result<(), ClientError> {
-        let captured = self.capture.take().map_or(Ok(()), WaylandCapture::stop);
+        let captured = self.stop_input();
         let followed = self.follower.take().map_or(Ok(()), DisplayFollower::stop);
 
         self.shared.update(|pending| {
