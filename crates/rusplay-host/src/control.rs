@@ -14,7 +14,7 @@ use rusplay_config::{Config, NetworkConfig};
 use rusplay_core::{CodecFormat, FormatSet};
 use rusplay_net::{
     ControlEvent, NetError, PeerStore, ReconnectTiming, RecvBatch, SessionTakeover, Transport,
-    busy_reply,
+    busy_reply, proves_peer_liveness,
 };
 use rusplay_protocol::{
     ClientDisplay, ClipboardChunk, ControlMessage, FecHeader, PacketHeader, PeerId,
@@ -182,7 +182,9 @@ impl ControlStage {
 
             for (datagram, from) in batch.iter() {
                 if from == self.client() {
-                    self.last_heard = now;
+                    if proves_peer_liveness(datagram) {
+                        self.last_heard = now;
+                    }
                     self.route(datagram, from, now, &mut events)?;
                 } else {
                     self.answer_stranger(datagram, from, now, &mut events)?;

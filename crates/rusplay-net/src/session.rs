@@ -26,6 +26,10 @@ pub const fn requires_sealing(stream: StreamKind) -> bool {
     )
 }
 
+pub fn proves_peer_liveness(datagram: &[u8]) -> bool {
+    PacketHeader::read(datagram).is_ok_and(|header| requires_sealing(header.stream))
+}
+
 pub struct SessionKeys {
     send: [u8; KEY_LEN],
     receive: [u8; KEY_LEN],
@@ -235,6 +239,32 @@ mod tests {
     use rusplay_protocol::{PacketFlags, ProtocolVersion};
 
     use super::*;
+
+    #[test]
+    fn only_sealed_stream_kinds_prove_the_peer_is_alive() {
+        let header = |stream| {
+            let mut bytes = [0; PacketHeader::SIZE];
+            PacketHeader {
+                version: ProtocolVersion::CURRENT,
+                stream,
+                flags: PacketFlags::empty(),
+                sequence: 0,
+                frame: 0,
+                fragment_index: 0,
+                fragment_count: 1,
+            }
+            .write(&mut bytes)
+            .unwrap();
+            bytes
+        };
+
+        assert!(proves_peer_liveness(&header(StreamKind::Control)));
+        assert!(proves_peer_liveness(&header(StreamKind::Video)));
+        assert!(!proves_peer_liveness(&header(StreamKind::Discovery)));
+        assert!(!proves_peer_liveness(&header(StreamKind::Pairing)));
+        assert!(!proves_peer_liveness(&header(StreamKind::Reconnect)));
+        assert!(!proves_peer_liveness(&[0; 3]));
+    }
 
     fn keys(a: u8, b: u8) -> SessionKeys {
         SessionKeys::new([a; KEY_LEN], [b; KEY_LEN])

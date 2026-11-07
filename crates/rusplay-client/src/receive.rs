@@ -15,7 +15,7 @@ use rusplay_core::{Codec, EncodedFrame, FormatSet, FrameBytes, Timestamp};
 use rusplay_input::{PadFeedback, RumbleCommand};
 use rusplay_net::{
     ControlChannel, ControlConfig, ControlEvent, NetError, ReassembledFrame, Reassembler,
-    ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport,
+    ReassemblyEvent, ReassemblyLimits, RecvBatch, Transport, proves_peer_liveness,
 };
 use rusplay_protocol::{
     ClientDisplay, ClipboardChunk, ControlMessage, CursorMessage, FecHeader, PacketHeader,
@@ -359,7 +359,9 @@ impl ReceiveStage {
 
             for (datagram, from) in batch.iter() {
                 if from == self.host {
-                    self.last_heard = now;
+                    if proves_peer_liveness(datagram) {
+                        self.last_heard = now;
+                    }
                     self.route(datagram, now, &mut pending);
                 }
             }

@@ -278,7 +278,10 @@ paths:
   counter is the AEAD nonce and feeds a 64-entry replay window per direction. Unsealed, replayed or
   forged datagrams are dropped inside `recv_from`, `try_recv_from`, `recv_from_timeout` and
   `recv_batch` and only counted (`rejected_datagrams`), so an attacker cannot make the receive
-  loops fail. Control, FEC and media all ride the sealed path unchanged.
+  loops fail. Control, FEC and media all ride the sealed path unchanged. Only a datagram of a
+  sealed stream kind from the peer's address (`proves_peer_liveness`) refreshes the host's and
+  the client's peer timer: an unsealed `Discovery`, `Pairing` or `Reconnect` datagram passes the
+  transport but proves nothing, so a spoofed source address cannot hold a session open.
 - Without a session the transport stays plaintext, which is what tests and unpaired development
   use; refusing to stream before pairing is the session layer's policy. Key material is zeroized on
   drop and never printed by `Debug`.

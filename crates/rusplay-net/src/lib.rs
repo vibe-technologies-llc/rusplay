@@ -42,7 +42,10 @@ pub use crate::{
         ReconnectAccepted, ReconnectInitiator, ReconnectOutput, ReconnectResponder, ReconnectStep,
         ReconnectTiming, reconnect_as_client, reconnect_as_host,
     },
-    session::{KEY_LEN, SEALED_OVERHEAD, SessionCipher, SessionKeys, requires_sealing},
+    session::{
+        KEY_LEN, SEALED_OVERHEAD, SessionCipher, SessionKeys, proves_peer_liveness,
+        requires_sealing,
+    },
     takeover::SessionTakeover,
     transport::{SocketBuffers, Transport, TransportOptions, max_datagram_len},
 };

@@ -28,9 +28,9 @@ use rusplay_net::{
     ReconnectTiming, Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
 use rusplay_protocol::{
-    ClientName, ControlMessage, CursorMessage, FecHeader, PacketHeader, PairingRejection,
-    ProtocolVersion, ReconnectMessage, ReconnectRejection, StreamDescription, StreamKind,
-    VideoFrameHeader,
+    ClientName, ControlMessage, CursorMessage, FecHeader, PacketFlags, PacketHeader,
+    PairingRejection, ProtocolVersion, ReconnectMessage, ReconnectRejection, StreamDescription,
+    StreamKind, VideoFrameHeader,
 };
 use tempfile::TempDir;
 
@@ -1164,6 +1164,40 @@ fn a_silent_client_times_out() {
         wait_for_end(stream),
         Err(HostError::ClientSilent(_))
     ));
+}
+
+#[test]
+fn unsealed_datagrams_from_the_client_address_do_not_hold_the_session_open() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.pump_until(|client| !client.frames.is_empty());
+
+    let mut unsealed = [0; PacketHeader::SIZE];
+    PacketHeader {
+        version: ProtocolVersion::CURRENT,
+        stream: StreamKind::Discovery,
+        flags: PacketFlags::empty(),
+        sequence: 0,
+        frame: 0,
+        fragment_index: 0,
+        fragment_count: 1,
+    }
+    .write(&mut unsealed)
+    .unwrap();
+    let deadline = Instant::now() + WAIT;
+    while !stream.is_finished() && Instant::now() < deadline {
+        client.transport.send_to(&unsealed, client.host).unwrap();
+        thread::sleep(POLL);
+    }
+    let ended_while_sending = stream.is_finished();
+
+    assert!(ended_while_sending);
+    assert!(matches!(stream.wait(), Err(HostError::ClientSilent(_))));
 }
 
 struct PanickingFactory;
