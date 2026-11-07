@@ -1,6 +1,8 @@
-use std::{net::SocketAddr, thread};
+use std::{net::SocketAddr, thread, time::Duration};
 
 use rusplay_net::{NetError, Transport};
+
+pub(crate) const SEND_RETRY_WAIT: Duration = Duration::from_micros(200);
 
 #[derive(Debug)]
 pub(crate) struct ForwardedDatagram {
@@ -18,7 +20,7 @@ pub(crate) fn send_all(
     while sent < datagrams.len() {
         let progress = transport.send_batch(&datagrams[sent..], client)?;
         if progress == 0 {
-            thread::yield_now();
+            thread::sleep(SEND_RETRY_WAIT);
         }
         sent += progress;
     }

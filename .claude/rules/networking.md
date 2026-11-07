@@ -54,8 +54,12 @@ paths:
   default. Linux clamps the request to `net.core.wmem_max`/`rmem_max` without an error, so
   `Transport::socket_buffers` reports the sizes actually in force for the caller to log or warn on.
 - Fragments of a frame leave in one `sendmmsg` call (`Transport::send_batch`, through rustix;
-  the whole batch is refused up front if any datagram exceeds the budget, and a short count means
-  the socket buffer filled on a non-blocking socket, so the caller re-queues the tail). The video
+  the whole batch is refused up front if any datagram exceeds the budget). Every `sendmmsg` passes
+  `MSG_DONTWAIT`, so a full send buffer returns a short count instead of blocking the thread and
+  the caller re-queues the tail: the host's send stage waits 200 µs (`SEND_RETRY_WAIT`) and
+  checks its stop flag and the suspension count before it retries, so a wedged interface never
+  holds `HostStream::stop` in `join`. The socket itself stays blocking, because the receive
+  timeouts are `SO_RCVTIMEO`. The video
   path uses `Transport::send_arena` instead, which takes a `DatagramArena` and an index range (see
   Fragmentation).
   Receivers drain with one `recvmmsg` (`Transport::recv_batch` into a reusable `RecvBatch`,

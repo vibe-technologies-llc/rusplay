@@ -12,7 +12,7 @@ use rusplay_capture::OutputRequest;
 use rusplay_net::{DatagramArena, FecScheme, Pacer, Packetizer, Transport};
 use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
-use crate::{HostError, encode::Outgoing, shared::Shared};
+use crate::{HostError, datagrams::SEND_RETRY_WAIT, encode::Outgoing, shared::Shared};
 
 const IDLE_WAKE: Duration = Duration::from_millis(20);
 const MIN_BURST_GAP: Duration = Duration::from_micros(250);
@@ -229,13 +229,13 @@ fn send_all(
 
     while sent < range.end {
         let client = links.shared.client.address();
-        if links.shared.mailbox.suspensions() != suspensions {
+        if links.shared.stopped() || links.shared.mailbox.suspensions() != suspensions {
             return Ok(());
         }
 
         let progress = links.transport.send_arena(arena, sent..range.end, client)?;
         if progress == 0 {
-            thread::yield_now();
+            thread::sleep(SEND_RETRY_WAIT);
         }
         sent += progress;
     }

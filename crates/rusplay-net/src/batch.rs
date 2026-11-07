@@ -187,7 +187,7 @@ impl Transport {
                 .map(|(slices, control)| MMsgHdr::new_with_addr(&address, slices, control))
                 .collect();
 
-            match sendmmsg(self.socket(), &mut messages, SendFlags::empty()) {
+            match sendmmsg(self.socket(), &mut messages, SendFlags::DONTWAIT) {
                 Ok(0) | Err(Errno::AGAIN) => break,
                 Ok(count) => sent += count,
                 Err(_) if sent > 0 => break,
