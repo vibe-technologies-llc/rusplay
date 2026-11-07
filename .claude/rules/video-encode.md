@@ -216,12 +216,14 @@ paths:
   because radeonsi pads the coded frame (to 8x2 on VCN 5, 64x16 on VCN 4) and keeps the captured
   size only as the render size.
 - Stream structure: P frames with a single active reference (the previous frame, the long-term
-  frame right after it was marked or on a recovery frame), over three reconstructed surfaces, each
+  frame right after it was marked or on a recovery frame), over `long_term::RECONSTRUCTED_SURFACES` (4) reconstructed surfaces, each
   picture taking the first one no reference holds (AV1: four, see the AV1 reference slots below); a keyframe on the first frame and on `request_keyframe` only. Intra
   periods in the sequence parameters are `0xffff`, since the picture type of every frame is set by
   Rusplay. H.264 uses POC type 2, a 16-bit `frame_num`, `max_num_reorder_frames` 0 and
   `max_num_ref_frames` = `max_dec_frame_buffering` = 3; HEVC uses 64x64 CTBs, 8x8 minimum CBs,
-  `sps_max_dec_pic_buffering_minus1` 3, two SPS short-term RPSs ({-1} and the empty set) and no
+  `sps_max_dec_pic_buffering_minus1` and `vps_max_dec_pic_buffering_minus1` both
+  `long_term::RECONSTRUCTED_SURFACES - 1` (3) with long-term references and 1 without (H.265
+  requires the two equal when `vps_base_layer_internal_flag` is set), two SPS short-term RPSs ({-1} and the empty set) and no
   temporal MVP (the VA parameters carry the unwrapped picture order count since the
   last IDR, saturated to `i32`, as libva expects, and only the slice header keeps its 8-bit
   LSB, `log2_max_pic_order_cnt_lsb_minus4` 4); AV1 uses 8-bit order hints, refreshes slot 0 from LAST

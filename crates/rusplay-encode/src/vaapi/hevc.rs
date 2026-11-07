@@ -10,7 +10,8 @@ use crate::{
         hdr::{SeiNal, sei},
         level::{self, Demand, Level},
         long_term::{
-            Held, LongTermReferences, MAX_HELD_DISTANCE, MAX_RECOVERY_DISTANCE, Reference,
+            Held, LongTermReferences, MAX_HELD_DISTANCE, MAX_RECOVERY_DISTANCE,
+            RECONSTRUCTED_SURFACES, Reference,
         },
         packed_buffers, sequence_buffer,
         va::{Context, INVALID_SURFACE, PackedHeader, Profile},
@@ -43,6 +44,7 @@ const VIDEO_FORMAT_UNSPECIFIED: u64 = 5;
 const ASPECT_RATIO_SQUARE: u8 = 1;
 const NO_COLLOCATED_PICTURE: u8 = 0xff;
 const LONG_TERM_DEC_PIC_BUFFERING_MINUS1: u32 = 3;
+const _: () = assert!(LONG_TERM_DEC_PIC_BUFFERING_MINUS1 as usize + 1 == RECONSTRUCTED_SURFACES);
 const SINGLE_DEC_PIC_BUFFERING_MINUS1: u32 = 1;
 const SHORT_TERM_SET_PREVIOUS: u64 = 0;
 const SHORT_TERM_SET_EMPTY: u64 = 1;
@@ -275,6 +277,14 @@ impl HevcStream {
         rbsp.flag(false);
     }
 
+    fn dec_pic_buffering_minus1(&self) -> u32 {
+        if self.references.enabled() {
+            LONG_TERM_DEC_PIC_BUFFERING_MINUS1
+        } else {
+            SINGLE_DEC_PIC_BUFFERING_MINUS1
+        }
+    }
+
     pub(super) fn vps(&self) -> Vec<u8> {
         let mut rbsp = BitWriter::new();
 
@@ -287,7 +297,7 @@ impl HevcStream {
         rbsp.bits(0xffff, 16);
         self.profile_tier_level(&mut rbsp);
         rbsp.flag(false);
-        rbsp.ue(1);
+        rbsp.ue(self.dec_pic_buffering_minus1());
         rbsp.ue(0);
         rbsp.ue(0);
         rbsp.bits(0, 6);
@@ -328,11 +338,7 @@ impl HevcStream {
         rbsp.ue(self.depth_minus8());
         rbsp.ue(LOG2_MAX_POC_LSB - 4);
         rbsp.flag(true);
-        rbsp.ue(if self.references.enabled() {
-            LONG_TERM_DEC_PIC_BUFFERING_MINUS1
-        } else {
-            SINGLE_DEC_PIC_BUFFERING_MINUS1
-        });
+        rbsp.ue(self.dec_pic_buffering_minus1());
         rbsp.ue(0);
         rbsp.ue(0);
         rbsp.ue(LOG2_MIN_CB - 3);

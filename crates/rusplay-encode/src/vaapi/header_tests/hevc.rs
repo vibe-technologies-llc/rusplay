@@ -256,7 +256,11 @@ fn vps_carries_every_field_the_writer_sets() {
             assert!(vps.temporal_id_nesting_flag);
             assert_eq!(vps.profile_tier_level, parsed.sps.profile_tier_level);
             assert!(!vps.sub_layer_ordering_info_present_flag);
-            assert_eq!(vps.max_dec_pic_buffering_minus1[0], 1);
+            assert_eq!(
+                vps.max_dec_pic_buffering_minus1[0],
+                u32::from(parsed.sps.max_dec_pic_buffering_minus1[0])
+            );
+            assert_eq!(vps.max_dec_pic_buffering_minus1[0], 3);
             assert_eq!(vps.max_num_reorder_pics[0], 0);
             assert_eq!(vps.max_latency_increase_plus1[0], 0);
             assert_eq!(vps.max_layer_id, 0);
@@ -1024,9 +1028,11 @@ fn an_unverified_driver_keeps_one_short_term_reference() {
         ..stream_info(format, Resolution::new(402, 226))
     };
     let mut stream = HevcStream::new(HevcProfile::for_format(format), info);
-    let sps = parse(&stream).sps;
+    let parsed = parse(&stream);
+    let sps = parsed.sps;
 
     assert_eq!(sps.max_dec_pic_buffering_minus1[0], 1);
+    assert_eq!(parsed.vps.max_dec_pic_buffering_minus1[0], 1);
     assert_eq!(sps.num_short_term_ref_pic_sets, 1);
     assert!(!sps.long_term_ref_pics_present_flag);
     long_term_walk(&mut stream, frames(20), |stream, picture| {
