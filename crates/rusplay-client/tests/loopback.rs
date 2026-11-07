@@ -596,7 +596,7 @@ fn a_resize_drag_announces_only_the_size_it_settles_on() {
         .unwrap()
     };
     let mut config = common::client_config();
-    config.video.display_debounce_ms = 150;
+    config.video.display_debounce_ms = 1000;
     let session = ClientSession::new(config).with_display(announce(1280, 720));
 
     let stream = common::connect_silent(
@@ -614,19 +614,23 @@ fn a_resize_drag_announces_only_the_size_it_settles_on() {
 
     for step in 0..30 {
         stream.announce_display(announce(1300 + step, 720));
-        std::thread::sleep(Duration::from_millis(10));
     }
     let settled = announce(1329, 720);
-    let arrived = host.wait_for(STREAM_TIMEOUT, |message| {
+    let settled_arrived = host.wait_for(STREAM_TIMEOUT, |message| {
         *message == ControlMessage::Display(settled)
     });
-    std::thread::sleep(Duration::from_millis(300));
+    let marker = announce(1600, 900);
+    stream.announce_display(marker);
+    let marker_arrived = host.wait_for(STREAM_TIMEOUT, |message| {
+        *message == ControlMessage::Display(marker)
+    });
     let sent = stream.stats().display_updates_sent;
     stream.stop().unwrap();
 
-    assert!(arrived);
-    assert_eq!(displays(&host), [announce(1280, 720), settled]);
-    assert_eq!(sent, 1);
+    assert!(settled_arrived);
+    assert!(marker_arrived);
+    assert_eq!(displays(&host), [announce(1280, 720), settled, marker]);
+    assert_eq!(sent, 2);
 }
 
 #[test]
