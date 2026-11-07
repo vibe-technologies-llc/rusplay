@@ -77,7 +77,11 @@ wayland-client = { version = "0.31.15", default-features = false }
 wayland-protocols = { version = "0.32.13", default-features = false }
 wayland-protocols-plasma = { version = "0.3.12", default-features = false }
 wayland-protocols-wlr = { version = "0.3.12", default-features = false }
-wgpu = { version = "30.0.1", default-features = false }
+wgpu = {
+    git = "https://github.com/gfx-rs/wgpu",
+    rev = "3b3506ea31154edc04de64debda0e780cba2639c",
+    default-features = false
+}
 zbus = { version = "5.19.0", default-features = false }
 zeroize = { version = "1.9.1", default-features = false }
 

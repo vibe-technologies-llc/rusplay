@@ -11,6 +11,7 @@ use crate::ScaleError;
 pub(super) const EXTERNAL_STATE: wgpu::TextureUses =
     wgpu::TextureUses::RESOURCE.union(wgpu::TextureUses::COPY_SRC);
 
+const IMPORTED_CONTENTS_ARE_INITIALISED: bool = true;
 const DMA_BUF: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
 const REQUIRED_EXTENSIONS: [&std::ffi::CStr; 3] = [
     khr::external_memory_fd::NAME,
@@ -294,6 +295,7 @@ impl VulkanImporter {
                 } else {
                     wgpu::TextureUses::UNINITIALIZED
                 },
+                IMPORTED_CONTENTS_ARE_INITIALISED,
             )
         })
     }

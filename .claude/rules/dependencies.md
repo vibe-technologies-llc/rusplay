@@ -128,9 +128,13 @@ paths:
     Wayland backend is enabled; X11 stays off.
   - Zed's workspace `[patch.crates-io]` entries that gpui needs are copied into the root
     `Cargo.toml` (`async-task`, `calloop`, `khronos-egl`).
-  - gpui's `gpui_wgpu` uses Zed's own git `wgpu`, not the crates.io `wgpu` the workspace declares,
-    so the two are separate crates in the tree. The stream is presented on a subsurface with the
-    workspace `wgpu` (`ui.md`), so no handle crosses between them and they need no reconciling.
+  - The workspace `wgpu` is the git rev gpui's `gpui_wgpu` uses (`3b3506e`, the same rev Zed pins),
+    not crates.io 30.0.1: wgpu-hal 30.0.1 `expect`s that no `SurfaceTexture` still holds a
+    swapchain semaphore when the swapchain is released, which `panic = "abort"` turns into a dead
+    process on a resize or teardown (gfx-rs/wgpu#10230); the rev skips such a semaphore instead.
+    Being one source, the two are one crate in the app. Moving the gpui `rev` means moving the
+    workspace `wgpu` rev with it, and the rev must keep `ash` 0.38. The stream still presents on
+    its own subsurface and device (`ui.md`), so no handle crosses between them.
   - `raw-window-handle` (0.6, the version gpui implements) reads the `wl_display` and
     `wl_surface` pointers off gpui's `Window`.
   - `unicode-segmentation` (pure Rust) gives the text field grapheme boundaries.

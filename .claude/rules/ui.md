@@ -25,8 +25,8 @@ paths:
   feature, `client.md`) puts a Wayland subsurface over the picture rectangle and presents into it
   with its own wgpu device, the same one the client's present stage and `rusplay-scale` use, so
   the scaled texture is composed straight into the swapchain with no copy and no wait on gpui's
-  frame loop. gpui keeps its own Zed git `wgpu` 30.0.0 next to the workspace's crates.io 30.0.1;
-  nothing crosses between the two, so they stay separate crates.
+  frame loop. The workspace `wgpu` is the same git rev gpui uses, so the app links one
+  wgpu crate (`dependencies.md`); the stream's device and gpui's still share no handle.
 - The app gets the `wl_display` and `wl_surface` pointers from gpui's `Window` through
   `raw-window-handle` (`HasWindowHandle::window_handle` explicitly, since `Window` has an inherent
   method of the same name). Their validity is the one `unsafe` contract: the `StreamWindow` lives
