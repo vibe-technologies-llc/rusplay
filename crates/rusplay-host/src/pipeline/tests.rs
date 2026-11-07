@@ -538,3 +538,35 @@ fn a_gpu_error_raised_between_frames_ends_the_next_frame_with_it() {
     ));
     assert!(!matches!(after, Err(HostError::Gpu(_))));
 }
+
+#[test]
+fn a_conversion_the_handoff_refuses_falls_back_to_the_readback() {
+    let mut config = config(srgb(), BitDepth::Eight);
+    config.video.pixel_format.chroma = ChromaSubsampling::Yuv420;
+    config.video.encoder_gpu_handoff = false;
+    let format = config.video.pixel_format;
+    let grey = frame(*b"XR30", srgb(), |_| xrgb2101010(512, 512, 512));
+    let Some(mut reference) = pipeline(config.clone()) else {
+        return;
+    };
+    let mut pipeline = pipeline(config).unwrap();
+    pipeline.handoff = HandoffState::Trying(Handoff {
+        backend: rusplay_encode::Backend::X264,
+        input: rusplay_encode::device::device_input(rusplay_encode::Backend::Vaapi, format)
+            .unwrap(),
+    });
+
+    let expected = luma_row(&mut reference, &grey);
+    let row = luma_row(&mut pipeline, &grey);
+
+    assert_eq!(row, expected);
+    assert!(matches!(pipeline.handoff, HandoffState::Off));
+    assert!(matches!(
+        pipeline.conversion,
+        Some(Conversion {
+            target: Target::Readback(_),
+            ..
+        })
+    ));
+    assert_eq!(pipeline.take_notices().handoff_disabled, 1);
+}

@@ -48,8 +48,6 @@ The conversion failure fallback also increments `handoff_disabled`.
   with the current implementation: this fixture does not demonstrate reference
   retention. Build a sequence where an error leaves a reference usable and assert
   the dependent picture succeeds before replacing this test.
-- The conversion-creation failure path while handoff is `Trying` needs a focused
-  regression test independent of the import rejection path.
 - The client loopback test sleeps through `display_debounce_ms`; replace that
   timing dependency with deterministic coordination.
 - Exercise Esc-hold through production `Session::tick` and apply `ExitFullscreen`
