@@ -166,8 +166,8 @@ paths:
   `ToggleFullscreen`) and the fullscreen hotkey all call gpui's `Window::toggle_fullscreen`. The
   stream view omits its header and the root omits the titlebar and status bar while the window is
   fullscreen and a stream exists, so notices are invisible then; the stats toggle and the disconnect hotkey
-  are the controls that remain. Holding Esc while input is engaged (`input.md`) releases input and
-  leaves fullscreen (`ClientAction::ExitFullscreen`), and the engaged header names it beside the
+  are the controls that remain. Holding Esc (`input.md`) leaves fullscreen, and while input is engaged also
+  releases it, (`ClientAction::ExitFullscreen`), and the engaged header names it beside the
   release chord. Entering fullscreen draws a hint in the picture's overlay for
   `input.fullscreen_hint_ms` (default 3000, 0 turns it off), above any statistics lines, listing
   each way out that is turned on (`fullscreen_hint`: hold Esc, the fullscreen hotkey, the release

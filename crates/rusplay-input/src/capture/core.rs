@@ -187,6 +187,13 @@ struct PendingSwitch {
     since: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EscapeState {
+    Free,
+    Withheld,
+    Spent,
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureCore {
     options: CaptureOptions,
@@ -204,6 +211,7 @@ pub struct CaptureCore {
     suppressed_buttons: BTreeSet<u32>,
     actions: Vec<ClientAction>,
     escape_since: Option<Instant>,
+    escape: EscapeState,
     locks: Option<LockState>,
     locks_sent: Option<LockState>,
     touches: BTreeMap<i32, u8>,
@@ -233,6 +241,7 @@ impl CaptureCore {
             suppressed_buttons: BTreeSet::new(),
             actions: Vec::new(),
             escape_since: None,
+            escape: EscapeState::Free,
             locks: None,
             locks_sent: None,
             touches: BTreeMap::new(),
@@ -340,10 +349,7 @@ impl CaptureCore {
         let Some(hold) = self.options.escape_hold else {
             return Transition::Unchanged;
         };
-        let holding = self.engaged
-            && self.down.contains(&KEY_ESC)
-            && !self.suppressed_keys.contains(&KEY_ESC);
-        if !holding {
+        if !self.counts_escape_hold() {
             self.escape_since = None;
             return Transition::Unchanged;
         }
@@ -354,8 +360,36 @@ impl CaptureCore {
         }
 
         self.escape_since = None;
+        self.escape = EscapeState::Spent;
         self.run(Hotkey::Client(ClientAction::ExitFullscreen));
         self.release(out)
+    }
+
+    fn counts_escape_hold(&self) -> bool {
+        let forwarding_keys = self.engaged && self.options.keyboard;
+
+        self.down.contains(&KEY_ESC)
+            && !self.suppressed_keys.contains(&KEY_ESC)
+            && self.escape != EscapeState::Spent
+            && (self.escape == EscapeState::Withheld || !forwarding_keys)
+    }
+
+    fn withholds_escape(&self) -> bool {
+        self.options.escape_hold.is_some()
+    }
+
+    fn flush_withheld_escape(&mut self, out: &mut Vec<InputEvent>) {
+        if self.escape != EscapeState::Withheld {
+            return;
+        }
+
+        self.escape = EscapeState::Free;
+        self.escape_since = None;
+        self.held_keys.insert(KEY_ESC);
+        out.push(InputEvent::Key {
+            keycode: KEY_ESC,
+            pressed: true,
+        });
     }
 
     fn pointer_for_host_cursor(&self, visible: bool) -> ActivePointer {
@@ -389,6 +423,9 @@ impl CaptureCore {
         }
 
         self.engaged = false;
+        if self.escape == EscapeState::Withheld {
+            self.escape = EscapeState::Free;
+        }
         out.extend(
             std::mem::take(&mut self.held_keys)
                 .into_iter()
@@ -444,6 +481,9 @@ impl CaptureCore {
         }
         if keycode == KEY_ESC {
             self.escape_since = None;
+            if self.escape == EscapeState::Spent {
+                self.escape = EscapeState::Free;
+            }
         }
 
         if pressed && self.completes_chord(keycode) {
@@ -468,7 +508,27 @@ impl CaptureCore {
             return Transition::Unchanged;
         }
 
+        if keycode == KEY_ESC && self.withholds_escape() {
+            if pressed && !self.suppressed_keys.contains(&KEY_ESC) {
+                self.escape = EscapeState::Withheld;
+                return Transition::Unchanged;
+            }
+            if !pressed && self.escape == EscapeState::Withheld {
+                self.escape = EscapeState::Free;
+                out.push(InputEvent::Key {
+                    keycode,
+                    pressed: true,
+                });
+                out.push(InputEvent::Key {
+                    keycode,
+                    pressed: false,
+                });
+                return Transition::Unchanged;
+            }
+        }
+
         if pressed {
+            self.flush_withheld_escape(out);
             self.held_keys.insert(keycode);
             out.push(InputEvent::Key {
                 keycode,
@@ -506,6 +566,7 @@ impl CaptureCore {
         }
 
         if pressed {
+            self.flush_withheld_escape(out);
             self.held_buttons.insert(button);
             out.push(InputEvent::PointerButton {
                 button,
@@ -1494,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn holding_escape_releases_input_and_asks_to_leave_fullscreen() {
+    fn holding_escape_releases_input_and_leaves_fullscreen_without_reaching_the_host() {
         let mut core = engaged(options());
         let mut out = Vec::new();
         let start = Instant::now();
@@ -1503,13 +1564,55 @@ mod tests {
         core.hold_escape(start, &mut out);
         let short = core.hold_escape(start + Duration::from_millis(999), &mut out);
         let held = core.hold_escape(start + Duration::from_millis(1000), &mut out);
+        let again = core.hold_escape(start + Duration::from_millis(3000), &mut out);
         core.key(KEY_ESC, false, &mut out);
 
         assert_eq!(short, Transition::Unchanged);
         assert_eq!(held, Transition::Released);
+        assert_eq!(again, Transition::Unchanged);
         assert!(!core.is_engaged());
-        assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
+        assert_eq!(out, Vec::new());
         assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
+    }
+
+    #[test]
+    fn holding_escape_while_released_leaves_fullscreen() {
+        let mut core = CaptureCore::new(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.hold_escape(start, &mut out);
+        let held = core.hold_escape(start + Duration::from_millis(1000), &mut out);
+
+        assert_eq!(held, Transition::Unchanged);
+        assert_eq!(out, Vec::new());
+        assert_eq!(core.take_actions(), vec![ClientAction::ExitFullscreen]);
+    }
+
+    #[test]
+    fn another_key_during_a_withheld_escape_sends_it_and_cancels_the_hold() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.hold_escape(start, &mut out);
+        core.key(KEY_LEFT_SHIFT, true, &mut out);
+        let held = core.hold_escape(start + Duration::from_secs(5), &mut out);
+        core.key(KEY_ESC, false, &mut out);
+
+        assert_eq!(held, Transition::Unchanged);
+        assert!(core.is_engaged());
+        assert_eq!(
+            out,
+            vec![
+                key(KEY_ESC, true),
+                key(KEY_LEFT_SHIFT, true),
+                key(KEY_ESC, false)
+            ]
+        );
+        assert_eq!(core.take_actions(), Vec::new());
     }
 
     #[test]
