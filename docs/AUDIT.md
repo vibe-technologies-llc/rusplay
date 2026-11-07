@@ -42,12 +42,6 @@ Decode-loop failure skipping, eager decoder opening, successful handoff fallback
 and preservation of the input portal token now have stronger regression tests.
 The conversion failure fallback also increments `handoff_disabled`.
 
-- **FFmpeg reference loss.** `crates/rusplay-decode/tests/ffmpeg.rs` still submits an
-  IDR after the missing-reference error. That passes even if flushing is restored.
-  A probe submitting the skipped dependent packet after the error also failed
-  with the current implementation: this fixture does not demonstrate reference
-  retention. Build a sequence where an error leaves a reference usable and assert
-  the dependent picture succeeds before replacing this test.
 
 ## Direction
 

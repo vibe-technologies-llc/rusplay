@@ -353,3 +353,76 @@ fn ffmpeg_raw(name: &str, pix_fmt: &str) -> Option<Vec<u8>> {
     );
     Some(output.stdout)
 }
+
+const MOTION_FIXTURE: &str = "hevc-rusplay-motion-8bit";
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn motion_packets() -> Vec<(EncodedFrame, [u64; 3])> {
+    let encoded = common::fixture(&format!("{MOTION_FIXTURE}.hevc"));
+    let index = common::fixture(&format!("{MOTION_FIXTURE}.index"));
+    let mut offset = 0;
+
+    std::str::from_utf8(&index)
+        .unwrap()
+        .lines()
+        .enumerate()
+        .map(|(number, line)| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let size: usize = fields[0].parse().unwrap();
+            let checksums = [1, 2, 3].map(|field| u64::from_str_radix(fields[field], 16).unwrap());
+            let packet = EncodedFrame {
+                codec: Codec::Hevc,
+                timestamp: Timestamp::from_micros(u64::try_from(number).unwrap() * 16_666),
+                keyframe: number == 0,
+                data: encoded[offset..offset + size].to_vec().into(),
+            };
+            offset += size;
+            (packet, checksums)
+        })
+        .collect()
+}
+
+fn checksums(frame: &DecodedFrame) -> [u64; 3] {
+    let cpu = cpu(frame);
+
+    [0, 1, 2].map(|plane| {
+        let pixels = cpu.plane(plane).unwrap();
+        let row_bytes = pixels.width as usize * usize::from(pixels.bytes_per_sample);
+        pixels
+            .data
+            .chunks_exact(pixels.stride)
+            .take(pixels.height as usize)
+            .flat_map(|row| row[..row_bytes].iter().copied())
+            .fold(FNV_OFFSET, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+            })
+    })
+}
+
+#[test]
+fn a_rejected_packet_keeps_the_references_the_next_frame_predicts_from() {
+    let mut decoder = open(Codec::Hevc, Some(1));
+    let packets = motion_packets();
+    let (resumed, expected) = &packets[10];
+    let broken = EncodedFrame {
+        data: [
+            0, 0, 1, 0x02, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        ]
+        .to_vec()
+        .into(),
+        ..resumed.clone()
+    };
+
+    for (packet, _) in &packets[..10] {
+        assert!(decoder.decode(packet).unwrap().is_some());
+    }
+    let rejected = decoder.decode(&broken);
+    let picture = decoder.decode(resumed).unwrap().unwrap();
+
+    assert!(
+        matches!(rejected, Err(DecodeError::Ffmpeg { .. })),
+        "a broken slice was {rejected:?}"
+    );
+    assert_eq!(checksums(&picture), *expected);
+}

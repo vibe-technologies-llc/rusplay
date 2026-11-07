@@ -132,6 +132,10 @@ paths:
   failure returns and frees each picture it has already output, so the decoded picture buffer does
   not survive the error and a recovery frame would look for a picture that is gone. The client
   asks for a keyframe and submits nothing else until that keyframe arrives.
+  A packet that fails before the reference lists are built (a malformed slice) leaves the picture
+  buffer intact, because the decoder is never flushed on an error: `tests/ffmpeg.rs` sends a
+  broken slice inside the 8-bit HEVC motion fixture and requires the next frame to match its
+  reference checksum, which fails if a send error flushes.
   `flush` sends a null packet and returns every remaining picture in display order, including any
   drained while the flush packet was waiting; a second flush is empty. The picture timestamp is
   `pts`, or the packet timestamp when `pts` is missing. `AV_FRAME_FLAG_CORRUPT` is
