@@ -52,6 +52,17 @@ paths:
   already pending. Remaining per-backend reference recovery is in `docs/FEATURES.md`
   (`video-ltr-*`).
   Bitrate changes are applied in place with `set_bitrate`, without re-creating the encoder.
+- Reconstruction for quality metrics: `capture_reconstruction` arms the next output and returns
+  whether the backend can; `take_reconstruction` then returns that output's reconstructed
+  picture as a `rusplay_core::SamplePicture` (samples in the low bits, visible size), the
+  picture the decoder outputs. A failed read is an error from `take_reconstruction`, never from
+  `encode`, so the frame still goes out (`ReconstructionSlot` in `src/reconstruction.rs`). x264
+  reads `x264_picture_t::img` of the output (`b_full_recon` set, NV12/NV16 or planar), x265 the
+  output picture's planes, VAAPI the frame's reconstructed surface through `vaGetImage` and
+  `format::unpack`, the exact inverse of `pack` (round-trip tested for every format). The
+  hardware test `reconstruction_is_what_the_decoder_outputs` holds the VAAPI reconstruction
+  bit-identical to `VaapiDecoder`'s output for H.264, HEVC and AV1, 8 and 10-bit (radeonsi, RX
+  9070). SVT-AV1 and NVENC keep the default, which answers false.
 - The software encoders expose every library parameter: typed config fields for the common ones,
   plus `params` passed verbatim (`x264_param_parse`, `x265_param_parse`, SVT-AV1's
   `svt_av1_enc_parse_parameter`). Errors from parameter parsing name the key

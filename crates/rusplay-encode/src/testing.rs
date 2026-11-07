@@ -9,7 +9,7 @@ use rusplay_core::{
 use crate::{
     EncodeError, OutputIndex, Recovery, VideoEncoder,
     hdr::fixtures::{expected_siting, hdr10_color, signalled},
-    input::{fixtures::yuv_frame, fourcc_for},
+    input::{YuvFrame, fixtures::yuv_frame, fourcc_for},
     open, open_sited,
 };
 
@@ -233,4 +233,40 @@ pub fn check_colour_reaches_the_decoder(
             assert_eq!(picture.color, expected, "{siting:?} frame {index}");
         }
     }
+}
+
+pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
+    const MEASURED: u64 = 5;
+    let format = config.pixel_format;
+    let mut encoder = open(config).unwrap();
+
+    for index in 0..MEASURED {
+        encoder.encode(&frame(format, index)).unwrap();
+    }
+    assert!(encoder.take_reconstruction().unwrap().is_none());
+
+    assert!(encoder.capture_reconstruction());
+    let source_frame = frame(format, MEASURED);
+    encoder.encode(&source_frame).unwrap();
+    let reconstruction = encoder.take_reconstruction().unwrap().unwrap();
+    let source = YuvFrame::from_frame(&source_frame, crate::Backend::from(&config.encoder), format)
+        .unwrap()
+        .sample_picture()
+        .unwrap();
+
+    let score = rusplay_core::measure(
+        &source,
+        &reconstruction,
+        &[],
+        rusplay_core::TemporalOrder::First,
+    )
+    .unwrap();
+    assert_eq!(reconstruction.format(), format);
+    assert_eq!(reconstruction.resolution(), TEST_RESOLUTION);
+    assert!(
+        score.psnr.luma.value() > 30.0,
+        "{format:?} reconstruction is {} from the source",
+        score.psnr.luma
+    );
+    assert!(encoder.take_reconstruction().unwrap().is_none());
 }

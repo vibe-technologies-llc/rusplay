@@ -8,7 +8,7 @@ use std::{
 use rusplay_config::{VideoConfig, X265Config, X265Tune};
 use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame,
-    FrameRate, PixelFormat, Resolution, Timestamp,
+    FrameRate, PixelFormat, Resolution, SamplePicture, Timestamp, chroma_size,
 };
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     hdr::St2086,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
+    reconstruction::{RawPlane, ReconPlanes, ReconstructionSlot, picture},
     software::CParam,
     x26x::{colour_matrix_name, colour_primaries_name, preset_name, transfer_name},
 };
@@ -380,6 +381,7 @@ struct Session {
     input: Picture,
     output: Picture,
     resolution: Resolution,
+    format: PixelFormat,
     colour_space: c_int,
     bit_depth: c_int,
     frame_rate: FrameRate,
@@ -416,6 +418,7 @@ impl Session {
             input,
             output,
             resolution,
+            format: settings.pixel_format,
             colour_space: colour_space_id(settings.pixel_format.chroma),
             bit_depth: c_int::from(settings.pixel_format.depth.bits()),
             frame_rate: settings.frame_rate,
@@ -428,6 +431,7 @@ impl Session {
         view: &YuvFrame<'_>,
         timestamp: Timestamp,
         keyframe: bool,
+        reconstruction: &mut ReconstructionSlot,
     ) -> Result<Option<EncodedFrame>, EncodeError> {
         let input = unsafe { self.input.raw.as_mut() };
 
@@ -478,6 +482,7 @@ impl Session {
         }
 
         let output = unsafe { self.output.raw.as_ref() };
+        reconstruction.fill(|| self.reconstruction(output));
 
         Ok(Some(EncodedFrame {
             codec: Codec::Hevc,
@@ -485,6 +490,41 @@ impl Session {
             keyframe: output.sliceType == sys::X265_TYPE_IDR,
             data: data.into(),
         }))
+    }
+
+    fn reconstruction(&self, output: &sys::x265_picture) -> Result<SamplePicture, EncodeError> {
+        let sample = if output.bitDepth > 8 { 2 } else { 1 };
+        let width = self.resolution.width as usize;
+        let height = self.resolution.height as usize;
+        let (chroma_width, chroma_height) = chroma_size((width, height), self.format.chroma);
+        if !matches!(
+            output.colorSpace,
+            sys::X265_CSP_I420 | sys::X265_CSP_I422 | sys::X265_CSP_I444
+        ) {
+            return Err(EncodeError::ReconstructionLayoutUnknown {
+                backend: BACKEND,
+                code: output.colorSpace,
+            });
+        }
+
+        let plane = |index: usize, plane_width: usize, rows: usize| RawPlane {
+            data: output.planes[index].cast::<u8>().cast_const(),
+            stride: usize::try_from(output.stride[index]).unwrap_or(0),
+            row_bytes: plane_width * sample,
+            rows,
+        };
+        let planes = ReconPlanes::Planar([
+            unsafe { plane(0, width, height).bytes(sample, 0) },
+            unsafe { plane(1, chroma_width, chroma_height).bytes(sample, 0) },
+            unsafe { plane(2, chroma_width, chroma_height).bytes(sample, 0) },
+        ]);
+
+        picture(self.format, self.resolution, planes).map_err(|source| {
+            EncodeError::ReconstructionUnreadable {
+                backend: BACKEND,
+                source,
+            }
+        })
     }
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), EncodeError> {
@@ -532,6 +572,7 @@ pub struct X265Encoder {
     settings: Settings,
     session: Option<Session>,
     keyframe_pending: bool,
+    reconstruction: ReconstructionSlot,
 }
 
 impl X265Encoder {
@@ -551,6 +592,7 @@ impl X265Encoder {
             settings,
             session,
             keyframe_pending: false,
+            reconstruction: ReconstructionSlot::Idle,
         })
     }
 }
@@ -572,7 +614,12 @@ impl VideoEncoder for X265Encoder {
             });
         }
 
-        let encoded = session.encode(&view, frame.timestamp, self.keyframe_pending)?;
+        let encoded = session.encode(
+            &view,
+            frame.timestamp,
+            self.keyframe_pending,
+            &mut self.reconstruction,
+        )?;
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -580,6 +627,15 @@ impl VideoEncoder for X265Encoder {
 
     fn request_keyframe(&mut self) {
         self.keyframe_pending = true;
+    }
+
+    fn capture_reconstruction(&mut self) -> bool {
+        self.reconstruction.arm();
+        true
+    }
+
+    fn take_reconstruction(&mut self) -> Result<Option<SamplePicture>, EncodeError> {
+        self.reconstruction.take()
     }
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), EncodeError> {
@@ -666,6 +722,23 @@ mod tests {
             &config(format, X265Config::default()),
             contains_idr,
         );
+    }
+
+    #[test]
+    fn reconstruction_follows_the_source_for_every_chroma_and_depth() {
+        for chroma in [
+            ChromaSubsampling::Yuv420,
+            ChromaSubsampling::Yuv422,
+            ChromaSubsampling::Yuv444,
+        ] {
+            for depth in [BitDepth::Eight, BitDepth::Ten, BitDepth::Twelve] {
+                let format = pixel(chroma, depth);
+                let video = config(format, X265Config::default());
+                if crate::open(&video).is_ok() {
+                    testing::check_reconstruction_follows_the_source(&video);
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use std::{fmt, io};
 
 use rusplay_config::RateControl;
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorPrimaries, DrmFourcc, Resolution};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, ColorPrimaries, DrmFourcc, QualityError, Resolution,
+};
 #[cfg(feature = "nvenc")]
 use rusplay_cuda::CudaError;
 #[cfg(feature = "vaapi")]
@@ -88,6 +90,16 @@ pub enum EncodeError {
     #[cfg(feature = "vaapi")]
     #[error(transparent)]
     Va(#[from] VaError),
+    #[error("the {backend} reconstruction could not be read")]
+    ReconstructionUnreadable {
+        backend: Backend,
+        #[source]
+        source: QualityError,
+    },
+    #[error("the vaapi reconstructed surface is not one the session created")]
+    ReconstructionSurfaceMissing,
+    #[error("the {backend} reconstruction has the unknown layout {code}")]
+    ReconstructionLayoutUnknown { backend: Backend, code: i32 },
     #[error("a {} DMA-BUF needs {expected} planes, the frame has {actual}", fourcc_text(*.fourcc))]
     DmaBufPlaneCount {
         fourcc: DrmFourcc,

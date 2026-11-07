@@ -1517,3 +1517,39 @@ fn unspecified_resolution_follows_the_first_frame() {
         Err(EncodeError::FrameResolutionMismatch { expected, .. }) if expected == RESOLUTION
     ));
 }
+
+#[test]
+fn reconstruction_is_what_the_decoder_outputs() {
+    const MEASURED: usize = 6;
+
+    for (codec, format) in [
+        (Codec::H264, yuv420(BitDepth::Eight)),
+        (Codec::Hevc, yuv420(BitDepth::Eight)),
+        (Codec::Hevc, yuv420(BitDepth::Ten)),
+        (Codec::Av1, yuv420(BitDepth::Eight)),
+        (Codec::Av1, yuv420(BitDepth::Ten)),
+    ] {
+        for resolution in [RESOLUTION, ODD_RESOLUTION] {
+            let config = video(codec, format, resolution);
+            let Some(mut encoder) = try_open(&config) else {
+                continue;
+            };
+            let frames = pattern_frames(format, resolution, FRAMES);
+
+            let mut packets = encode_all(&mut *encoder, &frames[..MEASURED]);
+            assert!(encoder.capture_reconstruction());
+            packets.push(encoder.encode(&frames[MEASURED]).unwrap().unwrap());
+            let reconstruction = encoder.take_reconstruction().unwrap().unwrap();
+            let Some(pictures) = decode_vaapi(codec, &packets) else {
+                continue;
+            };
+
+            assert_eq!(reconstruction.resolution(), resolution);
+            assert_eq!(
+                reconstruction.luma().samples(),
+                pictures[MEASURED].luma.as_slice(),
+                "{codec} {format:?} at {resolution}: the reconstruction differs from the decoded frame"
+            );
+        }
+    }
+}

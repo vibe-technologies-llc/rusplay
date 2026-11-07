@@ -23,7 +23,7 @@ use std::{
 use rusplay_config::{RateControl, VaapiConfig, VideoConfig};
 use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorSpace, EncodedFrame, Frame, FrameBuffer,
-    FrameRate, PixelFormat, Plane, Resolution, Timestamp,
+    FrameRate, PixelFormat, Plane, Resolution, SamplePicture, Timestamp,
 };
 use rusplay_va::ffi;
 
@@ -33,6 +33,7 @@ use crate::{
     input::{YuvFrame, fourcc_for},
     pool::FramePool,
     rate::vbv_buffer_kbit,
+    reconstruction::ReconstructionSlot,
     vaapi::{
         av1::{Av1Profile, Av1Stream},
         format::{
@@ -649,6 +650,32 @@ impl Session {
         (refresh.flags(), location, size)
     }
 
+    fn read_reconstruction(
+        &self,
+        display: &Rc<Display>,
+        settings: &Settings,
+        recon: SurfaceId,
+    ) -> Result<SamplePicture, EncodeError> {
+        let Some(surface) = self.recon.iter().find(|surface| surface.id() == recon) else {
+            return Err(EncodeError::ReconstructionSurfaceMissing);
+        };
+        display.sync(recon)?;
+
+        let mut image = Image::new(
+            display,
+            surface_format(settings.format).va_fourcc,
+            self.resolution,
+        )?;
+        let bytes = image.get(surface)?;
+
+        format::unpack(settings.format, &bytes, image.layout(), self.resolution).map_err(|source| {
+            EncodeError::ReconstructionUnreadable {
+                backend: BACKEND,
+                source,
+            }
+        })
+    }
+
     fn upload(
         &mut self,
         display: &Rc<Display>,
@@ -763,6 +790,7 @@ pub struct VaapiEncoder {
     settings: Settings,
     keyframe_requested: bool,
     rate_changed: bool,
+    reconstruction: ReconstructionSlot,
 }
 
 unsafe impl Send for VaapiEncoder {}
@@ -806,6 +834,7 @@ impl VaapiEncoder {
             settings,
             keyframe_requested: false,
             rate_changed: false,
+            reconstruction: ReconstructionSlot::Idle,
         })
     }
 }
@@ -943,6 +972,7 @@ impl VaapiEncoder {
             settings,
             keyframe_requested,
             rate_changed,
+            reconstruction,
         } = self;
 
         if let Some(expected) = settings.resolution
@@ -1006,6 +1036,8 @@ impl VaapiEncoder {
             .coded
             .read(settings.codec == Codec::Av1, session.pool.take())?;
         drop(buffers);
+        reconstruction
+            .fill(|| session.read_reconstruction(&device.display, settings, picture.recon));
 
         session.needs_keyframe = false;
         session.current ^= 1;
@@ -1065,6 +1097,15 @@ impl VideoEncoder for VaapiEncoder {
 
     fn request_keyframe(&mut self) {
         self.keyframe_requested = true;
+    }
+
+    fn capture_reconstruction(&mut self) -> bool {
+        self.reconstruction.arm();
+        true
+    }
+
+    fn take_reconstruction(&mut self) -> Result<Option<SamplePicture>, EncodeError> {
+        self.reconstruction.take()
     }
 
     fn acknowledge(&mut self, output: OutputIndex) {

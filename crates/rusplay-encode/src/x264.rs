@@ -8,7 +8,7 @@ use std::{
 use rusplay_config::{VideoConfig, X264Config, X264Tune};
 use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorRange, ColorSpace, EncodedFrame, Frame,
-    FrameRate, HdrLevels, PixelFormat, Resolution, Timestamp,
+    FrameRate, HdrLevels, PixelFormat, Resolution, SamplePicture, Timestamp, chroma_size,
 };
 
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
     hdr::St2086,
     input::YuvFrame,
     rate::vbv_buffer_kbit,
+    reconstruction::{RawPlane, ReconPlanes, ReconstructionSlot, picture},
     software::CParam,
     x26x::{colour_matrix_name, colour_primaries_name, preset_name, transfer_name},
 };
@@ -400,6 +401,7 @@ struct Session {
     handle: NonNull<sys::x264_t>,
     window: Option<ReferenceWindow>,
     resolution: Resolution,
+    format: PixelFormat,
     image_csp: c_int,
     frame_rate: FrameRate,
     vbv_frames: u8,
@@ -417,6 +419,7 @@ impl Drop for Session {
 impl Session {
     fn open(settings: &Settings, resolution: Resolution) -> Result<Self, EncodeError> {
         let mut param = settings.param(resolution)?;
+        param.b_full_recon = 1;
 
         let handle = NonNull::new(unsafe { sys::x264_encoder_open(&raw mut param) }).ok_or(
             EncodeError::OpenFailed {
@@ -436,6 +439,7 @@ impl Session {
             handle,
             window,
             resolution,
+            format: settings.pixel_format,
             image_csp: colour_space_id(settings.pixel_format.chroma) | high_depth,
             frame_rate: settings.frame_rate,
             vbv_frames: settings.vbv_frames,
@@ -448,6 +452,7 @@ impl Session {
         view: &YuvFrame<'_>,
         timestamp: Timestamp,
         keyframe: bool,
+        reconstruction: &mut ReconstructionSlot,
     ) -> Result<Option<EncodedFrame>, EncodeError> {
         let mut input = sys::x264_picture_t::default();
         unsafe { sys::x264_picture_init(&raw mut input) };
@@ -496,6 +501,8 @@ impl Session {
         let data = unsafe { slice::from_raw_parts(payload, length) }.to_vec();
         let keyframe = output.b_keyframe != 0;
 
+        reconstruction.fill(|| self.reconstruction(&output.img));
+
         if let Some(window) = &mut self.window {
             window.record(output.i_pts, keyframe);
         }
@@ -506,6 +513,51 @@ impl Session {
             keyframe,
             data: data.into(),
         }))
+    }
+
+    fn reconstruction(&self, image: &sys::x264_image_t) -> Result<SamplePicture, EncodeError> {
+        let high_depth = image.i_csp & sys::X264_CSP_HIGH_DEPTH != 0;
+        let sample = if high_depth { 2 } else { 1 };
+        let width = self.resolution.width as usize;
+        let height = self.resolution.height as usize;
+        let (chroma_width, chroma_height) = chroma_size((width, height), self.format.chroma);
+        let raw = |index: usize, row_bytes: usize, rows: usize| RawPlane {
+            data: image.plane[index],
+            stride: usize::try_from(image.i_stride[index]).unwrap_or(0),
+            row_bytes,
+            rows,
+        };
+
+        let luma = raw(0, width * sample, height);
+        let planes = match image.i_csp & sys::X264_CSP_MASK {
+            sys::X264_CSP_NV12 | sys::X264_CSP_NV16 => ReconPlanes::SemiPlanar {
+                luma: unsafe { luma.bytes(sample, 0) },
+                chroma: unsafe {
+                    raw(1, 2 * chroma_width * sample, chroma_height).bytes(sample, 0)
+                },
+            },
+            sys::X264_CSP_I420 | sys::X264_CSP_I422 | sys::X264_CSP_I444 => {
+                let chroma = |index| raw(index, chroma_width * sample, chroma_height);
+                ReconPlanes::Planar([
+                    unsafe { luma.bytes(sample, 0) },
+                    unsafe { chroma(1).bytes(sample, 0) },
+                    unsafe { chroma(2).bytes(sample, 0) },
+                ])
+            }
+            code => {
+                return Err(EncodeError::ReconstructionLayoutUnknown {
+                    backend: BACKEND,
+                    code,
+                });
+            }
+        };
+
+        picture(self.format, self.resolution, planes).map_err(|source| {
+            EncodeError::ReconstructionUnreadable {
+                backend: BACKEND,
+                source,
+            }
+        })
     }
 
     fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
@@ -568,6 +620,7 @@ pub struct X264Encoder {
     settings: Settings,
     session: Option<Session>,
     keyframe_pending: bool,
+    reconstruction: ReconstructionSlot,
 }
 
 impl X264Encoder {
@@ -587,6 +640,7 @@ impl X264Encoder {
             settings,
             session,
             keyframe_pending: false,
+            reconstruction: ReconstructionSlot::Idle,
         })
     }
 }
@@ -608,7 +662,12 @@ impl VideoEncoder for X264Encoder {
             });
         }
 
-        let encoded = session.encode(&view, frame.timestamp, self.keyframe_pending)?;
+        let encoded = session.encode(
+            &view,
+            frame.timestamp,
+            self.keyframe_pending,
+            &mut self.reconstruction,
+        )?;
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -616,6 +675,15 @@ impl VideoEncoder for X264Encoder {
 
     fn request_keyframe(&mut self) {
         self.keyframe_pending = true;
+    }
+
+    fn capture_reconstruction(&mut self) -> bool {
+        self.reconstruction.arm();
+        true
+    }
+
+    fn take_reconstruction(&mut self) -> Result<Option<SamplePicture>, EncodeError> {
+        self.reconstruction.take()
     }
 
     fn recover(&mut self, last_good: OutputIndex) -> Recovery {
@@ -939,6 +1007,23 @@ mod tests {
 
         assert_eq!(window.plan(OutputIndex(3)), Some(Forget::From(4)));
         assert_eq!(window.plan(OutputIndex(2)), None);
+    }
+
+    #[test]
+    fn reconstruction_follows_the_source_for_every_chroma_and_depth() {
+        for chroma in [
+            ChromaSubsampling::Yuv420,
+            ChromaSubsampling::Yuv422,
+            ChromaSubsampling::Yuv444,
+        ] {
+            for depth in [BitDepth::Eight, BitDepth::Ten] {
+                let format = pixel(chroma, depth);
+                let video = config(format, X264Config::default());
+                if crate::open(&video).is_ok() {
+                    testing::check_reconstruction_follows_the_source(&video);
+                }
+            }
+        }
     }
 
     #[test]

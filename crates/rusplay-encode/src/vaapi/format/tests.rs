@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 
-use super::pack;
+use super::{pack, unpack};
 use crate::{
     input::{YuvFrame, YuvPlane},
     vaapi::va::ImageLayout,
@@ -263,6 +263,43 @@ fn packing_matches_the_reference_for_every_format_extent_and_stride() {
 
                 assert_eq!(
                     actual, expected,
+                    "{format:?} {resolution} padded {padded} slack {slack}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unpacking_inverts_packing_for_every_format_extent_and_stride() {
+    let cases = [
+        (Resolution::new(1, 1), Resolution::new(2, 2)),
+        (Resolution::new(7, 5), Resolution::new(8, 6)),
+        (Resolution::new(34, 8), Resolution::new(35, 11)),
+    ];
+
+    for format in all_formats() {
+        for (resolution, padded) in cases {
+            for slack in [0, 6] {
+                let maximum = (1_u16 << format.depth.bits()) - 1;
+                let mut source = Source::new(format, resolution, slack, 0x2545_f491_4f6c_dd1d);
+                if format.depth != BitDepth::Eight {
+                    for buffer in &mut source.buffers {
+                        for pair in buffer.as_chunks_mut::<2>().0 {
+                            let value = u16::from_le_bytes(*pair) & maximum;
+                            pair.copy_from_slice(&value.to_le_bytes());
+                        }
+                    }
+                }
+                let (layout, size) = image_layout(format, padded, slack);
+                let mut packed = vec![0; size];
+                pack(&source.view(), &mut packed, layout, padded);
+
+                let unpacked = unpack(format, &packed, layout, resolution).unwrap();
+
+                assert_eq!(
+                    unpacked,
+                    source.view().sample_picture().unwrap(),
                     "{format:?} {resolution} padded {padded} slack {slack}"
                 );
             }

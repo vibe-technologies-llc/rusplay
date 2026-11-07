@@ -1,5 +1,6 @@
 use rusplay_core::{
-    BitDepth, ChromaSubsampling, DrmFourcc, Frame, FrameBuffer, PixelFormat, Resolution,
+    BitDepth, ChromaSubsampling, DrmFourcc, Frame, FrameBuffer, PixelFormat, PlaneBytes,
+    QualityError, Resolution, SamplePicture, SamplePlane,
 };
 
 use crate::{Backend, EncodeError};
@@ -80,6 +81,25 @@ pub struct YuvFrame<'a> {
 }
 
 impl<'a> YuvFrame<'a> {
+    pub fn sample_picture(&self) -> Result<SamplePicture, QualityError> {
+        let sample = bytes_per_sample(self.format.depth);
+        let planes = self.planes.map(|plane| {
+            SamplePlane::read(
+                PlaneBytes {
+                    data: plane.data,
+                    stride: plane.stride,
+                    bytes_per_sample: sample,
+                    shift: 0,
+                },
+                plane.width,
+                plane.rows,
+            )
+        });
+        let [luma, cb, cr] = planes;
+
+        SamplePicture::new(self.format, [luma?, cb?, cr?])
+    }
+
     pub fn from_frame(
         frame: &'a Frame,
         backend: Backend,

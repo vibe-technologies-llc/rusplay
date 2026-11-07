@@ -1,6 +1,7 @@
 use rusplay_core::{
     BitDepth, ChromaSubsampling, ColorPrimaries, ColorRange, DrmFourcc, MatrixCoefficients,
-    PixelFormat, Resolution, TransferFunction,
+    PixelFormat, QualityError, Resolution, SamplePicture, SamplePlane, TransferFunction,
+    chroma_size,
 };
 
 use crate::{
@@ -333,6 +334,134 @@ pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, pa
     } else {
         pack_rows::<Wide>(view, data, layout, padded);
     }
+}
+
+struct Unpacked {
+    width: usize,
+    planes: [Vec<u16>; 3],
+}
+
+impl Unpacked {
+    fn push(&mut self, plane: usize, value: u16) {
+        self.planes[plane].push(value);
+    }
+}
+
+fn load_at<S: Sample>(data: &[u8], offset: usize, shift: u32) -> u16 {
+    let value = S::load(&data[offset..]);
+    if S::SIZE == 1 { value } else { value >> shift }
+}
+
+fn unpack_rows<S: Sample>(
+    format: PixelFormat,
+    data: &[u8],
+    layout: ImageLayout,
+    resolution: Resolution,
+) -> Unpacked {
+    let shift = 16 - u32::from(format.depth.bits());
+    let width = resolution.width as usize;
+    let rows = resolution.height as usize;
+    let (chroma_width, chroma_rows) = chroma_size((width, rows), format.chroma);
+    let mut out = Unpacked {
+        width,
+        planes: [
+            Vec::with_capacity(width * rows),
+            Vec::with_capacity(chroma_width * chroma_rows),
+            Vec::with_capacity(chroma_width * chroma_rows),
+        ],
+    };
+
+    match format.chroma {
+        ChromaSubsampling::Yuv420 => {
+            for y in 0..rows {
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                for x in 0..width {
+                    out.push(0, load_at::<S>(data, start + x * S::SIZE, shift));
+                }
+            }
+            for y in 0..chroma_rows {
+                let start = layout.offsets[1] + y * layout.pitches[1];
+                for x in 0..chroma_width {
+                    let pair = start + 2 * x * S::SIZE;
+                    out.push(1, load_at::<S>(data, pair, shift));
+                    out.push(2, load_at::<S>(data, pair + S::SIZE, shift));
+                }
+            }
+        }
+        ChromaSubsampling::Yuv422 => {
+            for y in 0..rows {
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                for x in 0..width {
+                    let quad = start + (x / 2) * 4 * S::SIZE;
+                    let luma = quad + (x % 2) * 2 * S::SIZE;
+                    out.push(0, load_at::<S>(data, luma, shift));
+                    if x % 2 == 0 {
+                        out.push(1, load_at::<S>(data, quad + S::SIZE, shift));
+                        out.push(2, load_at::<S>(data, quad + 3 * S::SIZE, shift));
+                    }
+                }
+            }
+        }
+        ChromaSubsampling::Yuv444 => {
+            for y in 0..rows {
+                let start = layout.offsets[0] + y * layout.pitches[0];
+                for x in 0..width {
+                    let [luma, u, v] = match format.depth {
+                        BitDepth::Eight => {
+                            let at = start + x * 4;
+                            [data[at + 2], data[at + 1], data[at]].map(u16::from)
+                        }
+                        BitDepth::Ten => {
+                            let at = start + x * 4;
+                            let word = u32::from_le_bytes([
+                                data[at],
+                                data[at + 1],
+                                data[at + 2],
+                                data[at + 3],
+                            ]);
+                            [word >> 10, word, word >> 20]
+                                .map(|bits| u16::try_from(bits & 0x3ff).unwrap_or_default())
+                        }
+                        BitDepth::Twelve => {
+                            let at = start + x * 8;
+                            [at + 2, at, at + 4].map(|offset| load_at::<S>(data, offset, shift))
+                        }
+                    };
+                    out.push(0, luma);
+                    out.push(1, u);
+                    out.push(2, v);
+                }
+            }
+        }
+    }
+
+    out
+}
+
+pub(super) fn unpack(
+    format: PixelFormat,
+    data: &[u8],
+    layout: ImageLayout,
+    resolution: Resolution,
+) -> Result<SamplePicture, QualityError> {
+    let unpacked = if format.depth == BitDepth::Eight {
+        unpack_rows::<Narrow>(format, data, layout, resolution)
+    } else {
+        unpack_rows::<Wide>(format, data, layout, resolution)
+    };
+    let width = unpacked.width;
+    let height = resolution.height as usize;
+    let (chroma_width, chroma_height) = chroma_size((width, height), format.chroma);
+    let [luma, cb, cr] = unpacked.planes;
+
+    SamplePicture::new(
+        format,
+        [
+            SamplePlane::new(width, height, luma)?,
+            SamplePlane::new(chroma_width, chroma_height, cb)?,
+            SamplePlane::new(chroma_width, chroma_height, cr)?,
+        ],
+    )
 }
 
 #[cfg(test)]

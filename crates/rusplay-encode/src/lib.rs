@@ -29,6 +29,8 @@ mod obu;
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]
 mod pool;
 mod rate;
+#[cfg(any(feature = "x264", feature = "x265", feature = "vaapi"))]
+mod reconstruction;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod software;
 #[cfg(feature = "svt-av1")]
@@ -45,7 +47,7 @@ mod x265;
 mod x26x;
 
 use rusplay_config::VideoConfig;
-use rusplay_core::{ChromaSiting, EncodedFrame, Frame, Timestamp};
+use rusplay_core::{ChromaSiting, EncodedFrame, Frame, SamplePicture, Timestamp};
 
 pub use crate::{
     backend::Backend,
@@ -94,6 +96,14 @@ pub trait VideoEncoder: Send {
     fn recover(&mut self, _last_good: OutputIndex) -> Recovery {
         self.request_keyframe();
         Recovery::Keyframe
+    }
+
+    fn capture_reconstruction(&mut self) -> bool {
+        false
+    }
+
+    fn take_reconstruction(&mut self) -> Result<Option<SamplePicture>, EncodeError> {
+        Ok(None)
     }
 }
 
