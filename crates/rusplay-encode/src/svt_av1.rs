@@ -314,7 +314,6 @@ impl Settings {
                 parse(config, key, value)?;
             }
         }
-        config.force_key_frames = !self.config.low_latency;
 
         for (key, value) in &self.config.params {
             parse(config, key, value)?;

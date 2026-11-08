@@ -131,8 +131,11 @@ paths:
   keyframes, IDR-only random access and `rtc`; with it off the library defaults apply and frames
   may come out several calls late. In low-delay mode `svt_av1_enc_get_packet` blocks until the
   frame just sent is out, which is what keeps one frame in flight; outside it the call is polled
-  and any queued packets are returned one per `encode`. Forced keyframes use the library's
-  `force_key_frames` plus a key picture type on the input. `set_bitrate` attaches a
+  and any queued packets are returned one per `encode`. Forced keyframes are a key picture type on the input; the library's
+  `force_key_frames` stays off in both modes, because 4.2.0 refuses it with VBR (random access
+  could not open at all) and clears it in low delay
+  (`tests/svt_random_access.rs`, its own test binary so the random-access instance never shares a
+  process with the unit tests' low-delay ones, which 4.2.0 crashes on, `encode-svt-av1-flat-hang`). `set_bitrate` attaches a
   `RATE_CHANGE_EVENT` to the next input picture. `threads` maps to `level_of_parallelism`
   (1 to 6, not a thread count). `svt_av1_enc_parse_parameter` does not tell an unknown key from
   a bad value, so both are `InvalidParameterValue` naming the key and value. The library's
@@ -143,8 +146,7 @@ paths:
   `log_level` (`off`, `fatal`, `error`, default `warn`, `info`, `debug`); the banner is an info
   message, so the default drops it. The threshold is process-wide and the last encoder opened
   sets it. The library still applies its own `SVT_LOG` filter before the callback runs, so
-  `debug` output needs that variable set by the user. `force_key_frames` is set only outside
-  `low_latency` (the library warns and clears it there), and dropping an initialised handle sends
+  `debug` output needs that variable set by the user. Dropping an initialised handle sends
   EOS and drains the encoder first, because `svt_av1_enc_deinit` logs an error otherwise.
 - x264 reference recovery (`x264.rs`): `recover(last_good)` calls
   `x264_encoder_invalidate_reference(pts)` with the pts of the output after `last_good`, which
