@@ -54,7 +54,7 @@ pub use crate::{
     audio::{AudioSource, AudioSourceFactory},
     clipboard::ClipboardOpener,
     error::{HostError, Stage},
-    formats::encoder_formats,
+    formats::{encoder_formats, resolve_encoder},
     gpu::Gpu,
     input::{InputFeed, InputTarget},
     microphone::MicrophoneOutputFactory,

@@ -1,8 +1,8 @@
 use std::mem::discriminant;
 
 use rusplay_config::{
-    Config, HostProfile, NvdecDecoderConfig, PointerMode, PresentMode, SoftwareDecoderConfig,
-    VaapiDecoderConfig, VideoDecoderConfig,
+    AutoDecoderConfig, Config, HostProfile, NvdecDecoderConfig, PointerMode, PresentMode,
+    SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig,
 };
 
 const PRESENT_MODES: [(PresentMode, &str); 3] = [
@@ -169,8 +169,9 @@ fn decoder_row(profile: &HostProfile, global: &Config) -> ProfileRow {
     }
 }
 
-fn decoder_backends(global: &VideoDecoderConfig) -> [(VideoDecoderConfig, &'static str); 3] {
+fn decoder_backends(global: &VideoDecoderConfig) -> [(VideoDecoderConfig, &'static str); 4] {
     [
+        VideoDecoderConfig::Auto(AutoDecoderConfig::default()),
         VideoDecoderConfig::Vaapi(VaapiDecoderConfig::default()),
         VideoDecoderConfig::Nvdec(NvdecDecoderConfig::default()),
         VideoDecoderConfig::Software(SoftwareDecoderConfig::default()),
@@ -191,6 +192,7 @@ fn same_backend(left: &VideoDecoderConfig, right: &VideoDecoderConfig) -> bool {
 
 const fn backend_name(decoder: &VideoDecoderConfig) -> &'static str {
     match decoder {
+        VideoDecoderConfig::Auto(_) => "Auto",
         VideoDecoderConfig::Vaapi(_) => "VAAPI",
         VideoDecoderConfig::Nvdec(_) => "NVDEC",
         VideoDecoderConfig::Software(_) => "Software",
@@ -251,7 +253,7 @@ mod tests {
         assert!(rows.iter().all(|row| row.choices[0].selected));
         assert_eq!(find(&rows, "Present mode").effective, "Mailbox");
         assert_eq!(find(&rows, "Keyboard").effective, "On");
-        assert_eq!(find(&rows, "Decoder").effective, "VAAPI");
+        assert_eq!(find(&rows, "Decoder").effective, "Auto");
     }
 
     #[test]

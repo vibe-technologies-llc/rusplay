@@ -108,7 +108,7 @@ paths:
   and no book, says so in the status bar, and never overwrites the file.
 - Per-host client overrides (`HostProfile`, `client.md`) belong to the saved host: the Hosts page
   shows, for the selected host, one row per overridable option (`hosts/profile.rs`, no gpui
-  types) with a `Global` button plus one per value, the effective value and whether it comes from
+  types) with a `Global` button plus one per value (the decoder row starts with `Auto`), the effective value and whether it comes from
   the override or the global `client.toml`. Choosing a value or `Global` changes that one field;
   `Reset all to global` clears the profile. `HostsView` keeps the client config it last read
   (at start and on every refresh) as the global side, rejects a choice whose merged config fails
@@ -329,9 +329,11 @@ paths:
   and the devices both ends enable) stay on both. A row the role does not show is left out of the
   saved file, so it returns to its default there; the other role's own file is untouched. A
   section with no rows for the role disappears from the sidebar.
-- The band above the footer says what this machine will actually use. For the host it probes
-  `encoder_formats` and names the format `FormatSet::closest_to` would send when the selected
-  codec, chroma or depth does not exist (12-bit with no 12-bit encoder becomes the nearest format
+- The band above the footer says what this machine will actually use. The probe first resolves an
+  `auto` backend (`rusplay_host::resolve_encoder`, `rusplay_client::resolve_decoder`) and names the
+  detected backend and device. For the host it probes `encoder_formats` and names the format
+  `FormatSet::best_for` would send, both for an 8-bit and a 10-bit or HDR source when the depth is
+  automatic, and the fallback when a pinned codec, chroma or depth does not exist (12-bit with no 12-bit encoder becomes the nearest format
   the encoder can send). For the client it probes `decoder_formats` and names a missing bit depth,
   chroma or codec, including the deepest depth and widest chroma that remain. A backend that is
   not compiled, or a device that cannot be opened, is that error. FLAC selected in a build without

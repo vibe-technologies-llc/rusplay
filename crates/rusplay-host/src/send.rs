@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rusplay_capture::OutputRequest;
+use rusplay_core::FrameRate;
 use rusplay_net::{DatagramArena, FecScheme, Pacer, Packetizer, Transport};
 use rusplay_protocol::{StreamKind, VideoFrameHeader};
 
@@ -29,9 +29,9 @@ pub(crate) struct Pacing {
 }
 
 impl Pacing {
-    fn following(self, output: Option<OutputRequest>) -> Self {
-        let frame_interval = output
-            .and_then(|output| output.frame_rate.frame_interval())
+    fn following(self, agreed: Option<FrameRate>) -> Self {
+        let frame_interval = agreed
+            .and_then(FrameRate::frame_interval)
             .unwrap_or(self.frame_interval);
 
         Self {
@@ -133,10 +133,10 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
             }
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
-                let output = links.shared.output();
+                let agreed = links.shared.agreed_rate();
                 let pacing = options
                     .pacing
-                    .map(|pacing| pacing.following(output).for_frame(cadence.smoothed));
+                    .map(|pacing| pacing.following(agreed).for_frame(cadence.smoothed));
                 send_frame(
                     &mut packetizer,
                     &mut arena,

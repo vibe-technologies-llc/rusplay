@@ -1,5 +1,5 @@
 use rusplay_capture::DrmFourcc;
-use rusplay_core::{ChromaSubsampling, PixelFormat, Resolution};
+use rusplay_core::{BitDepth, ChromaSubsampling, PixelFormat, Resolution};
 use rusplay_encode::input::{YuvFrame, YuvPlane};
 use rusplay_scale::{ChannelOrder, FrameLayout, SourceChannels};
 
@@ -72,6 +72,13 @@ pub(crate) const UPLOAD_FORMATS: [(DrmFourcc, UploadFormat); 8] = [
 ];
 
 pub(crate) const UPLOAD_BYTES_PER_PIXEL: u32 = 4;
+
+pub(crate) fn source_depth(fourcc: DrmFourcc) -> BitDepth {
+    match upload_format_for(fourcc) {
+        Ok(format) if format.texture == RGB10A2 => BitDepth::Ten,
+        Ok(_) | Err(_) => BitDepth::Eight,
+    }
+}
 
 pub(crate) fn upload_format_for(fourcc: DrmFourcc) -> Result<UploadFormat, HostError> {
     UPLOAD_FORMATS

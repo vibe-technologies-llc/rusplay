@@ -109,7 +109,7 @@ pub fn stream_description() -> StreamDescription {
 
 pub fn client_config() -> Config {
     let mut config = Config::default();
-    config.video.codec = Codec::H264;
+    config.video.codec = rusplay_config::CodecChoice::pinned(Codec::H264);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = TEST_DECODE_QUEUE_FRAMES;
     config.network.bind_address = IpAddr::V4(Ipv4Addr::LOCALHOST);

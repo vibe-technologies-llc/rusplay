@@ -1,9 +1,11 @@
 mod audio;
 mod capture;
+mod choice;
 mod color;
 mod decoder;
 mod error;
 mod input;
+mod migrate;
 mod network;
 mod paths;
 mod peers;
@@ -18,11 +20,19 @@ use serde::{Deserialize, Serialize};
 pub use crate::{
     audio::{AudioConfig, FlacConfig, MicrophoneConfig, OpusConfig, OpusFrameDuration},
     capture::{CaptureConfig, CursorMode, SourceKind},
+    choice::{
+        ChromaChoice, CodecChoice, DepthChoice, FrameRateChoice, PixelFormatChoice,
+        StreamColorMode, UNDETECTED_FRAME_RATE, UNNEGOTIATED_CODEC, UNNEGOTIATED_PIXEL_FORMAT,
+        format_preference,
+    },
     color::{
         ColorConfig, ColorMethod, ColorProcessingConfig, DisplayOutputConfig, DisplayTargetConfig,
         DitherMode, GamutMappingConfig, OutputColorSpace, OutputFormat, ToneMappingConfig,
     },
-    decoder::{NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig, VideoDecoderConfig},
+    decoder::{
+        AutoDecoderConfig, NvdecDecoderConfig, SoftwareDecoderConfig, VaapiDecoderConfig,
+        VideoDecoderConfig,
+    },
     error::ConfigError,
     input::{
         ChordModifiers, ClipboardDirection, GamepadPersonality, HotkeyKey, InputConfig,
@@ -34,9 +44,10 @@ pub use crate::{
     profile::HostProfile,
     scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
-        EncoderParams, NvencConfig, NvencPreset, NvencTuning, PresentMode, PresentPacing,
-        RateControl, SoftwarePreset, SvtAv1Config, SvtAv1LogLevel, VaapiConfig, VideoConfig,
-        VideoEncoderConfig, X264Config, X264Tune, X265Config, X265Tune,
+        AutoEncoderConfig, EncoderParams, LEGACY_DEFAULT_RENDER_NODE, NvencConfig, NvencPreset,
+        NvencTuning, PresentMode, PresentPacing, RateControl, SoftwarePreset, SvtAv1Config,
+        SvtAv1LogLevel, VaapiConfig, VideoConfig, VideoEncoderConfig, X264Config, X264Tune,
+        X265Config, X265Tune,
     },
 };
 
@@ -53,6 +64,10 @@ pub struct Config {
     pub color: ColorConfig,
 }
 
+pub const CONFIG_VERSION: i64 = 2;
+const FIRST_CONFIG_VERSION: i64 = 1;
+const VERSION_KEY: &str = "version";
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -60,12 +75,39 @@ impl Config {
             source,
         })?;
 
-        let config: Self = toml::from_str(&text).map_err(|source| ConfigError::Parse {
+        let config = Self::parse(&text, path)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn parse(text: &str, path: &Path) -> Result<Self, ConfigError> {
+        let parse_error = |source| ConfigError::Parse {
             path: path.to_owned(),
             source: Box::new(source),
-        })?;
+        };
 
-        config.validate()?;
+        let mut table: toml::Table = toml::from_str(text).map_err(parse_error)?;
+        let version = match table.remove(VERSION_KEY) {
+            None => FIRST_CONFIG_VERSION,
+            Some(toml::Value::Integer(version)) => version,
+            Some(_) => {
+                return Err(ConfigError::VersionNotInteger {
+                    path: path.to_owned(),
+                });
+            }
+        };
+        if !(FIRST_CONFIG_VERSION..=CONFIG_VERSION).contains(&version) {
+            return Err(ConfigError::VersionUnsupported {
+                path: path.to_owned(),
+                version,
+            });
+        }
+
+        let mut config: Self = table.try_into().map_err(parse_error)?;
+        if version < CONFIG_VERSION {
+            migrate::unpin_legacy_defaults(&mut config);
+        }
+
         Ok(config)
     }
 
@@ -79,7 +121,10 @@ impl Config {
     }
 
     pub fn to_toml_string(&self) -> Result<String, ConfigError> {
-        toml::to_string_pretty(self).map_err(|source| ConfigError::Serialize { source })
+        let body =
+            toml::to_string_pretty(self).map_err(|source| ConfigError::Serialize { source })?;
+
+        Ok(format!("{VERSION_KEY} = {CONFIG_VERSION}\n\n{body}"))
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
@@ -296,7 +341,7 @@ mod tests {
             ColorPrimaries::DisplayP3.chromaticities()
         );
         assert_eq!(
-            toml::from_str::<Config>(&custom.to_toml_string().unwrap()).unwrap(),
+            Config::parse(&custom.to_toml_string().unwrap(), Path::new("custom.toml")).unwrap(),
             custom
         );
     }

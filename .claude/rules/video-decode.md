@@ -160,8 +160,9 @@ paths:
 
 ## VAAPI (`vaapi` feature)
 
-- `VaapiDecoder::new(codec, &VaapiDecoderConfig)` opens `video.decoder.device` (default
-  `/dev/dri/renderD128`) with `vaGetDisplayDRM`, and fails with `CodecUnsupported` when the
+- `VaapiDecoder::new(codec, &VaapiDecoderConfig)` opens `video.decoder.device` (the node
+  `auto` detected, or `/dev/dri/renderD128` for a pinned VAAPI decoder left at its default, `auto.md`) with
+  `vaGetDisplayDRM`, and fails with `CodecUnsupported` when the
   driver has no VLD entrypoint for the codec's base profile (H.264 Constrained Baseline/Main/
   High, HEVC Main, AV1 Profile 0).
 - libva is reached through `rusplay-va` (bindgen bindings re-exported as `ffi`, and the owning

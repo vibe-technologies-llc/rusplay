@@ -35,6 +35,10 @@ paths:
   250, 10 to 60000) and `virtual_first_frame_timeout_ms` (default 500, 0 to 10000, 0 turns the hold
   off). The client
   side is `video.display_debounce_ms` (default 200, up to 5000). See `host.md` and `client.md`.
+- Settings that depend on the machine, the display or the source default to `auto`; files carry
+  `version = 2`, and a version-1 file has its old shipped defaults turned into `auto` on load
+  (`auto.md`). A stored-format change bumps `CONFIG_VERSION` with a migration and a test against
+  the older shape.
 - New options go through the `add-config-option` skill.
 - `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the
   client's host book stores (`client.md`). Every field is an `Option`, `overlay` replaces the

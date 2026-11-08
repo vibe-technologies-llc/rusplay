@@ -29,6 +29,12 @@ impl Capabilities {
 
 pub fn capabilities(config: &VideoDecoderConfig) -> Result<Capabilities, DecodeError> {
     let formats = match config {
+        VideoDecoderConfig::Auto(_) => {
+            return match crate::resolve(config, None) {
+                VideoDecoderConfig::Auto(_) => Err(DecodeError::NoDecoderAvailable),
+                resolved => capabilities(&resolved),
+            };
+        }
         VideoDecoderConfig::Vaapi(vaapi) => vaapi_formats(vaapi)?,
         VideoDecoderConfig::Nvdec(nvdec) => nvdec_formats(nvdec)?,
         VideoDecoderConfig::Software(_) if cfg!(any(feature = "software", feature = "ffmpeg")) => {
@@ -41,7 +47,9 @@ pub fn capabilities(config: &VideoDecoderConfig) -> Result<Capabilities, DecodeE
         }
     };
 
-    Ok(Capabilities::new(Backend::of(config), formats))
+    let backend = Backend::of(config).ok_or(DecodeError::NoDecoderAvailable)?;
+
+    Ok(Capabilities::new(backend, formats))
 }
 
 #[cfg(feature = "vaapi")]

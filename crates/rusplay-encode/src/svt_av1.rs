@@ -253,7 +253,7 @@ impl Settings {
         config: &SvtAv1Config,
         siting: ChromaSiting,
     ) -> Result<Self, EncodeError> {
-        let format = video.pixel_format;
+        let format = video.stream_pixel_format();
 
         if format.chroma != ChromaSubsampling::Yuv420 {
             return Err(EncodeError::ChromaUnsupported {
@@ -273,7 +273,7 @@ impl Settings {
             pixel_format: format,
             color: video.color,
             siting,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };
@@ -914,7 +914,7 @@ mod tests {
                     assert!(encoder.capture_reconstruction());
                 }
                 let packet = encoder
-                    .encode(&testing::frame(format, index))
+                    .encode(&testing::frame((format).or_unnegotiated(), index))
                     .unwrap()
                     .unwrap();
                 let decoded = rav1d.decode(&packet).unwrap().unwrap();

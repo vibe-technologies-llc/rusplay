@@ -9,5 +9,7 @@ pub const CUDA_SUCCESS: CuResult = 0;
 pub type CuInitFn = unsafe extern "C" fn(c_uint) -> CuResult;
 pub type CuDeviceGetCountFn = unsafe extern "C" fn(*mut c_int) -> CuResult;
 pub type CuDeviceGetFn = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
+pub type CuDeviceGetPciBusIdFn =
+    unsafe extern "C" fn(*mut std::ffi::c_char, c_int, CuDevice) -> CuResult;
 pub type CuCtxPushCurrentFn = unsafe extern "C" fn(CuContext) -> CuResult;
 pub type CuCtxPopCurrentFn = unsafe extern "C" fn(*mut CuContext) -> CuResult;

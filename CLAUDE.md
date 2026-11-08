@@ -99,6 +99,7 @@ that implements it. The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/dependencies.md` | Adding and versioning dependencies, pure-Rust policy, C-backed allowlist |
 | `.claude/rules/roadmap.md` | Roadmap file format and upkeep |
 | `.claude/rules/config.md` | Configuration tree, defaults, validation |
+| `.claude/rules/auto.md` | Automatic settings: `auto` values, config version and migration, backend and device detection, format, frame rate and colour following the source and display |
 | `.claude/rules/capture.md` | Portal and PipeWire capture |
 | `.claude/rules/scaling.md` | GPU scaling kernels and pipeline |
 | `.claude/rules/color.md` | End-to-end colour management: description, signalling, tone and gamut mapping |

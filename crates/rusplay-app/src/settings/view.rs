@@ -10,7 +10,7 @@ use gpui::{
 use rusplay_config::{
     Config, ConfigEnvironment, ConfigRole, VideoDecoderConfig, VideoEncoderConfig,
 };
-use rusplay_core::{CodecFormat, FormatSet};
+use rusplay_core::FormatSet;
 
 use crate::{
     notice::{Notice, NoticeRaised, error_chain},
@@ -63,9 +63,14 @@ enum DeviceKey {
     Decoder(VideoDecoderConfig),
 }
 
+struct Detected {
+    backend: String,
+    formats: FormatSet,
+}
+
 struct HardwareProbe {
     key: DeviceKey,
-    formats: Option<Result<FormatSet, String>>,
+    formats: Option<Result<Detected, String>>,
 }
 
 enum ScrollTo {
@@ -125,7 +130,7 @@ fn placeholder(field: &Field, defaults: Option<&DisplayColorDefaults>) -> String
 
     match field.kind {
         Kind::Resolution => "1920x1080, empty for the capture size",
-        Kind::FrameRate => "60 or 60000/1001",
+        Kind::FrameRate => "auto, 60 or 60000/1001",
         Kind::Primaries => "custom RX,RY GX,GY BX,BY WX,WY",
         _ if field.optional => "not set",
         _ => "",
@@ -1115,10 +1120,30 @@ impl SettingsView {
         let pending = cx.background_spawn(async move {
             match key {
                 DeviceKey::Encoder(encoder) => {
-                    rusplay_host::encoder_formats(&encoder).map_err(|error| error.to_string())
+                    let automatic = matches!(encoder, VideoEncoderConfig::Auto(_));
+                    let resolved = rusplay_host::resolve_encoder(&encoder);
+                    rusplay_host::encoder_formats(&resolved)
+                        .map(|formats| Detected {
+                            backend: outlook::detected(
+                                outlook::encoder_backend(&resolved),
+                                automatic,
+                            ),
+                            formats,
+                        })
+                        .map_err(|error| error.to_string())
                 }
                 DeviceKey::Decoder(decoder) => {
-                    rusplay_client::decoder_formats(&decoder).map_err(|error| error.to_string())
+                    let automatic = matches!(decoder, VideoDecoderConfig::Auto(_));
+                    let resolved = rusplay_client::resolve_decoder(&decoder);
+                    rusplay_client::decoder_formats(&resolved)
+                        .map(|formats| Detected {
+                            backend: outlook::detected(
+                                outlook::decoder_backend(&resolved),
+                                automatic,
+                            ),
+                            formats,
+                        })
+                        .map_err(|error| error.to_string())
                 }
             }
         });
@@ -1169,16 +1194,20 @@ impl SettingsView {
                 text: error.clone(),
                 attention: true,
             }),
-            Some(Ok(formats)) => match self.role {
+            Some(Ok(detected)) => match self.role {
                 ConfigRole::Host => lines.push(outlook::encoder_outlook(
-                    outlook::encoder_backend(&config.video.encoder),
-                    CodecFormat::new(config.video.codec, config.video.pixel_format),
-                    *formats,
+                    &detected.backend,
+                    rusplay_config::format_preference(
+                        config.video.codec,
+                        config.video.pixel_format,
+                        None,
+                    ),
+                    detected.formats,
                 )),
                 ConfigRole::Client => {
                     lines.extend(outlook::decoder_outlook(
-                        outlook::decoder_backend(&config.video.decoder),
-                        *formats,
+                        &detected.backend,
+                        detected.formats,
                     ));
                 }
             },

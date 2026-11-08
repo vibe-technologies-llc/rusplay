@@ -139,8 +139,9 @@ paths:
   newest pending `Display` at most once per `capture.virtual_resize_min_interval_ms`.
   `rusplay-fuzz`'s `control` target covers it through `ControlMessage::decode`.
 - Format negotiation: the host picks
-  `FormatSet::closest_to(configured)` from encodable ∩ decodable, where `configured` is the
-  host's `video.codec` and `video.pixel_format`. The fallback order is lexicographic: codec
+  `FormatSet::best_for(preference)` from encodable ∩ decodable, where the preference comes from
+  the host's `video.codec` and `video.pixel_format`; automatic axes rank after pinned ones
+  (`auto.md`). For pinned axes the fallback order is lexicographic: codec
   first, then chroma, then depth. On the chroma and depth axes the configured value comes first,
   then higher values nearest first (nothing asked for is lost), then lower values nearest first;
   codecs are the configured one, then AV1, HEVC, H.264. The configured codec is kept whenever

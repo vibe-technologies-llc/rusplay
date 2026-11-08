@@ -9,6 +9,7 @@ const MAX_SOFTWARE_DECODER_THREADS: u32 = 256;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "backend", rename_all = "kebab-case")]
 pub enum VideoDecoderConfig {
+    Auto(AutoDecoderConfig),
     Vaapi(VaapiDecoderConfig),
     Nvdec(NvdecDecoderConfig),
     Software(SoftwareDecoderConfig),
@@ -16,7 +17,7 @@ pub enum VideoDecoderConfig {
 
 impl Default for VideoDecoderConfig {
     fn default() -> Self {
-        Self::Vaapi(VaapiDecoderConfig::default())
+        Self::Auto(AutoDecoderConfig::default())
     }
 }
 
@@ -28,10 +29,14 @@ impl VideoDecoderConfig {
             }) if threads.get() > MAX_SOFTWARE_DECODER_THREADS => {
                 Err(ConfigError::DecoderThreadsOutOfRange(threads.get()))
             }
-            Self::Vaapi(_) | Self::Nvdec(_) | Self::Software(_) => Ok(()),
+            Self::Auto(_) | Self::Vaapi(_) | Self::Nvdec(_) | Self::Software(_) => Ok(()),
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutoDecoderConfig {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -43,7 +48,7 @@ pub struct VaapiDecoderConfig {
 impl Default for VaapiDecoderConfig {
     fn default() -> Self {
         Self {
-            device: PathBuf::from("/dev/dri/renderD128"),
+            device: PathBuf::from(crate::video::LEGACY_DEFAULT_RENDER_NODE),
             copy_output: false,
         }
     }

@@ -14,6 +14,12 @@ pub enum ConfigError {
         path: PathBuf,
         source: Box<toml::de::Error>,
     },
+    #[error("config file {path} is version {version}, which this build cannot read")]
+    VersionUnsupported { path: PathBuf, version: i64 },
+    #[error("config file {path} has a version that is not a whole number")]
+    VersionNotInteger { path: PathBuf },
+    #[error("video.auto_detect_wait_ms is {0}, outside 0 to 10000")]
+    AutoDetectWaitOutOfRange(u32),
     #[error("failed to parse a host profile")]
     ProfileParse { source: Box<toml::de::Error> },
     #[error("frame rate {numerator}/{denominator} is not a valid rate")]
@@ -309,8 +315,11 @@ impl ConfigError {
                 Some("audio.microphone.fec_overhead_percent")
             }
             Self::DecoderThreadsOutOfRange(_) => Some("video.decoder.threads"),
+            Self::AutoDetectWaitOutOfRange(_) => Some("video.auto_detect_wait_ms"),
             Self::Read { .. }
             | Self::Parse { .. }
+            | Self::VersionUnsupported { .. }
+            | Self::VersionNotInteger { .. }
             | Self::NoConfigHome
             | Self::Serialize { .. }
             | Self::CreateDirectory { .. }

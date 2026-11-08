@@ -29,7 +29,7 @@ use pipewire::{
     },
     stream::{Stream, StreamFlags, StreamRc, StreamState},
 };
-use rusplay_config::{CaptureConfig, CursorMode, VideoConfig};
+use rusplay_config::{CaptureConfig, CursorMode, StreamColorMode, VideoConfig};
 use rusplay_core::{BitDepth, ColorSpace, FrameRate, HdrLevels, Resolution, Timestamp};
 
 pub use self::format::default_formats;
@@ -47,7 +47,7 @@ use self::{
 };
 use crate::{
     BufferLease, CaptureError, CaptureSource, DrmFourcc, Frame, FrameBuffer, OutputOffer,
-    OutputRequest, PortalSession, ShmFallback,
+    OutputRequest, PortalSession, ShmFallback, SourceRefresh,
     cursor::{CursorTracker, CursorUpdate},
     handoff::{Publisher, Received, Subscriber, latest},
     modifier::FormatModifiers,
@@ -71,7 +71,9 @@ pub struct StreamOptions {
 
 impl StreamOptions {
     pub fn new(capture: &CaptureConfig, video: &VideoConfig) -> Self {
-        let formats = default_formats(video.pixel_format.depth != BitDepth::Eight);
+        let formats = default_formats(
+            video.pixel_format.depth != rusplay_config::DepthChoice::pinned(BitDepth::Eight),
+        );
         let modifiers = formats
             .iter()
             .copied()
@@ -83,10 +85,11 @@ impl StreamOptions {
             prefer_dmabuf: capture.prefer_dmabuf,
             modifiers,
             cursor_metadata: capture.cursor == CursorMode::Metadata,
-            color_preference: Some(video.color),
+            color_preference: (video.color_mode == StreamColorMode::Configured)
+                .then_some(video.color),
             hdr: video.color.hdr,
             size_hint: video.resolution,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
         }
     }
 
@@ -137,6 +140,7 @@ pub struct PipeWireCapture {
     failure: Failure,
     fallback: ShmFallback,
     offer: OfferSlot,
+    refresh: SourceRefresh,
     control: channel::Sender<Command>,
     worker: Option<JoinHandle<()>>,
 }
@@ -152,6 +156,7 @@ impl PipeWireCapture {
         let failure = Failure::default();
         let fallback = ShmFallback::default();
         let offer = OfferSlot::default();
+        let refresh = SourceRefresh::default();
         let (control, commands) = channel::channel();
         let (started_tx, started_rx) = mpsc::sync_channel(1);
 
@@ -164,6 +169,7 @@ impl PipeWireCapture {
             failure: Arc::clone(&failure),
             fallback: fallback.clone(),
             offer: Arc::clone(&offer),
+            refresh: refresh.clone(),
             control: control.clone(),
             commands,
         };
@@ -182,6 +188,7 @@ impl PipeWireCapture {
             failure,
             fallback,
             offer,
+            refresh,
             control,
             worker: Some(worker),
         };
@@ -230,6 +237,10 @@ impl PipeWireCapture {
 
     pub fn shm_fallback(&self) -> ShmFallback {
         self.fallback.clone()
+    }
+
+    pub fn source_refresh(&self) -> SourceRefresh {
+        self.refresh.clone()
     }
 
     pub fn output_offer(&self) -> OutputOffer {
@@ -290,6 +301,7 @@ struct WorkerSetup {
     failure: Failure,
     fallback: ShmFallback,
     offer: OfferSlot,
+    refresh: SourceRefresh,
     control: channel::Sender<Command>,
     commands: channel::Receiver<Command>,
 }
@@ -305,6 +317,7 @@ struct Worker {
     failure: Failure,
     fallback: ShmFallback,
     offer: OfferSlot,
+    refresh: SourceRefresh,
     control: channel::Sender<Command>,
     mainloop: MainLoopWeak,
     epoch: Instant,
@@ -359,6 +372,7 @@ impl Worker {
     fn negotiate(&mut self, stream: &Stream, param: &Pod) -> Result<(), CaptureError> {
         self.adopt_offer();
         let parsed = parse_format(param.as_bytes())?;
+        self.refresh.set(parsed.refresh);
         let table = self.options.dmabuf_table().unwrap_or_default();
 
         let color = describe_color(&parsed.colorimetry, self.options.hdr)?;
@@ -583,6 +597,7 @@ fn run_worker(
         failure: setup.failure,
         fallback: setup.fallback.clone(),
         offer: Arc::clone(&setup.offer),
+        refresh: setup.refresh.clone(),
         control: setup.control,
         mainloop: mainloop.downgrade(),
         epoch: Instant::now(),
@@ -728,8 +743,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_options_prefer_the_stream_colour() {
-        let mut video = VideoConfig::default();
+    fn a_stream_following_its_source_offers_no_colour_preference() {
+        let options = StreamOptions::new(&CaptureConfig::default(), &VideoConfig::default());
+
+        assert_eq!(options.color_preference, None);
+        assert_eq!(options.request().color, None);
+    }
+
+    #[test]
+    fn stream_options_prefer_the_configured_stream_colour() {
+        let mut video = VideoConfig {
+            color_mode: StreamColorMode::Configured,
+            ..VideoConfig::default()
+        };
         video.color.transfer = rusplay_core::TransferFunction::Pq;
 
         let options = StreamOptions::new(&CaptureConfig::default(), &video);

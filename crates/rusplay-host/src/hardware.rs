@@ -42,7 +42,14 @@ fn test_name() -> String {
 
 pub(crate) fn encoder_supports_configured_format(config: &Config) -> bool {
     match capabilities(&config.video.encoder) {
-        Ok(found) if found.supports(config.video.codec, config.video.pixel_format) => true,
+        Ok(found)
+            if found.supports(
+                config.video.stream_codec(),
+                config.video.stream_pixel_format(),
+            ) =>
+        {
+            true
+        }
         Ok(_) => {
             unsupported("the configured codec and pixel format");
             false

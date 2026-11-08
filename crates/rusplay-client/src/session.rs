@@ -148,7 +148,8 @@ impl ClientSession {
     }
 
     pub fn probe(&self) -> Result<(), ClientError> {
-        let _decoder = rusplay_decode::open(self.config.video.codec, &self.config.video.decoder)?;
+        let _decoder =
+            rusplay_decode::open(self.config.video.stream_codec(), &self.config.video.decoder)?;
         let _audio = audio::open_decoder(&self.config.audio)?;
 
         Ok(())
@@ -215,7 +216,9 @@ impl ClientSession {
             Some(display) => display,
             None => default_display(&self.config)?,
         };
-        let decodable = rusplay_decode::capabilities(&self.config.video.decoder)?.formats();
+        let mut config = self.config.clone();
+        config.video.decoder = rusplay_decode::resolve(&config.video.decoder, None);
+        let decodable = rusplay_decode::capabilities(&config.video.decoder)?.formats();
         let transport = Transport::bind(
             SocketAddr::new(bind_address(network.bind_address, host), 0),
             TransportOptions::from(network),
@@ -243,7 +246,7 @@ impl ClientSession {
         let output = open_audio(&self.config.audio)?;
 
         stream.spawn_present(&self.config, gpu, sink, &decoded)?;
-        let (queue, feedback) = stream.spawn_decode(&self.config, &decoded)?;
+        let (queue, feedback) = stream.spawn_decode(&config, &decoded)?;
         let audio_queue = match output {
             Some(output) => Some(stream.spawn_audio(&self.config.audio, output)?),
             None => None,

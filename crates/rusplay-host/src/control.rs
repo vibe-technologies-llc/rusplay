@@ -26,10 +26,11 @@ use crate::{
     accept::{Replay, refresh_peers},
     datagrams::ForwardedDatagram,
     mailbox::RecoveryRequest,
-    negotiate::negotiate,
+    negotiate::{StreamChoice, negotiate},
     outbox::ControlOutbox,
     shared::Shared,
-    virtual_output::{ResizeGate, VirtualOutput, select_output},
+    source::CaptureFeed,
+    virtual_output::{ResizeGate, VirtualOutput, select_output, stream_rate},
 };
 
 const RECV_BATCH_DATAGRAMS: usize = 32;
@@ -103,7 +104,10 @@ pub(crate) struct ControlLinks {
     pub outbox: Arc<ControlOutbox>,
     pub input: Option<SyncSender<ForwardedDatagram>>,
     pub microphone: Option<SyncSender<ForwardedDatagram>>,
-    pub configured: CodecFormat,
+    pub stream: StreamChoice,
+    pub source: Arc<CaptureFeed>,
+    pub follow_refresh: Option<u32>,
+    pub source_wait: Duration,
     pub virtual_output: Option<VirtualOutput>,
     pub clipboard: Option<ClipboardLink>,
 }
@@ -344,6 +348,7 @@ impl ControlStage {
             self.links.outbox.channel().next_deadline(),
             handshake_deadline,
             keepalive,
+            self.source_deadline().filter(|deadline| *deadline > now),
             self.resize.next_deadline(),
             Some(self.last_heard + self.timing.peer_timeout),
         ]
@@ -566,7 +571,7 @@ impl ControlStage {
         else {
             return Ok(());
         };
-        if self.awaiting_display() {
+        if self.awaiting_display() || self.awaiting_source(now) {
             return Ok(());
         }
         self.unanswered_hello = None;
@@ -586,12 +591,25 @@ impl ControlStage {
             return self.resume_after_takeover(agreed.chosen, encodable, decodable, now);
         }
 
-        match negotiate(self.links.configured, encodable, decodable) {
+        let source = self.links.source.source_traits();
+        let preference = self
+            .links
+            .stream
+            .preference(source.map(|traits| traits.depth));
+        match negotiate(preference, encodable, decodable) {
             Ok(negotiated) => {
                 if let Some((output, display)) =
                     self.links.virtual_output.as_ref().zip(self.display)
                 {
                     shared.set_output(output.select(&display));
+                } else if let Some((max_hertz, display)) =
+                    self.links.follow_refresh.zip(self.display)
+                {
+                    shared.set_stream_rate(stream_rate(
+                        &display,
+                        max_hertz,
+                        self.links.source.source_refresh(),
+                    ));
                 }
                 shared.negotiation.agree(negotiated);
                 self.streaming = true;
@@ -642,9 +660,21 @@ impl ControlStage {
     }
 
     fn awaiting_display(&self) -> bool {
-        self.links.virtual_output.is_some()
+        (self.links.virtual_output.is_some() || self.links.follow_refresh.is_some())
             && self.display.is_none()
             && self.links.shared.negotiation.agreed().is_none()
+    }
+
+    fn source_deadline(&self) -> Option<Instant> {
+        (self.unanswered_hello.is_some()
+            && self.links.stream.follows_source()
+            && self.links.source.source_traits().is_none())
+        .then_some(self.started + self.links.source_wait)
+    }
+
+    fn awaiting_source(&self, now: Instant) -> bool {
+        self.source_deadline()
+            .is_some_and(|deadline| now < deadline)
     }
 
     fn take_hint(&self, kbps: u32) {

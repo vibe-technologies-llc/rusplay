@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
-use rusplay_config::VideoConfig;
-use rusplay_core::{CodecFormat, FormatSet};
+use rusplay_config::{
+    CodecChoice, PixelFormatChoice, StreamColorMode, VideoConfig, format_preference,
+};
+use rusplay_core::{BitDepth, CodecFormat, FormatPreference, FormatSet};
 
 use crate::HostError;
 
@@ -18,19 +20,44 @@ impl NegotiatedFormat {
     }
 }
 
-pub(crate) const fn configured_format(video: &VideoConfig) -> CodecFormat {
-    CodecFormat::new(video.codec, video.pixel_format)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StreamChoice {
+    codec: CodecChoice,
+    pixel_format: PixelFormatChoice,
+    color_mode: StreamColorMode,
+}
+
+impl StreamChoice {
+    pub(crate) const fn of(video: &VideoConfig) -> Self {
+        Self {
+            codec: video.codec,
+            pixel_format: video.pixel_format,
+            color_mode: video.color_mode,
+        }
+    }
+
+    pub(crate) const fn follows_source(self) -> bool {
+        self.pixel_format.depth.fixed().is_none()
+            || matches!(self.color_mode, StreamColorMode::Source)
+    }
+
+    pub(crate) const fn preference(self, source_depth: Option<BitDepth>) -> FormatPreference {
+        format_preference(self.codec, self.pixel_format, source_depth)
+    }
 }
 
 pub(crate) fn negotiate(
-    configured: CodecFormat,
+    preference: FormatPreference,
     encodable: FormatSet,
     decodable: FormatSet,
 ) -> Result<NegotiatedFormat, HostError> {
     encodable
         .intersection(decodable)
-        .closest_to(configured)
-        .map(|chosen| NegotiatedFormat { configured, chosen })
+        .best_for(preference)
+        .map(|chosen| NegotiatedFormat {
+            configured: preference.configured(chosen),
+            chosen,
+        })
         .ok_or(HostError::NoCommonFormat {
             encodable,
             decodable,
@@ -98,6 +125,14 @@ mod tests {
         formats.iter().copied().collect()
     }
 
+    fn negotiate(
+        configured: CodecFormat,
+        encodable: FormatSet,
+        decodable: FormatSet,
+    ) -> Result<NegotiatedFormat, HostError> {
+        super::negotiate(FormatPreference::pinned(configured), encodable, decodable)
+    }
+
     #[test]
     fn the_configured_format_is_kept_when_both_ends_support_it() {
         let negotiated = negotiate(HEVC_422_8, FormatSet::ALL, FormatSet::ALL).unwrap();
@@ -160,14 +195,36 @@ mod tests {
     }
 
     #[test]
-    fn the_configured_format_comes_from_the_video_section() {
+    fn a_pinned_video_section_prefers_exactly_its_format() {
         let video = VideoConfig {
-            codec: Codec::Av1,
-            pixel_format: AV1_420_10.format,
+            codec: CodecChoice::pinned(Codec::Av1),
+            pixel_format: PixelFormatChoice::pinned(AV1_420_10.format),
+            color_mode: StreamColorMode::Configured,
             ..VideoConfig::default()
         };
+        let choice = StreamChoice::of(&video);
 
-        assert_eq!(configured_format(&video), AV1_420_10);
+        assert_eq!(
+            choice.preference(Some(BitDepth::Eight)),
+            FormatPreference::pinned(AV1_420_10)
+        );
+        assert!(!choice.follows_source());
+    }
+
+    #[test]
+    fn auto_follows_the_source_depth_and_is_never_a_fallback() {
+        let choice = StreamChoice::of(&VideoConfig::default());
+        let encodable = set(&[HEVC_420_8, AV1_420_8, AV1_420_10]);
+        let decodable = set(&[HEVC_420_8, AV1_420_8, AV1_420_10]);
+
+        let ten =
+            super::negotiate(choice.preference(Some(BitDepth::Ten)), encodable, decodable).unwrap();
+        let eight = super::negotiate(choice.preference(None), encodable, decodable).unwrap();
+
+        assert!(choice.follows_source());
+        assert_eq!(ten.chosen, AV1_420_10);
+        assert_eq!(eight.chosen, AV1_420_8);
+        assert!(!ten.is_fallback() && !eight.is_fallback());
     }
 
     #[test]

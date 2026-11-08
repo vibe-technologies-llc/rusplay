@@ -43,18 +43,85 @@ impl CodecFormat {
         1 << index
     }
 
-    fn fallback_rank(self, preferred: Self) -> FallbackRank {
-        FallbackRank {
-            codec: codec_rank(self.codec, preferred.codec),
-            chroma: AxisRank::of(
-                chroma_index(self.format.chroma),
-                chroma_index(preferred.format.chroma),
-            ),
-            depth: AxisRank::of(
-                depth_index(self.format.depth),
-                depth_index(preferred.format.depth),
-            ),
+    fn rank(self, preference: FormatPreference) -> PreferenceRank {
+        let pinned_axis = |own: usize, pinned: Option<usize>| {
+            pinned.map_or(AxisRank::Same, |pinned| AxisRank::of(own, pinned))
+        };
+        let depth = depth_index(self.format.depth);
+        let chroma = chroma_index(self.format.chroma);
+
+        PreferenceRank {
+            pinned_codec: preference
+                .codec
+                .map_or(0, |pinned| codec_rank(self.codec, pinned)),
+            pinned_chroma: pinned_axis(chroma, preference.chroma.map(chroma_index)),
+            pinned_depth: match preference.depth {
+                DepthPreference::Pinned(pinned) => AxisRank::of(depth, depth_index(pinned)),
+                DepthPreference::Auto(_) => AxisRank::Same,
+            },
+            auto_depth: match preference.depth {
+                DepthPreference::Pinned(_) => AxisRank::Same,
+                DepthPreference::Auto(target) => AxisRank::of(depth, depth_index(target)),
+            },
+            auto_chroma: if preference.chroma.is_some() {
+                0
+            } else {
+                CHROMAS.len() - 1 - chroma
+            },
+            auto_codec: if preference.codec.is_some() {
+                0
+            } else {
+                codec_rank(self.codec, CODEC_FALLBACK_ORDER[0])
+            },
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DepthPreference {
+    Pinned(BitDepth),
+    Auto(BitDepth),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FormatPreference {
+    pub codec: Option<Codec>,
+    pub chroma: Option<ChromaSubsampling>,
+    pub depth: DepthPreference,
+}
+
+impl FormatPreference {
+    pub const fn pinned(format: CodecFormat) -> Self {
+        Self {
+            codec: Some(format.codec),
+            chroma: Some(format.format.chroma),
+            depth: DepthPreference::Pinned(format.format.depth),
+        }
+    }
+
+    pub const fn is_pinned(self) -> bool {
+        self.codec.is_some()
+            && self.chroma.is_some()
+            && matches!(self.depth, DepthPreference::Pinned(_))
+    }
+
+    pub const fn configured(self, chosen: CodecFormat) -> CodecFormat {
+        CodecFormat::new(
+            match self.codec {
+                Some(codec) => codec,
+                None => chosen.codec,
+            },
+            PixelFormat {
+                chroma: match self.chroma {
+                    Some(chroma) => chroma,
+                    None => chosen.format.chroma,
+                },
+                depth: match self.depth {
+                    DepthPreference::Pinned(depth) => depth,
+                    DepthPreference::Auto(_) => chosen.format.depth,
+                },
+            },
+        )
     }
 }
 
@@ -88,10 +155,13 @@ impl AxisRank {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct FallbackRank {
-    codec: usize,
-    chroma: AxisRank,
-    depth: AxisRank,
+struct PreferenceRank {
+    pinned_codec: usize,
+    pinned_chroma: AxisRank,
+    pinned_depth: AxisRank,
+    auto_depth: AxisRank,
+    auto_chroma: usize,
+    auto_codec: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -135,8 +205,12 @@ impl FormatSet {
     }
 
     pub fn closest_to(self, preferred: CodecFormat) -> Option<CodecFormat> {
+        self.best_for(FormatPreference::pinned(preferred))
+    }
+
+    pub fn best_for(self, preference: FormatPreference) -> Option<CodecFormat> {
         self.iter()
-            .min_by_key(|candidate| candidate.fallback_rank(preferred))
+            .min_by_key(|candidate| candidate.rank(preference))
     }
 }
 
@@ -207,6 +281,146 @@ fn codec_rank(codec: Codec, preferred: Codec) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const AUTO_EIGHT: FormatPreference = FormatPreference {
+        codec: None,
+        chroma: None,
+        depth: DepthPreference::Auto(BitDepth::Eight),
+    };
+    const AUTO_TEN: FormatPreference = FormatPreference {
+        depth: DepthPreference::Auto(BitDepth::Ten),
+        ..AUTO_EIGHT
+    };
+
+    #[test]
+    fn auto_takes_the_source_depth_then_the_widest_chroma_then_the_best_codec() {
+        let radeonsi = set(&[
+            format(Codec::H264, ChromaSubsampling::Yuv420, BitDepth::Eight),
+            format(Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Eight),
+            format(Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Ten),
+            format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Eight),
+            format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Ten),
+        ]);
+        let blackwell = set(&[
+            format(Codec::Hevc, ChromaSubsampling::Yuv444, BitDepth::Ten),
+            format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Ten),
+            format(Codec::H264, ChromaSubsampling::Yuv444, BitDepth::Eight),
+        ]);
+
+        assert_eq!(
+            radeonsi.best_for(AUTO_TEN),
+            Some(format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Ten))
+        );
+        assert_eq!(
+            radeonsi.best_for(AUTO_EIGHT),
+            Some(format(
+                Codec::Av1,
+                ChromaSubsampling::Yuv420,
+                BitDepth::Eight
+            ))
+        );
+        assert_eq!(
+            blackwell.best_for(AUTO_TEN),
+            Some(format(
+                Codec::Hevc,
+                ChromaSubsampling::Yuv444,
+                BitDepth::Ten
+            ))
+        );
+        assert_eq!(
+            blackwell.best_for(AUTO_EIGHT),
+            Some(format(
+                Codec::H264,
+                ChromaSubsampling::Yuv444,
+                BitDepth::Eight
+            ))
+        );
+    }
+
+    #[test]
+    fn an_auto_preference_orders_every_format_strictly() {
+        for preference in [AUTO_EIGHT, AUTO_TEN] {
+            let mut ranks: Vec<_> = CodecFormat::all()
+                .map(|candidate| candidate.rank(preference))
+                .collect();
+            let count = ranks.len();
+            ranks.sort();
+            ranks.dedup();
+
+            assert_eq!(ranks.len(), count);
+        }
+    }
+
+    #[test]
+    fn a_pinned_axis_outranks_every_auto_axis() {
+        let available = set(&[
+            format(Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Eight),
+            format(Codec::Av1, ChromaSubsampling::Yuv444, BitDepth::Ten),
+        ]);
+        let hevc = FormatPreference {
+            codec: Some(Codec::Hevc),
+            ..AUTO_TEN
+        };
+
+        assert_eq!(
+            available.best_for(hevc),
+            Some(format(
+                Codec::Hevc,
+                ChromaSubsampling::Yuv420,
+                BitDepth::Eight
+            ))
+        );
+        assert_eq!(
+            hevc.configured(format(
+                Codec::Hevc,
+                ChromaSubsampling::Yuv420,
+                BitDepth::Eight
+            )),
+            format(Codec::Hevc, ChromaSubsampling::Yuv420, BitDepth::Eight)
+        );
+    }
+
+    #[test]
+    fn an_auto_axis_never_makes_the_choice_a_fallback() {
+        let chosen = format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Eight);
+        let pinned_chroma = FormatPreference {
+            chroma: Some(ChromaSubsampling::Yuv444),
+            ..AUTO_TEN
+        };
+
+        assert_eq!(AUTO_TEN.configured(chosen), chosen);
+        assert_eq!(
+            pinned_chroma.configured(chosen),
+            format(Codec::Av1, ChromaSubsampling::Yuv444, BitDepth::Eight)
+        );
+        assert!(FormatPreference::pinned(chosen).is_pinned());
+        assert!(!AUTO_TEN.is_pinned());
+    }
+
+    #[test]
+    fn a_fully_pinned_preference_ranks_exactly_like_closest_to() {
+        let pool: Vec<CodecFormat> = CodecFormat::all().collect();
+        for mask in [
+            0x0005_5555_u32,
+            0x0002_a2aa,
+            0x0001_f0f0,
+            0x0007_ffff,
+            0x0003_c3c3,
+        ] {
+            let available = set(&pool
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| mask & (1 << index) != 0)
+                .map(|(_, format)| *format)
+                .collect::<Vec<_>>());
+            for preferred in CodecFormat::all() {
+                assert_eq!(
+                    available.best_for(FormatPreference::pinned(preferred)),
+                    available.closest_to(preferred)
+                );
+            }
+        }
+    }
 
     const fn format(codec: Codec, chroma: ChromaSubsampling, depth: BitDepth) -> CodecFormat {
         CodecFormat::new(codec, PixelFormat { chroma, depth })
@@ -389,7 +603,7 @@ mod tests {
     fn the_choice_is_always_a_member_and_the_order_is_total() {
         for preferred in CodecFormat::all() {
             let ranks = CodecFormat::all()
-                .map(|candidate| candidate.fallback_rank(preferred))
+                .map(|candidate| candidate.rank(FormatPreference::pinned(preferred)))
                 .collect::<Vec<_>>();
             let mut sorted = ranks.clone();
             sorted.sort();

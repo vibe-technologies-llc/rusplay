@@ -8,6 +8,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusplay_capture::OutputRequest;
+use rusplay_core::FrameRate;
 
 use crate::{
     capture::Captured, clock::StreamClock, link::ClientLink, mailbox::Mailbox,
@@ -25,6 +26,7 @@ pub(crate) struct Shared {
     pub mailbox: Mailbox<Captured>,
     pub negotiation: Negotiation,
     output: Mutex<Option<OutputRequest>>,
+    stream_rate: Mutex<Option<FrameRate>>,
 }
 
 impl Shared {
@@ -39,6 +41,7 @@ impl Shared {
             negotiation: Negotiation::default(),
             quality_requested: AtomicBool::new(false),
             output: Mutex::new(None),
+            stream_rate: Mutex::new(None),
         }
     }
 
@@ -48,6 +51,20 @@ impl Shared {
 
     pub(crate) fn output(&self) -> Option<OutputRequest> {
         *self.output.lock()
+    }
+
+    pub(crate) fn set_stream_rate(&self, rate: FrameRate) {
+        *self.stream_rate.lock() = Some(rate);
+    }
+
+    pub(crate) fn agreed_rate(&self) -> Option<FrameRate> {
+        self.output()
+            .map(|output| output.frame_rate)
+            .or(*self.stream_rate.lock())
+    }
+
+    pub(crate) fn frame_rate(&self, configured: FrameRate) -> FrameRate {
+        self.agreed_rate().unwrap_or(configured)
     }
 
     pub(crate) fn request_quality(&self, enabled: bool) {

@@ -1,5 +1,7 @@
 use rusplay_config::{VideoDecoderConfig, VideoEncoderConfig};
-use rusplay_core::{BitDepth, ChromaSubsampling, Codec, CodecFormat, FormatSet};
+use rusplay_core::{
+    BitDepth, ChromaSubsampling, Codec, CodecFormat, DepthPreference, FormatPreference, FormatSet,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutlookLine {
@@ -7,21 +9,34 @@ pub struct OutlookLine {
     pub attention: bool,
 }
 
-pub fn encoder_backend(config: &VideoEncoderConfig) -> &'static str {
+pub fn encoder_backend(config: &VideoEncoderConfig) -> String {
     match config {
-        VideoEncoderConfig::Vaapi(_) => "VAAPI",
-        VideoEncoderConfig::Nvenc(_) => "NVENC",
-        VideoEncoderConfig::X264(_) => "x264",
-        VideoEncoderConfig::X265(_) => "x265",
-        VideoEncoderConfig::SvtAv1(_) => "SVT-AV1",
+        VideoEncoderConfig::Auto(_) => "automatic".to_owned(),
+        VideoEncoderConfig::Vaapi(vaapi) => format!("VAAPI ({})", vaapi.device.display()),
+        VideoEncoderConfig::Nvenc(nvenc) => format!("NVENC (GPU {})", nvenc.gpu_index),
+        VideoEncoderConfig::X264(_) => "x264".to_owned(),
+        VideoEncoderConfig::X265(_) => "x265".to_owned(),
+        VideoEncoderConfig::SvtAv1(_) => "SVT-AV1".to_owned(),
     }
 }
 
-pub fn decoder_backend(config: &VideoDecoderConfig) -> &'static str {
+pub fn decoder_backend(config: &VideoDecoderConfig) -> String {
     match config {
-        VideoDecoderConfig::Vaapi(_) => "VAAPI",
-        VideoDecoderConfig::Nvdec(_) => "NVDEC",
-        VideoDecoderConfig::Software(_) => "software",
+        VideoDecoderConfig::Auto(_) => "automatic".to_owned(),
+        VideoDecoderConfig::Vaapi(vaapi) if vaapi.copy_output => {
+            format!("VAAPI ({}, CPU copy)", vaapi.device.display())
+        }
+        VideoDecoderConfig::Vaapi(vaapi) => format!("VAAPI ({})", vaapi.device.display()),
+        VideoDecoderConfig::Nvdec(nvdec) => format!("NVDEC (GPU {})", nvdec.gpu_index),
+        VideoDecoderConfig::Software(_) => "software".to_owned(),
+    }
+}
+
+pub fn detected(label: String, automatic: bool) -> String {
+    if automatic {
+        format!("detected {label}")
+    } else {
+        label
     }
 }
 
@@ -35,29 +50,50 @@ pub fn audio_gap(codec: &str, flac_compiled: bool) -> Option<&'static str> {
 
 pub fn encoder_outlook(
     backend: &str,
-    configured: CodecFormat,
+    preference: FormatPreference,
     available: FormatSet,
 ) -> OutlookLine {
-    match available.closest_to(configured) {
-        Some(produced) if produced == configured => OutlookLine {
-            text: format!(
-                "This {backend} encoder will send {}.",
-                format_name(produced)
-            ),
-            attention: false,
-        },
-        Some(produced) => OutlookLine {
+    let Some(produced) = available.best_for(preference) else {
+        return OutlookLine {
+            text: format!("This {backend} encoder has no format it can send."),
+            attention: true,
+        };
+    };
+    let configured = preference.configured(produced);
+
+    if produced != configured {
+        return OutlookLine {
             text: format!(
                 "{} does not exist on this {backend} encoder, so it will send {}.",
                 format_name(configured),
                 format_name(produced)
             ),
             attention: true,
-        },
-        None => OutlookLine {
-            text: format!("This {backend} encoder has no format it can send."),
-            attention: true,
-        },
+        };
+    }
+
+    let deep = match preference.depth {
+        DepthPreference::Auto(_) => available.best_for(FormatPreference {
+            depth: DepthPreference::Auto(BitDepth::Ten),
+            ..preference
+        }),
+        DepthPreference::Pinned(_) => None,
+    };
+    let text = match deep.filter(|deep| *deep != produced) {
+        Some(deep) => format!(
+            "This {backend} encoder will send {}, or {} from a 10-bit or HDR source.",
+            format_name(produced),
+            format_name(deep)
+        ),
+        None => format!(
+            "This {backend} encoder will send {}.",
+            format_name(produced)
+        ),
+    };
+
+    OutlookLine {
+        text,
+        attention: false,
     }
 }
 
@@ -255,7 +291,11 @@ mod tests {
     #[test]
     fn an_encoder_falls_back_when_the_selected_format_does_not_exist() {
         let configured = format(Codec::Hevc, ChromaSubsampling::Yuv444, BitDepth::Twelve);
-        let outlook = encoder_outlook("VAAPI", configured, without_twelve());
+        let outlook = encoder_outlook(
+            "VAAPI",
+            FormatPreference::pinned(configured),
+            without_twelve(),
+        );
 
         assert!(outlook.attention);
         assert_eq!(
@@ -267,7 +307,11 @@ mod tests {
     #[test]
     fn an_encoder_that_can_send_the_selection_says_so() {
         let configured = format(Codec::Hevc, ChromaSubsampling::Yuv422, BitDepth::Ten);
-        let outlook = encoder_outlook("NVENC", configured, FormatSet::ALL);
+        let outlook = encoder_outlook(
+            "NVENC",
+            FormatPreference::pinned(configured),
+            FormatSet::ALL,
+        );
 
         assert!(!outlook.attention);
         assert_eq!(
@@ -284,7 +328,7 @@ mod tests {
             ChromaSubsampling::Yuv420,
             BitDepth::Eight,
         )]);
-        let outlook = encoder_outlook("x264", configured, only_h264);
+        let outlook = encoder_outlook("x264", FormatPreference::pinned(configured), only_h264);
 
         assert!(outlook.attention);
         assert_eq!(
@@ -294,9 +338,35 @@ mod tests {
     }
 
     #[test]
+    fn an_automatic_format_names_what_an_eight_and_a_ten_bit_source_get() {
+        let available = only(&[
+            format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Eight),
+            format(Codec::Av1, ChromaSubsampling::Yuv420, BitDepth::Ten),
+            format(Codec::Hevc, ChromaSubsampling::Yuv444, BitDepth::Eight),
+        ]);
+        let automatic = rusplay_config::format_preference(
+            rusplay_config::CodecChoice::Auto,
+            rusplay_config::PixelFormatChoice::default(),
+            None,
+        );
+
+        let outlook = encoder_outlook("VAAPI", automatic, available);
+
+        assert!(!outlook.attention);
+        assert_eq!(
+            outlook.text,
+            "This VAAPI encoder will send HEVC 4:4:4 8-bit, or AV1 4:2:0 10-bit from a 10-bit or HDR source."
+        );
+    }
+
+    #[test]
     fn an_encoder_with_nothing_to_send_says_so() {
         let configured = format(Codec::Hevc, ChromaSubsampling::Yuv422, BitDepth::Ten);
-        let outlook = encoder_outlook("VAAPI", configured, FormatSet::EMPTY);
+        let outlook = encoder_outlook(
+            "VAAPI",
+            FormatPreference::pinned(configured),
+            FormatSet::EMPTY,
+        );
 
         assert_eq!(
             outlook.text,

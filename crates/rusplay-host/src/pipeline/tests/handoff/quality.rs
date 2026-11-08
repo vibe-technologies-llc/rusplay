@@ -108,8 +108,8 @@ fn the_handoff_samples_the_same_source_as_the_readback() {
         assert!(!used_readback);
         assert_eq!(handed_off.source, read_back.source, "{depth:?}");
         assert_eq!(handed_off.history, read_back.history, "{depth:?}");
-        assert_plausible(&handed_off, format, "vaapi hand-off");
-        assert_plausible(&read_back, format, "vaapi readback");
+        assert_plausible(&handed_off, (format).or_unnegotiated(), "vaapi hand-off");
+        assert_plausible(&read_back, (format).or_unnegotiated(), "vaapi readback");
     }
 }
 
@@ -125,7 +125,7 @@ fn a_software_encoder_samples_from_the_mapped_readback() {
     };
 
     assert!(!handed_off);
-    assert_plausible(&sampled, format, "x264");
+    assert_plausible(&sampled, (format).or_unnegotiated(), "x264");
 }
 
 #[cfg(feature = "svt-av1")]

@@ -27,7 +27,7 @@ pub use crate::{
         DEFAULT_MODIFIERS, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, FormatModifiers,
         choose_modifier, modifiers_for,
     },
-    output::{OutputOffer, OutputRequest},
+    output::{OutputOffer, OutputRequest, SourceRefresh},
     portal::{PortalSession, PortalStream, SharedScreencast, portal_resolution},
     token::{RestoreTokenStore, default_path as default_restore_token_path},
 };

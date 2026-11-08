@@ -68,9 +68,18 @@ impl Capabilities {
 }
 
 pub fn capabilities(config: &VideoEncoderConfig) -> Result<Capabilities, EncodeError> {
-    let backend = Backend::from(config);
+    if matches!(config, VideoEncoderConfig::Auto(_)) {
+        let resolved = crate::resolve(config, None);
+        if matches!(resolved, VideoEncoderConfig::Auto(_)) {
+            return Err(EncodeError::NoEncoderAvailable);
+        }
+        return capabilities(&resolved);
+    }
+
+    let backend = Backend::of(config).ok_or(EncodeError::NoEncoderAvailable)?;
 
     match config {
+        VideoEncoderConfig::Auto(_) => Err(EncodeError::NoEncoderAvailable),
         #[cfg(feature = "vaapi")]
         VideoEncoderConfig::Vaapi(vaapi) => crate::vaapi::capabilities(vaapi),
         #[cfg(feature = "nvenc")]
@@ -169,8 +178,8 @@ mod tests {
                         let format = PixelFormat { chroma, depth };
                         let video = VideoConfig {
                             resolution: Some(TEST_RESOLUTION),
-                            codec,
-                            pixel_format: format,
+                            codec: rusplay_config::CodecChoice::pinned(codec),
+                            pixel_format: rusplay_config::PixelFormatChoice::pinned(format),
                             encoder: encoder.clone(),
                             ..VideoConfig::default()
                         };

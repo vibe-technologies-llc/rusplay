@@ -6,3 +6,7 @@ use crate::HostError;
 pub fn encoder_formats(config: &VideoEncoderConfig) -> Result<FormatSet, HostError> {
     Ok(rusplay_encode::capabilities(config)?.format_set())
 }
+
+pub fn resolve_encoder(config: &VideoEncoderConfig) -> VideoEncoderConfig {
+    rusplay_encode::resolve(config, None)
+}

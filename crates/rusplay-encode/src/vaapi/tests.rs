@@ -57,8 +57,8 @@ fn yuv420(depth: BitDepth) -> PixelFormat {
 fn video(codec: Codec, format: PixelFormat, resolution: Resolution) -> VideoConfig {
     VideoConfig {
         resolution: Some(resolution),
-        codec,
-        pixel_format: format,
+        codec: rusplay_config::CodecChoice::pinned(codec),
+        pixel_format: rusplay_config::PixelFormatChoice::pinned(format),
         bitrate_kbps: BITRATE_KBPS,
         encoder: VideoEncoderConfig::Vaapi(VaapiConfig::default()),
         ..VideoConfig::default()
@@ -95,7 +95,10 @@ fn try_open(config: &VideoConfig) -> Option<Box<dyn VideoEncoder>> {
             hardware::unsupported(&error);
             None
         }
-        Err(error) => panic!("opening the {} vaapi encoder: {error}", config.codec),
+        Err(error) => panic!(
+            "opening the {} vaapi encoder: {error}",
+            config.stream_codec()
+        ),
     }
 }
 

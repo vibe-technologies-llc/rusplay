@@ -36,6 +36,7 @@ mod rate;
     feature = "vaapi"
 ))]
 mod reconstruction;
+mod resolve;
 #[cfg(any(feature = "x264", feature = "x265", feature = "svt-av1"))]
 mod software;
 #[cfg(feature = "svt-av1")]
@@ -58,6 +59,7 @@ pub use crate::{
     backend::Backend,
     capabilities::{Capabilities, capabilities},
     error::{ApiVersion, EncodeError, NvencCall, NvencStatus},
+    resolve::resolve,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -130,11 +132,22 @@ pub fn open_sited(
     )]
     siting: ChromaSiting,
 ) -> Result<Box<dyn VideoEncoder>, EncodeError> {
-    let backend = Backend::from(&config.encoder);
+    if matches!(config.encoder, rusplay_config::VideoEncoderConfig::Auto(_)) {
+        let resolved = rusplay_config::VideoConfig {
+            encoder: resolve(&config.encoder, None),
+            ..config.clone()
+        };
+        let backend = Backend::of(&resolved.encoder).ok_or(EncodeError::NoEncoderAvailable)?;
+        backend.check_codec(resolved.stream_codec())?;
+        return open_sited(&resolved, siting);
+    }
 
-    backend.check_codec(config.codec)?;
+    let backend = Backend::of(&config.encoder).ok_or(EncodeError::NoEncoderAvailable)?;
+
+    backend.check_codec(config.stream_codec())?;
 
     match &config.encoder {
+        rusplay_config::VideoEncoderConfig::Auto(_) => Err(EncodeError::NoEncoderAvailable),
         #[cfg(feature = "x264")]
         rusplay_config::VideoEncoderConfig::X264(x264) => {
             Ok(Box::new(x264::X264Encoder::new(config, x264, siting)?))

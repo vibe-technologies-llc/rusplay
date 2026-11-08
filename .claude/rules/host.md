@@ -104,8 +104,9 @@ paths:
     with the frame through the mailbox and `Outgoing` to the send stage; a keyframe repeat is
     stamped when it is produced. It first re-offers the feed's
     retained frame, so a client joining a static screen still gets a picture. Frames are capped at
-    the frame rate before the mailbox (`Cadence` in `capture.rs`): `video.frame_rate`, or the
-    virtual output's refresh once `Shared::output` is set. A frame that arrives before the next
+    the frame rate before the mailbox (`Cadence` in `capture.rs`): `Shared::frame_rate`, the
+    virtual output's refresh once `Shared::output` is set, else the automatic stream rate, else
+    `video.frame_rate` (`auto.md`). A frame that arrives before the next
     slot is held as pending, a newer one replaces it (`frames_superseded`), and the pending frame
     goes out when its slot comes, so the last frame of a burst is never lost; a stall restarts
     the cadence instead of releasing a burst. `src/tests.rs`'s `host_config` sets a 1000 Hz cap,
@@ -144,8 +145,8 @@ paths:
     `DatagramArena`, owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
     frame with `send_arena`, which seals the datagrams in place. With `network.pacing` a frame is spread over
-    `network.pacing_window_percent` of the frame interval, the shorter of the configured
-    `video.frame_rate` interval and the smoothed spacing of the frames' capture stamps (so a
+    `network.pacing_window_percent` of the frame interval, the shorter of the agreed or configured
+    frame interval and the smoothed spacing of the frames' capture stamps (so a
     faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
     frame never waits behind the previous one's pacing for long. With `network.pacing_max_mbps`
     above 0 the frame is instead sent at that rate when it fits inside the window (a frame
@@ -355,7 +356,8 @@ paths:
     and the pipeline replans only when that `RouteKey` changes, so a renegotiated description
     reconfigures the `Lineariser`s and `ColorMapper` in place (`configure`) from the next frame.
     The mapper (`ColorMapSettings` from `ColorVolume::of_content` of the source and of
-    `video.color`, with `color.tone_mapping` and `color.gamut_mapping`) runs unless
+    `video.color`, which with `video.color_mode = "source"` is the source's own description, so
+    nothing is mapped (`auto.md`), with `color.tone_mapping` and `color.gamut_mapping`) runs unless
     `ColorPlan::is_identity` says it changes nothing.
   - Routes. Encoded: when no mapping is needed, the source transfer is the stream's (and for PQ and
     HLG the `HdrLevels` match too) and there is no linear-light scaling, the encoded image goes

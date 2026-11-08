@@ -176,11 +176,11 @@ fn host_config(encoder: VideoEncoderConfig) -> Config {
     let mut config = Config::default();
     config.network.bind_address = LOCALHOST;
     config.network.port = 0;
-    config.video.codec = Codec::Av1;
-    config.video.pixel_format = PixelFormat {
+    config.video.codec = rusplay_config::CodecChoice::pinned(Codec::Av1);
+    config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
         chroma: SVT_AV1_MIN_CHROMA,
         depth: BitDepth::Eight,
-    };
+    });
     config.video.encoder = encoder;
     config
 }
@@ -197,7 +197,7 @@ fn client_decodes(codec: Codec) -> bool {
 fn client_config() -> Config {
     let mut config = Config::default();
     config.network.bind_address = LOCALHOST;
-    config.video.codec = Codec::H264;
+    config.video.codec = rusplay_config::CodecChoice::pinned(Codec::H264);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = u8::MAX;
     config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
@@ -499,7 +499,7 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
             depth: BitDepth::Eight,
         },
     );
-    config.video.pixel_format = configured.format;
+    config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(configured.format);
     let fallback = CodecFormat::new(
         Codec::Av1,
         PixelFormat {

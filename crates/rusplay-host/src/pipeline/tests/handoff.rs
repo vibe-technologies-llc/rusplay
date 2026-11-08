@@ -24,11 +24,11 @@ const BENCH_SOURCES: u32 = 3;
 
 fn vaapi_config(codec: Codec, depth: BitDepth, handoff: bool) -> Config {
     let mut config = Config::default();
-    config.video.codec = codec;
-    config.video.pixel_format = PixelFormat {
+    config.video.codec = rusplay_config::CodecChoice::pinned(codec);
+    config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
         chroma: ChromaSubsampling::Yuv420,
         depth,
-    };
+    });
     config.video.color = ColorSpace {
         transfer: TransferFunction::Bt709,
         ..ColorSpace::default()
@@ -171,8 +171,10 @@ fn a_refused_handoff_falls_back_to_the_readback() {
     if !pipeline.hands_off() {
         return;
     }
+    pipeline.config.video.color_mode = rusplay_config::StreamColorMode::Configured;
     pipeline.encoder = Some(OpenEncoder {
         resolution: Resolution::new(640, 360),
+        color: pipeline.config.video.color,
         encoder: Box::new(RejectHandoff),
         epoch: 0,
         next_output: OutputIndex(0),

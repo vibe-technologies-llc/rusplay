@@ -171,19 +171,19 @@ impl Settings {
         config: &X264Config,
         siting: ChromaSiting,
     ) -> Result<Self, EncodeError> {
-        if !supports(video.pixel_format) {
+        if !supports(video.stream_pixel_format()) {
             return Err(EncodeError::BitDepthUnsupported {
                 backend: BACKEND,
-                depth: video.pixel_format.depth,
+                depth: video.stream_pixel_format().depth,
             });
         }
 
         let settings = Self {
             config: config.clone(),
-            pixel_format: video.pixel_format,
+            pixel_format: video.stream_pixel_format(),
             color: video.color,
             siting,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };

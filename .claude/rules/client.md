@@ -19,17 +19,17 @@ paths:
 - The client announces its display in the handshake: right after the `Hello`, in the same flush,
   it sends `ControlMessage::Display` (`networking.md`) with its swapchain size, refresh and colour
   volume. `ClientSession::with_display` sets it; without it `announce::default_display` takes
-  `video.resolution` (1920x1080 when unset), `video.frame_rate` and the volume
+  `video.resolution` (1920x1080 when unset), `VideoConfig::stream_frame_rate` and the volume
   `color.target` resolves to over the sRGB fallback. `announced_display` builds one from a size, a
   `FrameRate` and a `ColorVolume`, clamping what the protocol would refuse (an axis outside
   `1..=16384`, a refresh outside 1 to 1000 Hz, nits outside 1 to 10000, a black level at or above
   the reference white), so a real display never fails the connect. The app waits until the picture
   canvas has laid out (`StreamView`, below the header and beside the details panel) and sends that
-  size as the connect `Display`, with `video.frame_rate` as the refresh and
-  `StreamWindow::color_target` as the volume, so a virtual source's first keyframe is already the
-  stream area. The display's true refresh is not known and `video.frame_rate` stands in for it. A
-  later layout change still goes through `announce_display`. Only a host with a virtual source uses
-  it. The client upscale does not run
+  size as the connect `Display`, with the window's display refresh (or a pinned
+  `video.frame_rate`, `auto.md`) and `StreamWindow::color_target` as the volume, so a virtual
+  source's first keyframe is already the stream area. A later layout or refresh change still goes
+  through `announce_display`. A host with a virtual source uses the size and refresh; a host with
+  an automatic frame rate uses the refresh. The client upscale does not run
   when the stream size equals the window's target (`target != source` in the present stage), which is
   the point of sizing the host's output to it.
 - `ClientStream::announce_display(ClientDisplay)` stores the newest wanted display in a slot the

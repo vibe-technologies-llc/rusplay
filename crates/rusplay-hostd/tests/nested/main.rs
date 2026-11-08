@@ -129,7 +129,7 @@ fn gpu() -> Option<Gpu> {
 
 fn client_config() -> Config {
     let mut config = Config::default();
-    config.video.codec = Codec::Av1;
+    config.video.codec = rusplay_config::CodecChoice::pinned(Codec::Av1);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.network.bind_address = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
     config.input.gamepads = false;

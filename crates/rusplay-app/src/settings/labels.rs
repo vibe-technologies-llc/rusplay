@@ -154,6 +154,8 @@ const NAMES: &[(&str, &str)] = &[
     ("hlg", "HLG"),
     ("bt2390", "BT.2390"),
     ("bt2446a", "BT.2446 A"),
+    ("source", "Follow the source"),
+    ("configured", "As set below"),
     ("vaapi", "VAAPI"),
     ("nvenc", "NVENC"),
     ("nvdec", "NVDEC"),

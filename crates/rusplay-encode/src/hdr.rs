@@ -184,7 +184,7 @@ pub(crate) mod fixtures {
         config: &VideoConfig,
         siting: ChromaSiting,
     ) -> Option<ChromaSiting> {
-        match (config.codec, &config.encoder, siting) {
+        match (config.stream_codec(), &config.encoder, siting) {
             (Codec::Av1, _, ChromaSiting::Center)
             | (_, VideoEncoderConfig::X264(_), ChromaSiting::Left) => None,
             _ => Some(siting),

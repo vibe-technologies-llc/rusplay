@@ -158,9 +158,11 @@ impl HostService {
         started
     }
 
-    pub fn start(config: Config, peers: &Arc<RwLock<PeerStore>>) -> Result<Self, HostError> {
+    pub fn start(mut config: Config, peers: &Arc<RwLock<PeerStore>>) -> Result<Self, HostError> {
         let host_id = load_or_create_host_id(&peers.read().path().with_file_name(HOST_ID_FILE))?;
         let gpu = Gpu::open()?;
+        config.video.encoder =
+            rusplay_encode::resolve(&config.video.encoder, gpu.pci_bus_id.as_deref());
         let portal = open_portal(&config, &gpu)?;
         let feed = portal.feed;
         let keepalive = portal.keepalive;

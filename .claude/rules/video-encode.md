@@ -194,8 +194,9 @@ paths:
 
 ## VAAPI (`vaapi` feature)
 
-- `VaapiEncoder::new(&VideoConfig, &VaapiConfig)` opens `encoder.device` (default
-  `/dev/dri/renderD128`) with `vaGetDisplayDRM`. libva is reached through `rusplay-va` (bindgen
+- `VaapiEncoder::new(&VideoConfig, &VaapiConfig)` opens `encoder.device` (the node `auto`
+  detected, or `/dev/dri/renderD128` for a pinned VAAPI encoder left at its default, `auto.md`)
+  with `vaGetDisplayDRM`. libva is reached through `rusplay-va` (bindgen
   bindings re-exported as `ffi`, and the owning display, config, context, buffer, surface and image
   wrappers shared with `rusplay-decode`); `src/vaapi/va.rs` keeps only what is encode specific:
   the `EncoderContext` extension (misc and packed-header buffers, the coded buffer), `CodedBuffer`

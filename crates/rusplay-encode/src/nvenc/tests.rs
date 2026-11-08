@@ -45,8 +45,8 @@ fn yuv420(depth: BitDepth) -> PixelFormat {
 fn video(codec: Codec, format: PixelFormat) -> VideoConfig {
     VideoConfig {
         resolution: Some(RESOLUTION),
-        codec,
-        pixel_format: format,
+        codec: rusplay_config::CodecChoice::pinned(codec),
+        pixel_format: rusplay_config::PixelFormatChoice::pinned(format),
         bitrate_kbps: BITRATE_KBPS,
         encoder: VideoEncoderConfig::Nvenc(NvencConfig::default()),
         ..VideoConfig::default()

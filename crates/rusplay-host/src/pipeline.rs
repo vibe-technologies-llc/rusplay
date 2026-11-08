@@ -9,10 +9,10 @@ use std::{
 };
 
 use rusplay_capture::{Frame, FrameBuffer, OutputRequest, Plane, ShmFallback};
-use rusplay_config::Config;
+use rusplay_config::{Config, StreamColorMode};
 use rusplay_core::{
-    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, PixelFormat, Resolution,
-    Timestamp,
+    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, FrameRate, PixelFormat,
+    Resolution, Timestamp,
 };
 use rusplay_encode::{OutputIndex, Recovery, VideoEncoder, input::fourcc_for};
 use rusplay_protocol::StreamDescription;
@@ -185,6 +185,7 @@ impl HandoffState {
 
 struct OpenEncoder {
     resolution: Resolution,
+    color: ColorSpace,
     encoder: Box<dyn VideoEncoder>,
     epoch: u32,
     next_output: OutputIndex,
@@ -255,8 +256,12 @@ impl PipelineFactory for GpuPipelineFactory {
         Ok(capabilities.format_set())
     }
 
+    fn use_frame_rate(&mut self, rate: FrameRate) {
+        self.config.video.frame_rate = rusplay_config::FrameRateChoice::Fixed(rate);
+    }
+
     fn use_output(&mut self, request: OutputRequest) {
-        self.config.video.frame_rate = request.frame_rate;
+        self.config.video.frame_rate = rusplay_config::FrameRateChoice::Fixed(request.frame_rate);
         self.config.video.resolution = None;
     }
 
@@ -267,8 +272,8 @@ impl PipelineFactory for GpuPipelineFactory {
             fallback,
             pipelines,
         } = *self;
-        config.video.codec = format.codec;
-        config.video.pixel_format = format.format;
+        config.video.codec = rusplay_config::CodecChoice::pinned(format.codec);
+        config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(format.format);
         let pipelines = pipelines.unwrap_or_else(|| ScalePipelines::new(&gpu.device));
 
         Ok(Box::new(GpuPipeline::with_pipelines(
@@ -483,6 +488,15 @@ impl GpuPipeline {
 
         wait_for_writes(fd, timeout)?;
         Ok(None)
+    }
+
+    fn follow_source_color(&mut self, frame: &Frame) {
+        if self.config.video.color_mode == StreamColorMode::Source
+            && self.config.video.color != frame.color
+        {
+            self.config.video.color = frame.color;
+            self.route = None;
+        }
     }
 
     fn route(&mut self, key: RouteKey) -> Result<Route, HostError> {
@@ -866,6 +880,7 @@ impl GpuPipeline {
         self.gpu.check_extent(frame.resolution)?;
         self.gpu
             .check_extent(self.config.video.resolution.unwrap_or(frame.resolution))?;
+        self.follow_source_color(frame);
 
         let Some(mut source) = self.upload(frame)? else {
             return Ok(None);
@@ -960,9 +975,9 @@ impl VideoPipeline for GpuPipeline {
         let video = &self.config.video;
 
         self.encoder.as_ref().map(|open| StreamFormat {
-            codec: video.codec,
+            codec: video.stream_codec(),
             resolution: open.resolution,
-            format: video.pixel_format,
+            format: video.stream_pixel_format(),
             color: video.color,
             siting: self.config.scaling.chroma_siting,
         })
@@ -977,7 +992,7 @@ fn open_encoder<'a>(
     resolution: Resolution,
 ) -> Result<&'a mut OpenEncoder, HostError> {
     let encoder = match slot.take() {
-        Some(open) if open.resolution == resolution => open,
+        Some(open) if open.resolution == resolution && open.color == config.video.color => open,
         _ => {
             let mut encoder =
                 rusplay_encode::open_sited(&config.video, config.scaling.chroma_siting)?;
@@ -987,6 +1002,7 @@ fn open_encoder<'a>(
             *epoch = epoch.wrapping_add(1);
             OpenEncoder {
                 resolution,
+                color: config.video.color,
                 encoder,
                 epoch: *epoch,
                 next_output: OutputIndex(0),
@@ -1234,7 +1250,7 @@ fn convert_settings(
 
     ConvertSettings {
         resolution,
-        format: video.pixel_format,
+        format: video.stream_pixel_format(),
         layout,
         matrix: video.color.matrix_coefficients(),
         range: video.color.range,

@@ -278,10 +278,10 @@ impl Settings {
     ) -> Result<Self, EncodeError> {
         let settings = Self {
             config: config.clone(),
-            pixel_format: video.pixel_format,
+            pixel_format: video.stream_pixel_format(),
             color: video.color,
             siting,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
             vbv_frames: video.vbv_frames,
             bitrate_kbps: video.bitrate_kbps,
         };
@@ -770,7 +770,7 @@ mod tests {
             return;
         };
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
-        let api = Api::load(config.pixel_format.depth).unwrap();
+        let api = Api::load(config.stream_pixel_format().depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
         let raw = unsafe { param.raw.as_ref() };
@@ -809,7 +809,7 @@ mod tests {
             return;
         };
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
-        let api = Api::load(config.pixel_format.depth).unwrap();
+        let api = Api::load(config.stream_pixel_format().depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
         let raw = unsafe { param.raw.as_ref() };
@@ -825,7 +825,7 @@ mod tests {
             return;
         };
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
-        let api = Api::load(config.pixel_format.depth).unwrap();
+        let api = Api::load(config.stream_pixel_format().depth).unwrap();
 
         let param = settings.param(api, testing::TEST_RESOLUTION).unwrap();
         let raw = unsafe { param.raw.as_ref() };

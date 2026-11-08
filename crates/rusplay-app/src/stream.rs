@@ -21,7 +21,10 @@ use rusplay_client::{
     ClipboardState, Credentials, FocusClipboardHandle, LogicalArea, OverlayText, PeerRecord,
     StreamWindow, WindowLayout, announced_display,
 };
-use rusplay_config::{Config, InputConfig, PointerMode, ReleaseChord, VideoDecoderConfig};
+use rusplay_config::{
+    Config, FrameRateChoice, InputConfig, PointerMode, ReleaseChord, UNDETECTED_FRAME_RATE,
+    VideoDecoderConfig,
+};
 use rusplay_core::{FrameRate, Resolution};
 
 use crate::{
@@ -62,13 +65,13 @@ struct Live {
     window: Option<StreamWindow>,
     stream: Option<ClientStream>,
     failure: Option<ClientError>,
-    refresh: FrameRate,
-    announced: Option<Resolution>,
+    refresh: FrameRateChoice,
+    announced: Option<(Resolution, FrameRate)>,
     connect: CanvasConnect,
 }
 
 impl Live {
-    fn apply_layout(&mut self, bounds: Bounds<Pixels>, scale: f32) {
+    fn apply_layout(&mut self, bounds: Bounds<Pixels>, scale: f32, display: Option<Duration>) {
         let area = LogicalArea {
             x: bounds.origin.x.as_f32(),
             y: bounds.origin.y.as_f32(),
@@ -78,17 +81,18 @@ impl Live {
         let Some(wanted) = canvas_size(area, scale) else {
             return;
         };
+        let refresh = announced_refresh(self.refresh, display);
         let Some(stream) = &self.stream else {
-            self.offer_connect(wanted);
+            self.offer_connect(wanted, refresh);
             return;
         };
         let Some(window) = &mut self.window else {
             return;
         };
 
-        if self.announced != Some(wanted) {
-            self.announced = Some(wanted);
-            if let Ok(display) = announced_display(wanted, self.refresh, &window.color_target()) {
+        if self.announced != Some((wanted, refresh)) {
+            self.announced = Some((wanted, refresh));
+            if let Ok(display) = announced_display(wanted, refresh, &window.color_target()) {
                 stream.announce_display(display);
             }
         }
@@ -103,7 +107,7 @@ impl Live {
         }
     }
 
-    fn offer_connect(&mut self, wanted: Resolution) {
+    fn offer_connect(&mut self, wanted: Resolution, refresh: FrameRate) {
         if self.announced.is_some() {
             return;
         }
@@ -111,11 +115,11 @@ impl Live {
         let Some(volume) = self.window.as_ref().map(StreamWindow::color_target) else {
             return;
         };
-        let Ok(display) = announced_display(wanted, self.refresh, &volume) else {
+        let Ok(display) = announced_display(wanted, refresh, &volume) else {
             return;
         };
         if self.connect.offer(display) {
-            self.announced = Some(wanted);
+            self.announced = Some((wanted, refresh));
         }
     }
 
@@ -183,6 +187,13 @@ impl StreamView {
         let decoder = config.video.decoder.clone();
         let stats_overlay = config.video.stats_overlay;
         let refresh = config.video.frame_rate;
+        let config = Config {
+            video: rusplay_config::VideoConfig {
+                decoder: stream_window.decoder().clone(),
+                ..config.video
+            },
+            ..config
+        };
         let requested_bitrate_kbps = config.video.bitrate_kbps;
         let json_reporter = JsonReporter::new(&config.network, Instant::now());
         let connect = CanvasConnect::new();
@@ -613,6 +624,20 @@ impl StreamView {
     }
 }
 
+const MILLIHERTZ_PER_HERTZ: f64 = 1_000.0;
+
+fn announced_refresh(choice: FrameRateChoice, display: Option<Duration>) -> FrameRate {
+    match (choice, display) {
+        (FrameRateChoice::Fixed(rate), _) => rate,
+        (FrameRateChoice::Auto, Some(interval)) if !interval.is_zero() => {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let millihertz = (MILLIHERTZ_PER_HERTZ / interval.as_secs_f64()).round() as u32;
+            FrameRate::new(millihertz, 1_000)
+        }
+        (FrameRateChoice::Auto, _) => UNDETECTED_FRAME_RATE,
+    }
+}
+
 fn area_size(area: LogicalArea, scale: f32) -> Resolution {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let device = |logical: f32| (logical * scale).round().max(1.0) as u32;
@@ -888,9 +913,10 @@ impl Render for StreamView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let live = Rc::clone(&self.live);
         let picture = canvas(
-            move |bounds, window, _| {
+            move |bounds, window, cx| {
+                let display = window.refresh_interval(cx);
                 live.borrow_mut()
-                    .apply_layout(bounds, window.scale_factor());
+                    .apply_layout(bounds, window.scale_factor(), display);
             },
             |_, (), _, _| {},
         )
@@ -946,6 +972,29 @@ mod tests {
         assert!(toggles_fullscreen(ClientAction::ToggleFullscreen, false));
         assert!(!toggles_fullscreen(ClientAction::ToggleStats, true));
         assert!(!toggles_fullscreen(ClientAction::Disconnect, true));
+    }
+
+    #[test]
+    fn an_automatic_refresh_follows_the_display_and_a_pinned_one_does_not() {
+        let display = Some(Duration::from_nanos(6_944_444));
+        let pinned = FrameRate::integer(60);
+
+        assert_eq!(
+            announced_refresh(FrameRateChoice::Auto, display),
+            FrameRate::new(144_000, 1_000)
+        );
+        assert_eq!(
+            announced_refresh(FrameRateChoice::Fixed(pinned), display),
+            pinned
+        );
+        assert_eq!(
+            announced_refresh(FrameRateChoice::Auto, None),
+            UNDETECTED_FRAME_RATE
+        );
+        assert_eq!(
+            announced_refresh(FrameRateChoice::Auto, Some(Duration::ZERO)),
+            UNDETECTED_FRAME_RATE
+        );
     }
 
     #[test]

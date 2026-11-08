@@ -34,7 +34,7 @@ pub(crate) fn default_display(config: &Config) -> Result<ClientDisplay, ClientEr
 
     announced_display(
         config.video.resolution.unwrap_or(FALLBACK_RESOLUTION),
-        config.video.frame_rate,
+        config.video.stream_frame_rate(),
         &volume,
     )
 }
@@ -166,7 +166,7 @@ mod tests {
     fn the_default_display_follows_the_client_config() {
         let mut config = Config::default();
         config.video.resolution = Some(Resolution::new(2560, 1440));
-        config.video.frame_rate = FrameRate::integer(144);
+        config.video.frame_rate = rusplay_config::FrameRateChoice::Fixed(FrameRate::integer(144));
 
         let display = default_display(&config).unwrap();
         let unset = default_display(&Config::default()).unwrap();

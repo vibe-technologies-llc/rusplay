@@ -30,6 +30,8 @@ pub(crate) trait PipelineFactory: Send {
 
     fn use_output(&mut self, _request: OutputRequest) {}
 
+    fn use_frame_rate(&mut self, _rate: FrameRate) {}
+
     fn build(self: Box<Self>, format: CodecFormat) -> Result<Box<dyn VideoPipeline>, HostError>;
 }
 
@@ -75,7 +77,7 @@ pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Res
     let result = open_negotiated(factory, links).and_then(|opened| match opened {
         Some(mut opened) => {
             let output = links.shared.output();
-            let rate = output.map_or(links.quality.frame_rate, |request| request.frame_rate);
+            let rate = links.shared.frame_rate(links.quality.frame_rate);
             let sink: Arc<dyn QualitySink> = links.outbox.clone();
             let mut sampler =
                 QualitySampler::new(QualitySettings::new(links.quality.interval_ms, rate), sink);
@@ -114,6 +116,7 @@ fn open_negotiated(
             return Ok(None);
         }
         if let Some(negotiated) = negotiation.wait_agreed(IDLE_WAKE) {
+            factory.use_frame_rate(links.shared.frame_rate(links.quality.frame_rate));
             if let Some(request) = links.shared.output() {
                 factory.use_output(request);
             }

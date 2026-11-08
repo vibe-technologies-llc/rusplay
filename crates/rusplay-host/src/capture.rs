@@ -56,13 +56,10 @@ fn capture(feed: &CaptureFeed, shared: &Shared, frame_rate: FrameRate) -> Result
                 shared.counters.frames_superseded.increment();
             }
         }
-        let interval = shared
-            .output()
-            .map_or(frame_rate, |output| output.frame_rate)
-            .frame_interval();
+        let interval = shared.frame_rate(frame_rate).frame_interval();
         if pending.is_some() && cadence.admit(Instant::now(), interval) {
             let captured = pending.take().unwrap();
-            feed.set_capture_size(captured.frame.resolution);
+            feed.observe(&captured.frame);
             if let Ok(Some(_)) = shared.mailbox.put(captured) {
                 shared.counters.frames_superseded.increment();
             }
@@ -73,7 +70,7 @@ fn capture(feed: &CaptureFeed, shared: &Shared, frame_rate: FrameRate) -> Result
 }
 
 fn offer(feed: &CaptureFeed, shared: &Shared, frame: Frame) {
-    feed.set_capture_size(frame.resolution);
+    feed.observe(&frame);
     let captured = Captured {
         frame,
         captured_micros: shared.clock.micros(),

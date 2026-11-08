@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 use rusplay_core::{Codec, ColorSpace, FrameRate, PixelFormat, Resolution};
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigError, VideoDecoderConfig};
+use crate::{
+    ConfigError, VideoDecoderConfig,
+    choice::{CodecChoice, FrameRateChoice, PixelFormatChoice, StreamColorMode},
+};
 
 pub type EncoderParams = BTreeMap<String, String>;
 
@@ -14,15 +17,18 @@ const MAX_PRESENT_MARGIN_US: u32 = 50_000;
 const MAX_PRESENT_JITTER_US: u32 = 100_000;
 const MAX_DISPLAY_DEBOUNCE_MS: u32 = 5_000;
 const MAX_QUALITY_INTERVAL_MS: u32 = 60_000;
+const MAX_AUTO_DETECT_WAIT_MS: u32 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VideoConfig {
     pub resolution: Option<Resolution>,
-    pub frame_rate: FrameRate,
-    pub codec: Codec,
-    pub pixel_format: PixelFormat,
+    pub frame_rate: FrameRateChoice,
+    pub codec: CodecChoice,
+    pub pixel_format: PixelFormatChoice,
+    pub color_mode: StreamColorMode,
     pub color: ColorSpace,
+    pub auto_detect_wait_ms: u32,
     pub bitrate_kbps: u32,
     pub encoder: VideoEncoderConfig,
     pub encoder_gpu_handoff: bool,
@@ -44,10 +50,12 @@ impl Default for VideoConfig {
     fn default() -> Self {
         Self {
             resolution: None,
-            frame_rate: FrameRate::default(),
-            codec: Codec::default(),
-            pixel_format: PixelFormat::default(),
+            frame_rate: FrameRateChoice::Auto,
+            codec: CodecChoice::Auto,
+            pixel_format: PixelFormatChoice::default(),
+            color_mode: StreamColorMode::Source,
             color: ColorSpace::default(),
+            auto_detect_wait_ms: 500,
             bitrate_kbps: 80_000,
             encoder: VideoEncoderConfig::default(),
             encoder_gpu_handoff: true,
@@ -68,11 +76,30 @@ impl Default for VideoConfig {
 }
 
 impl VideoConfig {
+    pub fn stream_codec(&self) -> Codec {
+        self.codec
+            .fixed()
+            .unwrap_or(crate::choice::UNNEGOTIATED_CODEC)
+    }
+
+    pub const fn stream_pixel_format(&self) -> PixelFormat {
+        self.pixel_format.or_unnegotiated()
+    }
+
+    pub const fn stream_frame_rate(&self) -> FrameRate {
+        self.frame_rate.or_undetected()
+    }
+
+    pub fn pin_stream(&mut self, codec: Codec, format: PixelFormat) {
+        self.codec = CodecChoice::pinned(codec);
+        self.pixel_format = PixelFormatChoice::pinned(format);
+    }
+
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
-        if !self.frame_rate.is_valid() {
+        if let Some(rate) = self.frame_rate.fixed().filter(|rate| !rate.is_valid()) {
             return Err(ConfigError::InvalidFrameRate {
-                numerator: self.frame_rate.numerator,
-                denominator: self.frame_rate.denominator,
+                numerator: rate.numerator,
+                denominator: rate.denominator,
             });
         }
 
@@ -131,6 +158,12 @@ impl VideoConfig {
             ));
         }
 
+        if self.auto_detect_wait_ms > MAX_AUTO_DETECT_WAIT_MS {
+            return Err(ConfigError::AutoDetectWaitOutOfRange(
+                self.auto_detect_wait_ms,
+            ));
+        }
+
         if self.quality_interval_ms > MAX_QUALITY_INTERVAL_MS {
             return Err(ConfigError::QualityIntervalOutOfRange(
                 self.quality_interval_ms,
@@ -163,6 +196,7 @@ pub enum PresentPacing {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "backend", rename_all = "kebab-case")]
 pub enum VideoEncoderConfig {
+    Auto(AutoEncoderConfig),
     Vaapi(VaapiConfig),
     Nvenc(NvencConfig),
     X264(X264Config),
@@ -172,7 +206,7 @@ pub enum VideoEncoderConfig {
 
 impl Default for VideoEncoderConfig {
     fn default() -> Self {
-        Self::Vaapi(VaapiConfig::default())
+        Self::Auto(AutoEncoderConfig::default())
     }
 }
 
@@ -180,7 +214,10 @@ impl VideoEncoderConfig {
     pub const fn is_constant_quality(&self) -> bool {
         matches!(
             self,
-            Self::Vaapi(VaapiConfig {
+            Self::Auto(AutoEncoderConfig {
+                rate_control: RateControl::ConstantQuality { .. },
+                ..
+            }) | Self::Vaapi(VaapiConfig {
                 rate_control: RateControl::ConstantQuality { .. },
                 ..
             }) | Self::Nvenc(NvencConfig {
@@ -192,6 +229,7 @@ impl VideoEncoderConfig {
 
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
+            Self::Auto(auto) => auto.rate_control.validate(),
             Self::Vaapi(vaapi) => vaapi.rate_control.validate(),
             Self::Nvenc(nvenc) => nvenc.rate_control.validate(),
             Self::SvtAv1(svt) if svt.preset > MAX_SVT_AV1_PRESET => {
@@ -229,6 +267,15 @@ impl RateControl {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutoEncoderConfig {
+    pub rate_control: RateControl,
+    pub params: EncoderParams,
+}
+
+pub const LEGACY_DEFAULT_RENDER_NODE: &str = "/dev/dri/renderD128";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VaapiConfig {
@@ -241,7 +288,7 @@ pub struct VaapiConfig {
 impl Default for VaapiConfig {
     fn default() -> Self {
         Self {
-            device: PathBuf::from("/dev/dri/renderD128"),
+            device: PathBuf::from(LEGACY_DEFAULT_RENDER_NODE),
             rate_control: RateControl::default(),
             low_power: true,
             params: EncoderParams::new(),
@@ -466,6 +513,22 @@ mod tests {
         ));
 
         config.quality_interval_ms = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn the_auto_detect_wait_is_range_checked_and_may_be_zero() {
+        let mut config = VideoConfig::default();
+
+        assert_eq!(config.auto_detect_wait_ms, 500);
+
+        config.auto_detect_wait_ms = MAX_AUTO_DETECT_WAIT_MS + 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::AutoDetectWaitOutOfRange(10_001))
+        ));
+
+        config.auto_detect_wait_ms = 0;
         assert!(config.validate().is_ok());
     }
 

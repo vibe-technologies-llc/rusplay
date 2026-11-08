@@ -20,6 +20,7 @@ use std::{
 use parking_lot::{Condvar, Mutex};
 use rusplay_config::{
     Config, DisplayOutputConfig, DisplayTargetConfig, InputConfig, PointerMode, PresentMode,
+    VideoDecoderConfig,
 };
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
@@ -166,6 +167,7 @@ pub struct StreamWindow {
     presenter: Option<JoinHandle<Result<(), ClientError>>>,
     layout: Option<WindowLayout>,
     follower: Option<DisplayFollower>,
+    decoder: VideoDecoderConfig,
 }
 
 impl StreamWindow {
@@ -189,7 +191,8 @@ impl StreamWindow {
         }
         .map_err(ClientError::WindowSurface)?;
 
-        let adapter = adapter::choose(&instance, &surface, &config.video.decoder)?;
+        let adapter::Chosen { adapter, decoder } =
+            adapter::choose(&instance, &surface, &config.video.decoder)?;
         let (device, queue) = pollster::block_on(rusplay_scale::request_fence_wait_device(
             &adapter,
             "rusplay-client",
@@ -264,6 +267,7 @@ impl StreamWindow {
             presenter: Some(thread),
             layout: None,
             follower,
+            decoder,
         })
     }
 
@@ -273,6 +277,10 @@ impl StreamWindow {
 
     pub fn gpu(&self) -> Gpu {
         self.gpu.clone()
+    }
+
+    pub fn decoder(&self) -> &VideoDecoderConfig {
+        &self.decoder
     }
 
     pub fn sink(&self) -> WindowSink {

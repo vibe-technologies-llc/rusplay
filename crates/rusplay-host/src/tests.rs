@@ -77,8 +77,10 @@ fn host_config() -> Config {
         network: network(),
         ..Config::default()
     };
-    config.video.codec = Codec::Av1;
-    config.video.frame_rate = FrameRate::integer(CAPTURE_CAP_ABOVE_SOURCE_HZ);
+    config.video.codec = rusplay_config::CodecChoice::pinned(Codec::Av1);
+    config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat::default());
+    config.video.frame_rate =
+        rusplay_config::FrameRateChoice::Fixed(FrameRate::integer(CAPTURE_CAP_ABOVE_SOURCE_HZ));
 
     config
 }
@@ -834,6 +836,39 @@ fn the_host_falls_back_to_what_the_client_decodes_and_says_so() {
         Some((configured, chosen))
     );
     assert!(negotiated.is_some_and(|format| format.is_fallback()));
+}
+
+#[test]
+fn an_automatic_frame_rate_waits_for_the_client_display_before_answering() {
+    let mut config = host_config();
+    config.video.frame_rate = rusplay_config::FrameRateChoice::Auto;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(3), fake_factory(&bitrate));
+    let host_hello = |client: &TestClient| {
+        client
+            .messages
+            .iter()
+            .any(|message| matches!(message, ControlMessage::Hello { .. }))
+    };
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let answered_early = client.pump(Duration::from_millis(300), host_hello);
+    client.send(ControlMessage::Display(
+        rusplay_protocol::ClientDisplay::new(
+            rusplay_core::Resolution::new(1280, 720),
+            144_000,
+            rusplay_protocol::DisplayVolume::srgb(),
+        )
+        .unwrap(),
+    ));
+    let answered = client.pump_until(host_hello);
+    stream.stop().unwrap();
+
+    assert!(!answered_early);
+    assert!(answered);
 }
 
 #[test]

@@ -1,9 +1,9 @@
 use std::net::IpAddr;
 
 use rusplay_config::{
-    Config, ConfigError, ConfigRole, NvdecDecoderConfig, NvencConfig, RateControl,
-    SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VaapiDecoderConfig, VideoDecoderConfig,
-    VideoEncoderConfig, X264Config, X265Config,
+    AutoDecoderConfig, AutoEncoderConfig, Config, ConfigError, ConfigRole, NvdecDecoderConfig,
+    NvencConfig, RateControl, SoftwareDecoderConfig, SvtAv1Config, VaapiConfig, VaapiDecoderConfig,
+    VideoDecoderConfig, VideoEncoderConfig, X264Config, X265Config,
 };
 use thiserror::Error;
 use toml::{Table, Value as Toml};
@@ -282,8 +282,9 @@ fn to_table(config: &Config) -> Result<Table, ConfigError> {
     Table::try_from(config).map_err(|source| ConfigError::Serialize { source })
 }
 
-fn decoder_alternatives() -> [VideoDecoderConfig; 3] {
+fn decoder_alternatives() -> [VideoDecoderConfig; 4] {
     [
+        VideoDecoderConfig::Auto(AutoDecoderConfig::default()),
         VideoDecoderConfig::Vaapi(VaapiDecoderConfig::default()),
         VideoDecoderConfig::Nvdec(NvdecDecoderConfig::default()),
         VideoDecoderConfig::Software(SoftwareDecoderConfig::default()),
@@ -299,6 +300,10 @@ fn encoder_alternatives() -> Vec<VideoEncoderConfig> {
 
     let hardware = rate_controls.into_iter().flat_map(|rate_control| {
         [
+            VideoEncoderConfig::Auto(AutoEncoderConfig {
+                rate_control,
+                ..AutoEncoderConfig::default()
+            }),
             VideoEncoderConfig::Vaapi(VaapiConfig {
                 rate_control,
                 ..VaapiConfig::default()
@@ -407,7 +412,13 @@ fn resolution_text(value: &Toml) -> String {
     }
 }
 
+const AUTO: &str = "auto";
+
 fn frame_rate_text(value: &Toml) -> String {
+    if value.as_str() == Some(AUTO) {
+        return AUTO.to_owned();
+    }
+
     match (
         dimension(value, "numerator"),
         dimension(value, "denominator"),
@@ -493,6 +504,10 @@ fn resolution_value(text: &str) -> Result<Toml, FieldError> {
 }
 
 fn frame_rate_value(text: &str) -> Result<Toml, FieldError> {
+    if text.trim().eq_ignore_ascii_case(AUTO) {
+        return Ok(Toml::String(AUTO.to_owned()));
+    }
+
     let (numerator, denominator) = match text.split_once('/') {
         Some((numerator, denominator)) => (positive(numerator), positive(denominator)),
         None => (positive(text), Some(1)),
@@ -613,7 +628,8 @@ mod tests {
     fn populated_configs() -> Vec<Config> {
         let mut base = Config::default();
         base.video.resolution = Some(Resolution::new(2560, 1440));
-        base.video.frame_rate = FrameRate::new(60_000, 1001);
+        base.video.frame_rate =
+            rusplay_config::FrameRateChoice::Fixed(FrameRate::new(60_000, 1001));
         base.video.bitrate_kbps = 123_456;
         base.scaling.upscale.antiringing = 0.35;
         base.capture.restore_token = Some("token".to_owned());
@@ -1004,6 +1020,11 @@ mod tests {
         let gpu_index = first_with_path("video.encoder.gpu_index");
         let mut model = form(&Config::default());
 
+        assert!(!model.is_visible(device));
+        assert!(!model.is_visible(gpu_index));
+
+        model.set_text(backend, "vaapi");
+
         assert!(model.is_visible(device));
         assert!(!model.is_visible(gpu_index));
 
@@ -1194,8 +1215,27 @@ mod tests {
 
         assert_eq!(
             model.build().unwrap().video.frame_rate,
-            FrameRate::new(60_000, 1001)
+            rusplay_config::FrameRateChoice::Fixed(FrameRate::new(60_000, 1001))
         );
+    }
+
+    #[test]
+    fn the_frame_rate_reads_and_writes_auto() {
+        let frame_rate = first_with_path("video.frame_rate");
+        let mut model = form(&Config::default());
+
+        let shown = model.text(frame_rate).to_owned();
+        model.set_text(frame_rate, "60");
+        let pinned = model.build().unwrap().video.frame_rate;
+        model.set_text(frame_rate, "Auto");
+        let automatic = model.build().unwrap().video.frame_rate;
+
+        assert_eq!(shown, "auto");
+        assert_eq!(
+            pinned,
+            rusplay_config::FrameRateChoice::Fixed(FrameRate::integer(60))
+        );
+        assert_eq!(automatic, rusplay_config::FrameRateChoice::Auto);
     }
 
     #[test]
@@ -1214,11 +1254,11 @@ mod tests {
         );
         model.add_pair(params);
 
-        let VideoEncoderConfig::Vaapi(vaapi) = model.build().unwrap().video.encoder else {
+        let VideoEncoderConfig::Auto(automatic) = model.build().unwrap().video.encoder else {
             panic!("backend changed");
         };
         assert_eq!(
-            vaapi.params,
+            automatic.params,
             EncoderParams::from([("rc-lookahead".to_owned(), "0".to_owned())])
         );
 

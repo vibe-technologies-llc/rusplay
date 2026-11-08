@@ -162,6 +162,7 @@ pub(crate) struct ParsedFormat {
     pub size: Resolution,
     pub modifiers: ModifierOffer,
     pub colorimetry: SpaColorimetry,
+    pub refresh: Option<FrameRate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +515,7 @@ pub(crate) fn parse_format(bytes: &[u8]) -> Result<ParsedFormat, CaptureError> {
         size: Resolution::new(size.width, size.height),
         modifiers,
         colorimetry: parse_colorimetry(&object)?,
+        refresh: source_refresh(&object),
     })
 }
 
@@ -580,6 +582,28 @@ fn chosen_id(property: &Property) -> Option<u32> {
             Some(default.0)
         }
         _ => fixed_id(property),
+    }
+}
+
+fn source_refresh(object: &Object) -> Option<FrameRate> {
+    let rate = |key: FormatProperties| {
+        property(object, key.as_raw())
+            .ok()
+            .and_then(fixed_fraction)
+            .filter(|fraction| fraction.num > 0 && fraction.denom > 0)
+            .map(|fraction| FrameRate::new(fraction.num, fraction.denom))
+    };
+
+    rate(FormatProperties::VideoFramerate).or_else(|| rate(FormatProperties::VideoMaxFramerate))
+}
+
+fn fixed_fraction(property: &Property) -> Option<Fraction> {
+    match &property.value {
+        Value::Fraction(fraction)
+        | Value::Choice(ChoiceValue::Fraction(Choice(_, ChoiceEnum::None(fraction)))) => {
+            Some(*fraction)
+        }
+        _ => None,
     }
 }
 
@@ -734,6 +758,52 @@ mod tests {
         assert_eq!(format.fourcc, DrmFourcc::from_code(*b"XR24"));
         assert_eq!(format.size, Resolution::new(1920, 1080));
         assert_eq!(format.modifiers, ModifierOffer::Absent);
+    }
+
+    fn with_rates(bytes: &[u8], rates: &[(FormatProperties, Fraction)]) -> Vec<u8> {
+        let mut object = parse_object(bytes).unwrap();
+        for (key, rate) in rates {
+            object
+                .properties
+                .push(Property::new(key.as_raw(), Value::Fraction(*rate)));
+        }
+
+        serialize(object).unwrap()
+    }
+
+    #[test]
+    fn the_source_refresh_is_the_fixed_rate_or_else_the_maximum_of_a_variable_one() {
+        let base = fixed_format(VideoFormat::BGRx, 64, 64);
+        let fixed = with_rates(
+            &base,
+            &[(
+                FormatProperties::VideoFramerate,
+                Fraction { num: 60, denom: 1 },
+            )],
+        );
+        let variable = with_rates(
+            &base,
+            &[
+                (
+                    FormatProperties::VideoFramerate,
+                    Fraction { num: 0, denom: 1 },
+                ),
+                (
+                    FormatProperties::VideoMaxFramerate,
+                    Fraction { num: 144, denom: 1 },
+                ),
+            ],
+        );
+
+        assert_eq!(
+            parse_format(&fixed).unwrap().refresh,
+            Some(FrameRate::integer(60))
+        );
+        assert_eq!(
+            parse_format(&variable).unwrap().refresh,
+            Some(FrameRate::integer(144))
+        );
+        assert_eq!(parse_format(&base).unwrap().refresh, None);
     }
 
     #[test]
@@ -922,6 +992,7 @@ mod tests {
             size: Resolution::new(1920, 1080),
             modifiers: ModifierOffer::Choice(vec![DRM_FORMAT_MOD_INVALID]),
             colorimetry: SpaColorimetry::default(),
+            refresh: None,
         };
 
         assert_eq!(

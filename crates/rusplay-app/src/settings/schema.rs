@@ -87,9 +87,10 @@ const NICE: Kind = Kind::Integer { min: -20, max: 19 };
 const RTKIT_PRIORITY: Kind = Kind::Integer { min: 0, max: 99 };
 const BACKOFF_PERCENT: Kind = Kind::Integer { min: 1, max: 90 };
 
-const CODECS: &[&str] = &["h264", "hevc", "av1"];
-const CHROMA: &[&str] = &["4:2:0", "4:2:2", "4:4:4"];
-const BIT_DEPTHS: &[&str] = &["eight", "ten", "twelve"];
+const CODECS: &[&str] = &["auto", "h264", "hevc", "av1"];
+const CHROMA: &[&str] = &["auto", "4:2:0", "4:2:2", "4:4:4"];
+const BIT_DEPTHS: &[&str] = &["auto", "eight", "ten", "twelve"];
+const COLOR_MODES: &[&str] = &["source", "configured"];
 pub const PRIMARIES: &[&str] = &[
     "bt709",
     "display-p3",
@@ -118,8 +119,8 @@ const OUTPUT_FORMATS: &[&str] = &["auto", "rgba8", "rgb10a2", "rgba16-float"];
 const DITHER_MODES: &[&str] = &["blue-noise", "ordered", "off"];
 const COLOR_METHODS: &[&str] = &["analytic", "lut"];
 const LUT_SIZES: Kind = Kind::Integer { min: 17, max: 129 };
-const BACKENDS: &[&str] = &["vaapi", "nvenc", "x264", "x265", "svt-av1"];
-const DECODER_BACKENDS: &[&str] = &["vaapi", "nvdec", "software"];
+const BACKENDS: &[&str] = &["auto", "vaapi", "nvenc", "x264", "x265", "svt-av1"];
+const DECODER_BACKENDS: &[&str] = &["auto", "vaapi", "nvdec", "software"];
 const RATE_CONTROL_MODES: &[&str] = &["cbr", "vbr", "constant-quality"];
 const NVENC_PRESETS: &[&str] = &["p1", "p2", "p3", "p4", "p5", "p6", "p7"];
 const NVENC_TUNINGS: &[&str] = &["ultra-low-latency", "low-latency", "high-quality"];
@@ -247,12 +248,12 @@ const SOFTWARE_THREADED: &[Condition] = &[Condition {
 }];
 const HARDWARE_RATE_CONTROL: &[Condition] = &[Condition {
     path: BACKEND_PATH,
-    any_of: &["vaapi", "nvenc"],
+    any_of: &["auto", "vaapi", "nvenc"],
 }];
 const VARIABLE_BITRATE: &[Condition] = &[
     Condition {
         path: BACKEND_PATH,
-        any_of: &["vaapi", "nvenc"],
+        any_of: &["auto", "vaapi", "nvenc"],
     },
     Condition {
         path: MODE_PATH,
@@ -262,7 +263,7 @@ const VARIABLE_BITRATE: &[Condition] = &[
 const CONSTANT_QUALITY: &[Condition] = &[
     Condition {
         path: BACKEND_PATH,
-        any_of: &["vaapi", "nvenc"],
+        any_of: &["auto", "vaapi", "nvenc"],
     },
     Condition {
         path: MODE_PATH,
@@ -360,6 +361,18 @@ pub static FIELDS: &[Field] = &[
         Kind::Choice(CODECS),
     ),
     field(
+        Audience::Host,
+        Section::Video,
+        "Stream",
+        "video.auto_detect_wait_ms",
+        "Wait for the source",
+        Kind::Integer {
+            min: 0,
+            max: 10_000,
+        },
+    )
+    .unit("ms"),
+    field(
         Audience::Shared,
         Section::Video,
         "Stream",
@@ -404,6 +417,14 @@ pub static FIELDS: &[Field] = &[
         "video.pixel_format.depth",
         "Bit depth",
         Kind::Choice(BIT_DEPTHS),
+    ),
+    field(
+        Audience::Host,
+        Section::Video,
+        "Colour",
+        "video.color_mode",
+        "Stream colour",
+        Kind::Choice(COLOR_MODES),
     ),
     field(
         Audience::Host,

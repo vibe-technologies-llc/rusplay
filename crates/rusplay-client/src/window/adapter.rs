@@ -49,24 +49,46 @@ fn pci_address_of(render_node: &Path, drm_class_directory: &Path) -> Option<Stri
 fn vaapi_render_node(decoder: &VideoDecoderConfig) -> Option<PathBuf> {
     match decoder {
         VideoDecoderConfig::Vaapi(vaapi) if !vaapi.copy_output => Some(vaapi.device.clone()),
-        VideoDecoderConfig::Vaapi(_)
+        VideoDecoderConfig::Auto(_)
+        | VideoDecoderConfig::Vaapi(_)
         | VideoDecoderConfig::Nvdec(_)
         | VideoDecoderConfig::Software(_) => None,
     }
+}
+
+pub(crate) struct Chosen {
+    pub adapter: wgpu::Adapter,
+    pub decoder: VideoDecoderConfig,
 }
 
 pub(crate) fn choose(
     instance: &wgpu::Instance,
     surface: &wgpu::Surface<'_>,
     decoder: &VideoDecoderConfig,
-) -> Result<wgpu::Adapter, ClientError> {
+) -> Result<Chosen, ClientError> {
     let preferred = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(surface),
         ..wgpu::RequestAdapterOptions::default()
     }))
     .map_err(ClientError::WindowAdapter)?;
+    let presenting = preferred.get_info().device_pci_bus_id;
+    let decoder = rusplay_decode::resolve(
+        decoder,
+        Some(presenting.as_str()).filter(|pci| !pci.is_empty()),
+    );
 
+    let adapter = adapter_for(instance, surface, preferred, &decoder)?;
+
+    Ok(Chosen { adapter, decoder })
+}
+
+fn adapter_for(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface<'_>,
+    preferred: wgpu::Adapter,
+    decoder: &VideoDecoderConfig,
+) -> Result<wgpu::Adapter, ClientError> {
     let Some(device) = vaapi_render_node(decoder) else {
         return Ok(preferred);
     };

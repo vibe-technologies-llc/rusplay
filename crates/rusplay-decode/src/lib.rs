@@ -26,6 +26,7 @@ mod metadata;
 mod nvdec;
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod obu;
+mod resolve;
 #[cfg(any(feature = "vaapi", feature = "nvdec"))]
 mod signal;
 #[cfg(feature = "software")]
@@ -59,6 +60,7 @@ pub use crate::{
         CpuFrame, CpuPlane, DecodedBuffer, DecodedFrame, DmaBufFrame, DmaBufImage, DmaBufObject,
         DmaBufPlane, DrmFourcc,
     },
+    resolve::resolve,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,11 +71,12 @@ pub enum Backend {
 }
 
 impl Backend {
-    pub const fn of(config: &VideoDecoderConfig) -> Self {
+    pub const fn of(config: &VideoDecoderConfig) -> Option<Self> {
         match config {
-            VideoDecoderConfig::Vaapi(_) => Self::Vaapi,
-            VideoDecoderConfig::Nvdec(_) => Self::Nvdec,
-            VideoDecoderConfig::Software(_) => Self::Software,
+            VideoDecoderConfig::Auto(_) => None,
+            VideoDecoderConfig::Vaapi(_) => Some(Self::Vaapi),
+            VideoDecoderConfig::Nvdec(_) => Some(Self::Nvdec),
+            VideoDecoderConfig::Software(_) => Some(Self::Software),
         }
     }
 }
@@ -101,6 +104,10 @@ pub fn open(
     config: &VideoDecoderConfig,
 ) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     match config {
+        VideoDecoderConfig::Auto(_) => match resolve(config, None) {
+            VideoDecoderConfig::Auto(_) => Err(DecodeError::NoDecoderAvailable),
+            resolved => open(codec, &resolved),
+        },
         VideoDecoderConfig::Vaapi(vaapi) => open_vaapi(codec, vaapi),
         VideoDecoderConfig::Nvdec(nvdec) => open_nvdec(codec, nvdec),
         VideoDecoderConfig::Software(software) => open_software(codec, software),
@@ -301,6 +308,12 @@ mod tests {
 
     #[test]
     fn backend_follows_the_config() {
-        assert_eq!(Backend::of(&VideoDecoderConfig::default()), Backend::Vaapi);
+        assert_eq!(Backend::of(&VideoDecoderConfig::default()), None);
+        assert_eq!(
+            Backend::of(&VideoDecoderConfig::Software(
+                rusplay_config::SoftwareDecoderConfig::default()
+            )),
+            Some(Backend::Software)
+        );
     }
 }

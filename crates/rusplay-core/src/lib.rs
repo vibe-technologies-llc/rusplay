@@ -17,7 +17,7 @@ pub use color::{
     MatrixCoefficients, SignalledColor, ToneMapOperator, TransferFunction, WhiteAdaptation,
     bradford_adaptation, pq_from_nits, pq_to_nits,
 };
-pub use format::{CodecFormat, FormatSet};
+pub use format::{CodecFormat, DepthPreference, FormatPreference, FormatSet};
 pub use frame::{BufferLease, DrmFourcc, Frame, FrameBuffer, Plane, ShmBytes};
 pub use media::{EncodedFrame, FrameBytes};
 pub use private_file::{read_regular, write_owner_only};

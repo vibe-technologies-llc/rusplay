@@ -23,8 +23,8 @@ pub fn pixel(chroma: ChromaSubsampling, depth: BitDepth) -> PixelFormat {
 pub fn video(codec: Codec, format: PixelFormat, encoder: VideoEncoderConfig) -> VideoConfig {
     VideoConfig {
         resolution: Some(TEST_RESOLUTION),
-        codec,
-        pixel_format: format,
+        codec: rusplay_config::CodecChoice::pinned(codec),
+        pixel_format: rusplay_config::PixelFormatChoice::pinned(format),
         bitrate_kbps: 8_000,
         encoder,
         ..VideoConfig::default()
@@ -79,14 +79,20 @@ pub fn check_stream_starts_on_a_keyframe(
     let format = config.pixel_format;
     let mut encoder = open(config).unwrap();
 
-    let first = encoder.encode(&frame(format, 0)).unwrap().unwrap();
+    let first = encoder
+        .encode(&frame((format).or_unnegotiated(), 0))
+        .unwrap()
+        .unwrap();
     assert!(first.keyframe);
     assert!(contains_idr(&first.data));
-    assert_eq!(first.codec, config.codec);
+    assert_eq!(first.codec, config.stream_codec());
     assert_eq!(first.timestamp, Timestamp::ZERO);
 
     for index in 1..5 {
-        let next = encoder.encode(&frame(format, index)).unwrap().unwrap();
+        let next = encoder
+            .encode(&frame((format).or_unnegotiated(), index))
+            .unwrap()
+            .unwrap();
         assert!(!next.keyframe);
         assert!(!contains_idr(&next.data));
         assert_eq!(next.timestamp.as_micros(), index * FRAME_INTERVAL_MICROS);
@@ -98,12 +104,20 @@ pub fn check_keyframe_on_request(config: &VideoConfig, contains_idr: impl Fn(&[u
     let mut encoder = open(config).unwrap();
 
     for index in 0..3 {
-        encoder.encode(&frame(format, index)).unwrap();
+        encoder
+            .encode(&frame((format).or_unnegotiated(), index))
+            .unwrap();
     }
     encoder.request_keyframe();
 
-    let forced = encoder.encode(&frame(format, 3)).unwrap().unwrap();
-    let after = encoder.encode(&frame(format, 4)).unwrap().unwrap();
+    let forced = encoder
+        .encode(&frame((format).or_unnegotiated(), 3))
+        .unwrap()
+        .unwrap();
+    let after = encoder
+        .encode(&frame((format).or_unnegotiated(), 4))
+        .unwrap()
+        .unwrap();
 
     assert!(forced.keyframe);
     assert!(contains_idr(&forced.data));
@@ -118,12 +132,17 @@ pub fn check_recovery_falls_back_to_a_keyframe(
     let mut encoder = open(config).unwrap();
 
     for index in 0..3 {
-        encoder.encode(&frame(format, index)).unwrap();
+        encoder
+            .encode(&frame((format).or_unnegotiated(), index))
+            .unwrap();
     }
     encoder.acknowledge(OutputIndex(1));
     let recovery = encoder.recover(OutputIndex(1));
 
-    let recovered = encoder.encode(&frame(format, 3)).unwrap().unwrap();
+    let recovered = encoder
+        .encode(&frame((format).or_unnegotiated(), 3))
+        .unwrap()
+        .unwrap();
 
     assert_eq!(recovery, Recovery::Keyframe);
     assert!(recovered.keyframe);
@@ -133,10 +152,14 @@ pub fn check_recovery_falls_back_to_a_keyframe(
 pub fn check_set_bitrate_in_place(config: &VideoConfig) {
     let format = config.pixel_format;
     let mut encoder = open(config).unwrap();
-    encoder.encode(&frame(format, 0)).unwrap();
+    encoder
+        .encode(&frame((format).or_unnegotiated(), 0))
+        .unwrap();
 
     encoder.set_bitrate(2_000).unwrap();
-    let next = encoder.encode(&frame(format, 1)).unwrap();
+    let next = encoder
+        .encode(&frame((format).or_unnegotiated(), 1))
+        .unwrap();
 
     assert!(next.is_some());
     assert!(matches!(
@@ -168,7 +191,7 @@ pub fn check_wrong_inputs_are_rejected(config: &VideoConfig) {
     let wanted = config.pixel_format;
     let other = pixel(
         ChromaSubsampling::Yuv444,
-        if wanted.depth == BitDepth::Eight {
+        if wanted.depth == rusplay_config::DepthChoice::pinned(BitDepth::Eight) {
             BitDepth::Ten
         } else {
             BitDepth::Eight
@@ -178,12 +201,17 @@ pub fn check_wrong_inputs_are_rejected(config: &VideoConfig) {
 
     let wrong_format = encoder.encode(&frame(other, 0)).unwrap_err();
     let dmabuf = encoder.encode(&dmabuf_frame()).unwrap_err();
-    let small = yuv_frame(wanted, Resolution::new(64, 64), 0, Timestamp::ZERO);
+    let small = yuv_frame(
+        (wanted).or_unnegotiated(),
+        Resolution::new(64, 64),
+        0,
+        Timestamp::ZERO,
+    );
     let wrong_size = encoder.encode(&small).unwrap_err();
 
     assert!(matches!(
         wrong_format,
-        EncodeError::FrameFormatMismatch { expected, .. } if expected == fourcc_for(wanted)
+        EncodeError::FrameFormatMismatch { expected, .. } if expected == fourcc_for((wanted).or_unnegotiated())
     ));
     assert!(matches!(dmabuf, EncodeError::CpuFrameRequired { .. }));
     assert!(matches!(
@@ -200,7 +228,7 @@ pub fn check_unspecified_resolution_follows_the_first_frame(config: &VideoConfig
     let mut encoder = open(&config).unwrap();
 
     let first = encoder
-        .encode(&frame(config.pixel_format, 0))
+        .encode(&frame(config.stream_pixel_format(), 0))
         .unwrap()
         .unwrap();
 
@@ -225,7 +253,7 @@ pub fn check_colour_reaches_the_decoder(
 
         for index in 0..3 {
             let packet = encoder
-                .encode(&frame(config.pixel_format, index))
+                .encode(&frame(config.stream_pixel_format(), index))
                 .unwrap()
                 .unwrap();
             let picture = decoder.decode(&packet).unwrap().unwrap();
@@ -241,18 +269,24 @@ pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
     let mut encoder = open(config).unwrap();
 
     for index in 0..MEASURED {
-        encoder.encode(&frame(format, index)).unwrap();
+        encoder
+            .encode(&frame((format).or_unnegotiated(), index))
+            .unwrap();
     }
     assert!(encoder.take_reconstruction().unwrap().is_none());
 
     assert!(encoder.capture_reconstruction());
-    let source_frame = frame(format, MEASURED);
+    let source_frame = frame((format).or_unnegotiated(), MEASURED);
     encoder.encode(&source_frame).unwrap();
     let reconstruction = encoder.take_reconstruction().unwrap().unwrap();
-    let source = YuvFrame::from_frame(&source_frame, crate::Backend::from(&config.encoder), format)
-        .unwrap()
-        .sample_picture()
-        .unwrap();
+    let source = YuvFrame::from_frame(
+        &source_frame,
+        crate::Backend::of(&config.encoder).unwrap(),
+        (format).or_unnegotiated(),
+    )
+    .unwrap()
+    .sample_picture()
+    .unwrap();
 
     let score = rusplay_core::measure(
         &source,
@@ -261,7 +295,7 @@ pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
         rusplay_core::TemporalOrder::First,
     )
     .unwrap();
-    assert_eq!(reconstruction.format(), format);
+    assert_eq!(reconstruction.format(), (format).or_unnegotiated());
     assert_eq!(reconstruction.resolution(), TEST_RESOLUTION);
     assert!(
         score.psnr.luma.value() > 30.0,

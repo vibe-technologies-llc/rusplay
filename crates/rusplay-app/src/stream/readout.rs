@@ -420,6 +420,7 @@ const fn range_label(range: ColorRange) -> &'static str {
 
 const fn decoder_label(decoder: &VideoDecoderConfig) -> &'static str {
     match decoder {
+        VideoDecoderConfig::Auto(_) => "automatic",
         VideoDecoderConfig::Vaapi(config) if config.copy_output => "VAAPI · CPU copy",
         VideoDecoderConfig::Vaapi(_) => "VAAPI · GPU surfaces",
         VideoDecoderConfig::Nvdec(_) => "NVDEC · CPU upload",

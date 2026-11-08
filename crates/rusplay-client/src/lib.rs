@@ -68,7 +68,7 @@ pub use crate::{
         query_target, resolve_target,
     },
     error::{ClientError, Stage},
-    formats::decoder_formats,
+    formats::{decoder_formats, resolve_decoder},
     host_book::{HostBook, SavedHost},
     input::InputHandle,
     microphone::default_microphone,

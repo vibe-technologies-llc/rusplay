@@ -595,11 +595,11 @@ impl NvencEncoder {
         }
 
         let settings = Settings {
-            codec: video.codec,
-            format: video.pixel_format,
+            codec: video.stream_codec(),
+            format: video.stream_pixel_format(),
             color: video.color,
             siting,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
             vbv_frames: video.vbv_frames,
             resolution: video.resolution,
             bitrate_kbps: video.bitrate_kbps,

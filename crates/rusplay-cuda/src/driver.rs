@@ -6,11 +6,12 @@ use crate::{
     error::{CudaCall, CudaError, CudaStatus},
     ffi::{
         CUDA_SUCCESS, CuContext, CuCtxPopCurrentFn, CuCtxPushCurrentFn, CuDevice,
-        CuDeviceGetCountFn, CuDeviceGetFn, CuInitFn, CuResult,
+        CuDeviceGetCountFn, CuDeviceGetFn, CuDeviceGetPciBusIdFn, CuInitFn, CuResult,
     },
 };
 
 pub const CUDA_LIBRARY: &str = "libcuda.so.1";
+const PCI_BUS_ID_CAPACITY: usize = 32;
 
 pub fn check(call: CudaCall, result: CuResult) -> Result<(), CudaError> {
     if result == CUDA_SUCCESS {
@@ -84,14 +85,37 @@ impl Driver {
         symbol(&self.library, self.name, symbol_name)
     }
 
-    pub fn device(&self, index: u32) -> Result<CuDevice, CudaError> {
+    pub fn device_count(&self) -> Result<u32, CudaError> {
         check(CudaCall::Init, unsafe { (self.init)(0) })?;
 
         let mut count: c_int = 0;
         check(CudaCall::DeviceGetCount, unsafe {
             (self.device_get_count)(&raw mut count)
         })?;
-        let count = u32::try_from(count).unwrap_or(0);
+
+        Ok(u32::try_from(count).unwrap_or(0))
+    }
+
+    pub fn pci_bus_id(&self, index: u32) -> Result<String, CudaError> {
+        let device = self.device(index)?;
+        let get_pci_bus_id: CuDeviceGetPciBusIdFn = self.symbol("cuDeviceGetPCIBusId")?;
+        let mut buffer = [0u8; PCI_BUS_ID_CAPACITY];
+        let capacity = c_int::try_from(buffer.len()).unwrap_or(c_int::MAX);
+
+        check(CudaCall::DeviceGetPciBusId, unsafe {
+            get_pci_bus_id(buffer.as_mut_ptr().cast(), capacity, device)
+        })?;
+
+        let end = buffer
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(buffer.len());
+
+        Ok(String::from_utf8_lossy(&buffer[..end]).to_ascii_lowercase())
+    }
+
+    pub fn device(&self, index: u32) -> Result<CuDevice, CudaError> {
+        let count = self.device_count()?;
         let ordinal = c_int::try_from(index)
             .ok()
             .filter(|_| index < count)

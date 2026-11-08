@@ -21,11 +21,11 @@ pub(crate) struct Handoff {
 impl Handoff {
     pub(crate) fn plan(config: &Config) -> Option<Self> {
         let video = &config.video;
-        let backend = Backend::from(&video.encoder);
+        let backend = Backend::of(&video.encoder)?;
 
         video
             .encoder_gpu_handoff
-            .then(|| device_input(backend, video.pixel_format))
+            .then(|| device_input(backend, video.stream_pixel_format()))
             .flatten()
             .map(|input| Self { backend, input })
     }
@@ -51,7 +51,12 @@ impl Handoff {
         layout: &FrameLayout,
     ) -> Result<(), HostError> {
         let planes = device_planes(layout)?;
-        check_device_layout(self.backend, config.video.pixel_format, resolution, &planes)?;
+        check_device_layout(
+            self.backend,
+            config.video.stream_pixel_format(),
+            resolution,
+            &planes,
+        )?;
         Ok(())
     }
 
@@ -137,7 +142,7 @@ mod tests {
     fn config(encoder: VideoEncoderConfig, format: PixelFormat) -> Config {
         let mut config = Config::default();
         config.video.encoder = encoder;
-        config.video.pixel_format = format;
+        config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(format);
         config
     }
 

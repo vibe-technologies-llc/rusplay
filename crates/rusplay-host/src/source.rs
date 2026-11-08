@@ -8,8 +8,12 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
-use rusplay_capture::{CaptureError, CursorUpdate, Frame, OutputOffer, ShmFallback, Subscriber};
-use rusplay_core::Resolution;
+use rusplay_capture::{
+    CaptureError, CursorUpdate, Frame, OutputOffer, ShmFallback, SourceRefresh, Subscriber,
+};
+use rusplay_core::{BitDepth, ColorSpace, FrameRate, Resolution};
+
+use crate::upload::source_depth;
 
 pub trait FrameSource: Send {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError>;
@@ -25,6 +29,30 @@ pub trait FrameSource: Send {
     fn output_offer(&self) -> Option<OutputOffer> {
         None
     }
+
+    fn source_refresh(&self) -> Option<SourceRefresh> {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceTraits {
+    pub depth: BitDepth,
+    pub color: ColorSpace,
+}
+
+impl SourceTraits {
+    pub(crate) fn of(frame: &Frame) -> Self {
+        let depth = match source_depth(frame.format) {
+            BitDepth::Eight if frame.color.transfer.is_hdr() => BitDepth::Ten,
+            depth => depth,
+        };
+
+        Self {
+            depth,
+            color: frame.color,
+        }
+    }
 }
 
 pub struct CaptureFeed {
@@ -34,6 +62,8 @@ pub struct CaptureFeed {
     cursor_state: Mutex<Option<CursorUpdate>>,
     fallback: Option<ShmFallback>,
     offer: Option<OutputOffer>,
+    refresh: Option<SourceRefresh>,
+    traits: Mutex<Option<SourceTraits>>,
     capture_size: AtomicU64,
 }
 
@@ -43,6 +73,8 @@ impl CaptureFeed {
             cursor: source.cursor_feed(),
             fallback: source.shm_fallback(),
             offer: source.output_offer(),
+            refresh: source.source_refresh(),
+            traits: Mutex::new(None),
             source: Mutex::new(Box::new(source)),
             retained: Mutex::new(None),
             cursor_state: Mutex::new(None),
@@ -56,6 +88,19 @@ impl CaptureFeed {
 
     pub(crate) fn retain(&self, frame: Frame) {
         *self.retained.lock() = Some(frame);
+    }
+
+    pub(crate) fn observe(&self, frame: &Frame) {
+        self.set_capture_size(frame.resolution);
+        *self.traits.lock() = Some(SourceTraits::of(frame));
+    }
+
+    pub(crate) fn source_traits(&self) -> Option<SourceTraits> {
+        *self.traits.lock()
+    }
+
+    pub(crate) fn source_refresh(&self) -> Option<FrameRate> {
+        self.refresh.as_ref().and_then(SourceRefresh::get)
     }
 
     pub(crate) fn set_capture_size(&self, size: Resolution) {
@@ -114,7 +159,8 @@ mod portal {
 
     use rusplay_capture::{
         CaptureError, CaptureSource, CursorUpdate, DrmFourcc, FormatModifiers, Frame, OutputOffer,
-        PipeWireCapture, PortalSession, RestoreTokenStore, ShmFallback, StreamOptions, Subscriber,
+        PipeWireCapture, PortalSession, RestoreTokenStore, ShmFallback, SourceRefresh,
+        StreamOptions, Subscriber,
     };
     use rusplay_config::Config;
     use rusplay_scale::{DmaBufFormat, DmaBufImporter};
@@ -136,6 +182,10 @@ mod portal {
 
         fn output_offer(&self) -> Option<OutputOffer> {
             Some(PipeWireCapture::output_offer(self))
+        }
+
+        fn source_refresh(&self) -> Option<SourceRefresh> {
+            Some(PipeWireCapture::source_refresh(self))
         }
     }
 
@@ -212,10 +262,10 @@ mod portal {
 
         fn ten_bit() -> Config {
             let mut config = Config::default();
-            config.video.pixel_format = PixelFormat {
+            config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
                 chroma: ChromaSubsampling::Yuv444,
                 depth: BitDepth::Ten,
-            };
+            });
             config
         }
 

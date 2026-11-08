@@ -8,6 +8,7 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub faults: GpuFaults,
+    pub pci_bus_id: Option<String>,
 }
 
 impl Gpu {
@@ -38,10 +39,12 @@ async fn request() -> Result<Gpu, HostError> {
         .map_err(HostError::GpuDevice)?;
 
     let faults = GpuFaults::install(&device);
+    let pci_bus_id = Some(adapter.get_info().device_pci_bus_id).filter(|id| !id.is_empty());
 
     Ok(Gpu {
         device,
         queue,
         faults,
+        pci_bus_id,
     })
 }

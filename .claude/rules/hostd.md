@@ -136,7 +136,8 @@ paths:
 - A useful daemon today is built with
   `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac`,
   which needs libva, libx264, libx265, libSvtAv1Enc, PipeWire and libclang (for bindgen) on the
-  system. `vaapi,pipewire,input` covers the default config, whose encoder backend is VAAPI;
+  system. `vaapi,pipewire,input` covers the default config on most GPUs: its encoder backend is `auto`,
+  which picks a working VAAPI node, an NVENC device or a compiled software encoder (`auto.md`);
   without `pipewire` the daemon stops at start with `CaptureNotCompiled`, and without `input` with
   `InputNotCompiled` unless `input.accept_remote` is off. Virtual gamepads need access to
   `/dev/uinput` (`input.md`).

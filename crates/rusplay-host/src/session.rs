@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use rusplay_audio::CODEC_THREAD_STACK_BYTES;
 use rusplay_capture::OutputRequest;
 use rusplay_clipboard::{ClipboardLink, ClipboardPolicy, ClipboardState};
-use rusplay_config::{Config, SourceKind};
+use rusplay_config::{Config, FrameRateChoice, SourceKind};
 use rusplay_net::{
     ControlChannel, ControlConfig, FecScheme, PeerStore, Pin, Transport, TransportOptions,
 };
@@ -31,7 +31,7 @@ use crate::{
     encode::{self, EncodeLinks, PipelineFactory, QualityTiming},
     input::{self, InputFeed, InputLinks},
     microphone::{self, MicrophoneLinks, MicrophoneOutputFactory, default_microphone_output},
-    negotiate::{NegotiatedFormat, configured_format},
+    negotiate::{NegotiatedFormat, StreamChoice},
     outbox::ControlOutbox,
     pipeline::GpuPipelineFactory,
     send::{self, Pacing, SendLinks, SendOptions},
@@ -259,7 +259,13 @@ impl HostSession {
                 outbox: Arc::clone(&outbox),
                 input: self.input.is_some().then_some(input_sender),
                 microphone: microphone.is_some().then_some(microphone_sender),
-                configured: configured_format(&self.config.video),
+                stream: StreamChoice::of(&self.config.video),
+                source: Arc::clone(feed),
+                follow_refresh: (self.config.video.frame_rate == FrameRateChoice::Auto)
+                    .then_some(self.config.capture.virtual_max_refresh_hz),
+                source_wait: Duration::from_millis(u64::from(
+                    self.config.video.auto_detect_wait_ms,
+                )),
                 virtual_output: self.virtual_output(feed),
                 clipboard: self.open_clipboard(&mut stream),
             },
@@ -291,7 +297,7 @@ impl HostSession {
             )),
             quality: QualityTiming {
                 interval_ms: self.config.video.quality_interval_ms,
-                frame_rate: self.config.video.frame_rate,
+                frame_rate: self.config.video.stream_frame_rate(),
             },
             shared: Arc::clone(&shared),
             feed: Arc::clone(feed),
@@ -337,7 +343,7 @@ impl HostSession {
         }
 
         let feed = Arc::clone(feed);
-        let frame_rate = self.config.video.frame_rate;
+        let frame_rate = self.config.video.stream_frame_rate();
         stream.spawn(Stage::Capture, move || {
             capture::run(&feed, &shared, frame_rate)
         })?;
@@ -356,7 +362,7 @@ fn send_options(config: &Config) -> SendOptions {
     let network = &config.network;
     let pacing = network
         .pacing
-        .then(|| config.video.frame_rate.frame_interval())
+        .then(|| config.video.stream_frame_rate().frame_interval())
         .flatten()
         .map(|frame_interval| Pacing {
             frame_interval,

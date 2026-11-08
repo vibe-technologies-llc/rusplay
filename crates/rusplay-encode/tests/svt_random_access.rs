@@ -46,8 +46,8 @@ fn frame(index: u64) -> Frame {
 #[test]
 fn a_random_access_encoder_opens_and_keys_a_requested_frame() {
     let config = VideoConfig {
-        codec: Codec::Av1,
-        pixel_format: FORMAT,
+        codec: rusplay_config::CodecChoice::pinned(Codec::Av1),
+        pixel_format: rusplay_config::PixelFormatChoice::pinned(FORMAT),
         resolution: Some(RESOLUTION),
         encoder: VideoEncoderConfig::SvtAv1(SvtAv1Config {
             low_latency: false,

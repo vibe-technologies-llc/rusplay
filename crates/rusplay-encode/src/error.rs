@@ -16,6 +16,10 @@ use crate::{Backend, input::fourcc_text};
 pub enum EncodeError {
     #[error("the {backend} encoder backend is not compiled into this build")]
     BackendNotCompiled { backend: Backend },
+    #[error(
+        "no encoder on this machine works: no hardware encoder answered and no software encoder is compiled in"
+    )]
+    NoEncoderAvailable,
     #[error("the {backend} encoder cannot produce {codec}")]
     CodecUnsupported { backend: Backend, codec: Codec },
     #[error("the {backend} encoder cannot produce {chroma} chroma")]

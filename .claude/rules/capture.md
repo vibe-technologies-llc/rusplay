@@ -89,8 +89,9 @@ paths:
 - The format pods, the buffer → `Frame` conversion and the SPA ↔ DRM fourcc table are pure
   functions in `format.rs` and `convert.rs`, unit tested without a daemon. SPA names formats in
   byte order and DRM in little-endian word order, so SPA `BGRx` is DRM `XR24`. Formats are
-  offered in `StreamOptions::formats` order; 10-bit (`XR30` family) goes first when
-  `video.pixel_format.depth` is above 8.
+  offered in `StreamOptions::formats` order; 10-bit (`XR30` family) goes first unless
+  `video.pixel_format.depth` is pinned to 8. The negotiated `framerate` (or `maxFramerate` for a
+  variable stream) is published through `PipeWireCapture::source_refresh` (`auto.md`).
 - The surface's colour description is read from the negotiated `Format` pod's
   `SPA_FORMAT_VIDEO_colorRange`, `colorMatrix`, `transferFunction` and `colorPrimaries` ids
   (`parse_format` into `SpaColorimetry`, 0 meaning unknown). `describe_color` in
@@ -109,7 +110,8 @@ paths:
   in `docs/FEATURES.md`).
 - Every `EnumFormat` offers `transferFunction` and `colorPrimaries` as `Id` enum choices
   (`ColorOffer` from `StreamOptions::color_preference`, which `StreamOptions::new` sets to
-  `video.color`): the stream's own transfer and primaries first (BT.2020 for custom primaries
+  `video.color` when `video.color_mode` is `configured`; with `source` there is no offer and the
+  producer keeps its own description): the stream's own transfer and primaries first (BT.2020 for custom primaries
   under PQ/HLG, BT.709 otherwise), then every other id `describe_color` can model
   (`DESCRIBABLE_TRANSFERS`, `DESCRIBABLE_PRIMARIES`), so an HDR-capable compositor picks the
   stream's encoding and a producer's fixed choice is never refused. The properties carry

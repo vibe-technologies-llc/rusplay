@@ -16,11 +16,12 @@ const DMABUF_STRIDE: u32 = 256;
 
 fn config(color: ColorSpace, depth: BitDepth) -> Config {
     let mut config = Config::default();
+    config.video.color_mode = rusplay_config::StreamColorMode::Configured;
     config.video.color = color;
-    config.video.pixel_format = PixelFormat {
+    config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
         chroma: ChromaSubsampling::Yuv444,
         depth,
-    };
+    });
     config
 }
 
@@ -153,7 +154,7 @@ fn luma_row(pipeline: &mut GpuPipeline, frame: &Frame) -> Vec<u32> {
     let FrameBuffer::Shm { data, .. } = &input.buffer else {
         unreachable!("the encoder input is always shared memory");
     };
-    let sample = match pipeline.config.video.pixel_format.depth {
+    let sample = match pipeline.config.video.stream_pixel_format().depth {
         BitDepth::Eight => 1,
         BitDepth::Ten | BitDepth::Twelve => 2,
     };
@@ -199,6 +200,44 @@ fn a_ten_bit_capture_in_the_stream_encoding_keeps_its_codes_and_channel_order() 
     assert_codes(&grey, 520, 0, "grey");
     assert_codes(&red, ten_bit_code(0.2627), 1, "red");
     assert_codes(&blue_first, ten_bit_code(0.2627), 1, "xb30 red");
+}
+
+#[test]
+fn a_stream_that_follows_its_source_takes_each_new_description_and_replans() {
+    let mut followed = config(ColorSpace::default(), BitDepth::Ten);
+    followed.video.color_mode = rusplay_config::StreamColorMode::Source;
+    let Some(mut pipeline) = pipeline(followed) else {
+        return;
+    };
+    let pq = ColorSpace {
+        primaries: rusplay_core::ColorPrimaries::Bt2020,
+        transfer: rusplay_core::TransferFunction::Pq,
+        ..ColorSpace::default()
+    };
+
+    pipeline.follow_source_color(&frame(*b"XR30", pq, |_| 0));
+    let after_pq = pipeline.config.video.color;
+    pipeline.follow_source_color(&frame(*b"XR24", ColorSpace::default(), |_| 0));
+    let after_sdr = pipeline.config.video.color;
+
+    assert_eq!(after_pq, pq);
+    assert_eq!(after_sdr, ColorSpace::default());
+    assert!(pipeline.route.is_none());
+}
+
+#[test]
+fn a_configured_stream_colour_is_kept_whatever_the_source_says() {
+    let Some(mut pipeline) = pipeline(config(ColorSpace::default(), BitDepth::Eight)) else {
+        return;
+    };
+    let pq = ColorSpace {
+        transfer: rusplay_core::TransferFunction::Pq,
+        ..ColorSpace::default()
+    };
+
+    pipeline.follow_source_color(&frame(*b"XR30", pq, |_| 0));
+
+    assert_eq!(pipeline.config.video.color, ColorSpace::default());
 }
 
 #[test]
@@ -542,7 +581,8 @@ fn a_gpu_error_raised_between_frames_ends_the_next_frame_with_it() {
 #[test]
 fn a_conversion_the_handoff_refuses_falls_back_to_the_readback() {
     let mut config = config(srgb(), BitDepth::Eight);
-    config.video.pixel_format.chroma = ChromaSubsampling::Yuv420;
+    config.video.pixel_format.chroma =
+        rusplay_config::ChromaChoice::pinned(ChromaSubsampling::Yuv420);
     config.video.encoder_gpu_handoff = false;
     let format = config.video.pixel_format;
     let grey = frame(*b"XR30", srgb(), |_| xrgb2101010(512, 512, 512));
@@ -552,8 +592,11 @@ fn a_conversion_the_handoff_refuses_falls_back_to_the_readback() {
     let mut pipeline = pipeline(config).unwrap();
     pipeline.handoff = HandoffState::Trying(Handoff {
         backend: rusplay_encode::Backend::X264,
-        input: rusplay_encode::device::device_input(rusplay_encode::Backend::Vaapi, format)
-            .unwrap(),
+        input: rusplay_encode::device::device_input(
+            rusplay_encode::Backend::Vaapi,
+            (format).or_unnegotiated(),
+        )
+        .unwrap(),
     });
 
     let expected = luma_row(&mut reference, &grey);

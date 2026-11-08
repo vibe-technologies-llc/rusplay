@@ -13,6 +13,10 @@ use crate::Backend;
 pub enum DecodeError {
     #[error("the {backend} decoder backend is not compiled into this build")]
     BackendNotCompiled { backend: Backend },
+    #[error(
+        "no decoder on this machine works: no hardware decoder answered and no software decoder is compiled in"
+    )]
+    NoDecoderAvailable,
     #[error("the {backend} decoder cannot decode {codec}")]
     CodecUnsupported { backend: Backend, codec: Codec },
     #[error("received a frame of {found}, but the decoder was opened for {expected}")]

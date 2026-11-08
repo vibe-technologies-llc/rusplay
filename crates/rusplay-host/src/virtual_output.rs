@@ -136,6 +136,20 @@ fn fit_within(wanted: Resolution, max: Resolution) -> Resolution {
     )
 }
 
+pub(crate) fn stream_rate(
+    display: &ClientDisplay,
+    max_hertz: u32,
+    source: Option<FrameRate>,
+) -> FrameRate {
+    let client = limit_rate(display, max_hertz);
+    let slower = |rate: FrameRate| rate.frame_interval().unwrap_or(Duration::ZERO);
+
+    match source.filter(|source| source.is_valid()) {
+        Some(source) if slower(source) > slower(client) => source,
+        Some(_) | None => client,
+    }
+}
+
 fn limit_rate(display: &ClientDisplay, max_hertz: u32) -> FrameRate {
     if display.refresh_millihertz() > max_hertz.saturating_mul(MILLIHERTZ_PER_HERTZ) {
         FrameRate::integer(max_hertz)
@@ -217,6 +231,26 @@ mod tests {
         let request = select_output(&display(1920, 1080, 1_000_000), &limits(3840, 2160, 240));
 
         assert_eq!(request.frame_rate, FrameRate::integer(240));
+    }
+
+    #[test]
+    fn the_stream_rate_is_the_slower_of_the_client_display_and_the_source() {
+        let client = display(2560, 1440, 144_000);
+
+        assert_eq!(
+            stream_rate(&client, 240, Some(FrameRate::integer(60))),
+            FrameRate::integer(60)
+        );
+        assert_eq!(
+            stream_rate(&client, 240, Some(FrameRate::integer(240))),
+            FrameRate::integer(144)
+        );
+        assert_eq!(stream_rate(&client, 240, None), FrameRate::integer(144));
+        assert_eq!(stream_rate(&client, 120, None), FrameRate::integer(120));
+        assert_eq!(
+            stream_rate(&client, 240, Some(FrameRate::new(0, 1))),
+            FrameRate::integer(144)
+        );
     }
 
     #[test]

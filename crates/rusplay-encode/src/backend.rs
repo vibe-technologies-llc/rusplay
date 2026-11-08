@@ -36,14 +36,15 @@ impl Backend {
     }
 }
 
-impl From<&VideoEncoderConfig> for Backend {
-    fn from(config: &VideoEncoderConfig) -> Self {
+impl Backend {
+    pub const fn of(config: &VideoEncoderConfig) -> Option<Self> {
         match config {
-            VideoEncoderConfig::Vaapi(_) => Self::Vaapi,
-            VideoEncoderConfig::Nvenc(_) => Self::Nvenc,
-            VideoEncoderConfig::X264(_) => Self::X264,
-            VideoEncoderConfig::X265(_) => Self::X265,
-            VideoEncoderConfig::SvtAv1(_) => Self::SvtAv1,
+            VideoEncoderConfig::Auto(_) => None,
+            VideoEncoderConfig::Vaapi(_) => Some(Self::Vaapi),
+            VideoEncoderConfig::Nvenc(_) => Some(Self::Nvenc),
+            VideoEncoderConfig::X264(_) => Some(Self::X264),
+            VideoEncoderConfig::X265(_) => Some(Self::X265),
+            VideoEncoderConfig::SvtAv1(_) => Some(Self::SvtAv1),
         }
     }
 }

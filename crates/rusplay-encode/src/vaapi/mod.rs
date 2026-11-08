@@ -345,10 +345,10 @@ impl Device {
         params: &VaapiParams,
     ) -> Result<Self, EncodeError> {
         let display = Display::open(&vaapi.device)?;
-        let format = video.pixel_format;
+        let format = video.stream_pixel_format();
 
-        let selection = select(&display, video.codec, format, vaapi.low_power)?
-            .ok_or_else(|| unsupported(video.codec, format))?;
+        let selection = select(&display, video.stream_codec(), format, vaapi.low_power)?
+            .ok_or_else(|| unsupported(video.stream_codec(), format))?;
         let profile = selection.profile.va();
 
         let [
@@ -384,7 +384,7 @@ impl Device {
         let packed_headers = packed.unwrap_or(0) & WANTED_PACKED_HEADERS;
         let period = params
             .intra_refresh_frames
-            .unwrap_or_else(|| default_refresh_period(video.frame_rate));
+            .unwrap_or_else(|| default_refresh_period(video.stream_frame_rate()));
         let refresh = refresh.unwrap_or(0);
         let direction = if refresh & ffi::VA_ENC_INTRA_REFRESH_ROLLING_ROW != 0 {
             Some(RefreshDirection::Rows)
@@ -811,11 +811,11 @@ impl VaapiEncoder {
         let device = Device::open(video, vaapi, &params)?;
 
         let settings = Settings {
-            codec: video.codec,
-            format: video.pixel_format,
+            codec: video.stream_codec(),
+            format: video.stream_pixel_format(),
             color: video.color,
             siting,
-            frame_rate: video.frame_rate,
+            frame_rate: video.stream_frame_rate(),
             vbv_frames: video.vbv_frames,
             resolution: video.resolution,
             bitrate_kbps: video.bitrate_kbps,
