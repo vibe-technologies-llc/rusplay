@@ -259,7 +259,7 @@ impl QualitySampler {
             frame,
             source,
             reconstruction,
-            history: self.history.drain(..).collect(),
+            history: self.history.drain(..).rev().collect(),
             order: self.settings.order,
         };
         if self

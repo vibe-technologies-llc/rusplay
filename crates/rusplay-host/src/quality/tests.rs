@@ -243,3 +243,46 @@ fn a_history_of_another_size_is_not_measured() {
     assert_eq!(again, Some(SampleKind::Luma));
     assert_eq!(link.take_events(), []);
 }
+
+#[test]
+fn the_history_reaches_the_measurement_newest_first() {
+    let (mut sampler, link) = sampler(1_000, 60);
+    let now = Instant::now();
+    let ramp = |offset: u16| {
+        let values = (0..WIDTH * HEIGHT)
+            .map(|index| u16::try_from(index % WIDTH).unwrap() * offset)
+            .collect();
+        SamplePlane::new(WIDTH, HEIGHT, values).unwrap()
+    };
+    let source = SamplePicture::new(format(), [ramp(9), plane(128), plane(128)]).unwrap();
+    let reconstruction = SamplePicture::new(format(), [ramp(8), plane(128), plane(128)]).unwrap();
+    let expected = measure(
+        &source,
+        &reconstruction,
+        &[&ramp(5), &ramp(1)],
+        TemporalOrder::Second,
+    )
+    .unwrap();
+
+    sampler.plan(true, now);
+    sampler.record(Some(Sample::Luma(ramp(1))), Some(1), now);
+    sampler.plan(true, now);
+    sampler.record(Some(Sample::Luma(ramp(5))), Some(2), now);
+    sampler.plan(true, now);
+    sampler.record(
+        Some(Sample::Picture(Box::new(PictureSample {
+            source,
+            reconstruction: Some(reconstruction),
+        }))),
+        Some(3),
+        now,
+    );
+
+    assert_eq!(
+        wait_for_events(&link),
+        [QualityEvent::Report {
+            frame: 3,
+            score: expected
+        }]
+    );
+}

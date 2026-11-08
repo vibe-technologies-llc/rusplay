@@ -420,4 +420,6 @@ fn squared_error(source: &SamplePlane, reconstruction: &SamplePlane) -> f64 {
 }
 
 #[cfg(test)]
+mod reference_tests;
+#[cfg(test)]
 mod tests;

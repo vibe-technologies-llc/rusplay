@@ -10,6 +10,8 @@ const TEMPORAL_GAIN: f64 = 2.0;
 const DOWNSAMPLE_ABOVE_SAMPLES: usize = 2048 * 1152;
 const SMOOTHING_UP_TO_SAMPLES: usize = 640 * 480;
 const MIN_RATIO: f64 = 0.000_01;
+const UNMEASURED_ACTIVITY: f64 = 1.0;
+const NARROWEST_DOWNSAMPLED_SPAN: usize = 12;
 
 #[derive(Debug, Clone)]
 struct Block {
@@ -71,11 +73,15 @@ impl Activity<'_> {
             block.rows.end.saturating_sub(edge)
         };
         if right <= left || bottom <= top {
-            return self.floor;
+            return UNMEASURED_ACTIVITY;
         }
 
         let spatial = if self.downsample {
-            self.downsampled_highpass(left..right, top..bottom)
+            if right - block.columns.start > NARROWEST_DOWNSAMPLED_SPAN {
+                self.downsampled_highpass(left..right, top..bottom)
+            } else {
+                0
+            }
         } else {
             self.highpass(left..right, top..bottom)
         };
@@ -263,6 +269,14 @@ fn block_error(source: &SamplePlane, reconstruction: &SamplePlane, block: &Block
     total
 }
 
+fn rounded_weighted_error(weighted: f64) -> f64 {
+    if weighted <= 0.0 {
+        0.0
+    } else {
+        (weighted + 0.5).floor()
+    }
+}
+
 fn chroma_block(block: &Block, chroma: ChromaSubsampling, size: (usize, usize)) -> Block {
     let (shift_x, shift_y) = match chroma {
         ChromaSubsampling::Yuv420 => (1, 1),
@@ -290,7 +304,7 @@ pub(super) fn weighted_errors(
     #[expect(clippy::cast_precision_loss)]
     let ratio = samples as f64 / UHD_SAMPLES;
     let size = block_size(ratio);
-    if size < BLOCK_MULTIPLE || luma.width() < 3 || luma.height() < 3 {
+    if size < BLOCK_MULTIPLE {
         return std::array::from_fn(|plane| {
             super::squared_error(&source.planes[plane], &reconstruction.planes[plane])
         });
@@ -338,6 +352,6 @@ pub(super) fn weighted_errors(
             })
             .sum();
 
-        weighted * picture_activity
+        rounded_weighted_error(weighted * picture_activity)
     })
 }
