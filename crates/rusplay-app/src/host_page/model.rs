@@ -6,7 +6,7 @@ use std::{
 use crate::{
     hosting::{Admission, HostEvent, HostStats, LiveStream, NegotiatedFormat, PairedClient, Pin},
     notice::{Notice, error_chain},
-    stats::{millis, per_second},
+    stats::{bitrate_text, fps_text, millis_text, per_second, rate_text},
 };
 
 const SAMPLE_WINDOW: Duration = Duration::from_millis(500);
@@ -23,6 +23,7 @@ pub enum Phase {
 pub struct Pairing {
     pub pin: Pin,
     expires_at: Instant,
+    window: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,24 +70,18 @@ impl HostRates {
 
     pub fn rows(&self) -> Vec<(&'static str, String)> {
         let mut rows = vec![
-            ("Sent", format!("{:.0} fps", self.sent_fps)),
-            ("Encoded", format!("{:.0} fps", self.encoded_fps)),
+            ("Sent", fps_text(self.sent_fps)),
+            ("Encoded", fps_text(self.encoded_fps)),
             (
                 "Round trip",
-                self.rtt.map_or_else(
-                    || "not measured yet".to_owned(),
-                    |rtt| format!("{:.1} ms", millis(rtt)),
-                ),
+                self.rtt.map_or_else(|| "waiting".to_owned(), millis_text),
             ),
-            ("Dropped", format!("{:.1}/s", self.dropped)),
-            ("Packets lost", format!("{:.1}/s", self.lost)),
+            ("Dropped", rate_text(self.dropped)),
+            ("Packets lost", rate_text(self.lost)),
             ("Keyframes", self.keyframes.to_string()),
         ];
         if let Some(kbps) = self.bitrate_target_kbps {
-            rows.push((
-                "Bitrate target",
-                format!("{:.1} Mbit/s", f64::from(kbps) / 1_000.0),
-            ));
+            rows.push(("Bitrate target", bitrate_text(kbps)));
         }
 
         rows
@@ -158,6 +153,10 @@ impl HostModel {
         })
     }
 
+    pub fn format_is_fallback(&self) -> bool {
+        self.format.is_some_and(|format| format.is_fallback())
+    }
+
     pub fn restarts_for_saved_settings(&self) -> bool {
         self.phase != Phase::Stopped
     }
@@ -205,6 +204,17 @@ impl HostModel {
         Some(left.as_secs() + u64::from(left.subsec_nanos() > 0))
     }
 
+    pub fn remaining_fraction(&self, now: Instant) -> Option<f32> {
+        let pairing = self.pairing.as_ref()?;
+        if pairing.window.is_zero() {
+            return Some(0.0);
+        }
+
+        let left = pairing.expires_at.saturating_duration_since(now);
+
+        Some((left.as_secs_f32() / pairing.window.as_secs_f32()).clamp(0.0, 1.0))
+    }
+
     pub fn apply(&mut self, event: &HostEvent, now: Instant) -> Option<Notice> {
         if self.phase != Phase::Running && self.phase != Phase::Stopping {
             return None;
@@ -215,6 +225,7 @@ impl HostModel {
                 self.pairing = Some(Pairing {
                     pin: pin.clone(),
                     expires_at: now + *window,
+                    window: *window,
                 });
                 None
             }
@@ -554,6 +565,26 @@ mod tests {
     }
 
     #[test]
+    fn the_remaining_fraction_runs_from_full_to_empty_over_the_window() {
+        let mut model = running();
+        let now = Instant::now();
+
+        let closed = model.remaining_fraction(now);
+        model.apply(&pairing_event(60), now);
+
+        assert_eq!(closed, None);
+        assert_eq!(model.remaining_fraction(now), Some(1.0));
+        assert_eq!(
+            model.remaining_fraction(now + Duration::from_secs(15)),
+            Some(0.75)
+        );
+        assert_eq!(
+            model.remaining_fraction(now + Duration::from_secs(90)),
+            Some(0.0)
+        );
+    }
+
+    #[test]
     fn a_pairing_client_closes_the_window_and_is_announced() {
         let mut model = running();
         let now = Instant::now();
@@ -715,8 +746,8 @@ mod tests {
 
         let rows = rates.rows();
 
-        assert_eq!(rows[0], ("Sent", "60 fps".to_owned()));
-        assert_eq!(rows[2], ("Round trip", "not measured yet".to_owned()));
+        assert_eq!(rows[0], ("Sent", "59.6 fps".to_owned()));
+        assert_eq!(rows[2], ("Round trip", "waiting".to_owned()));
         assert_eq!(rows[4], ("Packets lost", "1.2/s".to_owned()));
         assert_eq!(rows[6], ("Bitrate target", "25.0 Mbit/s".to_owned()));
     }

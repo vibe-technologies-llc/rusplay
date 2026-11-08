@@ -286,49 +286,54 @@ impl StreamRates {
     }
 
     pub fn overlay(&self) -> OverlayText {
-        let mut lines = vec![format!(
-            "{:.0} FPS  RECV {:.0}  LOST {:.1}/S",
-            self.presented_fps, self.received_fps, self.frames_lost
-        )];
+        let ms = |time: Duration| format!("{:.1}", millis(time));
+        let mut lines = vec![
+            overlay_row(
+                "FPS",
+                &format!("{:.0}", self.presented_fps),
+                &format!("RECV {:.0}", self.received_fps),
+            ),
+            overlay_row("LOST", &format!("{:.1}", self.frames_lost), "/S"),
+        ];
 
         if let Some(end_to_end) = self.end_to_end {
-            lines.push(format!("E2E {:.1} MS", millis(end_to_end.present)));
+            lines.push(overlay_row("E2E", &ms(end_to_end.present), "MS"));
             lines.extend(
                 end_to_end
                     .receive
-                    .map(|time| format!("  RX {:.1} MS", millis(time))),
+                    .map(|time| overlay_row(" RX", &ms(time), "MS")),
             );
             lines.extend(
                 end_to_end
                     .decode
-                    .map(|time| format!("  DEC {:.1} MS", millis(time))),
+                    .map(|time| overlay_row(" DEC", &ms(time), "MS")),
             );
         }
         if let Some(display) = self.display {
-            lines.push(format!(
-                "DISPLAY +{:.1} MS  {}",
-                millis(display.submit_to_display),
-                display.rate_label()
+            lines.push(overlay_row(
+                "DISPLAY",
+                &format!("+{}", ms(display.submit_to_display)),
+                &format!("MS {}", display.rate_label()),
             ));
             lines.extend(
                 display
                     .capture_to_display
-                    .map(|time| format!("  E2E {:.1} MS", millis(time))),
+                    .map(|time| overlay_row(" E2E", &ms(time), "MS")),
             );
         }
         if let Some(latency) = self.latency {
-            lines.push(format!(
-                "CLIENT {:.1} MS  PEAK {:.1}",
-                millis(latency.total()),
-                millis(latency.peak)
+            lines.push(overlay_row(
+                "CLIENT",
+                &ms(latency.total()),
+                &format!("MS PEAK {}", ms(latency.peak)),
             ));
         }
         if let Some(report) = self.quality {
             lines.push(
-                format!(
-                    "PSNR {}  XPSNR Y {} DB",
-                    decibels_text(report.psnr_overall),
-                    decibels_text(report.xpsnr.luma)
+                overlay_row(
+                    "PSNR",
+                    &decibels_text(report.psnr_overall),
+                    &format!("DB XPSNR Y {}", decibels_text(report.xpsnr.luma)),
                 )
                 .to_uppercase(),
             );
@@ -454,6 +459,31 @@ pub fn millis(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
+pub fn millis_text(duration: Duration) -> String {
+    format!("{:.1} ms", millis(duration))
+}
+
+pub fn fps_text(fps: f64) -> String {
+    format!("{fps:.1} fps")
+}
+
+pub fn rate_text(per_second: f64) -> String {
+    format!("{per_second:.1}/s")
+}
+
+pub fn bitrate_text(kbps: u32) -> String {
+    format!("{:.1} Mbit/s", f64::from(kbps) / 1_000.0)
+}
+
+const OVERLAY_LABEL_CELLS: usize = 8;
+const OVERLAY_VALUE_CELLS: usize = 6;
+
+fn overlay_row(label: &str, value: &str, unit: &str) -> String {
+    format!("{label:<OVERLAY_LABEL_CELLS$}{value:>OVERLAY_VALUE_CELLS$} {unit}")
+        .trim_end()
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,7 +595,7 @@ mod tests {
                 .overlay()
                 .lines()
                 .iter()
-                .any(|line| line == "PSNR 42.00  XPSNR Y 39.50 DB")
+                .any(|line| line == "PSNR     42.00 DB XPSNR Y 39.50")
         );
         assert!(quiet.quality.is_none());
     }
@@ -726,21 +756,21 @@ mod tests {
                 .overlay()
                 .lines()
                 .iter()
-                .any(|line| line == "DISPLAY +4.2 MS  60 HZ")
+                .any(|line| line == "DISPLAY   +4.2 MS 60 HZ")
         );
         assert!(
             rates
                 .overlay()
                 .lines()
                 .iter()
-                .any(|line| line == "  E2E 21.0 MS")
+                .any(|line| line == " E2E      21.0 MS")
         );
         assert!(
             variable
                 .overlay()
                 .lines()
                 .iter()
-                .any(|line| line == "DISPLAY +4.2 MS  VRR")
+                .any(|line| line == "DISPLAY   +4.2 MS VRR")
         );
         assert_eq!(
             measured_rates()
@@ -757,11 +787,12 @@ mod tests {
         assert_eq!(
             overlay.lines(),
             [
-                "60 FPS  RECV 60  LOST 0.0/S",
-                "E2E 12.3 MS",
-                "  RX 3.1 MS",
-                "  DEC 9.0 MS",
-                "CLIENT 2.5 MS  PEAK 6.5",
+                "FPS         60 RECV 60",
+                "LOST       0.0 /S",
+                "E2E       12.3 MS",
+                " RX        3.1 MS",
+                " DEC       9.0 MS",
+                "CLIENT     2.5 MS PEAK 6.5",
             ]
         );
     }

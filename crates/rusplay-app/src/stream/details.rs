@@ -1,67 +1,61 @@
-use gpui::{Context, FontWeight, IntoElement, div, prelude::*, px};
-use rusplay_client::{ClientStats, ClientStream};
-use rusplay_config::VideoDecoderConfig;
+use gpui::{AnyElement, Context, FontWeight, IntoElement, div, prelude::*, px};
+use rusplay_client::ClientStream;
 
-use super::StreamView;
+use super::{
+    StreamView,
+    readout::{Figure, Reading, Row, Section, SectionKind, Sources},
+};
 use crate::{
-    stats::{StreamRates, millis, quality_rows},
     theme,
     widgets::controls::{ButtonStyle, button},
 };
 
-const PANEL_WIDTH: f32 = 320.0;
-
-type Rows = Vec<(&'static str, String)>;
+const PANEL_WIDTH: f32 = 300.0;
+const WAITING: &str = "waiting";
+const NO_FIGURE: &str = "\u{2014}";
 
 impl StreamView {
     pub(super) fn render_details(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let live = self.live.borrow();
-        let format = live.stream.as_ref().and_then(ClientStream::stream_format);
         let stats = live.stream.as_ref().map(ClientStream::stats);
-        let mut connection = vec![
-            ("Host", self.host.name.clone()),
-            ("Address", self.host.address.to_string()),
-        ];
-        let (decoder, transfer) = match &self.decoder {
-            VideoDecoderConfig::Vaapi(config) if config.copy_output => ("VAAPI", "CPU copy"),
-            VideoDecoderConfig::Vaapi(_) => ("VAAPI", "GPU surfaces"),
-            VideoDecoderConfig::Nvdec(_) => ("NVDEC", "CPU upload"),
-            VideoDecoderConfig::Software(_) => ("Software", "CPU upload"),
-        };
-        let mut video = vec![
-            ("Decoder", decoder.to_owned()),
-            ("Frame transfer", transfer.to_owned()),
-        ];
-        let (performance, latency) = performance_rows(self.rates);
-        let quality = Self::render_quality(live.stream.as_ref(), stats.as_ref(), cx);
+        let measuring = live
+            .stream
+            .as_ref()
+            .is_some_and(ClientStream::quality_metrics);
+        let readout = Sources {
+            host: &self.host.name,
+            address: self.host.address,
+            decoder: &self.decoder,
+            requested_bitrate_kbps: self.requested_bitrate_kbps,
+            input: &self.input,
+            format: live.stream.as_ref().and_then(ClientStream::stream_format),
+            stats: stats.as_ref(),
+            rates: self.rates.as_ref(),
+        }
+        .readout();
+        drop(live);
 
-        if let Some(format) = format {
-            video.extend([
-                ("Codec", format.codec.to_string()),
-                ("Resolution", format.resolution.to_string()),
-                ("Bit depth", format!("{}-bit", format.format.depth.bits())),
-                ("Chroma", format.format.chroma.to_string()),
-                ("Colour primaries", format.color.primaries.to_string()),
-                ("Transfer", format.color.transfer.to_string()),
-                ("Colour range", format!("{:?}", format.color.range)),
-            ]);
-            if format.is_fallback() {
-                video.push(("Configured format", format.configured.to_string()));
-            }
-        }
-        video.push(("Requested bitrate", bitrate(self.requested_bitrate_kbps)));
-        if let Some(stats) = stats {
-            connection.push((
-                "Round trip",
-                stats.rtt.map_or_else(|| "Measuring…".to_owned(), time),
-            ));
-            video.push((
-                "Adaptive target",
-                stats
-                    .bitrate_target_kbps
-                    .map_or_else(|| "Unavailable".to_owned(), bitrate),
-            ));
-        }
+        let sections: Vec<AnyElement> = readout
+            .sections
+            .into_iter()
+            .map(|section| {
+                let action = (section.kind == SectionKind::Quality).then(|| {
+                    button(
+                        "quality-toggle",
+                        if measuring {
+                            "Stop measuring"
+                        } else {
+                            "Measure"
+                        },
+                        ButtonStyle::Quiet,
+                        stats.is_some(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_quality(cx)))
+                    .into_any_element()
+                });
+                render_section(section, action)
+            })
+            .collect();
 
         div()
             .id("connection-details")
@@ -71,27 +65,20 @@ impl StreamView {
             .w(px(PANEL_WIDTH))
             .h_full()
             .border_l_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .child(
                 div()
                     .flex()
                     .flex_none()
-                    .items_center()
-                    .justify_between()
-                    .p_3()
                     .border_b_1()
-                    .border_color(theme::border())
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::text())
-                            .child("Connection details"),
-                    )
-                    .child(
-                        button("close-details", "Close", ButtonStyle::Quiet, true)
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
+                    .border_color(theme::rule())
+                    .children(
+                        readout
+                            .figures
+                            .into_iter()
+                            .enumerate()
+                            .map(|(position, figure)| render_figure(position, figure)),
                     ),
             )
             .child(
@@ -100,143 +87,113 @@ impl StreamView {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .p_4()
-                    .child(section("Connection", connection, "Connecting…"))
-                    .child(section("Video", video, "Waiting for stream format…"))
-                    .child(section("Performance", performance, "Collecting samples…"))
-                    .child(section("Latency", latency, "Waiting for timing data…"))
-                    .child(quality),
-            )
-    }
-
-    fn render_quality(
-        stream: Option<&ClientStream>,
-        stats: Option<&ClientStats>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let measuring = stream.is_some_and(ClientStream::quality_metrics);
-        let label = if measuring {
-            "Stop measuring quality"
-        } else {
-            "Measure quality"
-        };
-
-        div()
-            .child(section(
-                "Encode quality",
-                stats.map(quality_rows).unwrap_or_default(),
-                "Connecting…",
-            ))
-            .child(
-                button("quality-toggle", label, ButtonStyle::Quiet, stats.is_some())
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_quality(cx))),
+                    .px_4()
+                    .pb_4()
+                    .children(sections),
             )
     }
 }
 
-fn performance_rows(rates: Option<StreamRates>) -> (Rows, Rows) {
-    let mut performance = Vec::new();
-    let mut latency = Vec::new();
-
-    if let Some(rates) = rates {
-        performance.extend([
-            ("Presented", format!("{:.1} fps", rates.presented_fps)),
-            ("Received", format!("{:.1} fps", rates.received_fps)),
-            ("Lost / skipped", rate(rates.frames_lost)),
-            ("Recovered", rate(rates.frames_recovered)),
-            ("Superseded", rate(rates.frames_superseded)),
-            ("Keyframe requests", rate(rates.keyframe_requests)),
-            ("Decode errors", rate(rates.decode_errors)),
-            ("Audio underruns", rate(rates.audio_underruns)),
-            ("Audio jitter buffer", time(rates.audio_buffer)),
-        ]);
-        if let Some(end_to_end) = rates.end_to_end {
-            latency.push(("Capture → present", time(end_to_end.present)));
-            latency.extend(
-                end_to_end
-                    .receive
-                    .map(|value| ("Capture → receive", time(value))),
-            );
-            latency.extend(
-                end_to_end
-                    .decode
-                    .map(|value| ("Capture → decode", time(value))),
-            );
-        }
-        if let Some(client) = rates.latency {
-            latency.extend([
-                ("Client total", time(client.total())),
-                ("Decode", time(client.decode)),
-                ("Present", time(client.present)),
-                ("Client peak", time(client.peak)),
-            ]);
-        }
-        if let Some(display) = rates.display {
-            latency.push(("Submit → display", time(display.submit_to_display)));
-            latency.extend(
-                display
-                    .capture_to_display
-                    .map(|value| ("Capture → display", time(value))),
-            );
-            latency.push((
-                "Display refresh",
-                display.refresh.map_or_else(
-                    || "Variable".to_owned(),
-                    |refresh| format!("{:.1} Hz", 1.0 / refresh.as_secs_f64()),
-                ),
-            ));
-        }
-    }
-
-    (performance, latency)
-}
-
-fn section(title: &'static str, rows: Rows, empty: &'static str) -> impl IntoElement {
-    let is_empty = rows.is_empty();
+fn render_figure(position: usize, figure: Figure) -> impl IntoElement {
+    let known = figure.value.is_some();
 
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .mb_5()
+        .flex_1()
+        .min_w_0()
+        .gap_0p5()
+        .px_3()
+        .py_3()
+        .when(position > 0, |this| {
+            this.border_l_1().border_color(theme::rule())
+        })
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::accent_bright())
-                .child(title),
+                .flex()
+                .items_baseline()
+                .gap_1()
+                .font_features(theme::tabular())
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(if known {
+                            theme::text()
+                        } else {
+                            theme::text_faint()
+                        })
+                        .child(figure.value.unwrap_or_else(|| NO_FIGURE.to_owned())),
+                )
+                .when(known, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_faint())
+                            .child(figure.unit),
+                    )
+                }),
         )
-        .children(rows.into_iter().map(|(label, value)| {
+        .child(
+            div()
+                .truncate()
+                .text_xs()
+                .text_color(theme::text_muted())
+                .child(figure.label),
+        )
+}
+
+fn render_section(section: Section, action: Option<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .pt_4()
+        .child(
             div()
                 .flex()
+                .items_center()
                 .justify_between()
-                .gap_3()
-                .text_xs()
+                .min_h(px(24.0))
+                .pb_1()
                 .child(
                     div()
-                        .flex_none()
-                        .text_color(theme::text_muted())
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_right()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::text())
-                        .child(value),
+                        .child(section.kind.title()),
                 )
-        }))
-        .children(is_empty.then(|| div().text_xs().text_color(theme::text_muted()).child(empty)))
+                .children(action),
+        )
+        .children(section.rows.into_iter().map(render_row))
+        .into_any_element()
 }
 
-fn bitrate(kbps: u32) -> String {
-    format!("{:.1} Mbps", f64::from(kbps) / 1_000.0)
-}
+fn render_row(row: Row) -> impl IntoElement {
+    let (value, color) = match row.value {
+        Reading::Value(value) if row.attention => (value, theme::warning()),
+        Reading::Value(value) => (value, theme::text()),
+        Reading::Waiting => (WAITING.to_owned(), theme::text_faint()),
+    };
 
-fn rate(value: f64) -> String {
-    format!("{value:.1}/s")
-}
-
-fn time(value: std::time::Duration) -> String {
-    format!("{:.1} ms", millis(value))
+    div()
+        .flex()
+        .items_baseline()
+        .justify_between()
+        .gap_3()
+        .py(px(3.0))
+        .text_xs()
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme::text_muted())
+                .child(row.label),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .text_right()
+                .font_features(theme::tabular())
+                .text_color(color)
+                .child(value),
+        )
 }

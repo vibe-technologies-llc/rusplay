@@ -12,7 +12,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::theme;
 
 const CONTEXT: &str = "TextField";
-const HEIGHT: f32 = 32.0;
+const HEIGHT: f32 = 30.0;
 const LINE_HEIGHT: f32 = 20.0;
 const TEXT_SIZE: f32 = 14.0;
 const CURSOR_WIDTH: f32 = 1.5;
@@ -520,7 +520,7 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), theme::text_muted().into())
+            (input.placeholder.clone(), theme::text_faint().into())
         } else {
             (content, style.color)
         };
@@ -655,7 +655,7 @@ impl Render for TextField {
         } else if focused {
             theme::accent()
         } else {
-            theme::border_strong()
+            theme::rule_strong()
         };
 
         div()
@@ -689,7 +689,7 @@ impl Render for TextField {
             .bg(theme::inset())
             .border_1()
             .border_color(border)
-            .rounded_lg()
+            .rounded(theme::radius_control())
             .overflow_hidden()
             .child(TextElement { input: cx.entity() })
     }

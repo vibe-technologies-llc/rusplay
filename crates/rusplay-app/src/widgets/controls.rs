@@ -4,13 +4,15 @@ use gpui::{
 
 use crate::theme;
 
-const BUTTON_HEIGHT: f32 = 32.0;
-const OPTION_HEIGHT: f32 = 28.0;
+const BUTTON_HEIGHT: f32 = 30.0;
+const OPTION_HEIGHT: f32 = 26.0;
+const TAB_HEIGHT: f32 = 39.0;
 const DISABLED_OPACITY: f32 = 0.4;
-const TOGGLE_WIDTH: f32 = 38.0;
-const TOGGLE_HEIGHT: f32 = 22.0;
-const TOGGLE_KNOB: f32 = 16.0;
-const DOT_SIZE: f32 = 8.0;
+const TOGGLE_WIDTH: f32 = 34.0;
+const TOGGLE_HEIGHT: f32 = 20.0;
+const TOGGLE_KNOB: f32 = 14.0;
+const DOT_SIZE: f32 = 6.0;
+const TAB_BAR_INSET: f32 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonStyle {
@@ -23,22 +25,34 @@ pub enum ButtonStyle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Accent,
-    Success,
+    Live,
     Warning,
     Danger,
     Neutral,
 }
 
 impl Tone {
-    fn colors(self) -> (Rgba, Rgba) {
+    pub fn color(self) -> Rgba {
         match self {
-            Self::Accent => (theme::accent_bright(), theme::accent_soft()),
-            Self::Success => (theme::success(), theme::success_soft()),
-            Self::Warning => (theme::warning(), theme::warning_soft()),
-            Self::Danger => (theme::danger(), theme::danger_soft()),
-            Self::Neutral => (theme::text_muted(), theme::surface_raised()),
+            Self::Accent => theme::accent(),
+            Self::Live => theme::live(),
+            Self::Warning => theme::warning(),
+            Self::Danger => theme::danger(),
+            Self::Neutral => theme::text_muted(),
         }
     }
+}
+
+fn control(id: impl Into<ElementId>, height: f32) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(height))
+        .flex()
+        .flex_none()
+        .items_center()
+        .rounded(theme::radius_control())
+        .text_sm()
+        .whitespace_nowrap()
 }
 
 pub fn button(
@@ -47,47 +61,60 @@ pub fn button(
     style: ButtonStyle,
     enabled: bool,
 ) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .h(px(BUTTON_HEIGHT))
-        .px(px(14.0))
-        .flex()
-        .flex_none()
-        .items_center()
+    let base = control(id, BUTTON_HEIGHT)
+        .px(px(12.0))
         .justify_center()
-        .rounded_lg()
-        .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .child(label.into());
 
     let styled = match style {
-        ButtonStyle::Primary => base
-            .bg(theme::brand())
-            .text_color(theme::accent_text())
-            .when(enabled, |this| {
-                this.shadow(theme::glow())
-                    .hover(|style| style.bg(theme::brand_hover()))
-            }),
+        ButtonStyle::Primary if enabled => base
+            .bg(theme::accent())
+            .text_color(theme::accent_ink())
+            .hover(|style| style.bg(theme::accent_hover())),
+        ButtonStyle::Primary => base.bg(theme::raised()).text_color(theme::text_faint()),
         ButtonStyle::Secondary => base
-            .bg(theme::surface_raised())
+            .bg(theme::raised())
             .border_1()
-            .border_color(theme::border_strong())
+            .border_color(theme::rule_strong())
             .text_color(theme::text())
             .when(enabled, |this| {
-                this.hover(|style| style.bg(theme::surface_hover()))
+                this.hover(|style| style.bg(theme::raised_hover()))
             }),
         ButtonStyle::Quiet => base.text_color(theme::text_muted()).when(enabled, |this| {
-            this.hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+            this.hover(|style| style.bg(theme::raised()).text_color(theme::text()))
         }),
         ButtonStyle::Danger => base.text_color(theme::danger()).when(enabled, |this| {
-            this.hover(|style| style.bg(theme::danger_soft()))
+            this.hover(|style| style.bg(theme::danger_quiet()))
         }),
     };
 
-    if enabled {
-        styled.cursor_pointer()
+    match (enabled, style) {
+        (true, _) => styled.cursor_pointer(),
+        (false, ButtonStyle::Primary) => styled,
+        (false, _) => styled.opacity(DISABLED_OPACITY),
+    }
+}
+
+pub fn button_toggled(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+) -> Stateful<Div> {
+    let base = control(id, BUTTON_HEIGHT)
+        .px(px(12.0))
+        .justify_center()
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
+        .child(label.into());
+
+    if on {
+        base.bg(theme::raised())
+            .text_color(theme::text())
+            .hover(|style| style.bg(theme::raised_hover()))
     } else {
-        styled.opacity(DISABLED_OPACITY)
+        base.text_color(theme::text_muted())
+            .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
     }
 }
 
@@ -96,47 +123,25 @@ pub fn option_button(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .h(px(OPTION_HEIGHT))
-        .px_3()
-        .flex()
-        .items_center()
-        .rounded_md()
+    let base = control(id, OPTION_HEIGHT)
+        .px_2p5()
         .border_1()
-        .text_sm()
         .cursor_pointer()
         .child(label.into());
 
     if selected {
-        base.bg(theme::accent_soft())
-            .border_color(theme::accent())
-            .text_color(theme::accent_bright())
-            .font_weight(FontWeight::MEDIUM)
+        base.bg(theme::accent_quiet())
+            .border_color(theme::accent_quiet())
+            .text_color(theme::text())
     } else {
-        base.bg(theme::surface_raised())
-            .border_color(theme::border())
+        base.border_color(theme::rule_strong())
             .text_color(theme::text_muted())
-            .hover(|style| {
-                style
-                    .bg(theme::surface_hover())
-                    .border_color(theme::border_strong())
-                    .text_color(theme::text())
-            })
+            .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
     }
 }
 
 pub fn tab_strip(tabs: impl IntoIterator<Item = Stateful<Div>>) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .p_1()
-        .rounded_lg()
-        .bg(theme::inset())
-        .border_1()
-        .border_color(theme::border())
-        .children(tabs)
+    div().flex().items_center().gap_1().children(tabs)
 }
 
 pub fn tab(
@@ -144,26 +149,33 @@ pub fn tab(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> Stateful<Div> {
-    let base = div()
+    div()
         .id(id)
-        .h(px(OPTION_HEIGHT))
+        .relative()
+        .h(px(TAB_HEIGHT))
         .px_3()
         .flex()
         .items_center()
-        .rounded_md()
         .text_sm()
         .font_weight(FontWeight::MEDIUM)
         .cursor_pointer()
-        .child(label.into());
-
-    if selected {
-        base.bg(theme::surface_hover())
-            .text_color(theme::text())
-            .shadow(theme::lift())
-    } else {
-        base.text_color(theme::text_muted())
-            .hover(|style| style.text_color(theme::text()))
-    }
+        .child(label.into())
+        .map(|this| {
+            if selected {
+                this.text_color(theme::text()).child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left(px(TAB_BAR_INSET))
+                        .right(px(TAB_BAR_INSET))
+                        .h(px(theme::SELECTION_BAR))
+                        .bg(theme::accent()),
+                )
+            } else {
+                this.text_color(theme::text_muted())
+                    .hover(|style| style.text_color(theme::text()))
+            }
+        })
 }
 
 pub fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>) -> Div {
@@ -173,10 +185,10 @@ pub fn segmented(segments: impl IntoIterator<Item = Stateful<Div>>) -> Div {
         .items_center()
         .gap_0p5()
         .p_0p5()
-        .rounded_lg()
+        .rounded(theme::radius_control())
         .bg(theme::inset())
         .border_1()
-        .border_color(theme::border())
+        .border_color(theme::rule())
         .children(segments)
 }
 
@@ -185,25 +197,18 @@ pub fn segment(
     label: impl Into<SharedString>,
     selected: bool,
 ) -> Stateful<Div> {
-    let base = div()
-        .id(id)
-        .h(px(OPTION_HEIGHT))
+    let base = control(id, OPTION_HEIGHT)
         .px_3()
-        .flex()
-        .items_center()
-        .rounded_md()
-        .text_sm()
-        .whitespace_nowrap()
         .cursor_pointer()
         .child(label.into());
 
     if selected {
-        base.bg(theme::surface_hover())
+        base.bg(theme::raised())
             .text_color(theme::text())
             .font_weight(FontWeight::MEDIUM)
     } else {
         base.text_color(theme::text_muted())
-            .hover(|style| style.bg(theme::surface()).text_color(theme::text()))
+            .hover(|style| style.text_color(theme::text()))
     }
 }
 
@@ -214,39 +219,26 @@ pub fn menu_row(
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .relative()
         .min_h(px(OPTION_HEIGHT))
-        .px_2()
+        .pl_3()
+        .pr_2()
         .flex()
         .items_center()
-        .gap_2()
-        .rounded_md()
+        .rounded(theme::radius_control())
         .text_sm()
         .cursor_pointer()
-        .when(selected, |this| this.bg(theme::accent_soft()))
-        .when(!selected, |this| {
-            this.hover(|style| style.bg(theme::surface_hover()))
+        .map(|this| {
+            if selected {
+                this.bg(theme::accent_quiet())
+                    .text_color(theme::text())
+                    .child(selection_bar())
+            } else {
+                this.text_color(theme::text_muted())
+                    .hover(|style| style.bg(theme::raised_hover()).text_color(theme::text()))
+            }
         })
-        .child(
-            div()
-                .w(px(14.0))
-                .flex_none()
-                .text_xs()
-                .text_color(theme::accent_bright())
-                .child(if selected { "\u{2713}" } else { "" }),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(if selected {
-                    theme::accent_bright()
-                } else {
-                    theme::text()
-                })
-                .when(selected, |this| this.font_weight(FontWeight::MEDIUM))
-                .child(label.into()),
-        )
+        .child(div().flex_1().min_w_0().truncate().child(label.into()))
 }
 
 pub fn select_trigger(
@@ -254,45 +246,35 @@ pub fn select_trigger(
     label: impl Into<SharedString>,
     open: bool,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
-        .h(px(BUTTON_HEIGHT))
-        .px_3()
-        .flex()
-        .items_center()
+    control(id, BUTTON_HEIGHT)
+        .px_2p5()
         .justify_between()
         .gap_3()
-        .rounded_lg()
         .border_1()
         .border_color(if open {
             theme::accent()
         } else {
-            theme::border_strong()
+            theme::rule_strong()
         })
         .bg(theme::inset())
-        .text_sm()
         .text_color(theme::text())
         .cursor_pointer()
-        .hover(|style| style.border_color(theme::accent()))
+        .hover(|style| style.border_color(theme::text_faint()))
         .child(div().flex_1().min_w_0().truncate().child(label.into()))
         .child(
             div()
                 .text_xs()
-                .text_color(theme::text_muted())
-                .child(if open { "\u{25b4}" } else { "\u{25be}" }),
+                .text_color(theme::text_faint())
+                .child("\u{25be}"),
         )
 }
 
 pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
-    let knob = div()
-        .size(px(TOGGLE_KNOB))
-        .rounded_full()
-        .bg(if on {
-            theme::accent_text()
-        } else {
-            theme::text_muted()
-        })
-        .shadow(theme::lift());
+    let knob = div().size(px(TOGGLE_KNOB)).rounded_full().bg(if on {
+        theme::accent_ink()
+    } else {
+        theme::text_faint()
+    });
 
     let container = div()
         .id(id)
@@ -309,113 +291,111 @@ pub fn toggle(id: impl Into<ElementId>, on: bool) -> Stateful<Div> {
     let container = if on {
         container
             .justify_end()
-            .bg(theme::brand())
+            .bg(theme::accent())
             .border_color(theme::accent())
+            .hover(|style| style.bg(theme::accent_hover()))
     } else {
         container
             .bg(theme::inset())
-            .border_color(theme::border_strong())
-            .hover(|style| style.border_color(theme::text_subtle()))
+            .border_color(theme::rule_strong())
+            .hover(|style| style.border_color(theme::text_faint()))
     };
 
     container.child(knob)
 }
 
-pub fn section_title(title: impl Into<SharedString>) -> Div {
-    let title: SharedString = title.into();
-
+pub fn selection_bar() -> Div {
     div()
-        .flex()
-        .items_center()
-        .gap_3()
-        .pt_5()
-        .pb_2()
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::text_subtle())
-                .child(title.to_uppercase()),
-        )
-        .child(div().flex_1().h(px(1.0)).bg(theme::border()))
+        .absolute()
+        .left_0()
+        .top(px(6.0))
+        .bottom(px(6.0))
+        .w(px(theme::SELECTION_BAR))
+        .rounded_full()
+        .bg(theme::accent())
 }
 
-pub fn card() -> Div {
+pub fn group_heading(title: impl Into<SharedString>) -> Div {
+    div()
+        .pt_6()
+        .pb_2()
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::text_muted())
+        .child(title.into())
+}
+
+pub fn panel() -> Div {
     div()
         .flex()
         .flex_col()
         .p_4()
-        .rounded_xl()
+        .rounded(theme::radius_panel())
         .border_1()
-        .border_color(theme::border())
+        .border_color(theme::rule())
         .bg(theme::surface())
-        .shadow(theme::lift())
 }
 
-pub fn card_heading(title: impl Into<SharedString>, detail: Option<SharedString>) -> Div {
+pub fn panel_heading(title: impl Into<SharedString>, action: Option<AnyElement>) -> Div {
     div()
         .flex()
-        .flex_col()
-        .gap_0p5()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .min_h(px(BUTTON_HEIGHT))
         .pb_3()
         .child(
             div()
+                .min_w_0()
+                .truncate()
                 .text_color(theme::text())
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.into()),
         )
-        .children(detail.map(|detail| {
-            div()
-                .text_xs()
-                .text_color(theme::text_muted())
-                .child(detail)
-        }))
+        .children(action)
 }
 
-pub fn badge(label: impl Into<SharedString>, tone: Tone) -> Div {
-    let (foreground, background) = tone.colors();
-
+pub fn state_text(label: impl Into<SharedString>, tone: Tone) -> Div {
     div()
-        .flex()
         .flex_none()
-        .items_center()
-        .h(px(20.0))
-        .px_2()
-        .rounded_full()
-        .bg(background)
         .text_xs()
         .font_weight(FontWeight::MEDIUM)
-        .text_color(foreground)
+        .text_color(tone.color())
         .child(label.into())
 }
 
 pub fn status_dot(tone: Tone) -> Div {
-    let (color, halo) = tone.colors();
-
     div()
-        .flex()
         .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(DOT_SIZE * 2.0))
+        .size(px(DOT_SIZE))
         .rounded_full()
-        .bg(halo)
-        .child(div().size(px(DOT_SIZE)).rounded_full().bg(color))
+        .bg(tone.color())
 }
 
-pub fn brand_mark(size: f32) -> AnyElement {
+pub fn value_row(
+    label: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+    color: Rgba,
+) -> Div {
     div()
         .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(size))
-        .rounded_lg()
-        .bg(theme::brand())
-        .shadow(theme::glow())
-        .text_color(theme::accent_text())
-        .font_weight(FontWeight::BOLD)
-        .child("R")
-        .into_any_element()
+        .items_baseline()
+        .justify_between()
+        .gap_4()
+        .py_1()
+        .text_sm()
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme::text_muted())
+                .child(label.into()),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .text_right()
+                .font_features(theme::tabular())
+                .text_color(color)
+                .child(value.into()),
+        )
 }

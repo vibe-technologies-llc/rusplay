@@ -111,6 +111,7 @@ that implements it. The format is in `.claude/rules/roadmap.md`.
 | `.claude/rules/input.md` | Input forwarding and injection |
 | `.claude/rules/clipboard.md` | Text clipboard sync: direction, limits, echo suppression, backends |
 | `.claude/rules/ui.md` | The gpui desktop app |
+| `.claude/rules/ui-design.md` | The app's visual system: palette roles, one accent, no shadows or pills, tabular figures, stable layouts, the contrast test |
 | `.claude/rules/hostd.md` | Headless host binary: arguments and config discovery |
 | `.claude/rules/client.md` | Client session: stages, feedback, frame hand-off and colour |
 | `.claude/rules/host.md` | Host session: accept, stages, keyframes, GPU capture → encode pipeline |

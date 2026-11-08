@@ -53,11 +53,11 @@ paths:
 | `session` | Loads the client config, attaches the `StreamWindow` and connects; the only place the app calls into `ClientSession` |
 | `hosting` | Loads `host.toml`, opens the paired-client store (`PairedClients`) and starts the `HostService` (`HostHandle`); the only place the app calls into `rusplay-host` |
 | `host_page` | `HostModel` (phase, pairing window, connected client, rates; no gpui types) and `HostPageView`, the Host this PC page |
-| `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown |
+| `stream` | `StreamView`: the stream page, owning the `ClientStream` and `StreamWindow` from connect to teardown; `stream/readout.rs` builds the details panel's content (no gpui types) |
 | `stats` | `TimingSink` (wraps the window's sink and records `PresentedFrame` timings), `StatsSampler` and `StreamRates`; no gpui types |
 | `notice` | `Notice` and the `NoticeRaised` event views emit; the root renders the latest one in the status bar |
-| `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls (buttons, tabs, cards, badges, status dots, dropdown parts) |
-| `theme` | The palette, one function per colour, plus the brand gradient and the shadows |
+| `widgets` | `TextField` (single-line input with IME, selection, clipboard) and stateless controls (buttons, underline tabs, segments, panels and their headings, state text, status dots, value rows, dropdown parts) |
+| `theme` | The palette as role functions, radii, tabular figures and the window shadow; the visual rules are in `ui-design.md` |
 
 - Arguments (`cli.rs`): `--connect <NAME|ADDRESS>` looks the host up in the host book
   (`HostList::find`: a case-insensitive unique name first, then an address, with the configured
@@ -156,9 +156,10 @@ paths:
 - Input: once connected, `StreamView` calls `StreamWindow::capture_input` with the config's
   `input` section; a failure there is reported as a notice and the stream continues without
   input. A click on the picture or the release chord engages, the chord releases again; the
-  header shows which, naming the chord (`chord_label`), and a pointer button next to
-  `Disconnect` names the active pointer (`Pointer: auto (relative)`) and cycles
-  `input.pointer_mode` for the session on click. Losing window activation
+  header (state dot, host name, address, one status line) shows which, naming the chord
+  (`chord_label`), and a pointer button next to `Details` names the active pointer
+  (`Pointer: auto (relative)`) and cycles `input.pointer_mode` for the session on click. The
+  client hotkeys are not repeated in the header; the details panel lists them under Shortcuts. Losing window activation
   (`observe_window_activation`) releases. `Quit` and `F11` are ignored while input is engaged,
   because the keyboard also reaches gpui and `ctrl-q` and `F11` belong to the game then; the
   client hotkeys (`input.md`) are the way to act on the client from there.
@@ -189,29 +190,33 @@ paths:
 - Statistics: the same poll feeds `StatsSampler` with `ClientStream::stats()` and the
   `FrameTimings` that `TimingSink` fills from each `PresentedFrame`. Every 500 ms it turns the
   counter deltas into per-second rates and the timing deltas into average and peak client latency
-  (`received_at` to `submitted_at`, split at `decoded_at`). A scrollable vertical connection
-  details panel beside the picture shows the host and address, RTT, decoder backend and frame
-  transfer path, negotiated codec, resolution,
-  bit depth, chroma and colour, the configured format on fallback, requested bitrate and adaptive
-  bitrate target, frame rates, loss and recovery rates, and latency stages. Unavailable timings
-  have a waiting state. The `Hide details`/`Connection details` button, panel Close button and stats
-  hotkey toggle it. The panel is omitted in fullscreen, where the existing optional overlay remains.
+  (`received_at` to `submitted_at`, split at `decoded_at`). A scrollable connection details panel
+  beside the picture shows its content from `stream/readout.rs` (`Sources::readout`, pure and unit
+  tested): a line of three figures (the best latency available, capture to display, then capture
+  to present, then client total; presented fps; round trip), then the sections Connection (host,
+  address, round trip), Stream (codec with depth and chroma, resolution, colour, the configured
+  format on fallback, decoder and frame transfer, requested bitrate and adaptive target),
+  Latency, Delivery, Audio, Encode quality and Shortcuts. Every section and row is present from
+  the start, a value not known yet reads `waiting`, so nothing moves as data arrives. The header's
+  `Details` toggle and the stats hotkey show and hide it. The panel is omitted in fullscreen,
+  where the existing optional overlay remains.
   The capture-to-present figure
   (`ClientStats::capture_to_present`, with `capture_to_receive` and `capture_to_decode` as its
   stages, from the host clock offset; absent until the first clock pong) appears alongside the client
   side latency measured from `PresentedFrame`. When the window has presentation feedback,
   `StreamRates::with_presentation(&StreamWindow::presentation())` adds `DisplayTiming`: the
-  panel shows submit-to-display latency, display refresh (`Variable` without a fixed one) and the
-  capture-to-display figure, the overlay a `DISPLAY +x MS  <n> HZ|VRR` line and an `E2E` line under
+  panel shows submit-to-display latency, display refresh (`variable` without a fixed one, `no feedback` without feedback) and the
+  capture-to-display figure, the overlay a `DISPLAY +x MS <n> HZ|VRR` line and an `E2E` line under
   it.
-  Below the latency the panel has an Encode quality section (`stats::quality_rows`: the state,
-  PSNR Y/U/V and overall, XPSNR Y/U/V, the sampled frame and the sample's age) and a
-  `Measure quality` / `Stop measuring quality` button that calls
+  The panel's Encode quality section shows `stats::quality_rows` (the state, PSNR Y/U/V and
+  overall, XPSNR Y/U/V, the sampled frame and the sample's age) and has a
+  `Measure` / `Stop measuring` button in that section's heading that calls
   `ClientStream::set_quality_metrics` for the session (`video.quality_metrics` is only the
-  initial state). While a report is in hand the overlay adds a `PSNR <overall>  XPSNR Y <luma> DB`
+  initial state). While a report is in hand the overlay adds a `PSNR <overall> DB XPSNR Y <luma>`
   line.
   With `video.stats_overlay` (default off) the same rates are also drawn over the picture, for
-  when the header is hidden: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
+  when the header is hidden, as two aligned columns (label padded to 8 cells, value right-aligned
+  in 6, then the unit; `overlay_row` in `stats.rs`), one blank line below the fullscreen hint: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
   hands it to `StreamWindow::set_overlay` on every new sample and on the toggle. The overlay
   follows the same details toggle and stats hotkey as the panel, so
   it is the control that remains in fullscreen.
@@ -260,8 +265,9 @@ paths:
   (`HostPageView::start_if_requested`). The headless daemon ignores the flag. Saving host settings
   reloads the toggle. The same flag is the Hosting row in Host settings, and a change on this page
   updates that form so a later save does not put the old value back.
-- The page shows the PIN in groups of three while a pairing window is open, with the seconds left
-  and `New PIN` (`HostService::renew_pin`, which ends the open window so the loop issues the next
+- The page shows the PIN in groups of three while a pairing window is open, with a bar and the
+  seconds left (`HostModel::remaining_fraction` and `seconds_left`, from the window length the
+  event carried) and `New PIN` (`HostService::renew_pin`, which ends the open window so the loop issues the next
   PIN at once); no PIN is shown while a client streams. The connected client card shows its name,
   address, whether it just paired or reconnected, the stream format (and that it is a fallback when
   it is) and the rates (sent and encoded frame rate, round trip, dropped frames, lost packets,

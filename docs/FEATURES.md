@@ -11,7 +11,6 @@
 - [S] `capture-hdr-metadata`: take mastering display and content light levels from the capture once PipeWire or the portal carries them (PipeWire 1.6 has no such metadata, so `HdrLevels::mastering` and `content_light` stay unset)
 
 # Client app
-- [L] `app-visual-polish`: redesign the app's look across every page so it reads as a considered tool rather than a generic template, the connected stream view first: the stream header, the connection details panel (grouping, hierarchy, number formatting, waiting states) and the fullscreen overlay, then the hosts, host and settings pages, through `theme.rs` and the shared `widgets`
 - [S] `app-host-live-check`: run the Host this PC page on a live Wayland session and fix what the compile-only work missed: the portal permission dialog while `Starting`, the PIN, countdown and `New PIN`, a PIN pairing and a reconnect from a second machine, the streaming stats, `Revoke`, the `Disconnect` button on the client card (the client ends and the next pairing window opens), and `Stop hosting` and quit while streaming (`HostService::stop` joins every stage, so check the window does not freeze)
 
 # Networking

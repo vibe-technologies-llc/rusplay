@@ -26,8 +26,8 @@ use crate::{
     theme,
     widgets::{
         controls::{
-            ButtonStyle, Tone, badge, button, card, menu_row, option_button, section_title,
-            segment, segmented, select_trigger, tab, tab_strip, toggle,
+            ButtonStyle, Tone, button, group_heading, menu_row, option_button, panel, segment,
+            segmented, select_trigger, selection_bar, state_text, toggle,
         },
         text_field::{TextField, TextFieldEvent},
     },
@@ -37,10 +37,9 @@ const LABEL_WIDTH: f32 = 200.0;
 const INPUT_WIDTH: f32 = 280.0;
 const PRIMARIES_INPUT_WIDTH: f32 = 320.0;
 const SIDEBAR_WIDTH: f32 = 216.0;
-const SIDEBAR_ITEM_HEIGHT: f32 = 32.0;
-const SIDEBAR_INDICATOR_WIDTH: f32 = 3.0;
-const SIDEBAR_INDICATOR_HEIGHT: f32 = 16.0;
-const LABEL_TOP: f32 = 7.0;
+const SIDEBAR_ITEM_HEIGHT: f32 = 30.0;
+const LABEL_TOP: f32 = 6.0;
+const MARK_SIZE: f32 = 6.0;
 const DROPDOWN_WIDTH: f32 = 240.0;
 const DROPDOWN_MAX_HEIGHT: f32 = 340.0;
 const DROPDOWN_OFFSET: f32 = 4.0;
@@ -560,46 +559,42 @@ impl SettingsView {
             items.push(
                 div()
                     .id(("section", position))
+                    .relative()
                     .flex()
                     .items_center()
                     .gap_2()
                     .h(px(SIDEBAR_ITEM_HEIGHT))
+                    .pl_3()
                     .pr_2()
-                    .rounded_md()
+                    .rounded(theme::radius_control())
                     .cursor_pointer()
                     .text_sm()
                     .map(|this| {
                         if selected {
-                            this.bg(theme::accent_soft())
-                                .text_color(theme::accent_bright())
+                            this.bg(theme::raised())
+                                .text_color(theme::text())
                                 .font_weight(FontWeight::MEDIUM)
+                                .child(selection_bar())
                         } else {
-                            this.text_color(theme::text_muted()).hover(|style| {
-                                style.bg(theme::surface_raised()).text_color(theme::text())
-                            })
+                            this.text_color(theme::text_muted())
+                                .hover(|style| style.bg(theme::raised()).text_color(theme::text()))
                         }
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.show_section(section, cx)))
-                    .child(
-                        div()
-                            .w(px(SIDEBAR_INDICATOR_WIDTH))
-                            .h(px(SIDEBAR_INDICATOR_HEIGHT))
-                            .rounded_full()
-                            .when(selected, |this| this.bg(theme::brand())),
-                    )
                     .child(div().flex_1().min_w_0().truncate().child(section.title()))
                     .when(searching && matches > 0, |this| {
                         this.child(
                             div()
                                 .text_xs()
-                                .text_color(theme::accent_bright())
+                                .font_features(theme::tabular())
+                                .text_color(theme::text_faint())
                                 .child(matches.to_string()),
                         )
                     })
                     .when(errored, |this| {
                         this.child(
                             div()
-                                .size(px(6.0))
+                                .size(px(MARK_SIZE))
                                 .flex_none()
                                 .rounded_full()
                                 .bg(theme::danger()),
@@ -616,24 +611,25 @@ impl SettingsView {
             .flex_none()
             .p_3()
             .border_r_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_0p5()
-                    .px_2()
-                    .pt_2()
-                    .pb_4()
+                    .gap_3()
+                    .px_1()
+                    .pt_1()
+                    .pb_3()
                     .child(
                         div()
-                            .text_lg()
+                            .px_2()
+                            .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text())
                             .child("Settings"),
                     )
-                    .child(div().w_full().pt_3().child(self.search.clone())),
+                    .child(div().w_full().child(self.search.clone())),
             )
             .children(items)
     }
@@ -800,10 +796,10 @@ impl SettingsView {
             .flex_col()
             .gap_0p5()
             .p_1()
-            .rounded_lg()
+            .rounded(theme::radius_panel())
             .border_1()
-            .border_color(theme::border_strong())
-            .bg(theme::surface_raised())
+            .border_color(theme::rule_strong())
+            .bg(theme::raised())
             .shadow_lg()
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
                 if this.open_choice == Some(index) {
@@ -865,7 +861,7 @@ impl SettingsView {
                         .items_center()
                         .gap_2()
                         .child(div().w(px(180.0)).child(pair.key.clone()))
-                        .child(div().text_color(theme::text_subtle()).child("="))
+                        .child(div().text_color(theme::text_faint()).child("="))
                         .child(div().w(px(220.0)).child(pair.value.clone()))
                         .child(
                             button(
@@ -948,7 +944,7 @@ impl SettingsView {
                                         this.child(
                                             div()
                                                 .text_sm()
-                                                .text_color(theme::text_subtle())
+                                                .text_color(theme::text_faint())
                                                 .child(field.unit),
                                         )
                                     }),
@@ -987,10 +983,15 @@ impl SettingsView {
             };
 
             tabs.push(
-                tab(("role", position), role_label(role), role == self.role)
+                segment(("role", position), role_label(role), role == self.role)
                     .gap_1p5()
                     .when(unsaved, |this| {
-                        this.child(div().size(px(6.0)).rounded_full().bg(theme::warning()))
+                        this.child(
+                            div()
+                                .size(px(MARK_SIZE))
+                                .rounded_full()
+                                .bg(theme::warning()),
+                        )
                     })
                     .on_click(cx.listener(move |this, _, _, cx| this.switch_role(role, cx))),
             );
@@ -1005,7 +1006,7 @@ impl SettingsView {
             .px_6()
             .py_3()
             .border_b_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .child(
                 div()
                     .flex()
@@ -1020,7 +1021,7 @@ impl SettingsView {
                             .gap_3()
                             .child(
                                 div()
-                                    .text_xl()
+                                    .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text())
                                     .child(title),
@@ -1052,10 +1053,10 @@ impl SettingsView {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme::text_subtle())
+                            .text_color(theme::text_faint())
                             .child("Editing"),
                     )
-                    .child(tab_strip(tabs)),
+                    .child(segmented(tabs)),
             )
     }
 
@@ -1198,17 +1199,22 @@ impl SettingsView {
             .flex_col()
             .gap_1()
             .px_6()
-            .py_3()
+            .py_2p5()
             .border_t_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .children(lines.into_iter().map(|line| {
                 div()
                     .text_xs()
-                    .text_color(if line.attention {
-                        theme::warning()
-                    } else {
-                        theme::text_muted()
+                    .map(|this| {
+                        if line.attention {
+                            this.pl_2()
+                                .border_l_2()
+                                .border_color(theme::warning())
+                                .text_color(theme::text())
+                        } else {
+                            this.text_color(theme::text_muted())
+                        }
                     })
                     .child(line.text)
             }))
@@ -1228,9 +1234,9 @@ impl SettingsView {
             .justify_between()
             .gap_4()
             .px_6()
-            .py_3()
+            .py_2p5()
             .border_t_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .child(
                 div()
@@ -1248,17 +1254,17 @@ impl SettingsView {
                             format!("{count} settings need attention")
                         };
 
-                        this.child(badge(label, Tone::Danger))
+                        this.child(state_text(label, Tone::Danger))
                     })
                     .when(self.dirty && self.errors.is_empty(), |this| {
-                        this.child(badge("Unsaved changes", Tone::Warning))
+                        this.child(state_text("Unsaved changes", Tone::Warning))
                     })
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
                             .text_xs()
-                            .text_color(theme::text_subtle())
+                            .text_color(theme::text_faint())
                             .child(location),
                     ),
             )
@@ -1319,8 +1325,8 @@ impl Render for SettingsView {
                 anchor_child = Some(children.len());
             }
 
-            children.push(section_title(heading).into_any_element());
-            children.push(card().p_0().py_1().children(rows).into_any_element());
+            children.push(group_heading(heading).into_any_element());
+            children.push(panel().p_0().py_1().children(rows).into_any_element());
         }
 
         self.apply_scroll(anchor.as_ref(), anchor_child);
@@ -1330,7 +1336,6 @@ impl Render for SettingsView {
             .track_scroll(&self.scroll)
             .flex()
             .flex_col()
-            .gap_1()
             .flex_1()
             .overflow_y_scroll()
             .px_6()
@@ -1392,43 +1397,19 @@ fn checking_line(role: ConfigRole) -> OutlookLine {
 }
 
 fn divider() -> impl IntoElement {
-    div().mx_4().h(px(1.0)).bg(theme::border())
+    div().mx_4().h(px(1.0)).bg(theme::rule())
 }
 
 fn empty_results(searching: bool) -> impl IntoElement {
-    let (title, detail) = if searching {
-        (
-            "No matching settings",
-            "Try the name from the config file, or clear the search.",
-        )
+    let text = if searching {
+        "No setting matches. Try the name from the config file, or clear the search."
     } else {
-        (
-            "Nothing to show in this section",
-            "The current choices hide every option here.",
-        )
+        "Nothing to show here: the current choices hide every option in this section."
     };
 
     div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_2()
-        .mt_8()
-        .py_10()
-        .rounded_xl()
-        .border_1()
-        .border_color(theme::border())
-        .bg(theme::surface())
-        .child(
-            div()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme::text())
-                .child(title),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme::text_muted())
-                .child(detail),
-        )
+        .pt_6()
+        .text_sm()
+        .text_color(theme::text_muted())
+        .child(text)
 }

@@ -1,4 +1,5 @@
 mod details;
+mod readout;
 
 use std::{
     cell::RefCell,
@@ -30,11 +31,12 @@ use crate::{
     session::{self, SessionError},
     stats::{FrameTimings, JsonReporter, StatsSampler, StreamRates, TimingSink},
     theme,
-    widgets::controls::{ButtonStyle, Tone, button, status_dot},
+    widgets::controls::{ButtonStyle, Tone, button, button_toggled, status_dot},
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-const DIVIDER_HEIGHT: f32 = 18.0;
+const DIVIDER_HEIGHT: f32 = 16.0;
+const HEADER_HEIGHT: f32 = 40.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StreamEvent {
@@ -302,8 +304,10 @@ impl StreamView {
         let stats = (self.stats_overlay && self.show_stats)
             .then(|| self.rates.as_ref().map(StreamRates::overlay))
             .flatten();
+        let separator = (!hint.is_empty() && stats.is_some()).then(String::new);
         let lines: Vec<String> = hint
             .into_iter()
+            .chain(separator)
             .chain(stats.iter().flat_map(|text| text.lines().iter().cloned()))
             .collect();
         let text = (!lines.is_empty()).then(|| OverlayText::new(lines));
@@ -587,27 +591,24 @@ impl StreamView {
         match self.phase {
             Phase::Connecting => Tone::Warning,
             Phase::Streaming if self.engaged => Tone::Accent,
-            Phase::Streaming => Tone::Success,
+            Phase::Streaming => Tone::Live,
             Phase::Abandoned | Phase::Ended => Tone::Neutral,
         }
     }
 
     fn status(&self) -> String {
         match self.phase {
-            Phase::Connecting => format!("Connecting to {}", self.host.name),
+            Phase::Connecting => "Connecting\u{2026}".to_owned(),
             Phase::Streaming if self.engaged => format!(
-                "Input captured by {}. Press {}{} to release it{}",
-                self.host.name,
+                "Input captured \u{00b7} {}{} releases",
                 chord_label(self.input.release_chord),
-                escape_hint(&self.input),
-                hotkey_hint(&self.input)
+                escape_hint(&self.input)
             ),
             Phase::Streaming => format!(
-                "Streaming from {}. Click the picture or press {} to capture input",
-                self.host.name,
+                "Click the picture or press {} to capture input",
                 chord_label(self.input.release_chord)
             ),
-            Phase::Abandoned | Phase::Ended => format!("Session with {} ended", self.host.name),
+            Phase::Abandoned | Phase::Ended => "Session ended".to_owned(),
         }
     }
 }
@@ -700,21 +701,6 @@ impl Drop for CanvasConnect {
     fn drop(&mut self) {
         self.gate.cancel();
     }
-}
-
-fn hotkey_hint(input: &InputConfig) -> String {
-    if !input.hotkeys {
-        return String::new();
-    }
-
-    format!(
-        ", {}+{:?} fullscreen, {:?} statistics, {:?} disconnect, {:?} pointer",
-        chord_label(input.hotkey_chord),
-        input.hotkey_fullscreen,
-        input.hotkey_stats,
-        input.hotkey_disconnect,
-        input.hotkey_pointer_mode
-    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -818,26 +804,43 @@ impl StreamView {
             .items_center()
             .justify_between()
             .gap_4()
-            .px_4()
-            .py_2p5()
+            .h(px(HEADER_HEIGHT))
+            .pl_4()
+            .pr_2()
             .border_b_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_2p5()
                     .min_w_0()
                     .child(status_dot(self.tone()))
                     .child(
-                        div().flex().flex_col().gap_0p5().min_w_0().child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme::text())
-                                .child(self.status()),
-                        ),
+                        div()
+                            .flex_none()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::text())
+                            .child(self.host.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .font_features(theme::tabular())
+                            .text_color(theme::text_faint())
+                            .child(self.host.address.to_string()),
+                    )
+                    .child(divider())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme::text_muted())
+                            .child(self.status()),
                     ),
             )
             .child(
@@ -856,35 +859,29 @@ impl StreamView {
                         .on_click(cx.listener(|this, _, _, _| this.cycle_pointer_mode()))
                     }))
                     .child(
-                        button(
-                            "stats",
-                            if self.show_stats {
-                                "Hide details"
-                            } else {
-                                "Connection details"
-                            },
-                            ButtonStyle::Quiet,
-                            true,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
+                        button_toggled("stats", "Details", self.show_stats)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_stats(cx))),
                     )
                     .child(
                         button("fullscreen", "Fullscreen", ButtonStyle::Quiet, true)
                             .on_click(cx.listener(|_, _, window, _| window.toggle_fullscreen())),
                     )
-                    .child(
-                        div()
-                            .w(px(1.0))
-                            .h(px(DIVIDER_HEIGHT))
-                            .mx_1()
-                            .bg(theme::border()),
-                    )
+                    .child(divider())
                     .child(
                         button("disconnect", "Disconnect", ButtonStyle::Danger, true)
                             .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
                     ),
             )
     }
+}
+
+fn divider() -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(1.0))
+        .h(px(DIVIDER_HEIGHT))
+        .mx_1()
+        .bg(theme::rule_strong())
 }
 
 impl Render for StreamView {
@@ -995,21 +992,6 @@ mod tests {
             pointer_label(PointerMode::Auto, ActivePointer::Absolute),
             "Pointer: auto (absolute)"
         );
-    }
-
-    #[test]
-    fn the_hotkey_hint_names_the_chord_and_each_key_or_vanishes_when_off() {
-        let on = InputConfig::default();
-        let off = InputConfig {
-            hotkeys: false,
-            ..InputConfig::default()
-        };
-
-        assert_eq!(
-            hotkey_hint(&on),
-            ", Ctrl+Alt+F fullscreen, S statistics, D disconnect, P pointer"
-        );
-        assert_eq!(hotkey_hint(&off), "");
     }
 
     #[test]

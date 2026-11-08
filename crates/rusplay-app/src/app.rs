@@ -15,12 +15,11 @@ use crate::{
     settings::{FormModel, HostSettingsSaved, SettingsView},
     stream::{StreamEvent, StreamView},
     theme,
-    widgets::controls::{Tone, brand_mark, status_dot, tab, tab_strip},
+    widgets::controls::{tab, tab_strip},
 };
 
-const TITLEBAR_HEIGHT: f32 = 48.0;
-const STATUS_HEIGHT: f32 = 34.0;
-const BRAND_MARK_SIZE: f32 = 30.0;
+const TITLEBAR_HEIGHT: f32 = 40.0;
+const STATUS_HEIGHT: f32 = 28.0;
 const KEY_HINTS: &str = "Tab to move \u{00b7} F11 fullscreen \u{00b7} Ctrl+Q quit";
 
 actions!(rusplay, [FocusNext, FocusPrevious, Quit, ToggleFullscreen]);
@@ -347,25 +346,12 @@ impl RusplayApp {
             .flex_1()
             .flex_basis(px(0.0))
             .items_center()
-            .gap_3()
-            .child(brand_mark(BRAND_MARK_SIZE))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme::text())
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Rusplay"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme::text_subtle())
-                            .child("LAN remote play"),
-                    ),
+                    .text_sm()
+                    .text_color(theme::text())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Rusplay"),
             );
 
         let controls = div()
@@ -391,10 +377,10 @@ impl RusplayApp {
             .items_center()
             .gap_4()
             .pl_4()
-            .pr_2()
+            .pr_1()
             .h(px(TITLEBAR_HEIGHT))
             .border_b_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .when(frame.rounded(), |this| {
                 this.rounded_t(chrome::corner_radius())
@@ -442,10 +428,10 @@ impl RusplayApp {
     }
 
     fn render_status(&self, frame: Frame) -> impl IntoElement + use<> {
-        let (tone, color, text) = match &self.notice {
-            Some(Notice::Info(text)) => (Tone::Success, theme::text(), text.clone()),
-            Some(Notice::Failure(text)) => (Tone::Danger, theme::danger(), text.clone()),
-            None => (Tone::Neutral, theme::text_muted(), "Ready".to_owned()),
+        let (color, text) = match &self.notice {
+            Some(Notice::Info(text)) => (theme::text_muted(), text.clone()),
+            Some(Notice::Failure(text)) => (theme::danger(), text.clone()),
+            None => (theme::text_muted(), String::new()),
         };
 
         div()
@@ -458,26 +444,17 @@ impl RusplayApp {
             .px_4()
             .min_h(px(STATUS_HEIGHT))
             .border_t_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .bg(theme::chrome())
             .when(frame.rounded(), |this| {
                 this.rounded_b(chrome::corner_radius())
             })
-            .text_sm()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .min_w_0()
-                    .child(status_dot(tone))
-                    .child(div().text_color(color).child(text)),
-            )
+            .text_xs()
+            .child(div().min_w_0().truncate().text_color(color).child(text))
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
-                    .text_color(theme::text_subtle())
+                    .text_color(theme::text_faint())
                     .child(KEY_HINTS),
             )
     }
@@ -537,7 +514,7 @@ impl Render for RusplayApp {
             }))
             .flex()
             .flex_col()
-            .bg(theme::background())
+            .bg(theme::canvas())
             .text_color(theme::text())
             .children((!immersive).then(|| self.render_titlebar(frame, window, cx)))
             .child(div().flex_1().min_h_0().child(content))

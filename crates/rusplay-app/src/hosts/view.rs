@@ -13,14 +13,15 @@ use crate::{
     session::{self, SessionError},
     theme,
     widgets::{
-        controls::{ButtonStyle, Tone, badge, button, card, card_heading, option_button},
+        controls::{
+            ButtonStyle, Tone, button, option_button, panel, panel_heading, selection_bar,
+            state_text,
+        },
         text_field::{TextField, TextFieldEvent},
     },
 };
 
-const SIDE_PANEL_WIDTH: f32 = 330.0;
-const AVATAR_SIZE: f32 = 36.0;
-const AVAILABILITY_DOT: f32 = 6.0;
+const SIDE_PANEL_WIDTH: f32 = 320.0;
 const PROFILE_LABEL_WIDTH: f32 = 130.0;
 
 #[derive(Debug, Clone)]
@@ -305,6 +306,16 @@ impl HostsView {
         cx.emit(ConnectRequested { host, credentials });
     }
 
+    fn remove_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.hosts.selected_index() else {
+            return;
+        };
+
+        self.hosts.remove(index);
+        self.persist(cx);
+        cx.notify();
+    }
+
     fn render_host(
         &self,
         index: usize,
@@ -312,89 +323,70 @@ impl HostsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let selected = self.hosts.selected_index() == Some(index);
-        let origin = match host.origin {
-            HostOrigin::Added => badge("Saved", Tone::Neutral),
-            HostOrigin::Discovered => badge("Discovered", Tone::Accent),
-        };
+        let (state, tone) = host_state(host);
 
         div()
             .id(("host", index))
+            .relative()
             .flex()
             .items_center()
             .gap_3()
-            .p_3()
-            .rounded_lg()
-            .border_1()
+            .px_4()
+            .py_2p5()
             .cursor_pointer()
+            .when(index > 0, |this| {
+                this.border_t_1().border_color(theme::rule())
+            })
             .map(|this| {
                 if selected {
-                    this.border_color(theme::accent())
-                        .bg(theme::surface_raised())
-                        .shadow(theme::glow())
+                    this.bg(theme::raised()).child(selection_bar())
                 } else {
-                    this.border_color(theme::border())
-                        .bg(theme::surface())
-                        .hover(|style| {
-                            style
-                                .bg(theme::surface_raised())
-                                .border_color(theme::border_strong())
-                        })
+                    this.hover(|style| style.bg(theme::raised()))
                 }
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.hosts.select(index);
                 cx.notify();
             }))
-            .child(avatar(&host.name, selected))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap_1()
+                    .gap_0p5()
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(theme::text())
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(host.name.clone()),
-                            )
-                            .children(host.peer.is_some().then(|| badge("Paired", Tone::Success)))
-                            .children(host.busy.then(|| badge("Busy", Tone::Warning)))
-                            .child(origin),
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(theme::text())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(host.name.clone()),
                     )
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
                             .text_xs()
-                            .text_color(theme::text_muted())
-                            .child(
-                                div()
-                                    .size(px(AVAILABILITY_DOT))
-                                    .rounded_full()
-                                    .bg(availability_color(host)),
-                            )
-                            .child(format!("{} \u{00b7} {}", host.address, availability(host))),
+                            .font_features(theme::tabular())
+                            .text_color(theme::text_faint())
+                            .child(host.address.to_string()),
                     ),
             )
             .child(
-                button(("remove-host", index), "Remove", ButtonStyle::Danger, true).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.hosts.remove(index);
-                        this.persist(cx);
-                        cx.stop_propagation();
-                        cx.notify();
-                    }),
-                ),
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_2()
+                    .when(host.origin == HostOrigin::Discovered, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text_faint())
+                                .child("on network"),
+                        )
+                    })
+                    .child(state_text(state, tone)),
             )
     }
 
@@ -406,31 +398,28 @@ impl HostsView {
             .collect();
         let overridden = !host.profile.is_empty();
 
-        card()
+        panel()
+            .child(panel_heading(
+                format!("Overrides for {}", host.name),
+                Some(
+                    button(
+                        "clear-profile",
+                        "Reset all to global",
+                        ButtonStyle::Quiet,
+                        overridden,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_selected_profile(HostProfile::default(), cx);
+                    }))
+                    .into_any_element(),
+                ),
+            ))
             .child(
                 div()
-                    .flex()
-                    .items_start()
-                    .justify_between()
-                    .gap_4()
-                    .child(card_heading(
-                        format!("Client settings for {}", host.name),
-                        Some(
-                            "Global follows client.toml; a choice overrides it for this host only."
-                                .into(),
-                        ),
-                    ))
-                    .child(
-                        button(
-                            "clear-profile",
-                            "Reset all to global",
-                            ButtonStyle::Quiet,
-                            overridden,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_selected_profile(HostProfile::default(), cx);
-                        })),
-                    ),
+                    .pb_2()
+                    .text_xs()
+                    .text_color(theme::text_muted())
+                    .child("Global follows client.toml; a choice overrides it for this host only."),
             )
             .child(div().flex().flex_col().children(rows))
     }
@@ -440,9 +429,9 @@ impl HostsView {
         row: ProfileRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let source_tone = match row.source {
-            Source::Override => Tone::Accent,
-            Source::Global => Tone::Neutral,
+        let source_color = match row.source {
+            Source::Override => theme::accent(),
+            Source::Global => theme::text_faint(),
         };
         let choices: Vec<_> = row
             .choices
@@ -465,9 +454,9 @@ impl HostsView {
             .flex()
             .items_center()
             .gap_4()
-            .py_2p5()
+            .py_2()
             .border_t_1()
-            .border_color(theme::border())
+            .border_color(theme::rule())
             .child(
                 div()
                     .w(px(PROFILE_LABEL_WIDTH))
@@ -485,83 +474,57 @@ impl HostsView {
                     .gap_1()
                     .children(choices),
             )
-            .child(badge(
-                format!("{} \u{00b7} {}", row.effective, row.source.label()),
-                source_tone,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_baseline()
+                    .gap_1p5()
+                    .text_xs()
+                    .child(
+                        div()
+                            .font_features(theme::tabular())
+                            .text_color(theme::text())
+                            .child(row.effective),
+                    )
+                    .child(div().text_color(source_color).child(row.source.label())),
+            )
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let entries: Vec<_> = self.hosts.entries().to_vec();
 
-        let body = if entries.is_empty() {
-            div()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap_2()
-                .py_10()
-                .rounded_lg()
-                .border_1()
-                .border_color(theme::border())
-                .bg(theme::inset())
-                .child(
-                    div()
-                        .text_color(theme::text())
-                        .font_weight(FontWeight::MEDIUM)
-                        .child("No hosts yet"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::text_muted())
-                        .child("Refresh to scan the network again, or add one by address."),
-                )
-                .into_any_element()
-        } else {
-            let mut rows = Vec::with_capacity(entries.len());
-            for (index, host) in entries.iter().enumerate() {
-                rows.push(self.render_host(index, host, cx));
-            }
+        if entries.is_empty() {
+            return panel()
+                .text_sm()
+                .text_color(theme::text_muted())
+                .child("No hosts found. Add one by address, or Refresh to scan again.");
+        }
 
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .children(rows)
-                .into_any_element()
-        };
+        let mut rows = Vec::with_capacity(entries.len());
+        for (index, host) in entries.iter().enumerate() {
+            rows.push(self.render_host(index, host, cx));
+        }
 
-        card()
-            .child(card_heading(
-                "Your hosts",
-                Some("Saved hosts and the ones announcing themselves on the network.".into()),
-            ))
-            .child(body)
+        panel().p_0().overflow_hidden().children(rows)
     }
 
-    fn render_connect(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let selected = self.hosts.selected();
-        let can_connect = selected.is_some();
-        let paired = selected.is_some_and(|host| host.peer.is_some());
-
-        let heading = match selected {
-            Some(host) => card_heading(host.name.clone(), Some(host.address.to_string().into())),
-            None => card_heading("Connect", Some("Select a host from the list.".into())),
+    fn render_detail(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let Some(host) = self.hosts.selected() else {
+            return panel().child(
+                div()
+                    .text_sm()
+                    .text_color(theme::text_muted())
+                    .child("Select a host to connect."),
+            );
         };
+        let paired = host.peer.is_some();
 
         let credentials = if paired {
             div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(badge("Paired", Tone::Success))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme::text_muted())
-                        .child("Connects with the remembered pairing"),
-                )
+                .text_sm()
+                .text_color(theme::text_muted())
+                .child("Paired. Connects without a PIN.")
                 .into_any_element()
         } else {
             div()
@@ -573,38 +536,71 @@ impl HostsView {
                 .into_any_element()
         };
 
-        card()
-            .child(heading)
+        panel()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .pb_4()
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(theme::text())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(host.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_features(theme::tabular())
+                            .text_color(theme::text_faint())
+                            .child(host.address.to_string()),
+                    )
+                    .when(host.busy, |this| {
+                        this.child(
+                            div()
+                                .pt_1()
+                                .text_xs()
+                                .text_color(theme::warning())
+                                .child("Busy in another session"),
+                        )
+                    }),
+            )
             .child(credentials)
             .child(
                 div().pt_4().child(
-                    button("connect", "Connect", ButtonStyle::Primary, can_connect)
+                    button("connect", "Connect", ButtonStyle::Primary, true)
                         .w_full()
                         .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
                 ),
             )
-            .children(paired.then(|| {
-                div().pt_2().child(
-                    button(
-                        "forget-pairing",
-                        "Forget pairing",
-                        ButtonStyle::Danger,
-                        true,
-                    )
-                    .w_full()
-                    .on_click(cx.listener(|this, _, _, cx| this.forget_selected_pairing(cx))),
-                )
-            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pt_2()
+                    .when(paired, |this| {
+                        this.child(
+                            button("forget-pairing", "Forget pairing", ButtonStyle::Quiet, true)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.forget_selected_pairing(cx)),
+                                ),
+                        )
+                    })
+                    .child(
+                        button("remove-host", "Remove", ButtonStyle::Danger, true)
+                            .on_click(cx.listener(|this, _, _, cx| this.remove_selected(cx))),
+                    ),
+            )
     }
 
     fn render_editor(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let can_edit = self.hosts.selected().is_some();
 
-        card()
-            .child(card_heading(
-                "Add or edit a host",
-                Some("Add a new host, or apply the name or address to the selected one.".into()),
-            ))
+        panel()
+            .child(panel_heading("Add or edit", None))
             .child(
                 div()
                     .flex()
@@ -632,7 +628,7 @@ impl HostsView {
                     .flex()
                     .flex_wrap()
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .pt_4()
                     .child(
                         button("add-host", "Add", ButtonStyle::Secondary, true)
@@ -665,8 +661,7 @@ impl Render for HostsView {
         let scanning = self.scan.is_some();
         let count = self.hosts.entries().len();
         let summary = match (count, scanning) {
-            (_, true) => "Scanning the network\u{2026}".to_owned(),
-            (0, false) => "No hosts".to_owned(),
+            (_, true) => "scanning\u{2026}".to_owned(),
             (1, false) => "1 host".to_owned(),
             (count, false) => format!("{count} hosts"),
         };
@@ -679,21 +674,21 @@ impl Render for HostsView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_5()
+                    .gap_4()
                     .p_6()
                     .child(
                         div()
                             .flex()
-                            .items_end()
+                            .items_center()
                             .justify_between()
                             .child(
                                 div()
                                     .flex()
-                                    .flex_col()
-                                    .gap_1()
+                                    .items_baseline()
+                                    .gap_2()
                                     .child(
                                         div()
-                                            .text_2xl()
+                                            .text_lg()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme::text())
                                             .child("Hosts"),
@@ -701,18 +696,15 @@ impl Render for HostsView {
                                     .child(
                                         div()
                                             .text_sm()
-                                            .text_color(theme::text_muted())
+                                            .font_features(theme::tabular())
+                                            .text_color(theme::text_faint())
                                             .child(summary),
                                     ),
                             )
                             .child(
                                 button(
                                     "refresh-hosts",
-                                    if scanning {
-                                        "Scanning\u{2026}"
-                                    } else {
-                                        "Refresh"
-                                    },
+                                    "Refresh",
                                     ButtonStyle::Secondary,
                                     !scanning,
                                 )
@@ -723,14 +715,14 @@ impl Render for HostsView {
                         div()
                             .flex()
                             .items_start()
-                            .gap_5()
+                            .gap_4()
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
                                     .flex_1()
                                     .min_w_0()
-                                    .gap_5()
+                                    .gap_4()
                                     .child(self.render_list(cx))
                                     .children(profile_panel),
                             )
@@ -740,41 +732,13 @@ impl Render for HostsView {
                                     .flex_col()
                                     .flex_none()
                                     .w(px(SIDE_PANEL_WIDTH))
-                                    .gap_5()
-                                    .child(self.render_connect(cx))
+                                    .gap_4()
+                                    .child(self.render_detail(cx))
                                     .child(self.render_editor(cx)),
                             ),
                     ),
             )
     }
-}
-
-fn avatar(name: &str, selected: bool) -> impl IntoElement + use<> {
-    let initial = name
-        .chars()
-        .find(|character| character.is_alphanumeric())
-        .map_or_else(
-            || "?".to_owned(),
-            |character| character.to_uppercase().collect(),
-        );
-
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(AVATAR_SIZE))
-        .rounded_lg()
-        .font_weight(FontWeight::SEMIBOLD)
-        .map(|this| {
-            if selected {
-                this.bg(theme::brand()).text_color(theme::accent_text())
-            } else {
-                this.bg(theme::surface_hover())
-                    .text_color(theme::text_muted())
-            }
-        })
-        .child(initial)
 }
 
 fn field_label(label: &'static str) -> impl IntoElement + use<> {
@@ -785,22 +749,12 @@ fn field_label(label: &'static str) -> impl IntoElement + use<> {
         .child(label)
 }
 
-fn availability_color(host: &HostEntry) -> gpui::Rgba {
-    if host.busy {
-        theme::warning()
-    } else if host.online {
-        theme::success()
-    } else {
-        theme::text_subtle()
-    }
-}
-
-const fn availability(host: &HostEntry) -> &'static str {
-    match (host.online, host.origin) {
-        (true, _) if host.busy => "busy in a session",
-        (true, HostOrigin::Discovered) => "found on the network",
-        (true, HostOrigin::Added) => "online",
-        (false, _) => "not seen",
+const fn host_state(host: &HostEntry) -> (&'static str, Tone) {
+    match (host.busy, host.peer.is_some(), host.online) {
+        (true, ..) => ("Busy", Tone::Warning),
+        (false, true, true) => ("Paired", Tone::Live),
+        (false, _, false) => ("Not seen", Tone::Neutral),
+        (false, false, true) => ("Not paired", Tone::Neutral),
     }
 }
 

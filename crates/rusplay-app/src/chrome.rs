@@ -7,9 +7,9 @@ use gpui::{
 use crate::theme;
 
 pub const RESIZE_INSET: f32 = 10.0;
-const CORNER_RADIUS: f32 = 10.0;
-const CONTROL_WIDTH: f32 = 46.0;
-const CONTROL_HEIGHT: f32 = 32.0;
+const CORNER_RADIUS: f32 = 8.0;
+const CONTROL_WIDTH: f32 = 42.0;
+const CONTROL_HEIGHT: f32 = 30.0;
 const GLYPH_SIZE: f32 = 10.0;
 const GLYPH_STROKE: f32 = 1.5;
 const RESTORE_OFFSET: f32 = 3.0;
@@ -73,7 +73,7 @@ pub fn frame(window: &mut Window, body: Stateful<Div>) -> AnyElement {
         .when(frame.rounded(), |this| {
             this.rounded(radius)
                 .border_1()
-                .border_color(theme::border_strong())
+                .border_color(theme::rule_strong())
                 .shadow(theme::window_shadow())
         });
 
@@ -199,14 +199,14 @@ fn control(id: &'static str, closes: bool) -> Stateful<Div> {
         .justify_center()
         .w(px(CONTROL_WIDTH))
         .h(px(CONTROL_HEIGHT))
-        .rounded_md()
+        .rounded(theme::radius_control())
         .cursor_pointer()
         .text_color(theme::text_muted())
         .hover(move |style| {
             if closes {
-                style.bg(theme::danger()).text_color(theme::accent_text())
+                style.bg(theme::danger()).text_color(theme::text())
             } else {
-                style.bg(theme::surface_hover()).text_color(theme::text())
+                style.bg(theme::raised()).text_color(theme::text())
             }
         })
 }
@@ -241,7 +241,7 @@ fn restore_glyph() -> impl IntoElement {
                 .size(box_size)
                 .rounded_sm()
                 .border(px(GLYPH_STROKE))
-                .border_color(theme::text_subtle()),
+                .border_color(theme::text_faint()),
         )
         .child(
             div()

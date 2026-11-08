@@ -9,16 +9,18 @@ use crate::{
     notice::{Notice, NoticeRaised, error_chain},
     stats::HostJsonLog,
     theme,
-    widgets::controls::{ButtonStyle, Tone, badge, button, card, card_heading, status_dot, toggle},
+    widgets::controls::{
+        ButtonStyle, Tone, button, panel, panel_heading, status_dot, toggle, value_row,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostLaunchPreference(pub bool);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const SIDE_PANEL_WIDTH: f32 = 330.0;
-const PIN_SIZE: f32 = 44.0;
-const ROW_LABEL_WIDTH: f32 = 120.0;
+const SIDE_PANEL_WIDTH: f32 = 320.0;
+const PIN_SIZE: f32 = 40.0;
+const COUNTDOWN_HEIGHT: f32 = 2.0;
 
 pub struct HostPageView {
     environment: ConfigEnvironment,
@@ -392,7 +394,7 @@ impl HostPageView {
             Phase::Stopped => Tone::Neutral,
             Phase::Starting | Phase::Stopping => Tone::Warning,
             Phase::Running if self.model.client().is_some() => Tone::Accent,
-            Phase::Running => Tone::Success,
+            Phase::Running => Tone::Live,
         }
     }
 
@@ -407,16 +409,18 @@ impl HostPageView {
 
         div()
             .flex()
-            .items_end()
+            .items_start()
             .justify_between()
+            .gap_4()
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .min_w_0()
                     .child(
                         div()
-                            .text_2xl()
+                            .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::text())
                             .child("Host this PC"),
@@ -446,7 +450,7 @@ impl HostPageView {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme::text())
+                                    .text_color(theme::text_muted())
                                     .child("Start hosting when the app opens"),
                             ),
                     ),
@@ -454,13 +458,14 @@ impl HostPageView {
             .child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap_2()
                     .child(
                         button(
                             "choose-display",
                             "Choose display",
-                            ButtonStyle::Secondary,
+                            ButtonStyle::Quiet,
                             running,
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.choose_display(cx))),
@@ -480,130 +485,146 @@ impl HostPageView {
     }
 
     fn render_pairing(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let pairing = self.model.pairing();
-        let body = match pairing {
+        let now = Instant::now();
+        let action = self.model.pairing().map(|_| {
+            button("new-pin", "New PIN", ButtonStyle::Secondary, true)
+                .on_click(cx.listener(|this, _, _, cx| this.renew_pin(cx)))
+                .into_any_element()
+        });
+        let body = match self.model.pairing() {
             Some(pairing) => {
-                let seconds = self.model.seconds_left(Instant::now()).unwrap_or(0);
+                let seconds = self.model.seconds_left(now).unwrap_or(0);
+                let fraction = self.model.remaining_fraction(now).unwrap_or(0.0);
 
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
+                    .flex_col()
+                    .gap_2()
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
+                            .text_size(px(PIN_SIZE))
+                            .line_height(px(PIN_SIZE * 1.2))
+                            .font_weight(FontWeight::MEDIUM)
+                            .font_features(theme::tabular())
+                            .text_color(theme::text())
+                            .child(grouped_pin(pairing.pin.as_str())),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(COUNTDOWN_HEIGHT))
+                            .rounded_full()
+                            .bg(theme::rule())
                             .child(
                                 div()
-                                    .text_size(px(PIN_SIZE))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::accent_bright())
-                                    .child(grouped_pin(pairing.pin.as_str())),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::text_muted())
-                                    .child(format!("Valid for {seconds} s")),
+                                    .h_full()
+                                    .w(gpui::relative(fraction))
+                                    .rounded_full()
+                                    .bg(theme::accent()),
                             ),
                     )
                     .child(
-                        button("new-pin", "New PIN", ButtonStyle::Secondary, true)
-                            .on_click(cx.listener(|this, _, _, cx| this.renew_pin(cx))),
+                        div()
+                            .text_xs()
+                            .font_features(theme::tabular())
+                            .text_color(theme::text_muted())
+                            .child(format!("Enter it on the client. Expires in {seconds} s")),
                     )
                     .into_any_element()
             }
             None => div()
                 .text_sm()
                 .text_color(theme::text_muted())
-                .child(match self.model.client() {
-                    Some(_) => "A client is streaming, so no PIN is offered.",
-                    None => "Start hosting to get a PIN a client can pair with.",
+                .child(match (self.model.phase(), self.model.client()) {
+                    (_, Some(_)) => "A client is streaming, so no PIN is offered.",
+                    (Phase::Running, None) => "The next PIN opens shortly.",
+                    _ => "Start hosting to get a PIN a client can pair with.",
                 })
                 .into_any_element(),
         };
 
-        card()
-            .child(card_heading(
-                "Pairing",
-                Some("Enter this PIN on the client to pair it with this machine.".into()),
-            ))
-            .child(body)
+        panel().child(panel_heading("Pairing", action)).child(body)
     }
 
     fn render_client(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let heading = match self.model.client() {
-            Some(client) => card_heading(
-                if client.name.is_empty() {
-                    "Connected client".to_owned()
-                } else {
-                    client.name.clone()
-                },
-                Some(client.address.to_string().into()),
-            ),
-            None => card_heading("Connected client", Some("Nobody is connected.".into())),
+        let Some(client) = self.model.client() else {
+            return panel()
+                .child(panel_heading("Connected client", None))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text_muted())
+                        .child("Nobody is connected."),
+                );
         };
 
-        let mut rows: Vec<(&'static str, String)> = Vec::new();
+        let name = if client.name.is_empty() {
+            "Connected client".to_owned()
+        } else {
+            client.name.clone()
+        };
+        let admission = match client.admission {
+            hosting::Admission::Paired => "just paired",
+            hosting::Admission::Reconnected => "reconnected",
+        };
+
+        let mut rows = vec![value_row(
+            "Address",
+            client.address.to_string(),
+            theme::text(),
+        )];
         if let Some(format) = self.model.format_line() {
-            rows.push(("Stream", format));
+            let color = if self.model.format_is_fallback() {
+                theme::warning()
+            } else {
+                theme::text()
+            };
+            rows.push(value_row("Stream", format, color));
         }
         if let Some(rates) = self.model.rates() {
-            rows.extend(rates.rows());
+            rows.extend(
+                rates
+                    .rows()
+                    .into_iter()
+                    .map(|(label, value)| value_row(label, value, theme::text())),
+            );
         }
 
-        let badges = self.model.client().map(|client| {
-            let (label, tone) = match client.admission {
-                hosting::Admission::Paired => ("Just paired", Tone::Accent),
-                hosting::Admission::Reconnected => ("Reconnected", Tone::Success),
-            };
-
-            div().flex().pb_3().child(badge(label, tone))
-        });
-
-        let disconnect = self.model.client().map(|_| {
-            div().flex().pb_3().child(
-                button("disconnect-client", "Disconnect", ButtonStyle::Danger, true)
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
-        });
-
-        card()
-            .child(heading)
-            .children(badges)
-            .children(disconnect)
+        panel()
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .children(rows.into_iter().map(|(label, value)| {
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .pb_3()
+                    .child(
                         div()
                             .flex()
-                            .items_center()
-                            .gap_4()
-                            .py_2()
-                            .border_t_1()
-                            .border_color(theme::border())
+                            .items_baseline()
+                            .gap_2()
+                            .min_w_0()
                             .child(
                                 div()
-                                    .w(px(ROW_LABEL_WIDTH))
-                                    .flex_none()
-                                    .text_sm()
-                                    .text_color(theme::text_muted())
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme::text())
-                                    .child(value),
+                                    .child(name),
                             )
-                    })),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(theme::text_faint())
+                                    .child(admission),
+                            ),
+                    )
+                    .child(
+                        button("disconnect-client", "Disconnect", ButtonStyle::Danger, true)
+                            .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+                    ),
             )
+            .child(div().flex().flex_col().children(rows))
     }
 
     fn render_paired(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -620,12 +641,14 @@ impl HostPageView {
                     .items_center()
                     .justify_between()
                     .gap_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(theme::border())
+                    .py_1()
+                    .when(index > 0, |this| {
+                        this.border_t_1().border_color(theme::rule())
+                    })
                     .child(
                         div()
                             .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(theme::text())
                             .child(client.name.clone()),
@@ -644,14 +667,21 @@ impl HostPageView {
             })
             .collect();
 
-        card()
-            .child(card_heading(
+        panel()
+            .child(panel_heading(
                 "Paired clients",
-                Some(client_summary(&self.paired).into()),
+                Some(
+                    div()
+                        .text_xs()
+                        .font_features(theme::tabular())
+                        .text_color(theme::text_faint())
+                        .child(client_summary(&self.paired))
+                        .into_any_element(),
+                ),
             ))
             .children(self.clients_error.clone().map(|error| {
                 div()
-                    .pb_3()
+                    .pb_2()
                     .text_xs()
                     .text_color(theme::warning())
                     .child(error)
@@ -667,7 +697,7 @@ impl Render for HostPageView {
             .flex_col()
             .flex_1()
             .min_w_0()
-            .gap_5()
+            .gap_4()
             .child(self.render_pairing(cx))
             .child(self.render_client(cx));
 
@@ -679,7 +709,7 @@ impl Render for HostPageView {
                 .p_6()
                 .child(self.render_header(cx))
                 .child(
-                    div().flex().items_start().gap_5().child(main).child(
+                    div().flex().items_start().gap_4().child(main).child(
                         div()
                             .flex()
                             .flex_col()
