@@ -167,6 +167,14 @@ pub enum ClientError {
     WindowSurface(#[source] wgpu::CreateSurfaceError),
     #[error("no gpu adapter can present to the stream surface")]
     WindowAdapter(#[source] wgpu::RequestAdapterError),
+    #[error(
+        "the vaapi decoder device {device} is on gpu {decoder_pci} but the stream surface presents on gpu {adapter_pci}"
+    )]
+    DecoderAdapterMismatch {
+        device: PathBuf,
+        decoder_pci: String,
+        adapter_pci: String,
+    },
     #[error("failed to open the gpu device for the stream")]
     WindowDevice(#[source] wgpu::RequestDeviceError),
     #[error(

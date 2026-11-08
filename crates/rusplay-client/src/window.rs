@@ -1,3 +1,4 @@
+mod adapter;
 mod choice;
 mod compose;
 mod cursor;
@@ -188,12 +189,7 @@ impl StreamWindow {
         }
         .map_err(ClientError::WindowSurface)?;
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            ..wgpu::RequestAdapterOptions::default()
-        }))
-        .map_err(ClientError::WindowAdapter)?;
+        let adapter = adapter::choose(&instance, &surface, &config.video.decoder)?;
         let (device, queue) = pollster::block_on(rusplay_scale::request_fence_wait_device(
             &adapter,
             "rusplay-client",

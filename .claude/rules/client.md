@@ -384,7 +384,14 @@ paths:
   `wp_viewporter` are required (`WindowGlobalMissing`).
 - It creates its own wgpu instance, a surface on the child `wl_surface`, an adapter compatible
   with it (high performance) and a device from `rusplay_scale::device_descriptor`, so DMA-BUF
-  import works. `StreamWindow::gpu` is that device for `ClientSession::connect`, and
+  import works. With the VAAPI decoder and `copy_output` off, `window/adapter.rs` takes the
+  adapter on the GPU that owns `video.decoder.device` (the render node's PCI address from
+  `/sys/class/drm/<node>/device` against `AdapterInfo::device_pci_bus_id`), among the adapters
+  that can present to the surface, so a machine with two GPUs decodes and imports on the same
+  one. When the decoder's GPU cannot present, the window fails with
+  `DecoderAdapterMismatch`; an adapter that reports no bus id, or a node whose PCI address
+  cannot be read, keeps the high performance choice, and `copy_output` skips the check because
+  its upload crosses GPUs. `StreamWindow::gpu` is that device for `ClientSession::connect`, and
   `StreamWindow::sink` the `FrameSink` (`WindowSink`), so frames go from the present stage to the
   window thread without touching the app's UI thread.
 - `set_layout(Option<WindowLayout>)` takes the picture rectangle in whole logical pixels of the
