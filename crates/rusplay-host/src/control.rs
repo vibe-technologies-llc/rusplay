@@ -487,6 +487,9 @@ impl ControlStage {
                 ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
                     self.receive_clipboard(&chunk);
                 }
+                ControlEvent::Received(ControlMessage::QualityRequest { enabled }) => {
+                    shared.request_quality(enabled);
+                }
                 ControlEvent::Undeliverable {
                     message: ControlMessage::Hello { .. },
                     ..
@@ -508,7 +511,9 @@ impl ControlStage {
                     | ControlMessage::PlayerLeds { .. }
                     | ControlMessage::TriggerEffect { .. }
                     | ControlMessage::StreamFormat(_)
-                    | ControlMessage::ClockPong { .. },
+                    | ControlMessage::ClockPong { .. }
+                    | ControlMessage::QualityReport(_)
+                    | ControlMessage::QualityUnavailable { .. },
                 )
                 | ControlEvent::Acked { .. } => {}
             }

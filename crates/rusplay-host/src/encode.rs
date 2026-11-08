@@ -8,7 +8,7 @@ use std::{
 };
 
 use rusplay_capture::OutputRequest;
-use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, Resolution, Timestamp};
+use rusplay_core::{CodecFormat, EncodedFrame, FormatSet, FrameRate, Resolution, Timestamp};
 
 use crate::{
     CaptureFeed, HostError,
@@ -17,6 +17,7 @@ use crate::{
     negotiate::NegotiatedFormat,
     outbox::ControlOutbox,
     pipeline::{OutputRef, PipelineNotices, PipelineRecovery, StreamFormat, VideoPipeline},
+    quality::{QualitySampler, QualitySettings, QualitySink},
     shared::Shared,
     stats::Counters,
 };
@@ -48,8 +49,22 @@ struct Origin {
     output: Option<OutputRef>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QualityTiming {
+    pub interval_ms: u32,
+    pub frame_rate: FrameRate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forwarded {
+    Sent(u32),
+    Dropped,
+    Closed,
+}
+
 pub(crate) struct EncodeLinks {
     pub first_frame_timeout: Duration,
+    pub quality: QualityTiming,
     pub shared: Arc<Shared>,
     pub feed: Arc<CaptureFeed>,
     pub output: SyncSender<Outgoing>,
@@ -58,11 +73,23 @@ pub(crate) struct EncodeLinks {
 
 pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Result<(), HostError> {
     let result = open_negotiated(factory, links).and_then(|opened| match opened {
-        Some(mut opened) => EncodeStage::holding_first_frame(FirstFrameHold::new(
-            links.shared.output().map(|request| request.resolution),
-            links.first_frame_timeout,
-        ))
-        .serve(&mut *opened.pipeline, opened.negotiated, links),
+        Some(mut opened) => {
+            let output = links.shared.output();
+            let rate = output.map_or(links.quality.frame_rate, |request| request.frame_rate);
+            let sink: Arc<dyn QualitySink> = links.outbox.clone();
+            let mut sampler =
+                QualitySampler::new(QualitySettings::new(links.quality.interval_ms, rate), sink);
+            EncodeStage::holding_first_frame(FirstFrameHold::new(
+                output.map(|request| request.resolution),
+                links.first_frame_timeout,
+            ))
+            .serve(
+                &mut *opened.pipeline,
+                opened.negotiated,
+                &mut sampler,
+                links,
+            )
+        }
         None => Ok(()),
     });
     links.shared.stop();
@@ -227,6 +254,7 @@ impl EncodeStage {
         &mut self,
         pipeline: &mut dyn VideoPipeline,
         negotiated: NegotiatedFormat,
+        sampler: &mut QualitySampler,
         links: &EncodeLinks,
     ) -> Result<(), HostError> {
         let counters = &links.shared.counters;
@@ -295,6 +323,7 @@ impl EncodeStage {
                     captured_micros,
                 }) => {
                     drop(links.feed.take_retained());
+                    plan_sample(pipeline, sampler, links);
                     let encoded = pipeline.encode(&frame, self.force_keyframe);
                     record_notices(pipeline.take_notices(), counters);
                     let encoded = encoded?;
@@ -304,6 +333,7 @@ impl EncodeStage {
                 }
                 None if self.force_keyframe || self.recovering.is_some() => {
                     counters.frames_repeated.increment();
+                    sampler.interrupt();
                     let encoded = pipeline.repeat(self.repeat_timestamp(), self.force_keyframe);
                     record_notices(pipeline.take_notices(), counters);
                     let encoded = encoded?;
@@ -312,7 +342,9 @@ impl EncodeStage {
                 None => continue,
             };
 
+            let sample = pipeline.take_sample();
             let Some(encoded) = encoded else {
+                sampler.record(sample, None, Instant::now());
                 continue;
             };
             self.announce(pipeline.stream_format(), negotiated.configured, links)?;
@@ -321,8 +353,10 @@ impl EncodeStage {
                 suspensions,
                 output: pipeline.last_output(),
             };
-            if !self.forward(encoded, origin, links) {
-                return Ok(());
+            match self.forward(encoded, origin, links) {
+                Forwarded::Sent(number) => sampler.record(sample, Some(number), Instant::now()),
+                Forwarded::Dropped => sampler.record(sample, None, Instant::now()),
+                Forwarded::Closed => return Ok(()),
             }
         }
     }
@@ -397,7 +431,7 @@ impl EncodeStage {
         })
     }
 
-    fn forward(&mut self, frame: EncodedFrame, origin: Origin, links: &EncodeLinks) -> bool {
+    fn forward(&mut self, frame: EncodedFrame, origin: Origin, links: &EncodeLinks) -> Forwarded {
         let Origin {
             captured_micros,
             suspensions,
@@ -431,16 +465,26 @@ impl EncodeStage {
                     self.references.record(number, output);
                 }
                 links.shared.counters.frames_encoded.increment();
-                true
+                Forwarded::Sent(number)
             }
             Err(TrySendError::Full(_)) => {
                 links.shared.counters.frames_dropped.increment();
                 self.force_keyframe = true;
                 self.recovering = None;
-                true
+                Forwarded::Dropped
             }
-            Err(TrySendError::Disconnected(_)) => false,
+            Err(TrySendError::Disconnected(_)) => Forwarded::Closed,
         }
+    }
+}
+
+fn plan_sample(
+    pipeline: &mut dyn VideoPipeline,
+    sampler: &mut QualitySampler,
+    links: &EncodeLinks,
+) {
+    if let Some(kind) = sampler.plan(links.shared.quality_requested(), Instant::now()) {
+        pipeline.sample_next(kind);
     }
 }
 

@@ -196,6 +196,8 @@ pub enum ConfigError {
     VirtualFirstFrameTimeoutOutOfRange(u32),
     #[error("display announcement debounce {0} ms is above 5000")]
     DisplayDebounceOutOfRange(u32),
+    #[error("quality sample interval {0} ms is above 60000")]
+    QualityIntervalOutOfRange(u32),
     #[error("neither XDG_CONFIG_HOME nor HOME names an absolute directory for the config file")]
     NoConfigHome,
     #[error("failed to serialize the configuration")]
@@ -249,6 +251,7 @@ impl ConfigError {
                 Some("capture.virtual_first_frame_timeout_ms")
             }
             Self::DisplayDebounceOutOfRange(_) => Some("video.display_debounce_ms"),
+            Self::QualityIntervalOutOfRange(_) => Some("video.quality_interval_ms"),
             Self::ZeroReassemblyTimeout => Some("network.reassembly_timeout_ms"),
             Self::ZeroReassemblyPendingFrames => Some("network.reassembly_max_pending_frames"),
             Self::ZeroReassemblyFragments => Some("network.reassembly_max_fragments"),

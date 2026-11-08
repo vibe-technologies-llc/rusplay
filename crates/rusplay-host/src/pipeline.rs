@@ -1,3 +1,4 @@
+mod sample;
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +27,7 @@ use crate::{
     Gpu, HostError,
     encode::PipelineFactory,
     handoff::{HANDOFF_ROW_ALIGNMENT, Handoff},
+    quality::{Sample, SampleKind},
     route::{Route, RouteKey, SourceRead},
     upload::{EncoderPlanes, UploadFormat, check_shm_frame, upload_format_for},
 };
@@ -107,6 +109,12 @@ pub(crate) trait VideoPipeline {
 
     fn recover(&mut self, _last_good: OutputRef) -> PipelineRecovery {
         PipelineRecovery::Keyframe
+    }
+
+    fn sample_next(&mut self, _kind: SampleKind) {}
+
+    fn take_sample(&mut self) -> Option<Sample> {
+        None
     }
 }
 
@@ -216,6 +224,9 @@ pub(crate) struct GpuPipeline {
     import_failures: u32,
     poll_timeout: Option<Duration>,
     notices: PipelineNotices,
+    sampling: Option<SampleKind>,
+    captured_source: Option<sample::CapturedSource>,
+    sample: Option<Sample>,
 }
 
 pub(crate) struct GpuPipelineFactory {
@@ -317,6 +328,9 @@ impl GpuPipeline {
             import_failures: 0,
             poll_timeout: None,
             notices: PipelineNotices::default(),
+            sampling: None,
+            captured_source: None,
+            sample: None,
         }
     }
 
@@ -608,6 +622,14 @@ impl GpuPipeline {
         let resolution = converter.settings().resolution;
         let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
         self.poll_gpu(Some(submission))?;
+        if let Some(kind) = self.sampling {
+            self.captured_source = Some(sample::read_exported(
+                &self.gpu,
+                exported,
+                converter.settings().format,
+                kind,
+            ));
+        }
         self.input = Some(frame);
         self.readback_held = false;
 
@@ -712,8 +734,14 @@ impl GpuPipeline {
         }
 
         let settings = converter.settings();
+        let mut captured = None;
+        let mut armed = false;
         let encoded = match readback.buffer.get_mapped_range(..) {
             Ok(mapped) => {
+                captured = self.sampling.map(|kind| {
+                    sample::read_source(converter.layout(), &mapped, settings.format, kind)
+                });
+                armed = sample::arm(&mut *open.encoder, captured.as_ref());
                 let planes = EncoderPlanes::view(
                     converter.layout(),
                     &mapped,
@@ -727,6 +755,9 @@ impl GpuPipeline {
             Err(error) => Err(HostError::GpuMappedRange(error)),
         };
         readback.buffer.unmap();
+        if encoded.is_ok() {
+            self.sample = sample::finish(&mut *open.encoder, captured, armed);
+        }
 
         if let Ok(Some(_)) = &encoded {
             self.last_output = Some(OutputRef {
@@ -785,6 +816,10 @@ impl GpuPipeline {
                 readback.planes.repack(layout, &view, data);
                 *held = stride;
             }
+            if let Some(kind) = self.sampling {
+                self.captured_source =
+                    Some(sample::read_source(layout, &view, settings.format, kind));
+            }
             Ok(())
         };
         readback.buffer.unmap();
@@ -808,7 +843,10 @@ impl GpuPipeline {
         if keyframe {
             encoder.encoder.request_keyframe();
         }
+        let captured = self.captured_source.take();
+        let armed = sample::arm(&mut *encoder.encoder, captured.as_ref());
         let output = encoder.encoder.encode(input)?;
+        self.sample = sample::finish(&mut *encoder.encoder, captured, armed);
         if output.is_some() {
             self.last_output = Some(OutputRef {
                 epoch: encoder.epoch,
@@ -849,8 +887,14 @@ impl GpuPipeline {
 impl VideoPipeline for GpuPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
         let gpu = self.gpu.clone();
+        self.sample = None;
+        self.captured_source = None;
 
-        gpu.guard(|| self.encode_frame(frame, keyframe))
+        let encoded = gpu.guard(|| self.encode_frame(frame, keyframe));
+        self.sampling = None;
+        self.captured_source = None;
+
+        encoded
     }
 
     fn repeat(
@@ -902,6 +946,14 @@ impl VideoPipeline for GpuPipeline {
             }),
             Recovery::Keyframe => PipelineRecovery::Keyframe,
         }
+    }
+
+    fn sample_next(&mut self, kind: SampleKind) {
+        self.sampling = Some(kind);
+    }
+
+    fn take_sample(&mut self) -> Option<Sample> {
+        self.sample.take()
     }
 
     fn stream_format(&self) -> Option<StreamFormat> {

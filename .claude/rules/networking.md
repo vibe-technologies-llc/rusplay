@@ -202,6 +202,16 @@ paths:
   fuzz target decodes arbitrary bodies, round-trips what decodes and feeds the reassembler. A sender
   with more chunks than the 64-id window leaves the rest queued until acknowledgements free ids
   (`clipboard.md`).
+- Quality metrics (`quality.rs`) ride the reliable channel: `ControlMessage::QualityRequest {
+  enabled }` (tag 21, client to host, 2 bytes, the flag 0 or 1, `UnknownQualityRequest`
+  otherwise) turns the host's sampling on or off for the session; `QualityReport(QualityReport)`
+  (tag 22, host to client, 19 bytes) is the frame number as a u32 then PSNR Y, U, V, overall and
+  XPSNR Y, U, V as big-endian u16 hundredths of a decibel (`QualityDecibels`, clamped to
+  `0..=65534`, `u16::MAX` meaning lossless); `QualityUnavailable { reason }` (tag 23, host to
+  client, 2 bytes: 0 encoder unsupported, 1 host disabled, 2 measurement failed,
+  `UnknownQualityUnavailableReason` otherwise). Short and long bodies are rejected like every
+  other message, and the `control` fuzz target forces the three tags in front of arbitrary bytes.
+  `ProtocolVersion::CURRENT` 27 added them.
 - `ControlChannel` keeps a smoothed RTT (`rtt`, `rtt_variation`; RFC 6298: the first sample seeds
   it, later ones use gains 1/8 and 1/4) from the time a message was sent to its acknowledgement.
   A message that was retransmitted never samples (Karn), so an ambiguous ack cannot skew it.

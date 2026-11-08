@@ -18,6 +18,7 @@ use crate::{
 pub(crate) struct Shared {
     stop: AtomicBool,
     streaming: AtomicBool,
+    quality_requested: AtomicBool,
     pub client: Arc<ClientLink>,
     pub clock: StreamClock,
     pub counters: Counters,
@@ -36,6 +37,7 @@ impl Shared {
             counters: Counters::default(),
             mailbox: Mailbox::new(),
             negotiation: Negotiation::default(),
+            quality_requested: AtomicBool::new(false),
             output: Mutex::new(None),
         }
     }
@@ -46,6 +48,14 @@ impl Shared {
 
     pub(crate) fn output(&self) -> Option<OutputRequest> {
         *self.output.lock()
+    }
+
+    pub(crate) fn request_quality(&self, enabled: bool) {
+        self.quality_requested.store(enabled, Ordering::Release);
+    }
+
+    pub(crate) fn quality_requested(&self) -> bool {
+        self.quality_requested.load(Ordering::Acquire)
     }
 
     pub(crate) fn stopped(&self) -> bool {

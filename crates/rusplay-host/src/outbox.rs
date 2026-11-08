@@ -2,9 +2,13 @@ use std::{sync::Arc, time::Instant};
 
 use parking_lot::{Mutex, MutexGuard};
 use rusplay_net::{ControlChannel, NetError, Transport};
-use rusplay_protocol::{ControlMessage, StreamDescription};
+use rusplay_protocol::{ControlMessage, QualityReport, StreamDescription};
 
-use crate::{HostError, link::ClientLink};
+use crate::{
+    HostError,
+    link::ClientLink,
+    quality::{QualityEvent, QualitySink},
+};
 
 #[derive(Debug, Default)]
 struct Announcement {
@@ -92,5 +96,21 @@ impl ControlOutbox {
         channel.flush(&self.transport, self.client.address())?;
 
         Ok(())
+    }
+}
+
+impl QualitySink for ControlOutbox {
+    fn deliver(&self, event: QualityEvent) {
+        let message = match event {
+            QualityEvent::Report { frame, score } => {
+                ControlMessage::QualityReport(QualityReport::new(frame, &score))
+            }
+            QualityEvent::Unavailable(reason) => ControlMessage::QualityUnavailable { reason },
+        };
+
+        let mut channel = self.channel.lock();
+        if channel.send(message, Instant::now()).is_ok() {
+            channel.flush(&self.transport, self.client.address()).ok();
+        }
     }
 }

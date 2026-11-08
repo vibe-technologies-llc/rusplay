@@ -708,7 +708,10 @@ impl ReceiveStage {
                     | ControlMessage::ClockPing { .. }
                     | ControlMessage::AcknowledgeFrame { .. }
                     | ControlMessage::RequestRecovery { .. }
-                    | ControlMessage::Display(_),
+                    | ControlMessage::Display(_)
+                    | ControlMessage::QualityRequest { .. }
+                    | ControlMessage::QualityReport(_)
+                    | ControlMessage::QualityUnavailable { .. },
                 ) => {}
             }
         }

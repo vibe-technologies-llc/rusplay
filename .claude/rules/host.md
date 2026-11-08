@@ -271,6 +271,29 @@ paths:
   output of an older encoder epoch, or an encoder that answers `Recovery::Keyframe` (the default).
   A pending keyframe wins over a recovery, and a full queue drops a pending recovery for a
   keyframe.
+- Quality sampling (`quality.rs`, `pipeline/sample.rs`): a `QualityRequest { enabled }` from
+  the client sets `Shared::request_quality`, and while it is set the encode stage's
+  `QualitySampler` measures one frame every `video.quality_interval_ms` (default 1000; 0 answers
+  every request `QualityUnavailable { HostDisabled }`, once per request). A sample is the
+  encoder input of consecutive new frames: the luma of the `TemporalOrder::for_rate(rate)` frames
+  before it (one below 32 fps, two from 32, the rate being the virtual output's or
+  `video.frame_rate`), then the whole picture of the measured frame with
+  `VideoEncoder::capture_reconstruction` armed for it. The stage asks with
+  `VideoPipeline::sample_next(SampleKind)` right before `encode` and takes the result with
+  `take_sample` right after; a repeat, a dropped frame, a frame without output, a size change or
+  a missing reconstruction restarts the collection, and a frame of a full queue is not measured.
+  `GpuPipeline` reads the input through the converter's `FrameLayout` (visible size, sample shift
+  undone, semi-planar chroma split): on the planes path from the mapped readback before
+  `encode_planes`, on the repacked path from the same mapped view, and on the hand-off path by
+  copying the exported buffer into a `MAP_READ` buffer after the conversion finished and before
+  the encoder sees it (only on sampled frames; a test holds it identical to the readback's). An
+  encoder that answers `false` is reported `EncoderUnsupported` once and never sampled again for
+  that request; a read that fails is `MeasurementFailed`, never a frame error. The measured
+  source, reconstruction and history go to the `rusplay-host-quality` thread through a queue of
+  one (a busy thread skips the sample), which runs `rusplay_core::measure` off the frame path and
+  sends the `QualityReport` (numbered as the frame went out) or `QualityUnavailable` through
+  `ControlOutbox`'s `QualitySink`, best effort: a full control window drops it. The thread ends
+  with the encode stage.
 - `GpuPipeline` (one per session) does capture → GPU → encoder:
   - DMA-BUF frames are the default path and are never copied: `GpuPipeline` imports them with its
     own `DmaBufImporter` (created on the first DMA-BUF frame, its cache keeping a capture

@@ -13,6 +13,7 @@ const PRESENT_FRAME_LATENCY_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 const MAX_PRESENT_MARGIN_US: u32 = 50_000;
 const MAX_PRESENT_JITTER_US: u32 = 100_000;
 const MAX_DISPLAY_DEBOUNCE_MS: u32 = 5_000;
+const MAX_QUALITY_INTERVAL_MS: u32 = 60_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -35,6 +36,7 @@ pub struct VideoConfig {
     pub present_jitter_us: u32,
     pub stats_overlay: bool,
     pub display_debounce_ms: u32,
+    pub quality_interval_ms: u32,
 }
 
 impl Default for VideoConfig {
@@ -58,6 +60,7 @@ impl Default for VideoConfig {
             present_jitter_us: 8_000,
             stats_overlay: false,
             display_debounce_ms: 200,
+            quality_interval_ms: 1_000,
         }
     }
 }
@@ -123,6 +126,12 @@ impl VideoConfig {
         if self.display_debounce_ms > MAX_DISPLAY_DEBOUNCE_MS {
             return Err(ConfigError::DisplayDebounceOutOfRange(
                 self.display_debounce_ms,
+            ));
+        }
+
+        if self.quality_interval_ms > MAX_QUALITY_INTERVAL_MS {
+            return Err(ConfigError::QualityIntervalOutOfRange(
+                self.quality_interval_ms,
             ));
         }
 
@@ -437,6 +446,22 @@ mod tests {
         ));
 
         config.display_debounce_ms = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn the_quality_interval_is_range_checked_and_may_be_zero() {
+        let mut config = VideoConfig::default();
+
+        assert_eq!(config.quality_interval_ms, 1_000);
+
+        config.quality_interval_ms = MAX_QUALITY_INTERVAL_MS + 1;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::QualityIntervalOutOfRange(60_001))
+        ));
+
+        config.quality_interval_ms = 0;
         assert!(config.validate().is_ok());
     }
 

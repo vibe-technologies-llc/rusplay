@@ -18,8 +18,8 @@ use std::{
 use rusplay_capture::{CaptureError, CursorUpdate, DrmFourcc, Frame, FrameBuffer, Subscriber};
 use rusplay_config::{Config, NetworkConfig, RateControl, VaapiConfig, VideoEncoderConfig};
 use rusplay_core::{
-    ChromaSiting, Codec, CodecFormat, ColorSpace, EncodedFrame, FormatSet, FrameRate, PixelFormat,
-    Resolution, Timestamp,
+    BitDepth, ChromaSiting, ChromaSubsampling, Codec, CodecFormat, ColorSpace, EncodedFrame,
+    FormatSet, FrameRate, PixelFormat, Resolution, SamplePicture, SamplePlane, Timestamp,
 };
 use rusplay_encode::OutputIndex;
 use rusplay_net::{
@@ -29,8 +29,8 @@ use rusplay_net::{
 };
 use rusplay_protocol::{
     ClientName, ControlMessage, CursorMessage, FecHeader, PacketFlags, PacketHeader,
-    PairingRejection, ProtocolVersion, ReconnectMessage, ReconnectRejection, StreamDescription,
-    StreamKind, VideoFrameHeader,
+    PairingRejection, ProtocolVersion, QualityUnavailableReason, ReconnectMessage,
+    ReconnectRejection, StreamDescription, StreamKind, VideoFrameHeader,
 };
 use tempfile::TempDir;
 
@@ -38,6 +38,7 @@ use crate::{
     Admission, CaptureFeed, FrameSource, HostError, HostSession, HostStream, Stage,
     encode::PipelineFactory,
     pipeline::{OutputRef, PipelineRecovery, StreamFormat, VideoPipeline},
+    quality::{PictureSample, Sample, SampleKind},
 };
 
 const PIN: &str = "583014";
@@ -180,6 +181,8 @@ struct FakePipeline {
     resolution: Option<Resolution>,
     stream: Option<Resolution>,
     bitrate: Arc<AtomicU32>,
+    sampling: Option<SampleKind>,
+    sample: Option<Sample>,
 }
 
 impl FakePipeline {
@@ -204,6 +207,7 @@ impl VideoPipeline for FakePipeline {
         self.last = Some(data[0]);
         let resized = self.resolution.is_some_and(|size| size != frame.resolution);
         self.resolution = Some(frame.resolution);
+        self.sample = self.sampling.take().map(|kind| fake_sample(kind, data[0]));
 
         Ok(Some(self.emit(
             data[0],
@@ -249,6 +253,50 @@ impl VideoPipeline for FakePipeline {
             PipelineRecovery::Keyframe
         }
     }
+
+    fn sample_next(&mut self, kind: SampleKind) {
+        self.sampling = Some(kind);
+    }
+
+    fn take_sample(&mut self) -> Option<Sample> {
+        self.sample.take()
+    }
+}
+
+const SAMPLE_SIDE: usize = 8;
+
+fn sample_plane(value: u16) -> SamplePlane {
+    SamplePlane::new(
+        SAMPLE_SIDE,
+        SAMPLE_SIDE,
+        vec![value; SAMPLE_SIDE * SAMPLE_SIDE],
+    )
+    .unwrap()
+}
+
+fn sample_picture(value: u16) -> SamplePicture {
+    let format = PixelFormat {
+        chroma: ChromaSubsampling::Yuv444,
+        depth: BitDepth::Eight,
+    };
+
+    SamplePicture::new(
+        format,
+        [sample_plane(value), sample_plane(128), sample_plane(128)],
+    )
+    .unwrap()
+}
+
+fn fake_sample(kind: SampleKind, fill: u8) -> Sample {
+    let value = u16::from(fill);
+
+    match kind {
+        SampleKind::Luma => Sample::Luma(sample_plane(value)),
+        SampleKind::Picture => Sample::Picture(Box::new(PictureSample {
+            source: sample_picture(value),
+            reconstruction: Some(sample_picture(value)),
+        })),
+    }
 }
 
 struct FakeFactory {
@@ -272,6 +320,8 @@ impl PipelineFactory for FakeFactory {
             resolution: None,
             stream: self.stream,
             bitrate: self.bitrate,
+            sampling: None,
+            sample: None,
         }))
     }
 }
@@ -362,6 +412,8 @@ impl PipelineFactory for LosesFirstKeyframeFactory {
                 resolution: None,
                 stream: None,
                 bitrate: Arc::default(),
+                sampling: None,
+                sample: None,
             },
             lost: false,
         }))
@@ -1076,6 +1128,63 @@ fn bitrate_hints_are_ignored_under_constant_quality() {
     assert_eq!(bitrate.load(Ordering::Relaxed), 0);
     assert_eq!(stats.bitrate_changes, 0);
     assert_eq!(stats.bitrate_target_kbps, None);
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_quality_request_is_answered_with_a_report_of_a_sampled_frame() {
+    let fixture = Fixture::new(host_config());
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(200), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::QualityRequest { enabled: true });
+    let reported = client.pump_until(|client| {
+        client
+            .messages
+            .iter()
+            .any(|message| matches!(message, ControlMessage::QualityReport(_)))
+    });
+    let report = client.messages.iter().find_map(|message| match message {
+        ControlMessage::QualityReport(report) => Some(*report),
+        _ => None,
+    });
+
+    assert!(reported);
+    let report = report.unwrap();
+    assert!(report.psnr.luma.is_lossless());
+    assert!(report.psnr_overall.is_lossless());
+    assert!(report.xpsnr.luma.is_lossless());
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_host_with_sampling_off_answers_a_quality_request_unavailable() {
+    let mut config = host_config();
+    config.video.quality_interval_ms = 0;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(200), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    client.send(ControlMessage::QualityRequest { enabled: true });
+    let refused = client.pump_until(|client| {
+        client.has(ControlMessage::QualityUnavailable {
+            reason: QualityUnavailableReason::HostDisabled,
+        })
+    });
+
+    assert!(refused);
+    assert!(
+        !client
+            .messages
+            .iter()
+            .any(|message| matches!(message, ControlMessage::QualityReport(_)))
+    );
     stream.stop().unwrap();
 }
 

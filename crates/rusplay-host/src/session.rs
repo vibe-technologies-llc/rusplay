@@ -28,7 +28,7 @@ use crate::{
     clipboard::{ClipboardOpener, default_clipboard_opener, open_link},
     control::{ControlLinks, ControlStage, HintPolicy},
     cursor::{self, CursorLinks},
-    encode::{self, EncodeLinks, PipelineFactory},
+    encode::{self, EncodeLinks, PipelineFactory, QualityTiming},
     input::{self, InputFeed, InputLinks},
     microphone::{self, MicrophoneLinks, MicrophoneOutputFactory, default_microphone_output},
     negotiate::{NegotiatedFormat, configured_format},
@@ -289,6 +289,10 @@ impl HostSession {
             first_frame_timeout: Duration::from_millis(u64::from(
                 self.config.capture.virtual_first_frame_timeout_ms,
             )),
+            quality: QualityTiming {
+                interval_ms: self.config.video.quality_interval_ms,
+                frame_rate: self.config.video.frame_rate,
+            },
             shared: Arc::clone(&shared),
             feed: Arc::clone(feed),
             output,

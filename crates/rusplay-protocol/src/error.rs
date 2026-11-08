@@ -25,6 +25,10 @@ pub enum ProtocolError {
     UnknownControlTag(u8),
     #[error("unknown adaptive trigger side {0}")]
     UnknownTriggerSide(u8),
+    #[error("quality request flag {0} is neither 0 nor 1")]
+    UnknownQualityRequest(u8),
+    #[error("unknown quality unavailable reason {0}")]
+    UnknownQualityUnavailableReason(u8),
     #[error("{extra} unexpected bytes follow the message")]
     TrailingBytes { extra: usize },
     #[error("datagram belongs to stream {found:?}, expected {expected:?}")]

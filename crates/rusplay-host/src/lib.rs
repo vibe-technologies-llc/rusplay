@@ -24,6 +24,7 @@ mod negotiate;
 mod outbox;
 mod pipeline;
 mod portal;
+mod quality;
 mod responder;
 mod route;
 mod send;

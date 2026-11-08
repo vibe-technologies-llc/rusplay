@@ -1,4 +1,5 @@
 mod hevc;
+mod quality;
 
 use std::{
     num::NonZeroU32,

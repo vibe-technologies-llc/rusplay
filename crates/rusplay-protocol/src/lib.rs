@@ -9,6 +9,7 @@ mod header;
 mod input;
 mod name;
 mod pairing;
+mod quality;
 mod reconnect;
 mod stream;
 mod video;
@@ -25,6 +26,7 @@ pub use crate::{
     input::{InputAdmission, InputPacket, InputRecords, InputSequence, push_input_record},
     name::ClientName,
     pairing::{PairingMessage, PairingRejection},
+    quality::{QualityDecibels, QualityPlanes, QualityReport, QualityUnavailableReason},
     reconnect::{PeerId, ReconnectMessage, ReconnectRejection},
     stream::StreamDescription,
     video::VideoFrameHeader,

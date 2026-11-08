@@ -2,7 +2,7 @@ use std::{fmt, io, net::SocketAddr, time::Duration};
 
 use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, DrmFourcc};
-use rusplay_core::{AudioCodec, FormatSet};
+use rusplay_core::{AudioCodec, FormatSet, QualityError};
 use rusplay_encode::{EncodeError, input::fourcc_text};
 use rusplay_input::InputError;
 use rusplay_net::NetError;
@@ -73,6 +73,10 @@ pub enum HostError {
     GpuReadback(#[source] wgpu::BufferAsyncError),
     #[error("the mapped readback buffer could not be viewed")]
     GpuMappedRange(#[source] wgpu::MapRangeError),
+    #[error("the sampled encoder input could not be read")]
+    QualitySourceUnreadable(#[source] QualityError),
+    #[error("the encoder input has {planes} planes, which no sampled picture has")]
+    QualitySourceLayout { planes: usize },
     #[error("failed to duplicate the exported frame's file descriptor")]
     HandoffFdDup(#[source] io::Error),
     #[error("an exported frame plane starts at byte {0}, past what a frame plane can address")]

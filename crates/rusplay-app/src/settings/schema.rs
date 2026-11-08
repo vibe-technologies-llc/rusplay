@@ -380,6 +380,18 @@ pub static FIELDS: &[Field] = &[
     field(
         Audience::Host,
         Section::Video,
+        "Stream",
+        "video.quality_interval_ms",
+        "Quality sample interval",
+        Kind::Integer {
+            min: 0,
+            max: 60_000,
+        },
+    )
+    .unit("ms"),
+    field(
+        Audience::Host,
+        Section::Video,
         "Pixel format",
         "video.pixel_format.chroma",
         "Chroma subsampling",

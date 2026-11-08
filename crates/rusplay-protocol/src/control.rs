@@ -2,7 +2,7 @@ use rusplay_core::FormatSet;
 
 use crate::{
     ClientDisplay, ClipboardChunk, PacketFlags, PacketHeader, ProtocolError, ProtocolVersion,
-    StreamDescription, StreamKind, stream::Reader,
+    QualityReport, QualityUnavailableReason, StreamDescription, StreamKind, stream::Reader,
 };
 
 const TAG_HELLO: u8 = 0;
@@ -22,6 +22,9 @@ const TAG_PLAYER_LEDS: u8 = 13;
 const TAG_TRIGGER_EFFECT: u8 = 14;
 const TAG_DISPLAY: u8 = 15;
 const TAG_CLIPBOARD: u8 = 20;
+const TAG_QUALITY_REQUEST: u8 = 21;
+const TAG_QUALITY_REPORT: u8 = 22;
+const TAG_QUALITY_UNAVAILABLE: u8 = 23;
 
 pub const TRIGGER_EFFECT_LEN: usize = 11;
 
@@ -82,6 +85,13 @@ pub enum ControlMessage {
     },
     Display(ClientDisplay),
     Clipboard(ClipboardChunk),
+    QualityRequest {
+        enabled: bool,
+    },
+    QualityReport(QualityReport),
+    QualityUnavailable {
+        reason: QualityUnavailableReason,
+    },
 }
 
 impl ControlMessage {
@@ -100,6 +110,8 @@ impl ControlMessage {
             | Self::Lightbar { .. } => 5,
             Self::Hello { .. } | Self::ReportLoss { .. } => 7,
             Self::Goodbye | Self::Keepalive => 1,
+            Self::QualityRequest { .. } | Self::QualityUnavailable { .. } => 2,
+            Self::QualityReport(_) => 1 + QualityReport::ENCODED_LEN,
             Self::Rumble { .. } => 10,
             Self::StreamFormat(description) => 1 + description.encoded_len(),
             Self::Display(display) => 1 + display.encoded_len(),
@@ -207,6 +219,9 @@ impl ControlMessage {
                 out[0] = TAG_CLIPBOARD;
                 chunk.write(&mut out[1..]);
             }
+            Self::QualityRequest { .. }
+            | Self::QualityReport(_)
+            | Self::QualityUnavailable { .. } => self.write_quality(out),
         }
 
         Ok(len)
@@ -234,6 +249,10 @@ impl ControlMessage {
 
         if tag == TAG_CLIPBOARD {
             return ClipboardChunk::read(body).map(Self::Clipboard);
+        }
+
+        if let Some(decoded) = Self::decode_quality(tag, body) {
+            return decoded;
         }
 
         let body_len = match tag {
@@ -339,6 +358,54 @@ fn read_whole<'a, T>(
 }
 
 impl ControlMessage {
+    fn write_quality(&self, out: &mut [u8]) {
+        match self {
+            Self::QualityRequest { enabled } => {
+                out.copy_from_slice(&[TAG_QUALITY_REQUEST, u8::from(*enabled)]);
+            }
+            Self::QualityReport(report) => {
+                out[0] = TAG_QUALITY_REPORT;
+                report.write(&mut out[1..]);
+            }
+            Self::QualityUnavailable { reason } => {
+                out.copy_from_slice(&[TAG_QUALITY_UNAVAILABLE, reason.code()]);
+            }
+            _ => {}
+        }
+    }
+
+    fn decode_quality(tag: u8, body: &[u8]) -> Option<Result<Self, ProtocolError>> {
+        let expected = match tag {
+            TAG_QUALITY_REQUEST | TAG_QUALITY_UNAVAILABLE => 1,
+            TAG_QUALITY_REPORT => QualityReport::ENCODED_LEN,
+            _ => return None,
+        };
+
+        if body.len() < expected {
+            return Some(Err(ProtocolError::BufferTooShort {
+                needed: 1 + expected,
+                available: 1 + body.len(),
+            }));
+        }
+
+        if body.len() > expected {
+            return Some(Err(ProtocolError::TrailingBytes {
+                extra: body.len() - expected,
+            }));
+        }
+
+        Some(match tag {
+            TAG_QUALITY_REQUEST => match body[0] {
+                0 => Ok(Self::QualityRequest { enabled: false }),
+                1 => Ok(Self::QualityRequest { enabled: true }),
+                other => Err(ProtocolError::UnknownQualityRequest(other)),
+            },
+            TAG_QUALITY_REPORT => Ok(Self::QualityReport(QualityReport::read(body))),
+            _ => QualityUnavailableReason::from_code(body[0])
+                .map(|reason| Self::QualityUnavailable { reason }),
+        })
+    }
+
     fn decode_pad_feedback(tag: u8, body: &[u8]) -> Option<Result<Self, ProtocolError>> {
         let expected = match tag {
             TAG_LIGHTBAR => 4,
@@ -470,8 +537,9 @@ impl ControlPacket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{QualityDecibels, QualityPlanes};
 
-    fn every_message() -> [ControlMessage; 16] {
+    fn every_message() -> [ControlMessage; 19] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -523,7 +591,74 @@ mod tests {
             ControlMessage::Clipboard(
                 ClipboardChunk::new(9, 0, 1, &[b'x'; ClipboardChunk::MAX_DATA]).unwrap(),
             ),
+            ControlMessage::QualityRequest { enabled: true },
+            ControlMessage::QualityReport(quality_report()),
+            ControlMessage::QualityUnavailable {
+                reason: QualityUnavailableReason::MeasurementFailed,
+            },
         ]
+    }
+
+    fn quality_report() -> QualityReport {
+        QualityReport {
+            frame: 0x0102_0304,
+            psnr: QualityPlanes {
+                luma: QualityDecibels(0x0506),
+                cb: QualityDecibels(0x0708),
+                cr: QualityDecibels(0x090A),
+            },
+            psnr_overall: QualityDecibels(0x0B0C),
+            xpsnr: QualityPlanes {
+                luma: QualityDecibels(0x0D0E),
+                cb: QualityDecibels(0x0F10),
+                cr: QualityDecibels::LOSSLESS,
+            },
+        }
+    }
+
+    #[test]
+    fn quality_messages_have_fixed_big_endian_layouts() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let request = ControlMessage::QualityRequest { enabled: true }
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..request], [21, 1]);
+
+        let report = ControlMessage::QualityReport(quality_report())
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(
+            &buf[..report],
+            [
+                22, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0xFF, 0xFF
+            ]
+        );
+
+        let unavailable = ControlMessage::QualityUnavailable {
+            reason: QualityUnavailableReason::HostDisabled,
+        }
+        .encode(&mut buf)
+        .unwrap();
+        assert_eq!(&buf[..unavailable], [23, 1]);
+    }
+
+    #[test]
+    fn malformed_quality_messages_are_rejected() {
+        assert_eq!(
+            ControlMessage::decode(&[21, 2]),
+            Err(ProtocolError::UnknownQualityRequest(2))
+        );
+        assert_eq!(
+            ControlMessage::decode(&[23, 9]),
+            Err(ProtocolError::UnknownQualityUnavailableReason(9))
+        );
+        assert_eq!(
+            ControlMessage::decode(&[21, 0, 0]),
+            Err(ProtocolError::TrailingBytes { extra: 1 })
+        );
+        assert!(ControlMessage::decode(&[22, 0, 0, 0]).is_err());
+        assert!(ControlMessage::decode(&[23]).is_err());
     }
 
     #[test]
