@@ -728,6 +728,17 @@ fn microphone_config(enabled: bool) -> rusplay_config::Config {
     config
 }
 
+fn wait_until(timeout: Duration, condition: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    false
+}
+
 #[test]
 fn the_microphone_is_encoded_numbered_and_sent_to_the_host() {
     let Some(gpu) = common::gpu() else {
@@ -751,12 +762,14 @@ fn the_microphone_is_encoded_numbered_and_sent_to_the_host() {
     )
     .unwrap();
     let arrived = host.wait_for_microphone(STREAM_TIMEOUT, MICROPHONE_PACKETS);
-    let stats = stream.stats();
+    let counted = wait_until(STREAM_TIMEOUT, || {
+        stream.stats().microphone_packets_sent >= MICROPHONE_PACKETS as u64
+    });
     stream.stop().unwrap();
 
     let frames = host.microphone_frames();
     assert!(arrived);
-    assert!(stats.microphone_packets_sent >= MICROPHONE_PACKETS as u64);
+    assert!(counted);
     assert!(
         frames
             .iter()
