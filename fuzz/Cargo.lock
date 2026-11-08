@@ -411,6 +411,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -803,6 +813,7 @@ version = "0.1.0"
 dependencies = [
  "chacha20poly1305",
  "hkdf 0.13.0",
+ "if-addrs",
  "libc",
  "parking_lot 0.13.0",
  "reed-solomon-simd",
