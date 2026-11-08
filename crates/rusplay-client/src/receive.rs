@@ -380,7 +380,11 @@ impl ReceiveStage {
             self.handle_cursor(&mut pending.cursor);
             let control = self.handle_control(&mut pending.control, now)?;
             let reassembly = self.handle_reassembly(&mut pending.video, now)?;
-            if reassembly == Flow::Ended || control == Flow::Ended {
+            if control == Flow::Ended {
+                return Ok(());
+            }
+            if reassembly == Flow::Ended {
+                self.say_goodbye();
                 return Ok(());
             }
 
@@ -1210,6 +1214,10 @@ mod tests {
             false
         }
 
+        fn close_decode_queue(&mut self) {
+            self.decode = mpsc::sync_channel(1).1;
+        }
+
         fn finish(mut self) -> Result<(), ClientError> {
             self.stop.store(true, Ordering::Relaxed);
             self.stage.take().unwrap().join().unwrap()
@@ -1330,6 +1338,25 @@ mod tests {
 
         assert_eq!(goodbyes, 2);
         assert!(ended.is_ok());
+    }
+
+    #[test]
+    fn a_closed_decode_queue_ends_the_stage_with_a_goodbye() {
+        let mut rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 1));
+        rig.close_decode_queue();
+        rig.send(
+            &packetizer
+                .packetize(0, true, &video_frame(0, 64, 0))
+                .unwrap(),
+        );
+        let farewell = next_message_matching(&rig, |message| *message == ControlMessage::Goodbye);
+
+        assert_eq!(farewell, Some(ControlMessage::Goodbye));
+        assert!(rig.finish().is_ok());
     }
 
     #[test]

@@ -50,7 +50,7 @@ paths:
   sends `ControlMessage::StreamFormat` with a newer generation; the client decodes and labels
   video only from it, never from its own `video.codec` or `video.color`. Its `configured` is the
   host's configured format, so `ClientStream::stream_format()` and `is_fallback` show a
-  negotiated downgrade instead of hiding it. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop` and, like the
+  negotiated downgrade instead of hiding it. A host `Goodbye` ends the stream cleanly; the client sends `Goodbye` on `stop`, and when the receive stage ends for any other reason without an error (the decode queue closed by a decode thread that stopped first), and, like the
   host, retransmits it until it is acknowledged or four retransmit intervals pass, retrying the
   send when the control window was full, so the host lifts held input at once instead of after
   `network.peer_timeout_ms`.
