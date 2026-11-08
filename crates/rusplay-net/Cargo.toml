@@ -9,6 +9,7 @@ publish.workspace = true
 rusplay-core.workspace = true
 chacha20poly1305 = { workspace = true, features = ["alloc"] }
 hkdf.workspace = true
+if-addrs.workspace = true
 libc.workspace = true
 parking_lot.workspace = true
 reed-solomon-simd = { workspace = true, features = ["std"] }

@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use if_addrs::{IfAddr, Interface};
 use rusplay_config::NetworkConfig;
 use rusplay_protocol::{DiscoveryMessage, HostId};
 
@@ -43,6 +44,51 @@ impl DiscoveryOptions {
             SocketAddr::new(IpAddr::V4(self.group), self.port),
         ]
     }
+
+    pub fn link_targets(&self, links: &[Ipv4Link]) -> Vec<SocketAddr> {
+        let mut targets = self.targets();
+        for broadcast in links.iter().filter_map(|link| link.broadcast) {
+            let target = SocketAddr::new(IpAddr::V4(broadcast), self.port);
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+
+        targets
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ipv4Link {
+    pub address: Ipv4Addr,
+    pub broadcast: Option<Ipv4Addr>,
+}
+
+impl Ipv4Link {
+    fn of(interface: &Interface) -> Option<Self> {
+        match &interface.addr {
+            IfAddr::V4(v4) if interface.is_oper_up() && !v4.ip.is_loopback() => Some(Self {
+                address: v4.ip,
+                broadcast: v4.broadcast.filter(|broadcast| !broadcast.is_broadcast()),
+            }),
+            _ => None,
+        }
+    }
+}
+
+pub fn ipv4_links() -> Vec<Ipv4Link> {
+    let mut links: Vec<Ipv4Link> = Vec::new();
+    for link in if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Ipv4Link::of)
+    {
+        if !links.contains(&link) {
+            links.push(link);
+        }
+    }
+
+    links
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,9 +130,7 @@ impl DiscoveryResponder {
         })?;
 
         if let Some(group) = group {
-            socket
-                .join_multicast_v4(&group, &Ipv4Addr::UNSPECIFIED)
-                .map_err(|source| NetError::MulticastJoin { group, source })?;
+            join_on_every_link(&socket, group, &ipv4_links())?;
         }
 
         Ok(Self {
@@ -157,10 +201,29 @@ impl DiscoveryResponder {
     }
 }
 
+fn join_on_every_link(
+    socket: &UdpSocket,
+    group: Ipv4Addr,
+    links: &[Ipv4Link],
+) -> Result<(), NetError> {
+    let mut joined = false;
+    for link in links {
+        joined |= socket.join_multicast_v4(&group, &link.address).is_ok();
+    }
+    if joined {
+        return Ok(());
+    }
+
+    socket
+        .join_multicast_v4(&group, &Ipv4Addr::UNSPECIFIED)
+        .map_err(|source| NetError::MulticastJoin { group, source })
+}
+
 #[derive(Debug)]
 pub struct DiscoveryBrowser {
     socket: UdpSocket,
     targets: Vec<SocketAddr>,
+    links: Vec<Ipv4Link>,
 }
 
 impl DiscoveryBrowser {
@@ -173,11 +236,19 @@ impl DiscoveryBrowser {
             .set_multicast_ttl_v4(MULTICAST_TTL)
             .map_err(NetError::MulticastTtl)?;
 
-        Ok(Self { socket, targets })
+        Ok(Self {
+            socket,
+            targets,
+            links: Vec::new(),
+        })
     }
 
     pub fn with_options(options: DiscoveryOptions) -> Result<Self, NetError> {
-        Self::new(options.targets())
+        let links = ipv4_links();
+        let mut browser = Self::new(options.link_targets(&links))?;
+        browser.links = links;
+
+        Ok(browser)
     }
 
     pub fn scan(&self, timeout: Duration) -> Result<Vec<DiscoveredHost>, NetError> {
@@ -249,6 +320,25 @@ impl DiscoveryBrowser {
                 Ok(_) => delivered = true,
                 Err(source) => last_error = Some((*target, source)),
             }
+        }
+
+        let groups = self
+            .targets
+            .iter()
+            .filter(|target| target.ip().is_multicast());
+        for group in groups {
+            for link in &self.links {
+                let sent = rustix::net::sockopt::set_ip_multicast_if(&self.socket, &link.address)
+                    .map_err(std::io::Error::from)
+                    .and_then(|()| self.socket.send_to(query, group));
+                match sent {
+                    Ok(_) => delivered = true,
+                    Err(source) => last_error = Some((*group, source)),
+                }
+            }
+        }
+        if !self.links.is_empty() {
+            rustix::net::sockopt::set_ip_multicast_if(&self.socket, &Ipv4Addr::UNSPECIFIED).ok();
         }
 
         match last_error {
@@ -462,6 +552,52 @@ mod tests {
                 ProtocolError::DiscoveryNameControlCharacter
             ))
         ));
+    }
+
+    #[test]
+    fn each_link_adds_its_directed_broadcast_once() {
+        let options = DiscoveryOptions::default();
+        let links = [
+            Ipv4Link {
+                address: Ipv4Addr::new(192, 168, 1, 20),
+                broadcast: Some(Ipv4Addr::new(192, 168, 1, 255)),
+            },
+            Ipv4Link {
+                address: Ipv4Addr::new(10, 0, 7, 3),
+                broadcast: Some(Ipv4Addr::new(10, 0, 7, 255)),
+            },
+            Ipv4Link {
+                address: Ipv4Addr::new(192, 168, 1, 21),
+                broadcast: Some(Ipv4Addr::new(192, 168, 1, 255)),
+            },
+            Ipv4Link {
+                address: Ipv4Addr::new(100, 64, 0, 9),
+                broadcast: None,
+            },
+        ];
+
+        let targets = options.link_targets(&links);
+
+        let port = options.port;
+        assert_eq!(&targets[..2], options.targets().as_slice());
+        assert_eq!(
+            &targets[2..],
+            [
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 255)), port),
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 7, 255)), port),
+            ]
+        );
+        assert_eq!(options.link_targets(&[]), options.targets());
+    }
+
+    #[test]
+    fn the_links_leave_out_loopback_and_repeat_no_address() {
+        let links = ipv4_links();
+
+        assert!(links.iter().all(|link| !link.address.is_loopback()));
+        for (index, link) in links.iter().enumerate() {
+            assert!(!links[index + 1..].contains(link));
+        }
     }
 
     #[test]

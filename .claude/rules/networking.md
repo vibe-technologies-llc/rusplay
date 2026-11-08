@@ -241,9 +241,17 @@ paths:
   repeats it three times over the scan window (`network.discovery_scan_ms`, default 1000), and
   returns the hosts whose announce echoed its nonce, deduplicated by address. Tests aim it at
   loopback addresses instead of broadcast.
-- Discovery is IPv4 only. Limited broadcast leaves through the default-route interface only and
-  the multicast group has TTL 1, so a host on another VLAN or a second interface is not found;
-  entering an address by hand always works.
+- Discovery is IPv4 only and reaches every up, non-loopback interface (`ipv4_links`, from
+  `if-addrs`): `DiscoveryBrowser::with_options` adds each interface's directed broadcast to the
+  limited broadcast and the group (`DiscoveryOptions::link_targets`, deduplicated; a
+  point-to-point link has none) and also sends the multicast query out of each interface
+  (`IP_MULTICAST_IF` per send, reset afterwards), and the responder joins the group on every
+  interface address, falling back to the default interface only when none joins. Limited
+  broadcast alone would leave through the default-route interface. The group keeps TTL 1, so a
+  host on a routed VLAN the client has no interface on is still not found; entering an address by
+  hand always works. Pairing is untouched. Only the target computation and the link filter are
+  unit tested: the namespaces a live test needs (`veth`) were not available on the development
+  machine (`net-discovery-multi-interface-live-check`).
 
 ## Pairing and encryption
 

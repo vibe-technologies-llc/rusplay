@@ -21,7 +21,10 @@ pub use crate::{
     batch::RecvBatch,
     busy::busy_reply,
     control::{CONTROL_WINDOW, ControlChannel, ControlConfig, ControlEvent},
-    discovery::{DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder},
+    discovery::{
+        DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, DiscoveryResponder, Ipv4Link,
+        ipv4_links,
+    },
     error::NetError,
     fec::{BlockEncoding, FecBlock, FecEncoder, FecScheme},
     host_id::load_or_create_host_id,
