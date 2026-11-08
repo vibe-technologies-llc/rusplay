@@ -219,7 +219,13 @@ paths:
   lines (`JsonReporter` in `stats.rs`, formatting in `rusplay-client`): one every
   `network.stats_log_interval_ms` (`0` turns the periodic ones off) with `"phase":"interval"`, and
   one with `"final"` read just before the session is stopped, so two runs can be compared without
-  scraping the UI. Beyond `--version`, nothing else in the app writes to stdout.
+  scraping the UI. The Host this PC page does the same for its own host when `host.toml` has
+  `network.stats_json` (`HostJsonLog` in `stats.rs`, read from `HostHandle::network` at start):
+  from `ClientAdmitted` on, a `HostStats` line every `network.stats_log_interval_ms` from the
+  250 ms poll, and on `ClientLeft` a final one from `HostHandle::ended_stream`, in
+  `rusplay-hostd`'s shape (`rusplay_host::host_stats_json_line`) but with
+  `"event":"host_stats"`, so an app that is host and client at once writes lines a reader can
+  tell apart. Beyond `--version` and these lines, nothing else in the app writes to stdout.
 
 ## Host page
 

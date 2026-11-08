@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use parking_lot::RwLock;
-use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole};
+use rusplay_config::{Config, ConfigEnvironment, ConfigError, ConfigRole, NetworkConfig};
 pub use rusplay_host::{Admission, HostEvent, HostStats, NegotiatedFormat, PeerId, Pin};
 use rusplay_host::{HostError, HostService, NetError, PeerStore, StreamSnapshot};
 use thiserror::Error;
@@ -96,9 +96,18 @@ impl PairedClients {
 #[derive(Debug)]
 pub struct HostHandle {
     service: HostService,
+    network: NetworkConfig,
 }
 
 impl HostHandle {
+    pub const fn network(&self) -> &NetworkConfig {
+        &self.network
+    }
+
+    pub fn ended_stream(&self) -> Option<LiveStream> {
+        self.service.ended_stream().map(LiveStream::from)
+    }
+
     pub const fn address(&self) -> SocketAddr {
         self.service.address()
     }
@@ -137,9 +146,10 @@ pub fn load_host_config(environment: &ConfigEnvironment) -> Result<Config, Confi
 pub fn start(environment: &ConfigEnvironment) -> Result<(HostHandle, PairedClients), HostingError> {
     let config = load_host_config(environment)?;
     let clients = PairedClients::open(&config)?;
+    let network = config.network;
     let service = HostService::start(config, &clients.store)?;
 
-    Ok((HostHandle { service }, clients))
+    Ok((HostHandle { service, network }, clients))
 }
 
 pub fn start_choosing_display(
@@ -147,9 +157,10 @@ pub fn start_choosing_display(
 ) -> Result<(HostHandle, PairedClients), HostingError> {
     let config = load_host_config(environment)?;
     let clients = PairedClients::open(&config)?;
+    let network = config.network;
     let service = HostService::start_choosing_display(config, &clients.store)?;
 
-    Ok((HostHandle { service }, clients))
+    Ok((HostHandle { service, network }, clients))
 }
 
 #[cfg(test)]

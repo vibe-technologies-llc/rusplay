@@ -7,6 +7,7 @@ use crate::{
     host_page::model::{HostModel, Phase, client_summary, grouped_pin},
     hosting::{self, HostEvent, HostHandle, HostingError, PairedClient, PairedClients, PeerId},
     notice::{Notice, NoticeRaised, error_chain},
+    stats::HostJsonLog,
     theme,
     widgets::controls::{ButtonStyle, Tone, badge, button, card, card_heading, status_dot, toggle},
 };
@@ -24,6 +25,7 @@ pub struct HostPageView {
     launch_on_start: bool,
     model: HostModel,
     handle: Option<HostHandle>,
+    json: Option<HostJsonLog>,
     clients: Option<PairedClients>,
     clients_error: Option<String>,
     paired: Vec<PairedClient>,
@@ -52,6 +54,7 @@ impl HostPageView {
             launch_on_start: false,
             model: HostModel::default(),
             handle: None,
+            json: None,
             clients: None,
             clients_error: None,
             paired: Vec::new(),
@@ -214,6 +217,7 @@ impl HostPageView {
         match result {
             Ok((handle, clients)) => {
                 self.model.started(handle.address());
+                self.json = HostJsonLog::new(handle.network());
                 self.handle = Some(handle);
                 self.clients_error = clients.exposure();
                 self.clients = Some(clients);
@@ -347,13 +351,22 @@ impl HostPageView {
             let mut ended = false;
             for event in handle.poll_events() {
                 ended |= matches!(event, HostEvent::Stopped(_));
+                write_json_line(self.json.as_mut(), handle, &event, now);
                 if let Some(notice) = self.model.apply(&event, now) {
                     cx.emit(NoticeRaised(notice));
                 }
                 changed = true;
             }
 
-            changed |= self.model.observe(handle.stream().as_ref(), now);
+            let stream = handle.stream();
+            if let Some(line) = self
+                .json
+                .as_mut()
+                .and_then(|json| json.observe(stream.as_ref().map(|live| &live.stats), now))
+            {
+                println!("{line}");
+            }
+            changed |= self.model.observe(stream.as_ref(), now);
             changed |= self.model.pairing().is_some();
 
             if ended || handle.is_finished() {
@@ -676,5 +689,27 @@ impl Render for HostPageView {
                     ),
                 ),
         )
+    }
+}
+
+fn write_json_line(
+    json: Option<&mut HostJsonLog>,
+    handle: &HostHandle,
+    event: &HostEvent,
+    now: Instant,
+) {
+    let Some(json) = json else {
+        return;
+    };
+
+    match event {
+        HostEvent::ClientAdmitted { .. } => json.admitted(now),
+        HostEvent::ClientLeft { .. } => {
+            let ended = handle.ended_stream();
+            if let Some(line) = json.left(ended.as_ref().map(|live| &live.stats)) {
+                println!("{line}");
+            }
+        }
+        _ => {}
     }
 }

@@ -1,10 +1,11 @@
 use std::{fmt::Write, time::Instant};
 
 use rusplay_host::{
-    HostStats, NegotiatedFormat, StatsPhase, StatsSchedule, StreamSnapshot, unix_millis_now,
+    HostStats, NegotiatedFormat, StatsPhase, StatsSchedule, StreamSnapshot, host_stats_json_line,
+    unix_millis_now,
 };
 
-use crate::stats_json;
+const JSON_EVENT: &str = "stats";
 
 pub fn summary(stats: &HostStats) -> String {
     let mut line = String::new();
@@ -66,7 +67,10 @@ fn format_line(format: NegotiatedFormat) -> String {
 }
 
 fn emit_json(phase: StatsPhase, stats: &HostStats) {
-    println!("{}", stats_json::line(phase, unix_millis_now(), stats));
+    println!(
+        "{}",
+        host_stats_json_line(JSON_EVENT, phase, unix_millis_now(), stats)
+    );
 }
 
 #[derive(Debug)]

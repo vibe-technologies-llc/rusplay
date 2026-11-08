@@ -6,7 +6,6 @@ mod discovery;
 mod peers;
 mod pin_file;
 mod stats;
-mod stats_json;
 mod supervisor;
 
 use std::{

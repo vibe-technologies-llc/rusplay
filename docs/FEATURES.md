@@ -12,7 +12,6 @@
 
 # Client app
 - [L] `app-visual-polish`: redesign the app's look across every page so it reads as a considered tool rather than a generic template, the connected stream view first: the stream header, the connection details panel (grouping, hierarchy, number formatting, waiting states) and the fullscreen overlay, then the hosts, host and settings pages, through `theme.rs` and the shared `widgets`
-- [M] `app-host-stats-json`: `network.stats_json` is a shared settings row, but the app writes only `client_stats` lines, so hosting from the app prints no `HostStats` JSON and saving the flag in `host.toml` does nothing until the daemon is used. Either the Host this PC page prints `HostStats` lines in `rusplay-hostd`'s shape with their own `event`, keeping them from interleaving with client lines when the app is also the client, or the form marks the flag daemon only
 - [S] `app-host-live-check`: run the Host this PC page on a live Wayland session and fix what the compile-only work missed: the portal permission dialog while `Starting`, the PIN, countdown and `New PIN`, a PIN pairing and a reconnect from a second machine, the streaming stats, `Revoke`, the `Disconnect` button on the client card (the client ends and the next pairing window opens), and `Stop hosting` and quit while streaming (`HostService::stop` joins every stage, so check the window does not freeze)
 
 # Networking

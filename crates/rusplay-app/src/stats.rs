@@ -12,6 +12,9 @@ use rusplay_client::{
     StatsSchedule, stats_json_line, unix_millis_now,
 };
 use rusplay_config::NetworkConfig;
+use rusplay_host::host_stats_json_line;
+
+use crate::hosting::HostStats;
 
 const SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
@@ -362,6 +365,44 @@ impl JsonReporter {
     }
 }
 
+const HOST_JSON_EVENT: &str = "host_stats";
+
+#[derive(Debug, Clone, Copy)]
+pub struct HostJsonLog {
+    interval_ms: u32,
+    schedule: Option<StatsSchedule>,
+}
+
+impl HostJsonLog {
+    pub fn new(network: &NetworkConfig) -> Option<Self> {
+        network.stats_json.then_some(Self {
+            interval_ms: network.stats_log_interval_ms,
+            schedule: None,
+        })
+    }
+
+    pub fn admitted(&mut self, now: Instant) {
+        self.schedule = Some(StatsSchedule::new(self.interval_ms, now));
+    }
+
+    pub fn observe(&mut self, stats: Option<&HostStats>, now: Instant) -> Option<String> {
+        let stats = stats?;
+        let due = self.schedule.as_mut()?.take_due(now);
+
+        due.then(|| host_line(StatsPhase::Interval, stats))
+    }
+
+    pub fn left(&mut self, ended: Option<&HostStats>) -> Option<String> {
+        self.schedule.take()?;
+
+        ended.map(|stats| host_line(StatsPhase::Final, stats))
+    }
+}
+
+fn host_line(phase: StatsPhase, stats: &HostStats) -> String {
+    host_stats_json_line(HOST_JSON_EVENT, phase, unix_millis_now(), stats)
+}
+
 #[derive(Debug)]
 pub struct StatsSampler {
     timings: Arc<FrameTimings>,
@@ -433,6 +474,37 @@ mod tests {
         let mut schedule = reporter.schedule;
         assert!(!schedule.take_due(start + Duration::from_millis(999)));
         assert!(schedule.take_due(start + Duration::from_millis(1_000)));
+    }
+
+    #[test]
+    fn the_host_log_writes_its_own_lines_only_while_a_client_streams() {
+        let start = Instant::now();
+        let network = NetworkConfig {
+            stats_json: true,
+            stats_log_interval_ms: 1_000,
+            ..NetworkConfig::default()
+        };
+        let stats = HostStats {
+            frames_sent: 42,
+            ..HostStats::default()
+        };
+        let mut log = HostJsonLog::new(&network).unwrap();
+
+        let before = log.observe(Some(&stats), start + Duration::from_secs(5));
+        log.admitted(start);
+        let early = log.observe(Some(&stats), start + Duration::from_millis(999));
+        let due = log.observe(Some(&stats), start + Duration::from_millis(1_000));
+        let last = log.left(Some(&stats));
+        let after = log.left(Some(&stats));
+
+        assert!(HostJsonLog::new(&NetworkConfig::default()).is_none());
+        assert_eq!(before, None);
+        assert_eq!(early, None);
+        let due = due.unwrap();
+        assert!(due.starts_with(r#"{"event":"host_stats","phase":"interval","#));
+        assert!(due.contains(r#""frames_sent":42"#));
+        assert!(last.unwrap().contains(r#""phase":"final""#));
+        assert_eq!(after, None);
     }
 
     fn quality_report() -> QualityReport {

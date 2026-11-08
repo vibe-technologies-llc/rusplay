@@ -33,6 +33,7 @@ mod session;
 mod shared;
 mod source;
 mod stats;
+mod stats_json;
 #[cfg(test)]
 mod tests;
 mod upload;
@@ -64,4 +65,5 @@ pub use crate::{
     session::{HostSession, HostStream},
     source::{CaptureFeed, FrameSource, open_portal_capture},
     stats::HostStats,
+    stats_json::host_stats_json_line,
 };

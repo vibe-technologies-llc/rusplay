@@ -1,9 +1,14 @@
-use rusplay_host::{HostStats, JsonLine, StatsPhase};
+use rusplay_core::{JsonLine, StatsPhase};
 
-const EVENT: &str = "stats";
+use crate::stats::HostStats;
 
-pub fn line(phase: StatsPhase, unix_ms: u128, stats: &HostStats) -> String {
-    JsonLine::new(EVENT, phase, unix_ms)
+pub fn host_stats_json_line(
+    event: &str,
+    phase: StatsPhase,
+    unix_ms: u128,
+    stats: &HostStats,
+) -> String {
+    JsonLine::new(event, phase, unix_ms)
         .number("frames_captured", stats.frames_captured)
         .number("frames_superseded", stats.frames_superseded)
         .number("frames_encoded", stats.frames_encoded)
@@ -94,7 +99,7 @@ mod tests {
             ..HostStats::default()
         };
 
-        let line = line(StatsPhase::Interval, 1_700_000_000_123, &stats);
+        let line = host_stats_json_line("stats", StatsPhase::Interval, 1_700_000_000_123, &stats);
 
         assert!(
             line.starts_with(r#"{"event":"stats","phase":"interval","unix_ms":1700000000123,"#)
@@ -107,8 +112,15 @@ mod tests {
     }
 
     #[test]
+    fn the_event_names_the_line() {
+        let line = host_stats_json_line("host_stats", StatsPhase::Final, 0, &HostStats::default());
+
+        assert!(line.starts_with(r#"{"event":"host_stats","phase":"final","#));
+    }
+
+    #[test]
     fn an_unmeasured_value_is_null() {
-        let line = line(StatsPhase::Final, 0, &HostStats::default());
+        let line = host_stats_json_line("stats", StatsPhase::Final, 0, &HostStats::default());
 
         assert!(line.contains(r#""phase":"final""#));
         assert!(line.contains(r#""rtt_us":null"#));
@@ -117,7 +129,7 @@ mod tests {
 
     #[test]
     fn every_counter_of_the_snapshot_is_emitted() {
-        let line = line(StatsPhase::Final, 0, &HostStats::default());
+        let line = host_stats_json_line("stats", StatsPhase::Final, 0, &HostStats::default());
         let emitted = keys(&line);
         let debug = format!("{:?}", HostStats::default());
         let counters: Vec<&str> = debug

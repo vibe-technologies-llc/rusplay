@@ -123,8 +123,10 @@ paths:
   `HostService::ended_stream`, the snapshot the service reads just before it joins the stages, even
   when the session ends in an error.
   With `network.stats_json` (default off) every periodic line and the final one are also
-  written to stdout as one JSON object per line (`stats_json.rs`, written by hand, no
-  `serde_json`): `{"event":"stats","phase":"interval"|"final","unix_ms":..,` then every
+  written to stdout as one JSON object per line (`rusplay_host::host_stats_json_line`,
+  `rusplay-host/src/stats_json.rs`, written by hand, no `serde_json`, shared with the app's
+  in-process host, which names its lines `host_stats`):
+  `{"event":"stats","phase":"interval"|"final","unix_ms":..,` then every
   `HostStats` counter under its field name, `rtt_us` for the round trip and `null` for a
   value not measured yet. The human lines stay on stderr, so stdout carries only JSON. A test
   compares the emitted keys with the `Debug` output of `HostStats`, so a new counter that is
