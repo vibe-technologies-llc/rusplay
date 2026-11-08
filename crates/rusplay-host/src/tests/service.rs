@@ -15,7 +15,7 @@ use crate::{Admission, Client, HostError, HostEvent, HostService, HostSession};
 fn service(config: Config) -> (TempDir, HostService) {
     let directory = TempDir::new().unwrap();
     let store = PeerStore::open(directory.path().join("paired-clients")).unwrap();
-    let host = HostSession::bind(config, store).unwrap();
+    let host = HostSession::bind(config, store).unwrap().without_audio();
     let bitrate = Arc::new(AtomicU32::new(0));
     let frames = feed(10_000);
     let serve = move |host: &HostSession, client: &Client| {
