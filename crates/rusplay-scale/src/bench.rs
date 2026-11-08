@@ -198,6 +198,7 @@ fn hdr_frame(
         output: OutputLight::Encoded,
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: ChromaSiting::Left,
+        chroma_antiringing: 0.0,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
     };
     (unpack, frame)
@@ -260,12 +261,29 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     };
     let mut lineariser = Lineariser::new(&pipelines, &gpu.device, linearise).unwrap();
 
-    let unpack_only = best_frame_time(gpu, |encoder| {
-        converter
-            .encode(&gpu.device, encoder, &frame, &views[0])
-            .unwrap();
-    });
-    println!("present unpack only {size:?}: {unpack_only:?}");
+    for (chroma_filter, chroma_antiringing) in [
+        (ScaleFilter::Lanczos3, 0.0),
+        (ScaleFilter::Lanczos3, 1.0),
+        (ScaleFilter::EwaLanczos, 0.0),
+        (ScaleFilter::EwaLanczosSharp, 1.0),
+    ] {
+        let chroma = RgbConvertSettings {
+            chroma_filter,
+            chroma_antiringing,
+            ..unpack
+        };
+        converter.configure(&gpu.device, chroma).unwrap();
+
+        let unpack_only = best_frame_time(gpu, |encoder| {
+            converter
+                .encode(&gpu.device, encoder, &frame, &views[0])
+                .unwrap();
+        });
+        println!(
+            "present unpack only {chroma_filter} antiringing {chroma_antiringing} {size:?}: {unpack_only:?}"
+        );
+    }
+    converter.configure(&gpu.device, unpack).unwrap();
 
     for (name, settings) in present_color_cases() {
         let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();

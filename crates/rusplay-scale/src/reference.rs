@@ -3,7 +3,7 @@ use rusplay_core::{HdrLevels, TransferFunction};
 use crate::{
     ConvertSettings, FrameLayout, InputLight, Kernel, LineariseSettings, OutputLight, PlaneContent,
     PlaneLayout, Quantization, RgbConvertSettings, ScaleSettings, TapTable,
-    polar::PolarGeometry,
+    polar::{PolarGeometry, polar_footprint},
     scaler::Axis,
     shaping::Shaping,
     testing::{Image, quantize_f16},
@@ -53,48 +53,6 @@ pub(crate) fn resample_separable(
 
         shaping.output(shaping.antiring(sum, nearest_low, nearest_high))
     })
-}
-
-pub(crate) struct PolarFootprint {
-    pub taps: Vec<(i64, i64, f64)>,
-    pub anchor: (i64, i64),
-}
-
-pub(crate) fn polar_footprint(
-    geometry: &PolarGeometry,
-    kernel: Kernel,
-    x: u32,
-    y: u32,
-) -> PolarFootprint {
-    let radius = f64::from(geometry.radius);
-    let stretch = (f64::from(geometry.stretch.0), f64::from(geometry.stretch.1));
-
-    #[allow(clippy::cast_precision_loss)]
-    let center = (
-        f64::from((x as f32 + 0.5) * geometry.ratio.0 - 0.5 + geometry.phase.0),
-        f64::from((y as f32 + 0.5) * geometry.ratio.1 - 0.5 + geometry.phase.1),
-    );
-
-    #[allow(clippy::cast_possible_truncation)]
-    let span = |middle: f64, stretch: f64| {
-        ((middle - radius * stretch).floor() as i64 + 1)
-            ..=((middle + radius * stretch).ceil() as i64 - 1)
-    };
-
-    #[allow(clippy::cast_possible_truncation)]
-    let anchor = (center.0.floor() as i64, center.1.floor() as i64);
-
-    let taps = span(center.1, stretch.1)
-        .flat_map(|row| span(center.0, stretch.0).map(move |column| (column, row)))
-        .filter_map(|(column, row)| {
-            #[allow(clippy::cast_precision_loss)]
-            let distance =
-                ((column as f64 - center.0) / stretch.0).hypot((row as f64 - center.1) / stretch.1);
-            (distance < radius).then(|| (column, row, kernel.weight(distance)))
-        })
-        .collect();
-
-    PolarFootprint { taps, anchor }
 }
 
 pub(crate) fn resample_polar(source: &Image, settings: &ScaleSettings) -> Image {
@@ -439,8 +397,9 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
     let (chroma_width, chroma_height) = settings.chroma_size();
     let interleaved = layout.planes[1].content == PlaneContent::CbCr;
     let dequantize = |code: u32, (scale, offset): (f64, f64)| (f64::from(code) - offset) / scale;
-    let chroma_at = |x: i64, y: usize| -> [f64; 2] {
+    let chroma_at = |x: i64, y: i64| -> [f64; 2] {
         let x = usize::try_from(x.clamp(0, i64::from(chroma_width) - 1)).unwrap_or_default();
+        let y = usize::try_from(y.clamp(0, i64::from(chroma_height) - 1)).unwrap_or_default();
         let (cb, cr) = if interleaved {
             (planes[1][y][2 * x], planes[1][y][2 * x + 1])
         } else {
@@ -451,25 +410,22 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
             dequantize(cr, quantization.chroma),
         ]
     };
-    let weighted = |sum: [f64; 2], weight: f32, value: [f64; 2]| {
-        [
-            sum[0] + f64::from(weight) * value[0],
-            sum[1] + f64::from(weight) * value[1],
-        ]
-    };
+    let strength = settings.chroma_antiringing;
 
-    let rows_filtered: Vec<Vec<[f64; 2]>> = (0..chroma_height as usize)
-        .map(|y| {
-            (0..settings.resolution.width)
-                .map(|x| {
-                    taps(&horizontal, x).fold([0.0; 2], |sum, (column, weight)| {
-                        weighted(sum, weight, chroma_at(column, y))
+    let rows_filtered: Vec<Vec<[f64; 2]>> = if settings.polar_chroma() {
+        polar_upsampled_chroma(settings, &chroma_at)
+    } else {
+        (0..i64::from(chroma_height))
+            .map(|y| {
+                (0..settings.resolution.width)
+                    .map(|x| {
+                        filter_antiringed(&horizontal, x, strength, |column| chroma_at(column, y))
                     })
-                })
-                .collect()
-        })
-        .collect();
-    let last_row = i64::from(chroma_height) - 1;
+                    .collect()
+            })
+            .collect()
+    };
+    let last_row = i64::try_from(rows_filtered.len()).unwrap_or(i64::MAX) - 1;
     let decode = |encoded: f64| {
         let x = encoded.clamp(0.0, 1.0);
         match (settings.output, settings.transfer) {
@@ -488,9 +444,9 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
         settings.resolution.width,
         settings.resolution.height,
         |x, y| {
-            let chroma = taps(&vertical, y).fold([0.0; 2], |sum, (row, weight)| {
+            let chroma = filter_antiringed(&vertical, y, strength, |row| {
                 let row = usize::try_from(row.clamp(0, last_row)).unwrap_or_default();
-                weighted(sum, weight, rows_filtered[row][x as usize])
+                rows_filtered[row][x as usize]
             });
             let ycbcr = [
                 dequantize(planes[0][y as usize][x as usize], quantization.luma),
@@ -515,4 +471,81 @@ fn taps(table: &TapTable, index: u32) -> impl Iterator<Item = (i64, f32)> + '_ {
     let first = i64::from(table.firsts[index as usize]);
 
     (first..).zip(table.weights[start..start + count].iter().copied())
+}
+
+fn filter_antiringed(
+    table: &TapTable,
+    index: u32,
+    strength: f32,
+    sample: impl Fn(i64) -> [f64; 2],
+) -> [f64; 2] {
+    let anchor = i64::from(table.anchors[index as usize]);
+
+    let mut sum = [0.0; 2];
+    let mut nearest_low = [f64::MAX; 2];
+    let mut nearest_high = [f64::MIN; 2];
+    for (position, weight) in taps(table, index) {
+        let value = sample(position);
+        for (total, component) in sum.iter_mut().zip(value) {
+            *total += f64::from(weight) * component;
+        }
+        if (0..=1).contains(&(position - anchor)) {
+            for channel in 0..2 {
+                nearest_low[channel] = nearest_low[channel].min(value[channel]);
+                nearest_high[channel] = nearest_high[channel].max(value[channel]);
+            }
+        }
+    }
+
+    antiring_chroma(sum, nearest_low, nearest_high, strength)
+}
+
+fn antiring_chroma(sum: [f64; 2], low: [f64; 2], high: [f64; 2], strength: f32) -> [f64; 2] {
+    if strength <= 0.0 || low[0] > high[0] {
+        return sum;
+    }
+
+    [0, 1].map(|channel| {
+        let clamped = sum[channel].clamp(low[channel], high[channel]);
+        sum[channel] + (clamped - sum[channel]) * f64::from(strength)
+    })
+}
+
+fn polar_upsampled_chroma(
+    settings: &RgbConvertSettings,
+    chroma_at: &dyn Fn(i64, i64) -> [f64; 2],
+) -> Vec<Vec<[f64; 2]>> {
+    let geometry = settings.polar_chroma_geometry();
+    let kernel = Kernel::new(settings.chroma_filter);
+
+    (0..settings.resolution.height)
+        .map(|y| {
+            (0..settings.resolution.width)
+                .map(|x| {
+                    let footprint = polar_footprint(&geometry, kernel, x, y);
+                    let total: f64 = footprint.taps.iter().map(|tap| tap.2).sum();
+
+                    let mut sum = [0.0; 2];
+                    let mut nearest_low = [f64::MAX; 2];
+                    let mut nearest_high = [f64::MIN; 2];
+                    for &(column, row, weight) in &footprint.taps {
+                        let value = chroma_at(column, row);
+                        for (accumulated, component) in sum.iter_mut().zip(value) {
+                            *accumulated += weight * component / total;
+                        }
+                        if (0..=1).contains(&(column - footprint.anchor.0))
+                            && (0..=1).contains(&(row - footprint.anchor.1))
+                        {
+                            for channel in 0..2 {
+                                nearest_low[channel] = nearest_low[channel].min(value[channel]);
+                                nearest_high[channel] = nearest_high[channel].max(value[channel]);
+                            }
+                        }
+                    }
+
+                    antiring_chroma(sum, nearest_low, nearest_high, settings.chroma_antiringing)
+                })
+                .collect()
+        })
+        .collect()
 }

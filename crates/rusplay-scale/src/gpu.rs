@@ -35,6 +35,12 @@ const UNPACK_CHROMA_SHADER: &str = concat!(
     include_str!("unpack_buffer.wgsl"),
     include_str!("unpack_chroma.wgsl")
 );
+const UNPACK_CHROMA_POLAR_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_chroma_polar.wgsl")
+);
 const UNPACK_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
@@ -57,6 +63,12 @@ const UNPACK_PLANES_CHROMA_SHADER: &str = concat!(
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
     include_str!("unpack_chroma.wgsl")
+);
+const UNPACK_PLANES_CHROMA_POLAR_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_chroma_polar.wgsl")
 );
 const UNPACK_PLANES_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
@@ -179,6 +191,8 @@ const LINEARISE_PACKED_SHADER: &str = concat!(
 const SEPARABLE_WORKGROUP: (u32, u32) = (8, 8);
 const POLAR_WORKGROUP: (u32, u32) = (64, 1);
 const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
+pub(crate) const POLAR_CHROMA_WORKGROUP: (u32, u32) = (16, 16);
+pub(crate) const POLAR_CHROMA_TILE: u32 = 24;
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
@@ -268,13 +282,20 @@ impl LinearisePipelines {
 #[derive(Debug, Clone)]
 pub(crate) struct UnpackPasses {
     pub input_layout: wgpu::BindGroupLayout,
-    pub chroma: ShaderPass,
+    pub table_layout: wgpu::BindGroupLayout,
+    pub chroma: ChromaPasses,
     pub rgb: ShaderPass,
     pub planes_layout: wgpu::BindGroupLayout,
-    pub planes_chroma: ShaderPass,
+    pub planes_chroma: ChromaPasses,
     pub planes_rgb: ShaderPass,
     pub lut: FusedUnpack,
     pub chain: FusedUnpack,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChromaPasses {
+    pub separable: ShaderPass,
+    pub polar: ShaderPass,
 }
 
 #[derive(Debug, Clone)]
@@ -298,18 +319,13 @@ impl FusedUnpack {
         layouts: [&wgpu::BindGroupLayout; 4],
         descriptor: &FusedUnpackDescriptor<'_>,
     ) -> Self {
-        let [source_layout, _, _, convert_table_layout] = layouts;
+        let [source_layout, _, _, table_layout] = layouts;
         let target_layout = layout(device, descriptor.label, descriptor.target_entries);
         let [rgb, planes_rgb] = [0, 1].map(|index| {
             compute_pipeline(
                 device,
                 descriptor.label,
-                &[
-                    inputs[index],
-                    source_layout,
-                    &target_layout,
-                    convert_table_layout,
-                ],
+                &[inputs[index], source_layout, &target_layout, table_layout],
                 descriptor.shaders[index],
                 "unpack_rgb",
                 CONVERT_WORKGROUP,
@@ -653,7 +669,6 @@ impl ScalePipelines {
                 &source_layout,
                 &destination_layout,
                 &convert.chroma_target_layout,
-                &convert.table_layout,
             ],
         );
 
@@ -688,26 +703,52 @@ impl ScalePipelines {
     }
 }
 
-fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) -> UnpackPasses {
+fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) -> UnpackPasses {
     let input_layout = layout(device, "rusplay-unpack-input", &[storage_buffer_entry(0)]);
     let planes_layout = layout(
         device,
         "rusplay-unpack-planes",
         &[uint_texture_entry(0), uint_texture_entry(1)],
     );
-    let [chroma, rgb] = unpack_pair(
+    let table_layout = layout(
+        device,
+        "rusplay-unpack-table",
+        &[
+            uniform_entry(0),
+            storage_buffer_entry(1),
+            storage_buffer_entry(2),
+            storage_buffer_entry(3),
+        ],
+    );
+    let [source_layout, destination_layout, chroma_target_layout] = layouts;
+    let layouts = [
+        source_layout,
+        destination_layout,
+        chroma_target_layout,
+        &table_layout,
+    ];
+
+    let (chroma, rgb) = unpack_pair(
         device,
         "rusplay-unpack",
         &input_layout,
         layouts,
-        [UNPACK_CHROMA_SHADER, UNPACK_RGB_SHADER],
+        [
+            UNPACK_CHROMA_SHADER,
+            UNPACK_CHROMA_POLAR_SHADER,
+            UNPACK_RGB_SHADER,
+        ],
     );
-    let [planes_chroma, planes_rgb] = unpack_pair(
+    let (planes_chroma, planes_rgb) = unpack_pair(
         device,
         "rusplay-unpack-planes",
         &planes_layout,
         layouts,
-        [UNPACK_PLANES_CHROMA_SHADER, UNPACK_PLANES_RGB_SHADER],
+        [
+            UNPACK_PLANES_CHROMA_SHADER,
+            UNPACK_PLANES_CHROMA_POLAR_SHADER,
+            UNPACK_PLANES_RGB_SHADER,
+        ],
     );
     let inputs = [&input_layout, &planes_layout];
     let lut = FusedUnpack::new(
@@ -745,6 +786,7 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 4]) ->
 
     UnpackPasses {
         input_layout,
+        table_layout,
         chroma,
         rgb,
         planes_layout,
@@ -760,24 +802,34 @@ fn unpack_pair(
     label: &str,
     input_layout: &wgpu::BindGroupLayout,
     layouts: [&wgpu::BindGroupLayout; 4],
-    shaders: [&str; 2],
-) -> [ShaderPass; 2] {
+    shaders: [&str; 3],
+) -> (ChromaPasses, ShaderPass) {
     let [
         source_layout,
         destination_layout,
         chroma_target_layout,
-        convert_table_layout,
+        table_layout,
     ] = layouts;
-    let [chroma_shader, rgb_shader] = shaders;
+    let [separable_shader, polar_shader, rgb_shader] = shaders;
+    let chroma_layouts = [input_layout, chroma_target_layout, table_layout];
 
-    let chroma = compute_pipeline(
+    let separable = compute_pipeline(
         device,
         &format!("{label}-chroma"),
-        &[input_layout, chroma_target_layout, convert_table_layout],
-        chroma_shader,
+        &chroma_layouts,
+        separable_shader,
         "unpack_chroma",
         CONVERT_WORKGROUP,
         &[],
+    );
+    let polar = compute_pipeline(
+        device,
+        &format!("{label}-chroma-polar"),
+        &chroma_layouts,
+        polar_shader,
+        "unpack_chroma_polar",
+        POLAR_CHROMA_WORKGROUP,
+        &[("POLAR_CHROMA_TILE", f64::from(POLAR_CHROMA_TILE))],
     );
     let rgb = compute_pipeline(
         device,
@@ -786,7 +838,7 @@ fn unpack_pair(
             input_layout,
             source_layout,
             destination_layout,
-            convert_table_layout,
+            table_layout,
         ],
         rgb_shader,
         "unpack_rgb",
@@ -794,7 +846,7 @@ fn unpack_pair(
         &[],
     );
 
-    [chroma, rgb]
+    (ChromaPasses { separable, polar }, rgb)
 }
 
 pub(crate) fn layout(

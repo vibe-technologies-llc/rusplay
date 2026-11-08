@@ -1,6 +1,5 @@
 use std::{io, net::Ipv4Addr, path::PathBuf};
 
-use rusplay_core::ScaleFilter;
 use thiserror::Error;
 
 use crate::input::{HotkeyKey, ReleaseChord};
@@ -70,6 +69,8 @@ pub enum ConfigError {
     MtuOutOfRange(u16),
     #[error("antiringing strength {0} is outside 0.0..=1.0")]
     AntiringingOutOfRange(f32),
+    #[error("chroma antiringing strength {0} is outside 0.0..=1.0")]
+    ChromaAntiringingOutOfRange(f32),
     #[error("reassembly timeout must be greater than zero")]
     ZeroReassemblyTimeout,
     #[error("reassembly pending frame limit must be greater than zero")]
@@ -210,8 +211,6 @@ pub enum ConfigError {
     Serialize { source: toml::ser::Error },
     #[error("failed to create config directory {path}")]
     CreateDirectory { path: PathBuf, source: io::Error },
-    #[error("upscale chroma filter {0} is not separable")]
-    UpscaleChromaFilterPolar(ScaleFilter),
     #[error("failed to write config file {path}")]
     Write { path: PathBuf, source: io::Error },
 }
@@ -223,7 +222,6 @@ impl ConfigError {
             Self::InvalidFrameRate { .. } => Some("video.frame_rate"),
             Self::ZeroVideoBitrate => Some("video.bitrate_kbps"),
             Self::EmptyStreamResolution { .. } => Some("video.resolution"),
-            Self::UpscaleChromaFilterPolar(_) => Some("scaling.upscale.chroma_filter"),
             Self::ReferenceWhiteOutOfRange(_) => Some("video.color.hdr.reference_white_nits"),
             Self::PeakLuminanceOutOfRange(_) => Some("video.color.hdr.peak_nits"),
             Self::MasteringLuminanceInverted { .. } => Some("video.color.hdr.mastering.min_nits"),
@@ -245,6 +243,7 @@ impl ConfigError {
             Self::FlacBlockSizeOutOfRange(_) => Some("audio.flac.block_size"),
             Self::MtuOutOfRange(_) => Some("network.mtu"),
             Self::AntiringingOutOfRange(_) => Some("scaling.upscale.antiringing"),
+            Self::ChromaAntiringingOutOfRange(_) => Some("scaling.upscale.chroma_antiringing"),
             Self::FecOverheadOutOfRange(_) => Some("network.fec_overhead_percent"),
             Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
             Self::EmptyVirtualMaxResolution { .. } => Some("capture.virtual_max_resolution"),

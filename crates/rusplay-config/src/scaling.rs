@@ -19,13 +19,13 @@ pub struct ScalingConfig {
 
 impl ScalingConfig {
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
-        if self.upscale.chroma_filter.is_polar() {
-            return Err(ConfigError::UpscaleChromaFilterPolar(
-                self.upscale.chroma_filter,
-            ));
-        }
         if !ANTIRINGING_RANGE.contains(&self.upscale.antiringing) {
             return Err(ConfigError::AntiringingOutOfRange(self.upscale.antiringing));
+        }
+        if !ANTIRINGING_RANGE.contains(&self.upscale.chroma_antiringing) {
+            return Err(ConfigError::ChromaAntiringingOutOfRange(
+                self.upscale.chroma_antiringing,
+            ));
         }
         if !SIGMOID_CENTER_RANGE.contains(&self.upscale.sigmoid_center) {
             return Err(ConfigError::SigmoidCenterOutOfRange(
@@ -69,6 +69,7 @@ pub struct UpscaleConfig {
     pub sigmoid_center: f32,
     pub sigmoid_slope: f32,
     pub antiringing: f32,
+    pub chroma_antiringing: f32,
 }
 
 impl Default for UpscaleConfig {
@@ -80,6 +81,7 @@ impl Default for UpscaleConfig {
             sigmoid_center: 0.75,
             sigmoid_slope: 6.5,
             antiringing: 0.0,
+            chroma_antiringing: 0.0,
         }
     }
 }
@@ -118,29 +120,42 @@ mod tests {
     }
 
     #[test]
-    fn polar_upscale_chroma_filter_is_rejected() {
-        let polar = ScalingConfig {
+    fn every_filter_is_accepted_for_upscale_chroma() {
+        for chroma_filter in [ScaleFilter::EwaLanczosSharp, ScaleFilter::Mitchell] {
+            let config = ScalingConfig {
+                upscale: UpscaleConfig {
+                    chroma_filter,
+                    ..UpscaleConfig::default()
+                },
+                ..ScalingConfig::default()
+            };
+
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn chroma_antiringing_is_validated_and_parsed() {
+        let parsed: ScalingConfig = toml::from_str(
+            "[upscale]\nchroma_filter = \"ewa-lanczos-sharp\"\nchroma_antiringing = 0.6",
+        )
+        .unwrap();
+        let excessive = ScalingConfig {
             upscale: UpscaleConfig {
-                chroma_filter: ScaleFilter::EwaLanczos,
-                ..UpscaleConfig::default()
-            },
-            ..ScalingConfig::default()
-        };
-        let separable = ScalingConfig {
-            upscale: UpscaleConfig {
-                chroma_filter: ScaleFilter::Mitchell,
+                chroma_antiringing: 1.5,
                 ..UpscaleConfig::default()
             },
             ..ScalingConfig::default()
         };
 
+        assert!(UpscaleConfig::default().chroma_antiringing.abs() < f32::EPSILON);
+        assert_eq!(parsed.upscale.chroma_filter, ScaleFilter::EwaLanczosSharp);
+        assert!((parsed.upscale.chroma_antiringing - 0.6).abs() < f32::EPSILON);
+        assert!(parsed.validate().is_ok());
         assert!(matches!(
-            polar.validate(),
-            Err(ConfigError::UpscaleChromaFilterPolar(
-                ScaleFilter::EwaLanczos
-            ))
+            excessive.validate(),
+            Err(ConfigError::ChromaAntiringingOutOfRange(strength)) if (strength - 1.5).abs() < f32::EPSILON
         ));
-        assert!(separable.validate().is_ok());
     }
 
     #[test]

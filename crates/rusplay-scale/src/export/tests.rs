@@ -47,6 +47,7 @@ fn unpack_settings(settings: &ConvertSettings) -> RgbConvertSettings {
         output: OutputLight::Linear,
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: settings.chroma_siting,
+        chroma_antiringing: 0.0,
         row_alignment: settings.row_alignment,
     }
 }

@@ -193,6 +193,7 @@ fn yuv_settings(size: (u32, u32), depth: BitDepth) -> RgbConvertSettings {
         output: OutputLight::Linear,
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: ChromaSiting::Left,
+        chroma_antiringing: 0.0,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
     }
 }

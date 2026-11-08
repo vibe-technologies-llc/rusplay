@@ -1,5 +1,5 @@
 use ash::vk;
-use rusplay_core::{PixelFormat, Resolution, ScaleFilter, TransferFunction};
+use rusplay_core::{PixelFormat, Resolution, TransferFunction};
 use rustix::io::Errno;
 use thiserror::Error;
 
@@ -17,8 +17,6 @@ pub enum ScaleError {
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]
     SigmoidSlopeOutOfRange(f32),
-    #[error("chroma filter {0} is polar, chroma upsampling needs a separable filter")]
-    UpsampleChromaFilterNotSeparable(ScaleFilter),
     #[error("decoding the {0:?} transfer function to linear light is not supported")]
     LinearOutputTransferUnsupported(TransferFunction),
     #[error("a {format:?} texture cannot be read as {packing:?} texels")]

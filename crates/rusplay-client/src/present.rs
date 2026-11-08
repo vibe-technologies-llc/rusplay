@@ -523,6 +523,7 @@ fn convert_settings(
         output,
         chroma_filter: options.scaling.upscale.chroma_filter,
         chroma_siting: signalled_siting.unwrap_or(options.scaling.chroma_siting),
+        chroma_antiringing: options.scaling.upscale.chroma_antiringing,
         row_alignment: UPLOAD_ROW_ALIGNMENT,
     }
 }

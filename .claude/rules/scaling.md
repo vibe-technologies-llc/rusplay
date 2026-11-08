@@ -14,7 +14,8 @@ paths:
   light: a non-ringing weighted average with the kernel stretched by the scale ratio, so every
   source pixel contributes.
 - Client upscale defaults to **Lanczos3**, with sigmoidal upscaling and optional anti-ringing.
-  Chroma (4:2:0 and 4:2:2 planes) has its own filter for both directions.
+  Chroma (4:2:0 and 4:2:2 planes) has its own filter for both directions, separable or polar,
+  and on the client its own anti-ringing strength.
 - Filters are a closed enum, `ScaleFilter` in `rusplay-core`. Separable filters: bilinear,
   Hermite, Catmull-Rom, Mitchell, Lanczos 2/3/4. Polar (EWA, jinc based): EWA Lanczos, EWA
   Lanczos Sharp, Ginseng, Hann, Robidoux, Robidoux Sharp. Kernel definitions follow mpv/libplacebo,
@@ -57,7 +58,10 @@ paths:
   texels bracketing the sample centre (`TapTable::anchors` holds the left one,
   `floor(centre)`), and the result is `mix(sum, clamp(sum, low, high), strength)`. The strength
   is `ScaleSettings::antiringing` (0..=1), which the client fills from
-  `scaling.upscale.antiringing`; the host's downscale passes 0.
+  `scaling.upscale.antiringing`; the host's downscale passes 0. Chroma upsampling has its own
+  strength, `RgbConvertSettings::chroma_antiringing` from `scaling.upscale.chroma_antiringing`
+  (default 0, `ChromaAntiringingOutOfRange` outside 0..=1), applied the same way to CbCr in
+  each unpack chroma pass (`antiring_chroma` in `unpack_common.wgsl`).
 - Sigmoidal upscaling is libplacebo's sigmoid: `ScaleSettings::sigmoid` (`Sigmoid { center,
   slope }`, defaults 0.75 and 6.5, from `scaling.upscale.sigmoid_center`/`sigmoid_slope` when
   `scaling.upscale.sigmoid` is on) maps linear light into sigmoid space before filtering and back
@@ -150,7 +154,8 @@ paths:
 - Y'CbCr to RGB on the client is `RgbConverter` (`unpack.rs`, `unpack_*.wgsl`), reading a
   `YuvFrame` upload buffer laid out by `FrameLayout::packed` (planar or semi-planar, any depth).
   `unpack_chroma` applies the horizontal chroma taps straight from the buffer into an `rg32float`
-  intermediate at luma width, `unpack_rgb` applies the vertical taps, the `MatrixCoefficients::inverse_rows`
+  intermediate at luma width, `unpack_rgb` applies the vertical taps (reading as many rows as the
+  intermediate has), the `MatrixCoefficients::inverse_rows`
   and `output_light`, into an `rgba16float` storage texture. `output_light` is either
   `unpack_output_transfer.wgsl`, the inverse OETF for `OutputLight::Linear` (sRGB, BT.709, gamma
   2.2 or linear; PQ and HLG must use `OutputLight::Encoded`), `unpack_output_chain.wgsl`, the
@@ -160,8 +165,27 @@ paths:
   whose group 2 adds the LUT texture and its decoding uniform (`color.md`; both are a
   `FusedUnpack` of the target layout and the buffer and planes pipelines). The unpack uniform is
   named `unpacking`, leaving `params` to the colour preludes. Chroma is upsampled with
-  `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples)
-  and must be separable. `reference::unpack_rgb` is its CPU reference. The input is a WGSL module
+  `scaling.upscale.chroma_filter` at exactly 1:2 (left siting is a phase of +0.25 chroma samples).
+  The unpack has its own table layout (`UnpackPasses::table_layout`: params, firsts, weights,
+  anchors), so both separable passes track the bracketing texels for chroma anti-ringing. A polar
+  filter on 4:2:0 or 4:2:2 replaces `unpack_chroma` with `unpack_chroma_polar`
+  (`unpack_chroma_polar.wgsl`), which writes the intermediate at full luma size, and `unpack_rgb`
+  then reads it through `TapTable::identity`. At exactly 1:2 the sample centre's fraction depends
+  only on the pixel's parity, so there are four phases on 4:2:0 and two on 4:2:2 (where
+  `PolarGeometry::with_identity_vertical` keeps only the centre row, as on the host).
+  `PhaseKernels` (`unpack/phase.rs`) builds each phase's normalised 2D kernel once per plan from
+  `polar_footprint` (exact kernel weights, no radial LUT) as anchor-relative offsets in the
+  firsts binding and weights in the weights binding, and the shader is a plain weighted sum.
+  Each 16x16 workgroup (`POLAR_CHROMA_WORKGROUP`) first dequantises the chroma its block
+  touches into workgroup memory: `PhaseKernels::tile_offset` and `tile_size` are the exact
+  extent for a block, at most `POLAR_CHROMA_TILE` (24) per axis, which a test checks for every
+  polar filter, chroma and siting. On an RX 9070 a 4K 10-bit 4:2:0 unpack takes 0.91 ms with EWA
+  Lanczos (anti-ringing is free) against 0.32 ms for Lanczos3; the per-pixel radial footprint
+  with LUT weights took 2.0 ms and 1.8 ms with the tile alone, and packing offset and weight
+  into one `vec4` per tap was slower (0.97 ms). `reference::unpack_rgb` is its CPU reference,
+  computing every polar footprint per pixel in f64, and tests cover every polar filter on both
+  subsamplings, sitings and layouts, anti-ringing on both paths, and the polar round trip from
+  the host conversion. The input is a WGSL module
   providing `luma_code`/`chroma_codes` (integer codes after the `sample_shift` and `max_code`
   clamp): `unpack_buffer.wgsl` reads the upload buffer, `unpack_planes.wgsl` reads two unsigned
   integer plane textures, and `unpack_common.wgsl` dequantises either. `RgbConverter::encode`

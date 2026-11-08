@@ -232,6 +232,7 @@ pub(in crate::color) fn unpack_settings(
         output: OutputLight::Encoded,
         chroma_filter: ScaleFilter::Hermite,
         chroma_siting: ChromaSiting::Center,
+        chroma_antiringing: 0.0,
         row_alignment: 4,
     }
 }

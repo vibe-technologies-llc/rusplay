@@ -191,16 +191,6 @@ const SCALE_FILTERS: &[&str] = &[
     "ewa-robidoux-sharp",
 ];
 
-const SEPARABLE_SCALE_FILTERS: &[&str] = &[
-    "bilinear",
-    "hermite",
-    "catmull-rom",
-    "mitchell",
-    "lanczos2",
-    "lanczos3",
-    "lanczos4",
-];
-
 const BACKEND_PATH: &str = "video.encoder.backend";
 const MODE_PATH: &str = "video.encoder.rate_control.mode";
 
@@ -1804,7 +1794,7 @@ pub static FIELDS: &[Field] = &[
         "Upscale",
         "scaling.upscale.chroma_filter",
         "Chroma filter",
-        Kind::Choice(SEPARABLE_SCALE_FILTERS),
+        Kind::Choice(SCALE_FILTERS),
     ),
     field(
         Audience::Client,
@@ -1836,6 +1826,14 @@ pub static FIELDS: &[Field] = &[
         "Upscale",
         "scaling.upscale.antiringing",
         "Anti-ringing",
+        Kind::Decimal,
+    ),
+    field(
+        Audience::Client,
+        Section::Scaling,
+        "Upscale",
+        "scaling.upscale.chroma_antiringing",
+        "Chroma anti-ringing",
         Kind::Decimal,
     ),
     field(

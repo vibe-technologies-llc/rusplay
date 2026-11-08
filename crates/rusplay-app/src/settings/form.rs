@@ -632,6 +632,7 @@ mod tests {
             rusplay_config::FrameRateChoice::Fixed(FrameRate::new(60_000, 1001));
         base.video.bitrate_kbps = 123_456;
         base.scaling.upscale.antiringing = 0.35;
+        base.scaling.upscale.chroma_antiringing = 0.25;
         base.capture.restore_token = Some("token".to_owned());
         base.capture.restore_token_file = Some("/tmp/rusplay-token".into());
         base.network.bind_address = "192.168.1.5".parse().unwrap();

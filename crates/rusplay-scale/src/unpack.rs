@@ -8,14 +8,21 @@ use crate::{
     PlaneLayout, Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
     gpu::{
-        self, CHROMA_FORMAT, ScalePipelines, ShaderPass, buffer_group, storage_buffer,
-        uniform_buffer,
+        self, CHROMA_FORMAT, ChromaPasses, ScalePipelines, ShaderPass, buffer_group,
+        storage_buffer, uniform_buffer,
     },
+    polar::PolarGeometry,
     scaler::{GroupCache, resolution_pair},
 };
 
+mod phase;
+
+use phase::PhaseKernels;
+
 const WORD_BYTES: u64 = 4;
 const LEFT_SITING_UPSAMPLE_PHASE: f64 = 0.25;
+const UPSAMPLING_RATIO: f32 = 0.5;
+const ANTIRINGING_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 const TRANSFER_NONE: u32 = 0;
 const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
@@ -50,6 +57,7 @@ pub struct RgbConvertSettings {
     pub output: OutputLight,
     pub chroma_filter: ScaleFilter,
     pub chroma_siting: ChromaSiting,
+    pub chroma_antiringing: f32,
     pub row_alignment: u32,
 }
 
@@ -58,10 +66,8 @@ impl RgbConvertSettings {
         if self.resolution.pixel_count() == 0 {
             return Err(ScaleError::EmptySource(self.resolution));
         }
-        if Kernel::new(self.chroma_filter).geometry() != Geometry::Separable {
-            return Err(ScaleError::UpsampleChromaFilterNotSeparable(
-                self.chroma_filter,
-            ));
+        if !ANTIRINGING_RANGE.contains(&self.chroma_antiringing) {
+            return Err(ScaleError::AntiringingOutOfRange(self.chroma_antiringing));
         }
 
         self.transfer_code()?;
@@ -96,14 +102,51 @@ impl RgbConvertSettings {
         chroma_size(self.resolution, self.format.chroma)
     }
 
+    pub(crate) fn polar_chroma(&self) -> bool {
+        Kernel::new(self.chroma_filter).geometry() == Geometry::Polar
+            && self.format.chroma != ChromaSubsampling::Yuv444
+    }
+
+    fn siting_phase(&self) -> f64 {
+        match self.chroma_siting {
+            ChromaSiting::Left => LEFT_SITING_UPSAMPLE_PHASE,
+            ChromaSiting::Center => 0.0,
+        }
+    }
+
+    pub(crate) fn polar_chroma_geometry(&self) -> PolarGeometry {
+        #[allow(clippy::cast_possible_truncation)]
+        let phase = self.siting_phase() as f32;
+
+        let vertical_ratio = match self.format.chroma {
+            ChromaSubsampling::Yuv420 => UPSAMPLING_RATIO,
+            ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444 => 1.0,
+        };
+        let geometry = PolarGeometry::with_ratio(
+            self.chroma_filter,
+            self.chroma_size(),
+            resolution_pair(self.resolution),
+            (UPSAMPLING_RATIO, vertical_ratio),
+            (phase, 0.0),
+        );
+
+        match self.format.chroma {
+            ChromaSubsampling::Yuv420 => geometry,
+            ChromaSubsampling::Yuv422 | ChromaSubsampling::Yuv444 => {
+                geometry.with_identity_vertical()
+            }
+        }
+    }
+
     pub(crate) fn chroma_tables(&self) -> (TapTable, TapTable) {
         let kernel = Kernel::new(self.chroma_filter);
         let (width, height) = resolution_pair(self.resolution);
         let (chroma_width, chroma_height) = self.chroma_size();
-        let phase = match self.chroma_siting {
-            ChromaSiting::Left => LEFT_SITING_UPSAMPLE_PHASE,
-            ChromaSiting::Center => 0.0,
-        };
+        let phase = self.siting_phase();
+
+        if self.polar_chroma() {
+            return (TapTable::identity(width), TapTable::identity(height));
+        }
 
         let horizontal = match self.format.chroma {
             ChromaSubsampling::Yuv444 => TapTable::identity(width),
@@ -306,7 +349,7 @@ impl RgbConverter {
         };
 
         self.plan.encode(
-            [&pipelines.unpack.chroma, rgb],
+            (&pipelines.unpack.chroma, rgb),
             encoder,
             &input_group,
             output.group(),
@@ -373,7 +416,7 @@ impl RgbConverter {
         };
 
         self.plan.encode(
-            [&pipelines.unpack.planes_chroma, rgb],
+            (&pipelines.unpack.planes_chroma, rgb),
             encoder,
             &input_group,
             output.group(),
@@ -554,8 +597,27 @@ struct UnpackPlan {
     chroma_target: wgpu::BindGroup,
     chroma_source: wgpu::BindGroup,
     chroma_pass_size: (u32, u32),
-    direct_chroma: bool,
+    chroma_filter: ChromaFilterPass,
     rgb_pass_size: (u32, u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChromaFilterPass {
+    Direct,
+    Separable,
+    Polar,
+}
+
+impl ChromaFilterPass {
+    fn of(settings: &RgbConvertSettings) -> Self {
+        if settings.chroma_size() == resolution_pair(settings.resolution) {
+            Self::Direct
+        } else if settings.polar_chroma() {
+            Self::Polar
+        } else {
+            Self::Separable
+        }
+    }
 }
 
 impl UnpackPlan {
@@ -567,22 +629,40 @@ impl UnpackPlan {
     ) -> Result<Self, ScaleError> {
         let (horizontal, vertical) = settings.chroma_tables();
         let size = resolution_pair(settings.resolution);
-        let chroma_height = settings.chroma_size().1;
+        let chroma_filter = ChromaFilterPass::of(settings);
+        let polar = (chroma_filter == ChromaFilterPass::Polar)
+            .then(|| PhaseKernels::build(settings, gpu::POLAR_CHROMA_WORKGROUP));
+        let chroma_pass_size = match chroma_filter {
+            ChromaFilterPass::Polar => size,
+            ChromaFilterPass::Direct | ChromaFilterPass::Separable => {
+                (size.0, settings.chroma_size().1)
+            }
+        };
 
         let params = uniform_buffer(
             device,
             "rusplay-unpack-params",
-            &params_bytes(settings, layout, &horizontal, &vertical)?,
+            &params_bytes(settings, layout, (&horizontal, &vertical), polar.as_ref())?,
         );
-        let horizontal_firsts = storage_buffer(device, "rusplay-unpack-firsts", &horizontal.firsts);
-        let horizontal_weights =
-            storage_buffer(device, "rusplay-unpack-weights", &horizontal.weights);
+        let (horizontal_firsts, horizontal_weights) = match &polar {
+            Some(kernels) => (
+                storage_buffer(device, "rusplay-unpack-phase-offsets", &kernels.offsets),
+                storage_buffer(device, "rusplay-unpack-phase-weights", &kernels.weights),
+            ),
+            None => (
+                storage_buffer(device, "rusplay-unpack-firsts", &horizontal.firsts),
+                storage_buffer(device, "rusplay-unpack-weights", &horizontal.weights),
+            ),
+        };
+        let horizontal_anchors =
+            storage_buffer(device, "rusplay-unpack-anchors", &horizontal.anchors);
         let vertical_firsts = storage_buffer(device, "rusplay-unpack-firsts", &vertical.firsts);
         let vertical_weights = storage_buffer(device, "rusplay-unpack-weights", &vertical.weights);
+        let vertical_anchors = storage_buffer(device, "rusplay-unpack-anchors", &vertical.anchors);
         let intermediate = gpu::storage_texture(
             device,
             "rusplay-unpack-chroma",
-            (size.0, chroma_height),
+            chroma_pass_size,
             CHROMA_FORMAT,
         );
 
@@ -590,14 +670,24 @@ impl UnpackPlan {
             chroma_group: buffer_group(
                 device,
                 "rusplay-unpack-chroma",
-                &pipelines.convert.table_layout,
-                &[&params, &horizontal_firsts, &horizontal_weights],
+                &pipelines.unpack.table_layout,
+                &[
+                    &params,
+                    &horizontal_firsts,
+                    &horizontal_weights,
+                    &horizontal_anchors,
+                ],
             ),
             rgb_group: buffer_group(
                 device,
                 "rusplay-unpack-rgb",
-                &pipelines.convert.table_layout,
-                &[&params, &vertical_firsts, &vertical_weights],
+                &pipelines.unpack.table_layout,
+                &[
+                    &params,
+                    &vertical_firsts,
+                    &vertical_weights,
+                    &vertical_anchors,
+                ],
             ),
             chroma_target: gpu::view_group(
                 device,
@@ -605,22 +695,27 @@ impl UnpackPlan {
                 &intermediate,
             ),
             chroma_source: pipelines.source_group(device, &intermediate),
-            chroma_pass_size: (size.0, chroma_height),
-            direct_chroma: settings.chroma_size() == size,
+            chroma_pass_size,
+            chroma_filter,
             rgb_pass_size: size,
         })
     }
 
     fn encode(
         &self,
-        passes: [&ShaderPass; 2],
+        passes: (&ChromaPasses, &ShaderPass),
         encoder: &mut wgpu::CommandEncoder,
         input_group: &wgpu::BindGroup,
         target_group: &wgpu::BindGroup,
     ) {
-        let [chroma_pass, rgb_pass] = passes;
+        let (chroma_passes, rgb_pass) = passes;
+        let chroma_pass = match self.chroma_filter {
+            ChromaFilterPass::Direct => None,
+            ChromaFilterPass::Separable => Some(&chroma_passes.separable),
+            ChromaFilterPass::Polar => Some(&chroma_passes.polar),
+        };
 
-        if !self.direct_chroma {
+        if let Some(chroma_pass) = chroma_pass {
             gpu::dispatch(
                 encoder,
                 "rusplay-unpack-chroma",
@@ -647,8 +742,8 @@ impl UnpackPlan {
 fn params_bytes(
     settings: &RgbConvertSettings,
     layout: &FrameLayout,
-    horizontal: &TapTable,
-    vertical: &TapTable,
+    (horizontal, vertical): (&TapTable, &TapTable),
+    polar: Option<&PhaseKernels>,
 ) -> Result<Vec<u8>, ScaleError> {
     let rows = settings.matrix.inverse_rows();
     let quantization = Quantization::new(settings.format.depth, settings.range);
@@ -665,6 +760,20 @@ fn params_bytes(
     let luma = layout.planes[0];
     let chroma = layout.planes[1];
     let second_chroma = layout.planes.get(2).copied().unwrap_or(chroma);
+    let horizontal_taps = polar.map_or(horizontal.taps_per_pixel, |kernels| kernels.taps_per_phase);
+    let polar_words = polar.map_or([0; 9], |kernels| {
+        [
+            kernels.geometry.ratio.0.to_bits(),
+            kernels.geometry.ratio.1.to_bits(),
+            kernels.geometry.phase.0.to_bits(),
+            kernels.geometry.phase.1.to_bits(),
+            kernels.tile_offset.0.cast_unsigned(),
+            kernels.tile_offset.1.cast_unsigned(),
+            kernels.tile_size.0,
+            kernels.tile_size.1,
+            kernels.phase_rows,
+        ]
+    });
 
     let words = [
         float(rows[0][0]),
@@ -697,11 +806,17 @@ fn params_bytes(
         word(second_chroma.offset)?,
         chroma.stride / 4,
         u32::from(chroma.content == PlaneContent::CbCr),
-        horizontal.taps_per_pixel,
+        horizontal_taps,
         vertical.taps_per_pixel,
     ];
+    let shaping = [settings.chroma_antiringing.to_bits(), 0, 0];
 
-    Ok(words.iter().flat_map(|word| word.to_ne_bytes()).collect())
+    Ok(words
+        .iter()
+        .chain(&polar_words)
+        .chain(&shaping)
+        .flat_map(|word| word.to_ne_bytes())
+        .collect())
 }
 
 #[cfg(test)]
@@ -717,6 +832,14 @@ mod tests {
     const ROUND_TRIP_EDGE_TOLERANCE: f32 = 0.03;
     const ROUND_TRIP_INTERIOR_TOLERANCE: f32 = 0.006;
     const ROUND_TRIP_BORDER: i64 = 4;
+    const POLAR_FILTERS: [ScaleFilter; 6] = [
+        ScaleFilter::EwaLanczos,
+        ScaleFilter::EwaLanczosSharp,
+        ScaleFilter::EwaGinseng,
+        ScaleFilter::EwaHann,
+        ScaleFilter::EwaRobidoux,
+        ScaleFilter::EwaRobidouxSharp,
+    ];
 
     fn interior_difference(actual: &Image, expected: &Image, border: i64) -> f32 {
         let (width, height) = (i64::from(actual.width), i64::from(actual.height));
@@ -746,6 +869,7 @@ mod tests {
             output: OutputLight::Linear,
             chroma_filter: ScaleFilter::Lanczos3,
             chroma_siting: ChromaSiting::Left,
+            chroma_antiringing: 0.0,
             row_alignment: 4,
         }
     }
@@ -876,6 +1000,7 @@ mod tests {
             ..base
         });
         assert_matches_reference(RgbConvertSettings {
+            chroma_antiringing: 0.0,
             row_alignment: 256,
             ..base
         });
@@ -884,6 +1009,148 @@ mod tests {
             output: OutputLight::Encoded,
             ..base
         });
+    }
+
+    #[test]
+    fn polar_chroma_filters_match_reference() {
+        let chromas = [ChromaSubsampling::Yuv420, ChromaSubsampling::Yuv422];
+        let sitings = [ChromaSiting::Left, ChromaSiting::Center];
+
+        for (index, chroma_filter) in POLAR_FILTERS.into_iter().enumerate() {
+            for (chroma, chroma_siting) in chromas
+                .into_iter()
+                .flat_map(|chroma| sitings.map(|siting| (chroma, siting)))
+            {
+                assert_matches_reference(RgbConvertSettings {
+                    chroma_filter,
+                    chroma_siting,
+                    layout: if index % 2 == 0 {
+                        PlaneLayout::Planar
+                    } else {
+                        PlaneLayout::SemiPlanar
+                    },
+                    ..settings((37, 23), chroma, BitDepth::Ten, PlaneLayout::Planar)
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn every_polar_footprint_fits_the_workgroup_tile() {
+        for chroma_filter in POLAR_FILTERS {
+            for chroma in [ChromaSubsampling::Yuv420, ChromaSubsampling::Yuv422] {
+                for chroma_siting in [ChromaSiting::Left, ChromaSiting::Center] {
+                    let settings = RgbConvertSettings {
+                        chroma_filter,
+                        chroma_siting,
+                        ..settings((64, 64), chroma, BitDepth::Ten, PlaneLayout::Planar)
+                    };
+
+                    let kernels = PhaseKernels::build(&settings, gpu::POLAR_CHROMA_WORKGROUP);
+
+                    assert!(
+                        kernels.tile_size.0 <= gpu::POLAR_CHROMA_TILE
+                            && kernels.tile_size.1 <= gpu::POLAR_CHROMA_TILE,
+                        "{chroma_filter} {chroma:?} {chroma_siting:?}: {:?}",
+                        kernels.tile_size
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn phase_kernels_are_normalized_and_cover_the_anchor() {
+        let settings = RgbConvertSettings {
+            chroma_filter: ScaleFilter::EwaLanczos,
+            ..settings(
+                (64, 64),
+                ChromaSubsampling::Yuv420,
+                BitDepth::Ten,
+                PlaneLayout::Planar,
+            )
+        };
+
+        let kernels = PhaseKernels::build(&settings, gpu::POLAR_CHROMA_WORKGROUP);
+        let taps = kernels.taps_per_phase as usize;
+
+        assert_eq!(kernels.phase_rows, 2);
+        assert_eq!(kernels.weights.len(), 4 * taps);
+        for phase in 0..4 {
+            let weights = &kernels.weights[phase * taps..(phase + 1) * taps];
+            let offsets = &kernels.offsets[2 * phase * taps..2 * (phase + 1) * taps];
+
+            assert!((weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+            assert!(offsets.as_chunks::<2>().0.contains(&[0, 0]));
+        }
+    }
+
+    #[test]
+    fn chroma_antiringing_matches_reference() {
+        for chroma_filter in [ScaleFilter::Lanczos4, ScaleFilter::EwaLanczosSharp] {
+            for chroma in [ChromaSubsampling::Yuv420, ChromaSubsampling::Yuv422] {
+                for chroma_antiringing in [0.5, 1.0] {
+                    assert_matches_reference(RgbConvertSettings {
+                        chroma_filter,
+                        chroma_antiringing,
+                        ..settings((41, 27), chroma, BitDepth::Ten, PlaneLayout::SemiPlanar)
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn full_chroma_antiringing_removes_chroma_overshoot() {
+        let Some(gpu) = testing::gpu() else {
+            return;
+        };
+        let image = Image::from_fn(48, 24, |x, _| {
+            if x < 24 {
+                [0.9, 0.05, 0.05, 1.0]
+            } else {
+                [0.05, 0.05, 0.9, 1.0]
+            }
+        });
+
+        for chroma_filter in [ScaleFilter::Lanczos4, ScaleFilter::EwaLanczosSharp] {
+            let ringing = RgbConvertSettings {
+                chroma_filter,
+                output: OutputLight::Encoded,
+                ..settings(
+                    (48, 24),
+                    ChromaSubsampling::Yuv420,
+                    BitDepth::Twelve,
+                    PlaneLayout::Planar,
+                )
+            };
+            let clamped = RgbConvertSettings {
+                chroma_antiringing: 1.0,
+                ..ringing
+            };
+
+            let bytes = encode_on_gpu(gpu, &image, &ringing);
+            let overshoot = chroma_overshoot(&reference::unpack_rgb(&bytes, &ringing), &image);
+            let antiringed = chroma_overshoot(&unpack_on_gpu(gpu, &bytes, clamped), &image);
+
+            assert!(overshoot > 0.01, "{chroma_filter}: overshoot {overshoot}");
+            assert!(
+                antiringed < overshoot / 4.0,
+                "{chroma_filter}: antiringed {antiringed} against {overshoot}"
+            );
+        }
+    }
+
+    fn chroma_overshoot(actual: &Image, source: &Image) -> f32 {
+        let blue_floor = source.texel(0, 0)[2];
+        let red_floor = source.texel(i64::from(source.width) - 1, 0)[0];
+
+        (0..i64::from(actual.width))
+            .map(|x| {
+                let texel = actual.texel(x, i64::from(actual.height) / 2);
+                (blue_floor - texel[2]).max(red_floor - texel[0]).max(0.0)
+            })
+            .fold(0.0, f32::max)
     }
 
     #[test]
@@ -897,8 +1164,16 @@ mod tests {
             [0.2 + 0.6 * u, 0.2 + 0.6 * v, 0.8 - 0.3 * (u + v), 1.0]
         });
 
-        for chroma in [ChromaSubsampling::Yuv444, ChromaSubsampling::Yuv420] {
-            let settings = settings((48, 32), chroma, BitDepth::Ten, PlaneLayout::Planar);
+        for (chroma, chroma_filter) in [
+            (ChromaSubsampling::Yuv444, ScaleFilter::Lanczos3),
+            (ChromaSubsampling::Yuv420, ScaleFilter::Lanczos3),
+            (ChromaSubsampling::Yuv420, ScaleFilter::EwaLanczosSharp),
+            (ChromaSubsampling::Yuv422, ScaleFilter::EwaRobidoux),
+        ] {
+            let settings = RgbConvertSettings {
+                chroma_filter,
+                ..settings((48, 32), chroma, BitDepth::Ten, PlaneLayout::Planar)
+            };
 
             let bytes = encode_on_gpu(gpu, &image, &settings);
             let unpacked = unpack_on_gpu(gpu, &bytes, settings);
@@ -907,11 +1182,11 @@ mod tests {
 
             assert!(
                 edges <= ROUND_TRIP_EDGE_TOLERANCE,
-                "{chroma:?}: max difference {edges}"
+                "{chroma:?} {chroma_filter}: max difference {edges}"
             );
             assert!(
                 interior <= ROUND_TRIP_INTERIOR_TOLERANCE,
-                "{chroma:?}: interior difference {interior}"
+                "{chroma:?} {chroma_filter}: interior difference {interior}"
             );
         }
     }
@@ -949,13 +1224,19 @@ mod tests {
 
         assert_eq!(
             RgbConvertSettings {
-                chroma_filter: ScaleFilter::EwaLanczos,
+                chroma_antiringing: 1.25,
                 ..base
             }
             .validate(),
-            Err(ScaleError::UpsampleChromaFilterNotSeparable(
-                ScaleFilter::EwaLanczos
-            ))
+            Err(ScaleError::AntiringingOutOfRange(1.25))
+        );
+        assert_eq!(
+            RgbConvertSettings {
+                chroma_filter: ScaleFilter::EwaLanczosSharp,
+                ..base
+            }
+            .validate(),
+            Ok(())
         );
         assert_eq!(
             RgbConvertSettings {
@@ -978,6 +1259,7 @@ mod tests {
         );
         assert_eq!(
             RgbConvertSettings {
+                chroma_antiringing: 0.0,
                 row_alignment: 6,
                 ..base
             }

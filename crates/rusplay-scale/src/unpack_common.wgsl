@@ -17,6 +17,12 @@ struct Params {
     interleaved: u32,
     horizontal_taps: u32,
     vertical_taps: u32,
+    polar_ratio: vec2<f32>,
+    polar_phase: vec2<f32>,
+    tile_offset: vec2<i32>,
+    tile_size: vec2<u32>,
+    phase_rows: u32,
+    antiringing: f32,
 }
 
 const TRANSFER_SRGB: u32 = 1u;
@@ -52,4 +58,12 @@ fn luma_at(x: u32, y: u32) -> f32 {
 fn chroma_at(x: u32, y: u32) -> vec2<f32> {
     let codes = chroma_codes(x, y);
     return vec2<f32>(dequantize(codes.x, unpacking.chroma_quant), dequantize(codes.y, unpacking.chroma_quant));
+}
+
+fn antiring_chroma(sum: vec2<f32>, low: vec2<f32>, high: vec2<f32>) -> vec2<f32> {
+    if unpacking.antiringing <= 0.0 || low.x > high.x {
+        return sum;
+    }
+
+    return mix(sum, clamp(sum, low, high), unpacking.antiringing);
 }

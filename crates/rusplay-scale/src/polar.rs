@@ -75,6 +75,60 @@ pub(crate) fn radial_lut(kernel: Kernel, size: u32) -> Vec<f32> {
     lut
 }
 
+pub(crate) struct PolarFootprint {
+    pub taps: Vec<(i64, i64, f64)>,
+    pub anchor: (i64, i64),
+}
+
+pub(crate) fn polar_footprint(
+    geometry: &PolarGeometry,
+    kernel: Kernel,
+    x: u32,
+    y: u32,
+) -> PolarFootprint {
+    let radius = f64::from(geometry.radius);
+    let stretch = (f64::from(geometry.stretch.0), f64::from(geometry.stretch.1));
+
+    let center = sample_center(geometry, x, y);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let span = |middle: f64, stretch: f64| {
+        ((middle - radius * stretch).floor() as i64 + 1)
+            ..=((middle + radius * stretch).ceil() as i64 - 1)
+    };
+
+    let anchor = sample_anchor(geometry, x, y);
+
+    let taps = span(center.1, stretch.1)
+        .flat_map(|row| span(center.0, stretch.0).map(move |column| (column, row)))
+        .filter_map(|(column, row)| {
+            #[allow(clippy::cast_precision_loss)]
+            let distance =
+                ((column as f64 - center.0) / stretch.0).hypot((row as f64 - center.1) / stretch.1);
+            (distance < radius).then(|| (column, row, kernel.weight(distance)))
+        })
+        .collect();
+
+    PolarFootprint { taps, anchor }
+}
+
+fn sample_center(geometry: &PolarGeometry, x: u32, y: u32) -> (f64, f64) {
+    #[allow(clippy::cast_precision_loss)]
+    let center = (
+        f64::from((x as f32 + 0.5) * geometry.ratio.0 - 0.5 + geometry.phase.0),
+        f64::from((y as f32 + 0.5) * geometry.ratio.1 - 0.5 + geometry.phase.1),
+    );
+    center
+}
+
+pub(crate) fn sample_anchor(geometry: &PolarGeometry, x: u32, y: u32) -> (i64, i64) {
+    let center = sample_center(geometry, x, y);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let anchor = (center.0.floor() as i64, center.1.floor() as i64);
+    anchor
+}
+
 #[derive(Debug)]
 pub(crate) struct PolarPlan {
     lut: wgpu::Buffer,
@@ -360,7 +414,7 @@ mod tests {
         let kernel = Kernel::new(ScaleFilter::EwaLanczos);
 
         for y in 0..12 {
-            let footprint = crate::reference::polar_footprint(&geometry, kernel, 7, y);
+            let footprint = polar_footprint(&geometry, kernel, 7, y);
 
             let rows: BTreeSet<i64> = footprint.taps.iter().map(|&(_, row, _)| row).collect();
 
