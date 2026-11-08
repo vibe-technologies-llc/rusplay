@@ -4,8 +4,8 @@ use rustix::{
     thread::gettid,
 };
 use zbus::{
-    blocking::{Connection, proxy::Builder},
-    proxy::CacheProperties,
+    Connection, Proxy, block_on,
+    proxy::{Builder, CacheProperties},
 };
 
 use crate::PriorityError;
@@ -30,33 +30,36 @@ pub(crate) trait RealtimeService {
 }
 
 pub(crate) struct Rtkit {
-    proxy: zbus::blocking::Proxy<'static>,
+    proxy: Proxy<'static>,
 }
 
 impl Rtkit {
     pub(crate) fn connect() -> Result<Self, PriorityError> {
-        let connection = Connection::system().map_err(PriorityError::RtkitUnreachable)?;
-        let proxy = Builder::new(&connection)
-            .destination(DESTINATION)
-            .and_then(|builder| builder.path(PATH))
-            .and_then(|builder| builder.interface(INTERFACE))
-            .and_then(|builder| builder.cache_properties(CacheProperties::No).build())
-            .map_err(PriorityError::RtkitUnreachable)?;
+        block_on(async {
+            let connection = Connection::system().await?;
 
-        Ok(Self { proxy })
+            Builder::new(&connection)
+                .destination(DESTINATION)
+                .path(PATH)
+                .interface(INTERFACE)
+                .cache_properties(CacheProperties::No)
+                .build()
+                .await
+        })
+        .map(|proxy| Self { proxy })
+        .map_err(PriorityError::RtkitUnreachable)
     }
 }
 
 impl RealtimeService for Rtkit {
     fn limits(&self) -> Result<RealtimeLimits, PriorityError> {
-        let max_priority: i32 = self
-            .proxy
-            .get_property(MAX_PRIORITY_PROPERTY)
-            .map_err(PriorityError::RtkitLimits)?;
-        let time_limit_us: i64 = self
-            .proxy
-            .get_property(TIME_LIMIT_PROPERTY)
-            .map_err(PriorityError::RtkitLimits)?;
+        let (max_priority, time_limit_us) = block_on(async {
+            let max_priority: i32 = self.proxy.get_property(MAX_PRIORITY_PROPERTY).await?;
+            let time_limit_us: i64 = self.proxy.get_property(TIME_LIMIT_PROPERTY).await?;
+
+            Ok((max_priority, time_limit_us))
+        })
+        .map_err(PriorityError::RtkitLimits)?;
 
         Ok(RealtimeLimits {
             max_priority: u32::try_from(max_priority).unwrap_or(0),
@@ -65,9 +68,11 @@ impl RealtimeService for Rtkit {
     }
 
     fn make_realtime(&self, thread: u64, priority: u32) -> Result<(), PriorityError> {
-        self.proxy
-            .call::<_, _, ()>(MAKE_REALTIME_METHOD, &(thread, priority))
-            .map_err(|source| PriorityError::RtkitRefused { priority, source })
+        block_on(
+            self.proxy
+                .call::<_, _, ()>(MAKE_REALTIME_METHOD, &(thread, priority)),
+        )
+        .map_err(|source| PriorityError::RtkitRefused { priority, source })
     }
 }
 

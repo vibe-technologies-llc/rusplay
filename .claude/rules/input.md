@@ -36,7 +36,7 @@ paths:
 ## Host injection (`libei` feature)
 
 - The host injects through the RemoteDesktop portal and libei, the Wayland way: no X11 XTest, and
-  no uinput for keyboard and pointer. `ashpd` (`remote_desktop`, tokio) opens the session and
+  no uinput for keyboard and pointer. `ashpd` (`remote_desktop`, `async-io`) opens the session and
   `ConnectToEIS` hands over the socket; the pure-Rust `reis` crate speaks the EI protocol, so no
   libei C library is linked.
 - `libei::mapping` is pure and unit-tested: `translate` turns an `InputEvent` into an `EiRequest`
@@ -79,7 +79,7 @@ paths:
   `Bounds` takes every region of the device, `Mapping(id)` only those whose mapping id equals the
   id the ScreenCast stream reported (`PortalStream::mapping_id`). The upper edge maps just inside
   the region, because a point on the far edge lies outside it.
-- Touch (`input.touch`, default on): the portal request adds `DeviceType::Touchscreen`
+- Touch (`input.touch`, default on): the portal request adds `DeviceType::TOUCHSCREEN`
   (`PortalInputOptions::touch`, `StartedPortal::touch`) and the injector binds `Touch`. A touchscreen
   device gets the same `AbsoluteMapper` as an absolute pointer, selected by the same
   `AbsoluteTarget`, and `Capability::Touch` needs both. The slot goes out as the EI touch id. The

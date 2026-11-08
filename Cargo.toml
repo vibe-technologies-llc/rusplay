@@ -28,7 +28,7 @@ rusplay-scale.path = "crates/rusplay-scale"
 rusplay-va.path = "crates/rusplay-va"
 
 ash = { version = "0.38.0", default-features = false }
-ashpd = { version = "0.13.13", default-features = false }
+ashpd = { version = "0.14.0", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false }
 claxon = "0.4.3"
@@ -83,7 +83,7 @@ wgpu = {
     rev = "3b3506ea31154edc04de64debda0e780cba2639c",
     default-features = false
 }
-zbus = { version = "5.19.0", default-features = false }
+zbus = { version = "6.2.1", default-features = false }
 zeroize = { version = "1.9.1", default-features = false }
 
 [patch.crates-io]

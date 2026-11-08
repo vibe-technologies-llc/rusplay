@@ -6,10 +6,10 @@ paths:
 # Capture
 
 - Capture goes through the xdg-desktop-portal ScreenCast interface (`ashpd` with the `async-io`
-  runtime, because gpui enables it and ashpd refuses two runtimes, and the `screencast` feature)
+  runtime, zbus's own `default-rt`, rather than tokio, and the `screencast` feature)
   and then the PipeWire node the portal returns. No compositor-specific protocols
   (wlr-screencopy, ext-image-copy-capture) until the portal path is complete, and no X11.
-- `capture.source = "virtual"` (`SourceKind::Virtual`) asks the portal for `SourceType::Virtual`,
+- `capture.source = "virtual"` (`SourceKind::Virtual`) asks the portal for `SourceType::VIRTUAL`,
   a monitor the compositor creates for the stream. The default stays `monitor`. Before
   `select_sources` the session reads the portal's `AvailableSourceTypes` and a portal without the
   virtual bit is `CaptureError::SourceUnavailable { requested }` (`PortalSession` and

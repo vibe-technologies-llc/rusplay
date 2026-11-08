@@ -78,7 +78,7 @@ paths:
   Pure-Rust choices already made: `wayland-client` and `wayland-protocols` (`client`, `staging`)
   for the compositor's output colour description in `rusplay-client`, on wayland-rs's pure-Rust
   backend, `opus-rs` (Opus), `flacenc` (FLAC, `rusplay-audio/flac`),
-  `ashpd` over zbus (portals; `rusplay-priority` talks to rtkit with `zbus` pinned to the 5.x line ashpd and gpui already build, `async-io` and `blocking-api` only, so the tree holds one D-Bus stack), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
+  `ashpd` 0.14 over zbus 6 (portals, the `async-io` feature, which is zbus's own `default-rt` runtime; `rusplay-priority` talks to rtkit with the same `zbus`, `default-rt` and `proxy` only, so rusplay's own crates share one D-Bus stack. gpui still builds ashpd 0.13 on zbus 5, so the app also carries zbus 5 until Zed moves; `rusplay-hostd` holds zbus 6 alone), `reed-solomon-simd` (FEC), `rustix` (socket options and syscalls;
   its `net` feature needs `time` to compile), `reis` (the EI protocol for libei input injection,
   `rusplay-input/libei`, with `rustix` for its socket polling and clock), `evdev` (uinput virtual
   gamepads on the host and physical gamepads with force feedback on the client,

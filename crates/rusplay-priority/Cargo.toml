@@ -9,7 +9,7 @@ publish.workspace = true
 rusplay-config.workspace = true
 rustix = { workspace = true, features = ["process", "thread"] }
 thiserror.workspace = true
-zbus = { workspace = true, features = ["async-io", "blocking-api"] }
+zbus = { workspace = true, features = ["default-rt", "proxy"] }
 
 [lints]
 workspace = true

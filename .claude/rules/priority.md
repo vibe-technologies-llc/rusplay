@@ -17,7 +17,8 @@ paths:
   `setpriority` on Linux applies to the calling thread, and threads spawned afterwards inherit it.
 - `network.frame_thread_nice` 0 leaves the thread alone. When the nice request is refused (no
   `RLIMIT_NICE` headroom) and `network.rtkit_priority` is not 0, the thread asks rtkit
-  (`org.freedesktop.RealtimeKit1` on the system bus, through `zbus`'s blocking API) for
+  (`org.freedesktop.RealtimeKit1` on the system bus, through `zbus`'s async proxy, each call driven
+  to completion with `zbus::block_on`, since zbus 6 has no blocking API) for
   `MakeThreadRealtime` at that priority, clamped to rtkit's `MaxRealtimePriority`. rtkit refuses
   unless the process's `RLIMIT_RTTIME` is at most its `RTTimeUSecMax`, so the limit is lowered to
   it first (only when it is higher or unlimited). A thread that burns that much CPU without

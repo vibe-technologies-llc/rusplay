@@ -249,6 +249,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba377f1fb1e3972907220f1f8e7c0a45164580905c981d872c1fb90d921cbcc"
+dependencies = [
+ "bitflags 2.13.2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_repr",
+ "zbus 6.2.1",
+]
+
+[[package]]
 name = "assert_matches"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2122,7 +2136,7 @@ dependencies = [
  "accesskit",
  "accesskit_unix",
  "anyhow",
- "ashpd",
+ "ashpd 0.13.13",
  "bytemuck",
  "calloop",
  "calloop-wayland-source",
@@ -3741,7 +3755,7 @@ version = "0.6.0"
 source = "git+https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13#731c1215edb6905876c6137ab300428c7b8d7c13"
 dependencies = [
  "aes",
- "ashpd",
+ "ashpd 0.13.13",
  "async-fs",
  "async-io",
  "async-lock",
@@ -4678,7 +4692,7 @@ dependencies = [
 name = "rusplay-capture"
 version = "0.1.0"
 dependencies = [
- "ashpd",
+ "ashpd 0.14.0",
  "parking_lot 0.13.0",
  "pipewire",
  "rusplay-config",
@@ -4717,7 +4731,7 @@ dependencies = [
 name = "rusplay-clipboard"
 version = "0.1.0"
 dependencies = [
- "ashpd",
+ "ashpd 0.14.0",
  "futures-util",
  "parking_lot 0.13.0",
  "pollster 1.0.1",
@@ -4842,7 +4856,7 @@ dependencies = [
 name = "rusplay-input"
 version = "0.1.0"
 dependencies = [
- "ashpd",
+ "ashpd 0.14.0",
  "evdev",
  "parking_lot 0.13.0",
  "reis",
@@ -4885,7 +4899,7 @@ dependencies = [
  "rusplay-config",
  "rustix",
  "thiserror 2.0.21",
- "zbus 5.19.0",
+ "zbus 6.2.1",
 ]
 
 [[package]]

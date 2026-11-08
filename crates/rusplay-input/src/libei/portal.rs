@@ -1,13 +1,10 @@
 use std::os::fd::OwnedFd;
 
-use ashpd::{
-    desktop::{
-        CreateSessionOptions, PersistMode, Session,
-        remote_desktop::{
-            ConnectToEISOptions, DeviceType, RemoteDesktop, SelectDevicesOptions, StartOptions,
-        },
+use ashpd::desktop::{
+    CreateSessionOptions, PersistMode, Session,
+    remote_desktop::{
+        ConnectToEISOptions, DeviceType, RemoteDesktop, SelectDevicesOptions, StartOptions,
     },
-    enumflags2::BitFlags,
 };
 use rusplay_config::InputConfig;
 
@@ -43,16 +40,16 @@ impl PortalInputOptions {
         }
     }
 
-    fn device_types(&self) -> BitFlags<DeviceType> {
-        let mut types = BitFlags::empty();
+    fn device_types(&self) -> DeviceType {
+        let mut types = DeviceType::empty();
         if self.keyboard {
-            types |= DeviceType::Keyboard;
+            types |= DeviceType::KEYBOARD;
         }
         if self.pointer {
-            types |= DeviceType::Pointer;
+            types |= DeviceType::POINTER;
         }
         if self.touch {
-            types |= DeviceType::Touchscreen;
+            types |= DeviceType::TOUCHSCREEN;
         }
         types
     }
@@ -146,9 +143,9 @@ impl RemoteDesktopSession {
             .collect();
 
         Ok(StartedPortal {
-            keyboard: devices.contains(DeviceType::Keyboard),
-            pointer: devices.contains(DeviceType::Pointer),
-            touch: devices.contains(DeviceType::Touchscreen),
+            keyboard: devices.contains(DeviceType::KEYBOARD),
+            pointer: devices.contains(DeviceType::POINTER),
+            touch: devices.contains(DeviceType::TOUCHSCREEN),
             streams,
             restore_token: selected.restore_token().map(str::to_owned),
         })

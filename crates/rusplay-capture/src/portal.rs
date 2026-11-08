@@ -1,14 +1,11 @@
 use std::os::fd::OwnedFd;
 
-use ashpd::{
-    desktop::{
-        CreateSessionOptions, PersistMode, Session,
-        screencast::{
-            CursorMode as PortalCursorMode, IsScreencastSession, OpenPipeWireRemoteOptions,
-            Screencast, SelectSourcesOptions, SourceType, StartCastOptions,
-        },
+use ashpd::desktop::{
+    CreateSessionOptions, PersistMode, Session,
+    screencast::{
+        CursorMode as PortalCursorMode, IsScreencastSession, OpenPipeWireRemoteOptions, Screencast,
+        SelectSourcesOptions, SourceType, StartCastOptions,
     },
-    enumflags2::BitFlags,
 };
 use rusplay_config::{CaptureConfig, CursorMode, SourceKind};
 use rusplay_core::Resolution;
@@ -156,9 +153,9 @@ pub fn portal_resolution(width: i32, height: i32) -> Option<Resolution> {
 
 fn portal_cursor(mode: CursorMode) -> PortalCursorMode {
     match mode {
-        CursorMode::Hidden => PortalCursorMode::Hidden,
-        CursorMode::Embedded => PortalCursorMode::Embedded,
-        CursorMode::Metadata => PortalCursorMode::Metadata,
+        CursorMode::Hidden => PortalCursorMode::HIDDEN,
+        CursorMode::Embedded => PortalCursorMode::EMBEDDED,
+        CursorMode::Metadata => PortalCursorMode::METADATA,
     }
 }
 
@@ -170,10 +167,7 @@ async fn require_source(proxy: &Screencast, kind: SourceKind) -> Result<(), Capt
     check_source_available(kind, proxy.available_source_types().await?)
 }
 
-fn check_source_available(
-    kind: SourceKind,
-    available: BitFlags<SourceType>,
-) -> Result<(), CaptureError> {
+fn check_source_available(kind: SourceKind, available: SourceType) -> Result<(), CaptureError> {
     if available.contains(portal_sources(kind)) {
         Ok(())
     } else {
@@ -181,12 +175,12 @@ fn check_source_available(
     }
 }
 
-fn portal_sources(kind: SourceKind) -> BitFlags<SourceType> {
+fn portal_sources(kind: SourceKind) -> SourceType {
     match kind {
-        SourceKind::Monitor => SourceType::Monitor.into(),
-        SourceKind::Window => SourceType::Window.into(),
-        SourceKind::Any => SourceType::Monitor | SourceType::Window,
-        SourceKind::Virtual => SourceType::Virtual.into(),
+        SourceKind::Monitor => SourceType::MONITOR,
+        SourceKind::Window => SourceType::WINDOW,
+        SourceKind::Any => SourceType::MONITOR | SourceType::WINDOW,
+        SourceKind::Virtual => SourceType::VIRTUAL,
     }
 }
 
@@ -203,34 +197,25 @@ mod tests {
 
     #[test]
     fn every_source_kind_maps_to_its_portal_type() {
-        assert_eq!(
-            portal_sources(SourceKind::Monitor),
-            BitFlags::from(SourceType::Monitor)
-        );
-        assert_eq!(
-            portal_sources(SourceKind::Window),
-            BitFlags::from(SourceType::Window)
-        );
+        assert_eq!(portal_sources(SourceKind::Monitor), SourceType::MONITOR);
+        assert_eq!(portal_sources(SourceKind::Window), SourceType::WINDOW);
         assert_eq!(
             portal_sources(SourceKind::Any),
-            SourceType::Monitor | SourceType::Window
+            SourceType::MONITOR | SourceType::WINDOW
         );
-        assert_eq!(
-            portal_sources(SourceKind::Virtual),
-            BitFlags::from(SourceType::Virtual)
-        );
+        assert_eq!(portal_sources(SourceKind::Virtual), SourceType::VIRTUAL);
     }
 
     #[test]
     fn a_portal_advertising_virtual_sources_satisfies_a_virtual_request() {
-        let advertised = SourceType::Monitor | SourceType::Window | SourceType::Virtual;
+        let advertised = SourceType::MONITOR | SourceType::WINDOW | SourceType::VIRTUAL;
 
         assert!(check_source_available(SourceKind::Virtual, advertised).is_ok());
     }
 
     #[test]
     fn a_portal_without_virtual_sources_refuses_a_virtual_request() {
-        let advertised = SourceType::Monitor | SourceType::Window;
+        let advertised = SourceType::MONITOR | SourceType::WINDOW;
 
         assert!(matches!(
             check_source_available(SourceKind::Virtual, advertised),
