@@ -27,6 +27,7 @@ use crate::{
     audio::EncodedAudio,
     bitrate::{BitrateController, BitrateSettings, HintOutbox},
     clock::ClockSync,
+    quality::QualityRequester,
     resize::DisplayAnnouncer,
     stats::Counters,
 };
@@ -266,6 +267,7 @@ pub(crate) struct ReceiveStage {
     acks: Acks,
     adaptation: Option<Adaptation>,
     announcer: DisplayAnnouncer,
+    quality: QualityRequester,
     clock_sync: ClockSync,
     last_heard: Instant,
 }
@@ -320,6 +322,7 @@ impl ReceiveStage {
             acks: Acks::default(),
             adaptation,
             announcer,
+            quality: QualityRequester::default(),
             clock_sync: ClockSync::new(network.clock_sync_interval_ms, now),
             last_heard: now,
         }
@@ -389,6 +392,7 @@ impl ReceiveStage {
             self.send_frame_ack(now)?;
             self.adapt_bitrate(now)?;
             self.announce_display(now)?;
+            self.request_quality(now)?;
             self.service_clipboard(now);
 
             self.control.flush(&self.transport, self.host)?;
@@ -690,15 +694,23 @@ impl ReceiveStage {
                         adaptation.outbox.undeliverable(id, current);
                     }
                     self.announcer.undeliverable(id, now);
+                    self.quality.undeliverable(id);
                 }
                 ControlEvent::Acked { id } => {
                     self.announcer.acked(id);
+                    self.quality.acked(id);
                     if let Some(adaptation) = &mut self.adaptation {
                         adaptation.outbox.acked(id);
                     }
                 }
                 ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
                     self.receive_clipboard(&chunk);
+                }
+                ControlEvent::Received(ControlMessage::QualityReport(report)) => {
+                    self.links.counters.quality.report(report, now);
+                }
+                ControlEvent::Received(ControlMessage::QualityUnavailable { reason }) => {
+                    self.links.counters.quality.unavailable(reason);
                 }
                 ControlEvent::Received(
                     ControlMessage::Keepalive
@@ -709,9 +721,7 @@ impl ReceiveStage {
                     | ControlMessage::AcknowledgeFrame { .. }
                     | ControlMessage::RequestRecovery { .. }
                     | ControlMessage::Display(_)
-                    | ControlMessage::QualityRequest { .. }
-                    | ControlMessage::QualityReport(_)
-                    | ControlMessage::QualityUnavailable { .. },
+                    | ControlMessage::QualityRequest { .. },
                 ) => {}
             }
         }
@@ -844,6 +854,24 @@ impl ReceiveStage {
             Ok(id) => {
                 adaptation.outbox.sent(id);
                 self.links.counters.bitrate_hints_sent.increment();
+                Ok(())
+            }
+            Err(NetError::ControlWindowFull { .. }) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn request_quality(&mut self, now: Instant) -> Result<(), ClientError> {
+        let wanted = self.links.counters.quality.wanted();
+        let Some(enabled) = self.quality.ready(wanted).filter(|_| self.handshake_done) else {
+            return Ok(());
+        };
+        match self
+            .control
+            .send(ControlMessage::QualityRequest { enabled }, now)
+        {
+            Ok(id) => {
+                self.quality.sent(enabled, id);
                 Ok(())
             }
             Err(NetError::ControlWindowFull { .. }) => Ok(()),
@@ -1915,6 +1943,58 @@ mod tests {
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 2));
         assert_eq!(rig.cursor.latest().unwrap().x, 60);
         assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_wanted_quality_request_follows_the_hello_and_reports_reach_the_stats() {
+        let rig = Rig::start(None);
+        let report = rusplay_protocol::QualityReport {
+            frame: 12,
+            psnr: rusplay_protocol::QualityPlanes {
+                luma: rusplay_protocol::QualityDecibels(4_000),
+                cb: rusplay_protocol::QualityDecibels(4_100),
+                cr: rusplay_protocol::QualityDecibels(4_200),
+            },
+            psnr_overall: rusplay_protocol::QualityDecibels(4_050),
+            xpsnr: rusplay_protocol::QualityPlanes {
+                luma: rusplay_protocol::QualityDecibels(3_900),
+                cb: rusplay_protocol::QualityDecibels(4_000),
+                cr: rusplay_protocol::QualityDecibels(4_100),
+            },
+        };
+        let hello = ControlMessage::Hello {
+            version: ProtocolVersion::CURRENT,
+            formats: FormatSet::ALL,
+        };
+
+        rig.counters.quality.want(true);
+        rig.send(&[ControlPacket::Message {
+            id: 0,
+            message: hello,
+        }
+        .to_datagram()
+        .unwrap()]);
+        let request = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::QualityRequest { .. })
+        });
+        rig.send(&[ControlPacket::Message {
+            id: 1,
+            message: ControlMessage::QualityReport(report),
+        }
+        .to_datagram()
+        .unwrap()]);
+        let reported =
+            rig.wait_until(|rig| rig.counters.snapshot().quality == crate::QualityState::Reported);
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(
+            request,
+            Some(ControlMessage::QualityRequest { enabled: true })
+        );
+        assert!(reported);
+        assert_eq!(stats.quality_report, Some(report));
+        assert!(stats.quality_age.is_some());
+        rig.finish().unwrap();
     }
 
     fn clipboard_rig(send: bool, receive: bool, board: &rusplay_clipboard::MemoryClipboard) -> Rig {

@@ -1,10 +1,20 @@
 use rusplay_core::{JsonLine, StatsPhase};
+use rusplay_protocol::QualityDecibels;
 
 use crate::stats::ClientStats;
 
 const EVENT: &str = "client_stats";
 
+fn decibels(value: QualityDecibels) -> Option<String> {
+    (!value.is_lossless()).then(|| format!("{:.2}", value.decibels().value()))
+}
+
 pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) -> String {
+    let report = stats.quality_report;
+    let value = |pick: fn(&rusplay_protocol::QualityReport) -> QualityDecibels| {
+        report.as_ref().map(pick).and_then(decibels)
+    };
+
     JsonLine::new(EVENT, phase, unix_ms)
         .number("frames_received", stats.frames_received)
         .number("frames_recovered", stats.frames_recovered)
@@ -68,6 +78,19 @@ pub fn stats_json_line(phase: StatsPhase, unix_ms: u128, stats: &ClientStats) ->
             "capture_to_present_us",
             stats.capture_to_present.map(|latency| latency.as_micros()),
         )
+        .number("quality_state", format!("\"{}\"", stats.quality.name()))
+        .optional("quality_frame", report.map(|report| report.frame))
+        .optional(
+            "quality_age_ms",
+            stats.quality_age.map(|age| age.as_millis()),
+        )
+        .optional("psnr_y_db", value(|report| report.psnr.luma))
+        .optional("psnr_u_db", value(|report| report.psnr.cb))
+        .optional("psnr_v_db", value(|report| report.psnr.cr))
+        .optional("psnr_db", value(|report| report.psnr_overall))
+        .optional("xpsnr_y_db", value(|report| report.xpsnr.luma))
+        .optional("xpsnr_u_db", value(|report| report.xpsnr.cb))
+        .optional("xpsnr_v_db", value(|report| report.xpsnr.cr))
         .finish()
 }
 
@@ -110,6 +133,36 @@ mod tests {
     }
 
     #[test]
+    fn a_quality_report_is_emitted_in_decibels_with_lossless_as_null() {
+        let planes = rusplay_protocol::QualityPlanes {
+            luma: QualityDecibels(4_123),
+            cb: QualityDecibels::LOSSLESS,
+            cr: QualityDecibels(4_500),
+        };
+        let stats = ClientStats {
+            quality: crate::QualityState::Reported,
+            quality_report: Some(rusplay_protocol::QualityReport {
+                frame: 77,
+                psnr: planes,
+                psnr_overall: QualityDecibels(4_200),
+                xpsnr: planes,
+            }),
+            quality_age: Some(Duration::from_millis(420)),
+            ..ClientStats::default()
+        };
+
+        let line = stats_json_line(StatsPhase::Interval, 0, &stats);
+
+        assert!(line.contains(r#""quality_state":"reported""#));
+        assert!(line.contains(r#""quality_frame":77"#));
+        assert!(line.contains(r#""quality_age_ms":420"#));
+        assert!(line.contains(r#""psnr_y_db":41.23"#));
+        assert!(line.contains(r#""psnr_u_db":null"#));
+        assert!(line.contains(r#""psnr_db":42.00"#));
+        assert!(line.contains(r#""xpsnr_v_db":45.00"#));
+    }
+
+    #[test]
     fn an_unmeasured_value_is_null() {
         let line = stats_json_line(StatsPhase::Final, 0, &ClientStats::default());
 
@@ -136,6 +189,9 @@ mod tests {
             let name = match counter {
                 "rtt" => "rtt_us".to_owned(),
                 "clock_offset_micros" => "clock_offset_us".to_owned(),
+                "quality" => "quality_state".to_owned(),
+                "quality_report" => "quality_frame".to_owned(),
+                "quality_age" => "quality_age_ms".to_owned(),
                 other if other.starts_with("capture_to_") => format!("{other}_us"),
                 other => other.to_owned(),
             };

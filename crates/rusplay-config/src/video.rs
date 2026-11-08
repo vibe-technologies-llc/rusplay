@@ -37,6 +37,7 @@ pub struct VideoConfig {
     pub stats_overlay: bool,
     pub display_debounce_ms: u32,
     pub quality_interval_ms: u32,
+    pub quality_metrics: bool,
 }
 
 impl Default for VideoConfig {
@@ -61,6 +62,7 @@ impl Default for VideoConfig {
             stats_overlay: false,
             display_debounce_ms: 200,
             quality_interval_ms: 1_000,
+            quality_metrics: false,
         }
     }
 }

@@ -280,6 +280,13 @@ impl StreamView {
         }
     }
 
+    fn toggle_quality(&mut self, cx: &mut Context<Self>) {
+        if let Some(stream) = &self.live.borrow().stream {
+            stream.set_quality_metrics(!stream.quality_metrics());
+        }
+        cx.notify();
+    }
+
     fn toggle_stats(&mut self, cx: &mut Context<Self>) {
         self.show_stats = !self.show_stats;
         self.sync_overlay();

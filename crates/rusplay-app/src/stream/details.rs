@@ -1,10 +1,10 @@
 use gpui::{Context, FontWeight, IntoElement, div, prelude::*, px};
-use rusplay_client::ClientStream;
+use rusplay_client::{ClientStats, ClientStream};
 use rusplay_config::VideoDecoderConfig;
 
 use super::StreamView;
 use crate::{
-    stats::{StreamRates, millis},
+    stats::{StreamRates, millis, quality_rows},
     theme,
     widgets::controls::{ButtonStyle, button},
 };
@@ -33,6 +33,7 @@ impl StreamView {
             ("Frame transfer", transfer.to_owned()),
         ];
         let (performance, latency) = performance_rows(self.rates);
+        let quality = Self::render_quality(live.stream.as_ref(), stats.as_ref(), cx);
 
         if let Some(format) = format {
             video.extend([
@@ -103,7 +104,32 @@ impl StreamView {
                     .child(section("Connection", connection, "Connecting…"))
                     .child(section("Video", video, "Waiting for stream format…"))
                     .child(section("Performance", performance, "Collecting samples…"))
-                    .child(section("Latency", latency, "Waiting for timing data…")),
+                    .child(section("Latency", latency, "Waiting for timing data…"))
+                    .child(quality),
+            )
+    }
+
+    fn render_quality(
+        stream: Option<&ClientStream>,
+        stats: Option<&ClientStats>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let measuring = stream.is_some_and(ClientStream::quality_metrics);
+        let label = if measuring {
+            "Stop measuring quality"
+        } else {
+            "Measure quality"
+        };
+
+        div()
+            .child(section(
+                "Encode quality",
+                stats.map(quality_rows).unwrap_or_default(),
+                "Connecting…",
+            ))
+            .child(
+                button("quality-toggle", label, ButtonStyle::Quiet, stats.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_quality(cx))),
             )
     }
 }

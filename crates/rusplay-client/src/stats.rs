@@ -1,9 +1,14 @@
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use crate::clock::HostClock;
+use rusplay_protocol::QualityReport;
+
+use crate::{
+    clock::HostClock,
+    quality::{QualityLink, QualityState},
+};
 
 const SMOOTHING_DIVISOR: u64 = 8;
 
@@ -62,6 +67,9 @@ pub struct ClientStats {
     pub capture_to_receive: Option<Duration>,
     pub capture_to_decode: Option<Duration>,
     pub capture_to_present: Option<Duration>,
+    pub quality: QualityState,
+    pub quality_report: Option<QualityReport>,
+    pub quality_age: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -162,11 +170,20 @@ pub(crate) struct Counters {
     pub capture_to_decode: Gauge,
     pub capture_to_present: Gauge,
     pub clock: HostClock,
+    pub quality: QualityLink,
     rtt_nanos: Counter,
 }
 
 impl Counters {
+    pub(crate) fn wanting_quality(wanted: bool) -> Self {
+        let counters = Self::default();
+        counters.quality.want(wanted);
+        counters
+    }
+
     pub(crate) fn snapshot(&self) -> ClientStats {
+        let quality = self.quality.snapshot(Instant::now());
+
         ClientStats {
             frames_received: self.frames_received.get(),
             frames_recovered: self.frames_recovered.get(),
@@ -227,6 +244,9 @@ impl Counters {
             capture_to_receive: self.capture_to_receive.get(),
             capture_to_decode: self.capture_to_decode.get(),
             capture_to_present: self.capture_to_present.get(),
+            quality: quality.state,
+            quality_report: quality.report,
+            quality_age: quality.age,
         }
     }
 

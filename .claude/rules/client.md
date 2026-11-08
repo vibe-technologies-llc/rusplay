@@ -289,6 +289,20 @@ paths:
   `ClientStats` gains `input_packets_sent`, `input_events_sent`, `rumble_commands`,
   `rumble_failures`, `feedback_commands`, `feedback_dropped`, `feedback_failures` and `gamepad_failures`.
 - `ClientStats` copies the output's `underruns`, `trims` and `overflows` after every packet.
+- Encode quality (`quality.rs`): `video.quality_metrics` (default off) is the initial wish and
+  `ClientStream::set_quality_metrics` changes it for the session (`quality_metrics` reads it).
+  The wish lives in `Counters::quality` (`QualityLink`); the receive stage sends
+  `QualityRequest { enabled }` once the handshake is done whenever the wish differs from what the
+  host last acknowledged, one request in flight at a time (`QualityRequester`, an undeliverable one
+  is sent again, a full control window waits), so the host starts with sampling off and a wish
+  that never changes sends nothing. `QualityReport` and `QualityUnavailable` from the host land in
+  the link while the wish is on (afterwards they are dropped) and `ClientStats` carries
+  `quality` (`QualityState`: `Off`, `Waiting`, `Reported`, `Unavailable(reason)`, where an
+  unavailable answer keeps the last report), `quality_report` and `quality_age` (since it
+  arrived). Turning the wish off clears both. The JSON line adds `quality_state` (the state's
+  kebab-case name), `quality_frame`, `quality_age_ms` and `psnr_y_db`, `psnr_u_db`, `psnr_v_db`,
+  `psnr_db`, `xpsnr_y_db`, `xpsnr_u_db`, `xpsnr_v_db` (two decimals; `null` without a report and
+  for a lossless plane).
 - Cursor (`cursor.rs`): `StreamKind::Cursor` has its own `Reassembler` (a shape image is larger
   than a datagram) and each completed frame is decoded as a `CursorMessage` on the receive
   thread. `LatestCursor`, from `ClientStream::cursor`, holds the latest `CursorState`

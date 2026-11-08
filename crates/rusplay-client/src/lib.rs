@@ -19,6 +19,7 @@ mod microphone;
 mod name;
 mod packet_dump;
 mod present;
+mod quality;
 mod receive;
 mod resize;
 mod session;
@@ -45,7 +46,10 @@ pub use rusplay_net::{
     DiscoveredHost, DiscoveryBrowser, DiscoveryOptions, MAX_PEER_NAME_BYTES, PeerRecord,
     PeerSecret, Pin,
 };
-pub use rusplay_protocol::{ClientDisplay, CursorImage, HostId, StreamDescription};
+pub use rusplay_protocol::{
+    ClientDisplay, CursorImage, HostId, QualityDecibels, QualityPlanes, QualityReport,
+    QualityUnavailableReason, StreamDescription,
+};
 pub use rusplay_scale::{ColorVolume, OutputLight};
 
 #[cfg(feature = "window")]
@@ -68,6 +72,7 @@ pub use crate::{
     host_book::{HostBook, SavedHost},
     input::InputHandle,
     microphone::default_microphone,
+    quality::QualityState,
     session::{ClientSession, ClientStream, Credentials, Gpu},
     sink::{FrameSink, LatestFrame, PresentedFrame},
     stats::ClientStats,

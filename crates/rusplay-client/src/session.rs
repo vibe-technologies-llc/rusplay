@@ -227,7 +227,7 @@ impl ClientSession {
         let mut stream = ClientStream {
             stages: Vec::new(),
             stop: Arc::new(AtomicBool::new(false)),
-            counters: Arc::new(Counters::default()),
+            counters: Arc::new(Counters::wanting_quality(self.config.video.quality_metrics)),
             tuning: ThreadTuning::from_config(network),
             target: Arc::new(Mutex::new(None)),
             decoded: Arc::new(Slot::new()),
@@ -399,6 +399,14 @@ impl ClientStream {
 
     pub fn announce_display(&self, display: ClientDisplay) {
         *self.display_updates.lock() = Some(display);
+    }
+
+    pub fn set_quality_metrics(&self, enabled: bool) {
+        self.counters.quality.want(enabled);
+    }
+
+    pub fn quality_metrics(&self) -> bool {
+        self.counters.quality.wanted()
     }
 
     pub fn target(&self) -> Option<Resolution> {

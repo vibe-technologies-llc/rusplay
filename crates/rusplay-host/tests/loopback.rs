@@ -15,7 +15,7 @@ use rusplay_audio::AudioError;
 use rusplay_capture::{CaptureError, CursorBitmap, CursorUpdate, Publisher, Subscriber, latest};
 use rusplay_client::{
     AudioOutput, AudioOutputStats, ClientError, ClientSession, ClientStream, Credentials,
-    LatestFrame, PresentedFrame,
+    LatestFrame, PresentedFrame, QualityState,
 };
 use rusplay_clipboard::{ClipboardBackend, MemoryClipboard};
 use rusplay_config::{
@@ -544,6 +544,51 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
     assert!(described.is_fallback());
     assert_eq!(described.coded(), fallback);
     assert_eq!(described.configured, configured);
+}
+
+#[test]
+fn a_client_asking_for_quality_gets_reports_of_the_encoded_stream() {
+    let config = host_config(VideoEncoderConfig::Vaapi(VaapiConfig::default()));
+    if !supported(&config) {
+        return;
+    }
+    let Some(gpu) = open_gpu() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let host = bind_host(config, &dir, &RecordedInput::default());
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+    let mut client = client_config();
+    client.video.quality_metrics = true;
+
+    let stream = ClientSession::new(client)
+        .connect_with_audio(
+            address,
+            &Credentials::Pin(Pin::parse(PIN).unwrap()),
+            client_gpu(&gpu),
+            LatestFrame::new(),
+            None,
+        )
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    while stream.stats().quality_report.is_none() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let stats = stream.stats();
+    stream.set_quality_metrics(false);
+    let turned_off = stream.stats();
+    stream.stop().unwrap();
+    serving.join().unwrap().unwrap();
+
+    let report = stats
+        .quality_report
+        .expect("the host sent no quality report");
+    assert_eq!(stats.quality, QualityState::Reported);
+    assert!(report.psnr.luma.decibels().value() > 30.0, "{report:?}");
+    assert!(report.xpsnr.luma.decibels().value() > 30.0, "{report:?}");
+    assert_eq!(turned_off.quality, QualityState::Off);
+    assert!(turned_off.quality_report.is_none());
 }
 
 #[test]

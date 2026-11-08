@@ -8,7 +8,8 @@ use std::{
 
 use rusplay_client::{
     ClientStats, ColorVolume, FrameSink, OverlayText, PresentationStats, PresentedFrame,
-    StatsPhase, StatsSchedule, stats_json_line, unix_millis_now,
+    QualityDecibels, QualityReport, QualityState, QualityUnavailableReason, StatsPhase,
+    StatsSchedule, stats_json_line, unix_millis_now,
 };
 use rusplay_config::NetworkConfig;
 
@@ -128,6 +129,67 @@ pub struct StreamRates {
     pub latency: Option<ClientLatency>,
     pub end_to_end: Option<EndToEnd>,
     pub display: Option<DisplayTiming>,
+    pub quality: Option<QualityReport>,
+}
+
+pub fn decibels_text(value: QualityDecibels) -> String {
+    if value.is_lossless() {
+        "lossless".to_owned()
+    } else {
+        format!("{:.2}", value.decibels().value())
+    }
+}
+
+fn planes_text(luma: QualityDecibels, cb: QualityDecibels, cr: QualityDecibels) -> String {
+    format!(
+        "{} / {} / {} dB",
+        decibels_text(luma),
+        decibels_text(cb),
+        decibels_text(cr)
+    )
+}
+
+pub fn quality_rows(snapshot: &ClientStats) -> Vec<(&'static str, String)> {
+    let status = match snapshot.quality {
+        QualityState::Off => "Off",
+        QualityState::Waiting => "Waiting for a sample…",
+        QualityState::Reported => "Measuring",
+        QualityState::Unavailable(QualityUnavailableReason::EncoderUnsupported) => {
+            "The host encoder cannot reconstruct"
+        }
+        QualityState::Unavailable(QualityUnavailableReason::HostDisabled) => {
+            "The host has sampling off"
+        }
+        QualityState::Unavailable(QualityUnavailableReason::MeasurementFailed) => {
+            "The last measurement failed"
+        }
+    };
+    let mut rows = vec![("Status", status.to_owned())];
+
+    if let Some(report) = snapshot.quality_report {
+        rows.extend([
+            (
+                "PSNR Y / U / V",
+                planes_text(report.psnr.luma, report.psnr.cb, report.psnr.cr),
+            ),
+            (
+                "PSNR overall",
+                format!("{} dB", decibels_text(report.psnr_overall)),
+            ),
+            (
+                "XPSNR Y / U / V",
+                planes_text(report.xpsnr.luma, report.xpsnr.cb, report.xpsnr.cr),
+            ),
+            ("Sampled frame", report.frame.to_string()),
+        ]);
+        rows.extend(
+            snapshot
+                .quality_age
+                .map(|age| ("Sample age", format!("{:.1} s", age.as_secs_f64()))),
+        );
+    }
+
+    rows
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +271,9 @@ impl StreamRates {
             latency,
             end_to_end: EndToEnd::from_stats(now),
             display: None,
+            quality: now
+                .quality_report
+                .filter(|_| now.quality != QualityState::Off),
         })
     }
 
@@ -254,6 +319,16 @@ impl StreamRates {
                 millis(latency.total()),
                 millis(latency.peak)
             ));
+        }
+        if let Some(report) = self.quality {
+            lines.push(
+                format!(
+                    "PSNR {}  XPSNR Y {} DB",
+                    decibels_text(report.psnr_overall),
+                    decibels_text(report.xpsnr.luma)
+                )
+                .to_uppercase(),
+            );
         }
 
         OverlayText::new(lines)
@@ -358,6 +433,69 @@ mod tests {
         let mut schedule = reporter.schedule;
         assert!(!schedule.take_due(start + Duration::from_millis(999)));
         assert!(schedule.take_due(start + Duration::from_millis(1_000)));
+    }
+
+    fn quality_report() -> QualityReport {
+        QualityReport {
+            frame: 90,
+            psnr: rusplay_client::QualityPlanes {
+                luma: QualityDecibels(4_123),
+                cb: QualityDecibels(4_400),
+                cr: QualityDecibels::LOSSLESS,
+            },
+            psnr_overall: QualityDecibels(4_200),
+            xpsnr: rusplay_client::QualityPlanes {
+                luma: QualityDecibels(3_950),
+                cb: QualityDecibels(4_300),
+                cr: QualityDecibels(4_310),
+            },
+        }
+    }
+
+    #[test]
+    fn quality_rows_say_the_state_and_show_a_report_with_its_age() {
+        let off = quality_rows(&ClientStats::default());
+        let refused = quality_rows(&ClientStats {
+            quality: QualityState::Unavailable(QualityUnavailableReason::HostDisabled),
+            ..ClientStats::default()
+        });
+        let reported = quality_rows(&ClientStats {
+            quality: QualityState::Reported,
+            quality_report: Some(quality_report()),
+            quality_age: Some(Duration::from_millis(1_250)),
+            ..ClientStats::default()
+        });
+
+        assert_eq!(off, [("Status", "Off".to_owned())]);
+        assert_eq!(refused[0].1, "The host has sampling off");
+        assert_eq!(
+            reported[1],
+            ("PSNR Y / U / V", "41.23 / 44.00 / lossless dB".to_owned())
+        );
+        assert_eq!(reported[2], ("PSNR overall", "42.00 dB".to_owned()));
+        assert_eq!(reported[4], ("Sampled frame", "90".to_owned()));
+        assert_eq!(reported[5], ("Sample age", "1.2 s".to_owned()));
+    }
+
+    #[test]
+    fn the_overlay_gets_a_quality_line_while_measuring() {
+        let start = Instant::now();
+        let mut current = reading(start + SAMPLE_WINDOW);
+        current.stats.quality = QualityState::Reported;
+        current.stats.quality_report = Some(quality_report());
+
+        let rates = StreamRates::between(&reading(start), &current, 0).unwrap();
+        let quiet =
+            StreamRates::between(&reading(start), &reading(start + SAMPLE_WINDOW), 0).unwrap();
+
+        assert!(
+            rates
+                .overlay()
+                .lines()
+                .iter()
+                .any(|line| line == "PSNR 42.00  XPSNR Y 39.50 DB")
+        );
+        assert!(quiet.quality.is_none());
     }
 
     fn reading(at: Instant) -> Reading {

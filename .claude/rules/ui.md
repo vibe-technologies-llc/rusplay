@@ -204,6 +204,12 @@ paths:
   panel shows submit-to-display latency, display refresh (`Variable` without a fixed one) and the
   capture-to-display figure, the overlay a `DISPLAY +x MS  <n> HZ|VRR` line and an `E2E` line under
   it.
+  Below the latency the panel has an Encode quality section (`stats::quality_rows`: the state,
+  PSNR Y/U/V and overall, XPSNR Y/U/V, the sampled frame and the sample's age) and a
+  `Measure quality` / `Stop measuring quality` button that calls
+  `ClientStream::set_quality_metrics` for the session (`video.quality_metrics` is only the
+  initial state). While a report is in hand the overlay adds a `PSNR <overall>  XPSNR Y <luma> DB`
+  line.
   With `video.stats_overlay` (default off) the same rates are also drawn over the picture, for
   when the header is hidden: `StreamRates::overlay` makes an `OverlayText` and `sync_overlay`
   hands it to `StreamWindow::set_overlay` on every new sample and on the toggle. The overlay
