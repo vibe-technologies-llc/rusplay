@@ -96,6 +96,10 @@ pub enum EncodeError {
         #[source]
         source: QualityError,
     },
+    #[error("the {backend} encoder returned no reconstruction for the output")]
+    ReconstructionMissing { backend: Backend },
+    #[error("the {backend} reconstruction could not be read, status {code}")]
+    ReconstructionFailed { backend: Backend, code: i32 },
     #[error("the vaapi reconstructed surface is not one the session created")]
     ReconstructionSurfaceMissing,
     #[error("the {backend} reconstruction has the unknown layout {code}")]

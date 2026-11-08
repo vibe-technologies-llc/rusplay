@@ -369,6 +369,7 @@ pub struct SvtAv1Config {
     pub low_latency: bool,
     pub log_level: SvtAv1LogLevel,
     pub threads: Option<NonZeroU32>,
+    pub reconstruction: bool,
     pub params: EncoderParams,
 }
 
@@ -379,6 +380,7 @@ impl Default for SvtAv1Config {
             low_latency: true,
             log_level: SvtAv1LogLevel::default(),
             threads: None,
+            reconstruction: false,
             params: EncoderParams::new(),
         }
     }

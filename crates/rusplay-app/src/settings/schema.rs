@@ -636,6 +636,15 @@ pub static FIELDS: &[Field] = &[
         Audience::Host,
         Section::Video,
         "Encoder",
+        "video.encoder.reconstruction",
+        "Reconstruction for quality metrics",
+        Kind::Flag,
+    )
+    .when(SVT_AV1),
+    field(
+        Audience::Host,
+        Section::Video,
+        "Encoder",
         "video.encoder.log_level",
         "Log level",
         Kind::Choice(SVT_AV1_LOG_LEVELS),

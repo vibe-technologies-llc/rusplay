@@ -9,14 +9,15 @@ use std::{
 use rusplay_config::{SvtAv1Config, VideoConfig};
 use rusplay_core::{
     BitDepth, ChromaSiting, ChromaSubsampling, Codec, ColorPrimaries, ColorRange, ColorSpace,
-    EncodedFrame, Frame, FrameRate, MatrixCoefficients, PixelFormat, Resolution, Timestamp,
-    TransferFunction,
+    EncodedFrame, Frame, FrameRate, MatrixCoefficients, PixelFormat, PlaneBytes, Resolution,
+    SamplePicture, Timestamp, TransferFunction, chroma_size,
 };
 
 use crate::{
     Backend, EncodeError, VideoEncoder,
     hdr::St2086,
     input::{YuvFrame, bytes_per_sample},
+    reconstruction::{ReconPlanes, ReconstructionSlot, picture},
     software::CParam,
 };
 
@@ -283,6 +284,10 @@ impl Settings {
         Ok(settings)
     }
 
+    const fn reconstructs(&self) -> bool {
+        self.config.reconstruction && self.config.low_latency
+    }
+
     fn apply(
         &self,
         config: &mut sys::EbSvtAv1EncConfiguration,
@@ -347,14 +352,84 @@ impl Settings {
         if let Some(threads) = self.config.threads {
             config.level_of_parallelism = threads.get();
         }
+        config.recon_enabled = self.reconstructs();
 
         Ok(())
+    }
+}
+
+struct ReconBuffer {
+    format: PixelFormat,
+    bytes: Vec<u8>,
+}
+
+impl ReconBuffer {
+    fn new(format: PixelFormat, resolution: Resolution) -> Self {
+        let luma = (resolution.width as usize, resolution.height as usize);
+        let (chroma_width, chroma_height) = chroma_size(luma, format.chroma);
+        let samples = luma.0 * luma.1 + 2 * chroma_width * chroma_height;
+
+        Self {
+            format,
+            bytes: vec![0; samples * bytes_per_sample(format.depth)],
+        }
+    }
+
+    fn read(&mut self, handle: &Handle) -> Result<Option<usize>, EncodeError> {
+        let mut header = sys::EbBufferHeaderType {
+            size: u32::try_from(mem::size_of::<sys::EbBufferHeaderType>()).unwrap_or(0),
+            p_buffer: self.bytes.as_mut_ptr(),
+            n_alloc_len: u32::try_from(self.bytes.len()).unwrap_or(u32::MAX),
+            ..sys::EbBufferHeaderType::default()
+        };
+
+        let status = unsafe { sys::svt_av1_get_recon(handle.raw.as_ptr(), &raw mut header) };
+        if !header.metadata.is_null() {
+            unsafe { sys::svt_metadata_array_free((&raw mut header.metadata).cast::<c_void>()) };
+        }
+
+        match status {
+            sys::EbErrorType_EB_NoErrorEmptyQueue => Ok(None),
+            sys::EbErrorType_EB_ErrorNone => Ok(Some(header.n_filled_len as usize)),
+            code => Err(EncodeError::ReconstructionFailed {
+                backend: BACKEND,
+                code,
+            }),
+        }
+    }
+
+    fn picture(&self, resolution: Resolution, filled: usize) -> Result<SamplePicture, EncodeError> {
+        let sample = bytes_per_sample(self.format.depth);
+        let luma = (resolution.width as usize, resolution.height as usize);
+        let (chroma_width, chroma_height) = chroma_size(luma, self.format.chroma);
+        let luma_bytes = luma.0 * luma.1 * sample;
+        let chroma_bytes = chroma_width * chroma_height * sample;
+        let filled = &self.bytes[..filled.min(self.bytes.len())];
+        let plane = |start: usize, len: usize, width: usize| PlaneBytes {
+            data: filled.get(start..start + len).unwrap_or_default(),
+            stride: width * sample,
+            bytes_per_sample: sample,
+            shift: 0,
+        };
+        let planes = ReconPlanes::Planar([
+            plane(0, luma_bytes, luma.0),
+            plane(luma_bytes, chroma_bytes, chroma_width),
+            plane(luma_bytes + chroma_bytes, chroma_bytes, chroma_width),
+        ]);
+
+        picture(self.format, resolution, planes).map_err(|source| {
+            EncodeError::ReconstructionUnreadable {
+                backend: BACKEND,
+                source,
+            }
+        })
     }
 }
 
 struct Session {
     handle: Handle,
     resolution: Resolution,
+    recon: Option<ReconBuffer>,
     bytes_per_sample: usize,
     blocking_output: bool,
     ready: VecDeque<EncodedFrame>,
@@ -371,6 +446,9 @@ impl Session {
         Ok(Self {
             handle,
             resolution,
+            recon: settings
+                .reconstructs()
+                .then(|| ReconBuffer::new(settings.pixel_format, resolution)),
             bytes_per_sample: bytes_per_sample(settings.pixel_format.depth),
             blocking_output: config.pred_structure == sys::PredStructure_LOW_DELAY,
             ready: VecDeque::new(),
@@ -384,6 +462,7 @@ impl Session {
         view: &YuvFrame<'_>,
         timestamp: Timestamp,
         keyframe: bool,
+        reconstruction: &mut ReconstructionSlot,
     ) -> Result<Option<EncodedFrame>, EncodeError> {
         let strides = view
             .planes
@@ -435,7 +514,33 @@ impl Session {
         }
         self.pending_bitrate_kbps = None;
 
-        self.receive()
+        let encoded = self.receive()?;
+        let latest = self.drain_reconstructions();
+        if encoded.is_some() {
+            reconstruction.fill(|| {
+                let filled =
+                    latest?.ok_or(EncodeError::ReconstructionMissing { backend: BACKEND })?;
+                self.recon
+                    .as_ref()
+                    .ok_or(EncodeError::ReconstructionMissing { backend: BACKEND })?
+                    .picture(self.resolution, filled)
+            });
+        }
+
+        Ok(encoded)
+    }
+
+    fn drain_reconstructions(&mut self) -> Result<Option<usize>, EncodeError> {
+        let Some(recon) = &mut self.recon else {
+            return Ok(None);
+        };
+
+        let mut latest = None;
+        while let Some(filled) = recon.read(&self.handle)? {
+            latest = Some(filled);
+        }
+
+        Ok(latest)
     }
 
     fn receive(&mut self) -> Result<Option<EncodedFrame>, EncodeError> {
@@ -495,6 +600,7 @@ pub struct SvtAv1Encoder {
     settings: Settings,
     session: Option<Session>,
     keyframe_pending: bool,
+    reconstruction: ReconstructionSlot,
 }
 
 impl SvtAv1Encoder {
@@ -515,6 +621,7 @@ impl SvtAv1Encoder {
             settings,
             session,
             keyframe_pending: false,
+            reconstruction: ReconstructionSlot::Idle,
         })
     }
 }
@@ -536,7 +643,12 @@ impl VideoEncoder for SvtAv1Encoder {
             });
         }
 
-        let encoded = session.encode(&view, frame.timestamp, self.keyframe_pending)?;
+        let encoded = session.encode(
+            &view,
+            frame.timestamp,
+            self.keyframe_pending,
+            &mut self.reconstruction,
+        )?;
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -544,6 +656,19 @@ impl VideoEncoder for SvtAv1Encoder {
 
     fn request_keyframe(&mut self) {
         self.keyframe_pending = true;
+    }
+
+    fn capture_reconstruction(&mut self) -> bool {
+        if !self.settings.reconstructs() {
+            return false;
+        }
+
+        self.reconstruction.arm();
+        true
+    }
+
+    fn take_reconstruction(&mut self) -> Result<Option<SamplePicture>, EncodeError> {
+        self.reconstruction.take()
     }
 
     fn set_bitrate(&mut self, kbps: u32) -> Result<(), EncodeError> {
@@ -742,6 +867,95 @@ mod tests {
             (u16::from_be(light.max_cll), u16::from_be(light.max_fall)),
             (1000, 400)
         );
+    }
+
+    use rusplay_decode::VideoDecoder;
+
+    fn reconstructing(depth: BitDepth) -> VideoConfig {
+        config(
+            pixel(ChromaSubsampling::Yuv420, depth),
+            SvtAv1Config {
+                reconstruction: true,
+                ..SvtAv1Config::default()
+            },
+        )
+    }
+
+    fn decoded_samples(plane: &rusplay_decode::CpuPlane<'_>) -> Vec<u16> {
+        let sample = usize::from(plane.bytes_per_sample);
+
+        (0..plane.height as usize)
+            .flat_map(|row| {
+                plane.data[row * plane.stride..][..plane.width as usize * sample]
+                    .chunks(sample)
+                    .map(|bytes| match bytes {
+                        [low, high] => u16::from_le_bytes([*low, *high]),
+                        [value] => u16::from(*value),
+                        _ => 0,
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_reconstruction_is_what_the_decoder_outputs() {
+        const ARMED: u64 = 4;
+
+        for depth in [BitDepth::Eight, BitDepth::Ten] {
+            let config = reconstructing(depth);
+            let format = config.pixel_format;
+            let mut encoder = crate::open(&config).unwrap();
+            let mut rav1d = rusplay_decode::Rav1dDecoder::new(&SoftwareDecoderConfig {
+                threads: std::num::NonZeroU32::new(1),
+            })
+            .unwrap();
+
+            for index in 0..=ARMED + 1 {
+                if index == ARMED {
+                    assert!(encoder.capture_reconstruction());
+                }
+                let packet = encoder
+                    .encode(&testing::frame(format, index))
+                    .unwrap()
+                    .unwrap();
+                let decoded = rav1d.decode(&packet).unwrap().unwrap();
+                let reconstruction = encoder.take_reconstruction().unwrap();
+                if index != ARMED {
+                    assert!(reconstruction.is_none());
+                    continue;
+                }
+
+                let reconstruction = reconstruction.unwrap();
+                let rusplay_decode::DecodedBuffer::Cpu(cpu) = decoded.buffer else {
+                    unreachable!("rav1d decodes to memory");
+                };
+                assert_eq!(reconstruction.resolution(), testing::TEST_RESOLUTION);
+                for (plane, (ours, theirs)) in
+                    reconstruction.planes().iter().zip(cpu.planes()).enumerate()
+                {
+                    assert_eq!(
+                        ours.samples(),
+                        decoded_samples(&theirs).as_slice(),
+                        "{depth:?} plane {plane}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_reconstruction_follows_the_source() {
+        for depth in [BitDepth::Eight, BitDepth::Ten] {
+            testing::check_reconstruction_follows_the_source(&reconstructing(depth));
+        }
+    }
+
+    #[test]
+    fn reconstruction_is_off_by_default() {
+        let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
+        let mut encoder = crate::open(&config(format, SvtAv1Config::default())).unwrap();
+
+        assert!(!encoder.capture_reconstruction());
     }
 
     #[test]

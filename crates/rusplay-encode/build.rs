@@ -141,10 +141,10 @@ fn main() -> Result<(), bindings::BuildError> {
     #[cfg(feature = "svt-av1")]
     bindings::generate(&bindings::Library {
         packages: &["SvtAv1Enc"],
-        headers: &["EbSvtAv1Enc.h"],
+        headers: &["EbSvtAv1Enc.h", "EbSvtAv1Metadata.h"],
         macro_type: MacroTypeVariation::Signed,
         output: "svt_av1.rs",
-        symbols: "(svt_av1|Svt|Eb|EB|SVT)_?.*",
+        symbols: "(svt_av1|svt_metadata|Svt|Eb|EB|SVT)_?.*",
         build_suffixed_prefix: None,
     })?;
 

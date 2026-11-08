@@ -62,7 +62,15 @@ paths:
   `format::unpack`, the exact inverse of `pack` (round-trip tested for every format). The
   hardware test `reconstruction_is_what_the_decoder_outputs` holds the VAAPI reconstruction
   bit-identical to `VaapiDecoder`'s output for H.264, HEVC and AV1, 8 and 10-bit (radeonsi, RX
-  9070). SVT-AV1 and NVENC keep the default, which answers false.
+  9070). SVT-AV1 reconstructs only with `video.encoder.reconstruction = true` (default off) and
+  `low_latency`: it sets `recon_enabled`, which makes the library copy every reconstructed picture
+  into an output queue that must be drained or the encoder blocks, so `Session::encode` drains it
+  with `svt_av1_get_recon` after every packet into one reused buffer (planar, visible size,
+  16-bit little-endian above 8 bits) and reads the last one when armed; that is a frame copy per
+  frame inside the library and one more in Rusplay whether or not anything is sampled, which is
+  why it is opt-in. Outside low delay the queue's pictures are in decode order with the library's
+  own picture numbers, so it stays off there. `the_reconstruction_is_what_the_decoder_outputs`
+  holds it bit-identical to rav1d at 8 and 10 bits. NVENC keeps the default, which answers false.
 - The software encoders expose every library parameter: typed config fields for the common ones,
   plus `params` passed verbatim (`x264_param_parse`, `x265_param_parse`, SVT-AV1's
   `svt_av1_enc_parse_parameter`). Errors from parameter parsing name the key
