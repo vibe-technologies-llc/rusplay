@@ -98,7 +98,8 @@ The model is `rusplay_core::color` (`color.rs` and `color/`), re-exported from t
 
 It runs on the GPU in wgpu compute, between decode and present, in this order:
 
-1. Y'CbCr → R'G'B': matrix, range and depth from the stream description.
+1. Y'CbCr → R'G'B': matrix, range and depth from the stream description, after debanding the
+   dequantised planes in their source coding (`scaling.deband`, `.claude/rules/scaling.md`).
 2. EOTF to linear light in absolute cd/m². PQ is absolute. HLG applies the BT.2100 OOTF with the
    system gamma for the target peak. SDR content is scaled so its reference white lands on the
    target's reference white (BT.2408 203 cd/m² by default).

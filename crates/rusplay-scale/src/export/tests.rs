@@ -48,6 +48,7 @@ fn unpack_settings(settings: &ConvertSettings) -> RgbConvertSettings {
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: settings.chroma_siting,
         chroma_antiringing: 0.0,
+        deband: None,
         row_alignment: settings.row_alignment,
     }
 }

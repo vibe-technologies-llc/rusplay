@@ -4,12 +4,13 @@ use rusplay_core::{
 };
 
 use crate::{
-    ChromaSiting, ColorChain, ColorLut, DmaBufTexture, FrameLayout, Geometry, Kernel, PlaneContent,
-    PlaneLayout, Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
+    ChromaSiting, ColorChain, ColorLut, DebandSettings, DmaBufTexture, FrameLayout, Geometry,
+    Kernel, PlaneContent, PlaneLayout, Quantization, Reconfigured, ScaleError, TapTable, YuvFrame,
     convert::chroma_size,
+    deband,
     gpu::{
-        self, CHROMA_FORMAT, ChromaPasses, ScalePipelines, ShaderPass, buffer_group,
-        storage_buffer, uniform_buffer,
+        self, CHROMA_FORMAT, DEBANDED_LUMA_FORMAT, ScalePipelines, UnpackOutput, UnpackPasses,
+        UnpackSource, buffer_group, storage_buffer, uniform_buffer,
     },
     polar::PolarGeometry,
     scaler::{GroupCache, resolution_pair},
@@ -58,6 +59,7 @@ pub struct RgbConvertSettings {
     pub chroma_filter: ScaleFilter,
     pub chroma_siting: ChromaSiting,
     pub chroma_antiringing: f32,
+    pub deband: Option<DebandSettings>,
     pub row_alignment: u32,
 }
 
@@ -68,6 +70,9 @@ impl RgbConvertSettings {
         }
         if !ANTIRINGING_RANGE.contains(&self.chroma_antiringing) {
             return Err(ScaleError::AntiringingOutOfRange(self.chroma_antiringing));
+        }
+        if let Some(deband) = &self.deband {
+            deband.validate()?;
         }
 
         self.transfer_code()?;
@@ -342,14 +347,10 @@ impl RgbConverter {
                 &[frame.buffer()],
             )
         });
-        let rgb = match output {
-            Output::Transfer(_) => &pipelines.unpack.rgb,
-            Output::Lut(_) => &pipelines.unpack.lut.rgb,
-            Output::Chain(_) => &pipelines.unpack.chain.rgb,
-        };
 
         self.plan.encode(
-            (&pipelines.unpack.chroma, rgb),
+            &pipelines.unpack,
+            (UnpackSource::Buffer, output.kind()),
             encoder,
             &input_group,
             output.group(),
@@ -409,14 +410,10 @@ impl RgbConverter {
             .get_or_create(&(luma.clone(), chroma.clone()), || {
                 planes_group(device, &pipelines.unpack.planes_layout, &luma, &chroma)
             });
-        let rgb = match output {
-            Output::Transfer(_) => &pipelines.unpack.planes_rgb,
-            Output::Lut(_) => &pipelines.unpack.lut.planes_rgb,
-            Output::Chain(_) => &pipelines.unpack.chain.planes_rgb,
-        };
 
         self.plan.encode(
-            (&pipelines.unpack.planes_chroma, rgb),
+            &pipelines.unpack,
+            (UnpackSource::Planes, output.kind()),
             encoder,
             &input_group,
             output.group(),
@@ -496,6 +493,14 @@ impl Output {
     const fn group(&self) -> &wgpu::BindGroup {
         match self {
             Self::Transfer(group) | Self::Lut(group) | Self::Chain(group) => group,
+        }
+    }
+
+    const fn kind(&self) -> UnpackOutput {
+        match self {
+            Self::Transfer(_) => UnpackOutput::Transfer,
+            Self::Lut(_) => UnpackOutput::Lut,
+            Self::Chain(_) => UnpackOutput::Chain,
         }
     }
 }
@@ -599,6 +604,116 @@ struct UnpackPlan {
     chroma_pass_size: (u32, u32),
     chroma_filter: ChromaFilterPass,
     rgb_pass_size: (u32, u32),
+    deband: Option<DebandPlan>,
+}
+
+#[derive(Debug)]
+struct DebandPlan {
+    targets: wgpu::BindGroup,
+    params: wgpu::BindGroup,
+    input: wgpu::BindGroup,
+    luma_size: (u32, u32),
+    chroma_size: (u32, u32),
+}
+
+impl DebandPlan {
+    fn new(
+        passes: &UnpackPasses,
+        device: &wgpu::Device,
+        settings: &RgbConvertSettings,
+        deband: &DebandSettings,
+        unpacking: &wgpu::Buffer,
+    ) -> Self {
+        let luma_size = resolution_pair(settings.resolution);
+        let chroma_size = settings.chroma_size();
+        let luma = gpu::storage_texture(
+            device,
+            "rusplay-deband-luma",
+            luma_size,
+            DEBANDED_LUMA_FORMAT,
+        );
+        let chroma =
+            gpu::storage_texture(device, "rusplay-deband-chroma", chroma_size, CHROMA_FORMAT);
+        let deband_params = uniform_buffer(
+            device,
+            "rusplay-deband-params",
+            &deband::params_bytes(deband, settings.range, settings.format.chroma),
+        );
+
+        Self {
+            targets: views_group(
+                device,
+                "rusplay-deband-target",
+                &passes.deband.target_layout,
+                [&luma, &chroma],
+            ),
+            params: buffer_group(
+                device,
+                "rusplay-deband-params",
+                &passes.deband.params_layout,
+                &[unpacking, &deband_params],
+            ),
+            input: views_group(
+                device,
+                "rusplay-unpack-debanded",
+                &passes.debanded_layout,
+                [&luma, &chroma],
+            ),
+            luma_size,
+            chroma_size,
+        }
+    }
+
+    fn encode(
+        &self,
+        passes: &UnpackPasses,
+        source: UnpackSource,
+        encoder: &mut wgpu::CommandEncoder,
+        input_group: &wgpu::BindGroup,
+    ) {
+        let Some(planes) = passes.deband.of(source) else {
+            return;
+        };
+        let groups = [input_group, &self.targets, &self.params];
+
+        gpu::dispatch(
+            encoder,
+            "rusplay-deband-luma",
+            &planes.luma,
+            &groups,
+            self.luma_size,
+        );
+        gpu::dispatch(
+            encoder,
+            "rusplay-deband-chroma",
+            &planes.chroma,
+            &groups,
+            self.chroma_size,
+        );
+    }
+}
+
+fn views_group(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::BindGroupLayout,
+    views: [&wgpu::TextureView; 2],
+) -> wgpu::BindGroup {
+    let [first, second] = views;
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(first),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(second),
+            },
+        ],
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -665,6 +780,10 @@ impl UnpackPlan {
             chroma_pass_size,
             CHROMA_FORMAT,
         );
+        let deband = settings
+            .deband
+            .as_ref()
+            .map(|deband| DebandPlan::new(&pipelines.unpack, device, settings, deband, &params));
 
         Ok(Self {
             chroma_group: buffer_group(
@@ -698,17 +817,27 @@ impl UnpackPlan {
             chroma_pass_size,
             chroma_filter,
             rgb_pass_size: size,
+            deband,
         })
     }
 
     fn encode(
         &self,
-        passes: (&ChromaPasses, &ShaderPass),
+        passes: &UnpackPasses,
+        (source, output): (UnpackSource, UnpackOutput),
         encoder: &mut wgpu::CommandEncoder,
         input_group: &wgpu::BindGroup,
         target_group: &wgpu::BindGroup,
     ) {
-        let (chroma_passes, rgb_pass) = passes;
+        let (source, input_group) = match &self.deband {
+            Some(deband) => {
+                deband.encode(passes, source, encoder, input_group);
+                (UnpackSource::Debanded, &deband.input)
+            }
+            None => (source, input_group),
+        };
+        let chroma_passes = passes.chroma(source);
+        let rgb_pass = passes.rgb(source, output);
         let chroma_pass = match self.chroma_filter {
             ChromaFilterPass::Direct => None,
             ChromaFilterPass::Separable => Some(&chroma_passes.separable),
@@ -821,6 +950,8 @@ fn params_bytes(
 
 #[cfg(test)]
 mod tests {
+    mod deband;
+
     use rusplay_core::BitDepth;
 
     use super::*;
@@ -870,6 +1001,7 @@ mod tests {
             chroma_filter: ScaleFilter::Lanczos3,
             chroma_siting: ChromaSiting::Left,
             chroma_antiringing: 0.0,
+            deband: None,
             row_alignment: 4,
         }
     }
@@ -926,12 +1058,17 @@ mod tests {
     }
 
     fn assert_matches_reference(settings: RgbConvertSettings) {
+        let image = Image::pattern(settings.resolution.width, settings.resolution.height, 7);
+
+        assert_image_matches_reference(&image, settings);
+    }
+
+    fn assert_image_matches_reference(image: &Image, settings: RgbConvertSettings) {
         let Some(gpu) = testing::gpu() else {
             return;
         };
-        let image = Image::pattern(settings.resolution.width, settings.resolution.height, 7);
 
-        let bytes = encode_on_gpu(gpu, &image, &settings);
+        let bytes = encode_on_gpu(gpu, image, &settings);
         let actual = unpack_on_gpu(gpu, &bytes, settings);
         let expected = reference::unpack_rgb(&bytes, &settings);
         let difference = actual.max_difference(&expected);

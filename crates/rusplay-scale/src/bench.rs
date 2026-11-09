@@ -8,9 +8,9 @@ use rusplay_core::{
 use crate::{
     ChromaSiting, ColorChain, ColorChainSettings, ColorConverter, ColorLut, ColorLutSettings,
     ColorMapSettings, ColorMapper, ColorVolume, ConvertSettings, DEFAULT_ROW_ALIGNMENT,
-    DynamicPeak, GamutMapping, InputLight, LineariseSettings, Lineariser, OutputLight, PlaneLayout,
-    RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings, Scaler, SourceChannels,
-    ToneMapping, YuvFrame,
+    DebandSettings, DynamicPeak, GamutMapping, InputLight, LineariseSettings, Lineariser,
+    OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter, ScalePipelines, ScaleSettings,
+    Scaler, SourceChannels, ToneMapping, YuvFrame,
     testing::{self, Gpu, Image},
 };
 
@@ -199,6 +199,7 @@ fn hdr_frame(
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: ChromaSiting::Left,
         chroma_antiringing: 0.0,
+        deband: None,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
     };
     (unpack, frame)
@@ -261,15 +262,33 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     };
     let mut lineariser = Lineariser::new(&pipelines, &gpu.device, linearise).unwrap();
 
-    for (chroma_filter, chroma_antiringing) in [
-        (ScaleFilter::Lanczos3, 0.0),
-        (ScaleFilter::Lanczos3, 1.0),
-        (ScaleFilter::EwaLanczos, 0.0),
-        (ScaleFilter::EwaLanczosSharp, 1.0),
+    let deband = DebandSettings {
+        iterations: 2,
+        radius: 16,
+        threshold: 3.0,
+        chroma_threshold: 3.0,
+    };
+    for (chroma_filter, chroma_antiringing, deband) in [
+        (ScaleFilter::Lanczos3, 0.0, None),
+        (ScaleFilter::Lanczos3, 1.0, None),
+        (ScaleFilter::EwaLanczos, 0.0, None),
+        (ScaleFilter::EwaLanczosSharp, 1.0, None),
+        (ScaleFilter::Lanczos3, 0.0, Some(deband)),
+        (ScaleFilter::EwaLanczos, 0.0, Some(deband)),
+        (
+            ScaleFilter::Lanczos3,
+            0.0,
+            Some(DebandSettings {
+                iterations: 4,
+                radius: 32,
+                ..deband
+            }),
+        ),
     ] {
         let chroma = RgbConvertSettings {
             chroma_filter,
             chroma_antiringing,
+            deband,
             ..unpack
         };
         converter.configure(&gpu.device, chroma).unwrap();
@@ -279,8 +298,9 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
                 .encode(&gpu.device, encoder, &frame, &views[0])
                 .unwrap();
         });
+        let deband = deband.map(|deband| (deband.iterations, deband.radius));
         println!(
-            "present unpack only {chroma_filter} antiringing {chroma_antiringing} {size:?}: {unpack_only:?}"
+            "present unpack only {chroma_filter} antiringing {chroma_antiringing} deband {deband:?} {size:?}: {unpack_only:?}"
         );
     }
     converter.configure(&gpu.device, unpack).unwrap();

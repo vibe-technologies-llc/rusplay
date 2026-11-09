@@ -233,6 +233,7 @@ pub(in crate::color) fn unpack_settings(
         chroma_filter: ScaleFilter::Hermite,
         chroma_siting: ChromaSiting::Center,
         chroma_antiringing: 0.0,
+        deband: None,
         row_alignment: 4,
     }
 }

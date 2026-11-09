@@ -8,6 +8,9 @@ use crate::ConfigError;
 const ANTIRINGING_RANGE: RangeInclusive<f32> = 0.0..=1.0;
 const SIGMOID_CENTER_RANGE: RangeInclusive<f32> = 0.0..=1.0;
 const SIGMOID_SLOPE_RANGE: RangeInclusive<f32> = 1.0..=20.0;
+const DEBAND_ITERATIONS_RANGE: RangeInclusive<u32> = 1..=4;
+const DEBAND_RADIUS_RANGE: RangeInclusive<u32> = 1..=64;
+const DEBAND_THRESHOLD_RANGE: RangeInclusive<f32> = 0.0..=16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -15,6 +18,7 @@ pub struct ScalingConfig {
     pub chroma_siting: ChromaSiting,
     pub downscale: DownscaleConfig,
     pub upscale: UpscaleConfig,
+    pub deband: DebandConfig,
 }
 
 impl ScalingConfig {
@@ -38,7 +42,50 @@ impl ScalingConfig {
             ));
         }
 
+        self.deband.validate()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DebandConfig {
+    pub enabled: bool,
+    pub iterations: u32,
+    pub radius: u32,
+    pub threshold: f32,
+    pub chroma_threshold: f32,
+}
+
+impl DebandConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !DEBAND_ITERATIONS_RANGE.contains(&self.iterations) {
+            return Err(ConfigError::DebandIterationsOutOfRange(self.iterations));
+        }
+        if !DEBAND_RADIUS_RANGE.contains(&self.radius) {
+            return Err(ConfigError::DebandRadiusOutOfRange(self.radius));
+        }
+        if !DEBAND_THRESHOLD_RANGE.contains(&self.threshold) {
+            return Err(ConfigError::DebandThresholdOutOfRange(self.threshold));
+        }
+        if !DEBAND_THRESHOLD_RANGE.contains(&self.chroma_threshold) {
+            return Err(ConfigError::DebandChromaThresholdOutOfRange(
+                self.chroma_threshold,
+            ));
+        }
+
         Ok(())
+    }
+}
+
+impl Default for DebandConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            iterations: 2,
+            radius: 16,
+            threshold: 3.0,
+            chroma_threshold: 3.0,
+        }
     }
 }
 
@@ -155,6 +202,64 @@ mod tests {
         assert!(matches!(
             excessive.validate(),
             Err(ConfigError::ChromaAntiringingOutOfRange(strength)) if (strength - 1.5).abs() < f32::EPSILON
+        ));
+    }
+
+    #[test]
+    fn deband_defaults_on_and_parses() {
+        let parsed: ScalingConfig = toml::from_str(
+            "[deband]\nenabled = false\niterations = 3\nradius = 24\nthreshold = 4.5\nchroma_threshold = 0.0",
+        )
+        .unwrap();
+        let defaults = DebandConfig::default();
+
+        assert!(defaults.enabled);
+        assert_eq!((defaults.iterations, defaults.radius), (2, 16));
+        assert!((defaults.threshold - 3.0).abs() < f32::EPSILON);
+        assert!((defaults.chroma_threshold - 3.0).abs() < f32::EPSILON);
+        assert!(!parsed.deband.enabled);
+        assert_eq!((parsed.deband.iterations, parsed.deband.radius), (3, 24));
+        assert!((parsed.deband.threshold - 4.5).abs() < f32::EPSILON);
+        assert!(parsed.deband.chroma_threshold.abs() < f32::EPSILON);
+        assert!(parsed.validate().is_ok());
+        assert!(toml::from_str::<ScalingConfig>("[deband]\nstrength = 1.0").is_err());
+    }
+
+    #[test]
+    fn deband_ranges_are_validated() {
+        let deband = |deband: DebandConfig| ScalingConfig {
+            deband,
+            ..ScalingConfig::default()
+        };
+        let base = DebandConfig::default();
+
+        assert!(matches!(
+            deband(DebandConfig {
+                iterations: 5,
+                ..base
+            })
+            .validate(),
+            Err(ConfigError::DebandIterationsOutOfRange(5))
+        ));
+        assert!(matches!(
+            deband(DebandConfig { radius: 0, ..base }).validate(),
+            Err(ConfigError::DebandRadiusOutOfRange(0))
+        ));
+        assert!(matches!(
+            deband(DebandConfig {
+                threshold: 16.5,
+                ..base
+            })
+            .validate(),
+            Err(ConfigError::DebandThresholdOutOfRange(_))
+        ));
+        assert!(matches!(
+            deband(DebandConfig {
+                chroma_threshold: -0.5,
+                ..base
+            })
+            .validate(),
+            Err(ConfigError::DebandChromaThresholdOutOfRange(_))
         ));
     }
 

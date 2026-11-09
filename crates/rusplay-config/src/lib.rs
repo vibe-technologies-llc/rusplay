@@ -42,7 +42,7 @@ pub use crate::{
     paths::{ConfigEnvironment, ConfigRole},
     peers::PeersConfig,
     profile::HostProfile,
-    scaling::{DownscaleConfig, ScalingConfig, UpscaleConfig},
+    scaling::{DebandConfig, DownscaleConfig, ScalingConfig, UpscaleConfig},
     video::{
         AutoEncoderConfig, EncoderParams, LEGACY_DEFAULT_RENDER_NODE, NvencConfig, NvencPreset,
         NvencTuning, PresentMode, PresentPacing, RateControl, SoftwarePreset, SvtAv1Config,

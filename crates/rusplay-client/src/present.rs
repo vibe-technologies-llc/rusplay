@@ -9,11 +9,11 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusplay_config::ScalingConfig;
+use rusplay_config::{DebandConfig, ScalingConfig};
 use rusplay_core::{ChromaSiting, Resolution, Timestamp};
 use rusplay_decode::{CpuFrame, DecodedBuffer, DmaBufImage};
 use rusplay_scale::{
-    ColorVolume, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
+    ColorVolume, DebandSettings, DmaBuf, DmaBufImporter, DmaBufPlane, DmaBufTexture, FrameLayout,
     IMPORT_CACHE_ENTRIES, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
     ScalePipelines, ScaleSettings, Scaler, Sigmoid, YuvFrame,
 };
@@ -524,8 +524,18 @@ fn convert_settings(
         chroma_filter: options.scaling.upscale.chroma_filter,
         chroma_siting: signalled_siting.unwrap_or(options.scaling.chroma_siting),
         chroma_antiringing: options.scaling.upscale.chroma_antiringing,
+        deband: deband_settings(&options.scaling.deband),
         row_alignment: UPLOAD_ROW_ALIGNMENT,
     }
+}
+
+fn deband_settings(config: &DebandConfig) -> Option<DebandSettings> {
+    config.enabled.then_some(DebandSettings {
+        iterations: config.iterations,
+        radius: config.radius,
+        threshold: config.threshold,
+        chroma_threshold: config.chroma_threshold,
+    })
 }
 
 fn ensure_unpacker<'a>(

@@ -13,6 +13,14 @@ pub enum ScaleError {
     EmptyTarget(Resolution),
     #[error("antiringing strength {0} is outside 0.0..=1.0")]
     AntiringingOutOfRange(f32),
+    #[error("deband iterations {0} are outside 1..=4")]
+    DebandIterationsOutOfRange(u32),
+    #[error("deband radius {0} is outside 1..=64")]
+    DebandRadiusOutOfRange(u32),
+    #[error("deband threshold {0} is outside 0.0..=16.0")]
+    DebandThresholdOutOfRange(f32),
+    #[error("deband chroma threshold {0} is outside 0.0..=16.0")]
+    DebandChromaThresholdOutOfRange(f32),
     #[error("sigmoid center {0} is outside 0.0..=1.0")]
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]

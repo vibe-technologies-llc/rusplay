@@ -182,7 +182,8 @@ paths:
   past `max_texture_dimension_2d` are refused up front with `GpuFault::TextureTooLarge`.
 - Present runs on the app's `Gpu` (device and queue): CPU planes are written row by row into the
   `RgbConverter` upload buffer through `Queue::write_buffer_with` (the one unavoidable copy for
-  software decode), unpacked to `rgba16float` at the source resolution, taken through the colour
+  software decode), unpacked to `rgba16float` at the source resolution (debanded on the Y'CbCr planes first unless
+  `scaling.deband.enabled` is off, `scaling.md`), taken through the colour
   passes (`present/mapping.rs`, below) and, when the target set by `ClientStream::set_target`
   differs, resampled by `Scaler` (the upscale filter, anti-ringing and, for an SDR colour target
   only, sigmoid when enlarging either axis; the downscale filter otherwise). The passes ping-pong

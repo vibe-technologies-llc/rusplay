@@ -47,19 +47,6 @@ fn decode_transfer(encoded: vec3<f32>) -> vec3<f32> {
     }
 }
 
-fn dequantize(code: u32, quant: vec2<f32>) -> f32 {
-    return (f32(code) - quant.y) / quant.x;
-}
-
-fn luma_at(x: u32, y: u32) -> f32 {
-    return dequantize(luma_code(x, y), unpacking.luma_quant);
-}
-
-fn chroma_at(x: u32, y: u32) -> vec2<f32> {
-    let codes = chroma_codes(x, y);
-    return vec2<f32>(dequantize(codes.x, unpacking.chroma_quant), dequantize(codes.y, unpacking.chroma_quant));
-}
-
 fn antiring_chroma(sum: vec2<f32>, low: vec2<f32>, high: vec2<f32>) -> vec2<f32> {
     if unpacking.antiringing <= 0.0 || low.x > high.x {
         return sum;

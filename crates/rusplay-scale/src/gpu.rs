@@ -33,18 +33,21 @@ const UNPACK_CHROMA_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_chroma.wgsl")
 );
 const UNPACK_CHROMA_POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_chroma_polar.wgsl")
 );
 const UNPACK_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_output_transfer.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
@@ -52,6 +55,7 @@ const UNPACK_RGB_LUT_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("transfer_decode.wgsl"),
     include_str!("color_lut_storage.wgsl"),
     include_str!("color_lut_sample.wgsl"),
@@ -62,18 +66,21 @@ const UNPACK_PLANES_CHROMA_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_chroma.wgsl")
 );
 const UNPACK_PLANES_CHROMA_POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_chroma_polar.wgsl")
 );
 const UNPACK_PLANES_RGB_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("unpack_output_transfer.wgsl"),
     include_str!("unpack_rgb.wgsl")
 );
@@ -81,6 +88,7 @@ const UNPACK_PLANES_RGB_LUT_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("transfer_decode.wgsl"),
     include_str!("color_lut_storage.wgsl"),
     include_str!("color_lut_sample.wgsl"),
@@ -91,6 +99,7 @@ const UNPACK_RGB_CHAIN_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("color_common.wgsl"),
     include_str!("color_tone.wgsl"),
     include_str!("color_gamut.wgsl"),
@@ -103,6 +112,7 @@ const UNPACK_PLANES_RGB_CHAIN_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
     include_str!("unpack_common.wgsl"),
     include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
     include_str!("color_common.wgsl"),
     include_str!("color_tone.wgsl"),
     include_str!("color_gamut.wgsl"),
@@ -110,6 +120,61 @@ const UNPACK_PLANES_RGB_CHAIN_SHADER: &str = concat!(
     include_str!("transfer_decode.wgsl"),
     include_str!("unpack_output_chain.wgsl"),
     include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_DEBANDED_CHROMA_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_debanded.wgsl"),
+    include_str!("unpack_chroma.wgsl")
+);
+const UNPACK_DEBANDED_CHROMA_POLAR_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_debanded.wgsl"),
+    include_str!("unpack_chroma_polar.wgsl")
+);
+const UNPACK_DEBANDED_RGB_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_debanded.wgsl"),
+    include_str!("unpack_output_transfer.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_DEBANDED_RGB_LUT_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_debanded.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("color_lut_storage.wgsl"),
+    include_str!("color_lut_sample.wgsl"),
+    include_str!("unpack_output_lut.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const UNPACK_DEBANDED_RGB_CHAIN_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_debanded.wgsl"),
+    include_str!("color_common.wgsl"),
+    include_str!("color_tone.wgsl"),
+    include_str!("color_gamut.wgsl"),
+    include_str!("color_light.wgsl"),
+    include_str!("transfer_decode.wgsl"),
+    include_str!("unpack_output_chain.wgsl"),
+    include_str!("unpack_rgb.wgsl")
+);
+const DEBAND_BUFFER_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_buffer.wgsl"),
+    include_str!("unpack_codes.wgsl"),
+    include_str!("deband.wgsl")
+);
+const DEBAND_PLANES_SHADER: &str = concat!(
+    include_str!("workgroup.wgsl"),
+    include_str!("unpack_common.wgsl"),
+    include_str!("unpack_planes.wgsl"),
+    include_str!("unpack_codes.wgsl"),
+    include_str!("deband.wgsl")
 );
 const POLAR_SHADER: &str = concat!(
     include_str!("workgroup.wgsl"),
@@ -194,6 +259,7 @@ const CONVERT_WORKGROUP: (u32, u32) = (8, 8);
 pub(crate) const POLAR_CHROMA_WORKGROUP: (u32, u32) = (16, 16);
 pub(crate) const POLAR_CHROMA_TILE: u32 = 24;
 const CONVERT_ROWS_WORKGROUP: (u32, u32) = (64, 1);
+const DEBAND_WORKGROUP: (u32, u32) = (16, 16);
 const COLOR_WORKGROUP: (u32, u32) = (8, 8);
 const LUT_BAKE_WORKGROUP: (u32, u32) = (8, 8);
 const BOUNDARY_BAKE_WORKGROUP: (u32, u32) = (16, 4);
@@ -208,6 +274,7 @@ pub(crate) const MAX_CHROMA_TAPS: u32 = 32;
 
 pub(crate) const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const CHROMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+pub(crate) const DEBANDED_LUMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 pub(crate) const LUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const BOUNDARY_TABLE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 
@@ -279,17 +346,45 @@ impl LinearisePipelines {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnpackSource {
+    Buffer,
+    Planes,
+    Debanded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnpackOutput {
+    Transfer,
+    Lut,
+    Chain,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct UnpackPasses {
     pub input_layout: wgpu::BindGroupLayout,
-    pub table_layout: wgpu::BindGroupLayout,
-    pub chroma: ChromaPasses,
-    pub rgb: ShaderPass,
     pub planes_layout: wgpu::BindGroupLayout,
-    pub planes_chroma: ChromaPasses,
-    pub planes_rgb: ShaderPass,
+    pub debanded_layout: wgpu::BindGroupLayout,
+    pub table_layout: wgpu::BindGroupLayout,
+    pub chroma: [ChromaPasses; 3],
+    pub rgb: [ShaderPass; 3],
     pub lut: FusedUnpack,
     pub chain: FusedUnpack,
+    pub deband: DebandPasses,
+}
+
+impl UnpackPasses {
+    pub fn chroma(&self, source: UnpackSource) -> &ChromaPasses {
+        &self.chroma[source as usize]
+    }
+
+    pub fn rgb(&self, source: UnpackSource, output: UnpackOutput) -> &ShaderPass {
+        match output {
+            UnpackOutput::Transfer => &self.rgb[source as usize],
+            UnpackOutput::Lut => &self.lut.rgb[source as usize],
+            UnpackOutput::Chain => &self.chain.rgb[source as usize],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -299,29 +394,97 @@ pub(crate) struct ChromaPasses {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct DebandPasses {
+    pub target_layout: wgpu::BindGroupLayout,
+    pub params_layout: wgpu::BindGroupLayout,
+    pub buffer: DebandPlanes,
+    pub planes: DebandPlanes,
+}
+
+impl DebandPasses {
+    fn new(
+        device: &wgpu::Device,
+        input_layout: &wgpu::BindGroupLayout,
+        planes_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let target_layout = layout(
+            device,
+            "rusplay-deband-target",
+            &[
+                storage_texture_entry(0, DEBANDED_LUMA_FORMAT),
+                storage_texture_entry(1, CHROMA_FORMAT),
+            ],
+        );
+        let params_layout = layout(
+            device,
+            "rusplay-deband-params",
+            &[uniform_entry(0), uniform_entry(1)],
+        );
+        let planes = |label: &str, input: &wgpu::BindGroupLayout, shader: &str| {
+            let layouts = [input, &target_layout, &params_layout];
+            let [luma, chroma] = ["deband_luma", "deband_chroma"].map(|entry_point| {
+                compute_pipeline(
+                    device,
+                    &format!("{label}-{entry_point}"),
+                    &layouts,
+                    shader,
+                    entry_point,
+                    DEBAND_WORKGROUP,
+                    &[],
+                )
+            });
+            DebandPlanes { luma, chroma }
+        };
+
+        let buffer = planes("rusplay-deband", input_layout, DEBAND_BUFFER_SHADER);
+        let planes = planes("rusplay-deband-planes", planes_layout, DEBAND_PLANES_SHADER);
+
+        Self {
+            target_layout,
+            params_layout,
+            buffer,
+            planes,
+        }
+    }
+
+    pub fn of(&self, source: UnpackSource) -> Option<&DebandPlanes> {
+        match source {
+            UnpackSource::Buffer => Some(&self.buffer),
+            UnpackSource::Planes => Some(&self.planes),
+            UnpackSource::Debanded => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DebandPlanes {
+    pub luma: ShaderPass,
+    pub chroma: ShaderPass,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FusedUnpack {
     pub target_layout: wgpu::BindGroupLayout,
-    pub rgb: ShaderPass,
-    pub planes_rgb: ShaderPass,
+    pub rgb: [ShaderPass; 3],
 }
 
 struct FusedUnpackDescriptor<'a> {
     label: &'a str,
     target_entries: &'a [wgpu::BindGroupLayoutEntry],
-    shaders: [&'a str; 2],
+    shaders: [&'a str; 3],
     constants: &'a [(&'a str, f64)],
 }
 
 impl FusedUnpack {
     fn new(
         device: &wgpu::Device,
-        inputs: [&wgpu::BindGroupLayout; 2],
+        inputs: [&wgpu::BindGroupLayout; 3],
         layouts: [&wgpu::BindGroupLayout; 4],
         descriptor: &FusedUnpackDescriptor<'_>,
     ) -> Self {
         let [source_layout, _, _, table_layout] = layouts;
         let target_layout = layout(device, descriptor.label, descriptor.target_entries);
-        let [rgb, planes_rgb] = [0, 1].map(|index| {
+        let rgb = [0, 1, 2].map(|index| {
             compute_pipeline(
                 device,
                 descriptor.label,
@@ -333,11 +496,7 @@ impl FusedUnpack {
             )
         });
 
-        Self {
-            target_layout,
-            rgb,
-            planes_rgb,
-        }
+        Self { target_layout, rgb }
     }
 }
 
@@ -710,6 +869,11 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
         "rusplay-unpack-planes",
         &[uint_texture_entry(0), uint_texture_entry(1)],
     );
+    let debanded_layout = layout(
+        device,
+        "rusplay-unpack-debanded",
+        &[texture_entry(0), texture_entry(1)],
+    );
     let table_layout = layout(
         device,
         "rusplay-unpack-table",
@@ -728,7 +892,7 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
         &table_layout,
     ];
 
-    let (chroma, rgb) = unpack_pair(
+    let (buffer_chroma, buffer_rgb) = unpack_pair(
         device,
         "rusplay-unpack",
         &input_layout,
@@ -750,7 +914,42 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
             UNPACK_PLANES_RGB_SHADER,
         ],
     );
-    let inputs = [&input_layout, &planes_layout];
+    let (debanded_chroma, debanded_rgb) = unpack_pair(
+        device,
+        "rusplay-unpack-debanded",
+        &debanded_layout,
+        layouts,
+        [
+            UNPACK_DEBANDED_CHROMA_SHADER,
+            UNPACK_DEBANDED_CHROMA_POLAR_SHADER,
+            UNPACK_DEBANDED_RGB_SHADER,
+        ],
+    );
+    let (lut, chain) = fused_unpacks(
+        device,
+        [&input_layout, &planes_layout, &debanded_layout],
+        layouts,
+    );
+    let deband = DebandPasses::new(device, &input_layout, &planes_layout);
+
+    UnpackPasses {
+        input_layout,
+        planes_layout,
+        debanded_layout,
+        table_layout,
+        chroma: [buffer_chroma, planes_chroma, debanded_chroma],
+        rgb: [buffer_rgb, planes_rgb, debanded_rgb],
+        lut,
+        chain,
+        deband,
+    }
+}
+
+fn fused_unpacks(
+    device: &wgpu::Device,
+    inputs: [&wgpu::BindGroupLayout; 3],
+    layouts: [&wgpu::BindGroupLayout; 4],
+) -> (FusedUnpack, FusedUnpack) {
     let lut = FusedUnpack::new(
         device,
         inputs,
@@ -762,7 +961,11 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
                 texture_3d_entry(1),
                 uniform_entry(2),
             ],
-            shaders: [UNPACK_RGB_LUT_SHADER, UNPACK_PLANES_RGB_LUT_SHADER],
+            shaders: [
+                UNPACK_RGB_LUT_SHADER,
+                UNPACK_PLANES_RGB_LUT_SHADER,
+                UNPACK_DEBANDED_RGB_LUT_SHADER,
+            ],
             constants: &[],
         },
     );
@@ -779,22 +982,16 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
                 texture_entry(3),
                 uniform_entry(4),
             ],
-            shaders: [UNPACK_RGB_CHAIN_SHADER, UNPACK_PLANES_RGB_CHAIN_SHADER],
+            shaders: [
+                UNPACK_RGB_CHAIN_SHADER,
+                UNPACK_PLANES_RGB_CHAIN_SHADER,
+                UNPACK_DEBANDED_RGB_CHAIN_SHADER,
+            ],
             constants: &gamut_constants(),
         },
     );
 
-    UnpackPasses {
-        input_layout,
-        table_layout,
-        chroma,
-        rgb,
-        planes_layout,
-        planes_chroma,
-        planes_rgb,
-        lut,
-        chain,
-    }
+    (lut, chain)
 }
 
 fn unpack_pair(

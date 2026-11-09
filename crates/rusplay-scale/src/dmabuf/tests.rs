@@ -8,9 +8,9 @@ use rusplay_core::{
 use super::*;
 use crate::{
     ChromaSiting, ColorConverter, ColorLut, ColorLutSettings, ColorMapSettings, ColorVolume,
-    ConvertSettings, DEFAULT_LUT_SIZE, DEFAULT_ROW_ALIGNMENT, FrameLayout, InputLight,
-    LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings, RgbConverter,
-    ScalePipelines, YuvFrame, hardware,
+    ConvertSettings, DEFAULT_LUT_SIZE, DEFAULT_ROW_ALIGNMENT, DebandSettings, FrameLayout,
+    InputLight, LineariseSettings, Lineariser, OutputLight, PlaneLayout, RgbConvertSettings,
+    RgbConverter, ScalePipelines, YuvFrame, hardware,
     testing::{self, Gpu, Image, RGBA16F_TOLERANCE},
     udmabuf::PAGE_BYTES,
 };
@@ -194,6 +194,7 @@ fn yuv_settings(size: (u32, u32), depth: BitDepth) -> RgbConvertSettings {
         chroma_filter: ScaleFilter::Lanczos3,
         chroma_siting: ChromaSiting::Left,
         chroma_antiringing: 0.0,
+        deband: None,
         row_alignment: DEFAULT_ROW_ALIGNMENT,
     }
 }
@@ -264,8 +265,22 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
         (DmaBufFormat::Nv12, BitDepth::Eight),
         (DmaBufFormat::P010, BitDepth::Ten),
     ] {
-        for size in [(64, 36), (37, 23)] {
-            let settings = yuv_settings(size, depth);
+        let deband = DebandSettings {
+            iterations: 2,
+            radius: 16,
+            threshold: 3.0,
+            chroma_threshold: 3.0,
+        };
+        for (size, deband) in [
+            ((64, 36), None),
+            ((37, 23), None),
+            ((64, 36), Some(deband)),
+            ((37, 23), Some(deband)),
+        ] {
+            let settings = RgbConvertSettings {
+                deband,
+                ..yuv_settings(size, depth)
+            };
             let mut converter = RgbConverter::new(&pipelines, &gpu.device, settings).unwrap();
             let bytes = encode_yuv(gpu, &pipelines, &settings);
             let fd = udmabuf(&bytes).unwrap();
@@ -292,11 +307,15 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
                 unpack_through_lut(gpu, &pipelines, settings, (&upload, &texture));
 
             assert_eq!(texture.plane_count(), 2);
-            assert_eq!(actual.max_difference(&expected), 0.0, "{format:?} {size:?}");
+            assert_eq!(
+                actual.max_difference(&expected),
+                0.0,
+                "{format:?} {size:?} {deband:?}"
+            );
             assert_eq!(
                 lut_actual.max_difference(&lut_expected),
                 0.0,
-                "{format:?} {size:?} through a lut"
+                "{format:?} {size:?} {deband:?} through a lut"
             );
         }
     }

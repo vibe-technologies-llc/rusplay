@@ -1,8 +1,10 @@
 use rusplay_core::{HdrLevels, TransferFunction};
 
 use crate::{
-    ConvertSettings, FrameLayout, InputLight, Kernel, LineariseSettings, OutputLight, PlaneContent,
-    PlaneLayout, Quantization, RgbConvertSettings, ScaleSettings, TapTable,
+    ConvertSettings, DebandSettings, FrameLayout, InputLight, Kernel, LineariseSettings,
+    OutputLight, PlaneContent, PlaneLayout, Quantization, RgbConvertSettings, ScaleSettings,
+    TapTable,
+    deband::{DebandPlane, chroma_shift, pair_weight},
     polar::{PolarGeometry, polar_footprint},
     scaler::Axis,
     shaping::Shaping,
@@ -391,24 +393,14 @@ pub(crate) fn unpack(bytes: &[u8], layout: &FrameLayout) -> SamplePlanes {
 pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
     let layout = settings.frame_layout().unwrap();
     let planes = unpack(bytes, &layout);
-    let quantization = Quantization::new(settings.format.depth, settings.range);
     let rows = settings.matrix.inverse_rows();
     let (horizontal, vertical) = settings.chroma_tables();
     let (chroma_width, chroma_height) = settings.chroma_size();
-    let interleaved = layout.planes[1].content == PlaneContent::CbCr;
-    let dequantize = |code: u32, (scale, offset): (f64, f64)| (f64::from(code) - offset) / scale;
+    let (luma_plane, chroma_plane) = dequantized_planes(&planes, &layout, settings);
     let chroma_at = |x: i64, y: i64| -> [f64; 2] {
         let x = usize::try_from(x.clamp(0, i64::from(chroma_width) - 1)).unwrap_or_default();
         let y = usize::try_from(y.clamp(0, i64::from(chroma_height) - 1)).unwrap_or_default();
-        let (cb, cr) = if interleaved {
-            (planes[1][y][2 * x], planes[1][y][2 * x + 1])
-        } else {
-            (planes[1][y][x], planes[2][y][x])
-        };
-        [
-            dequantize(cb, quantization.chroma),
-            dequantize(cr, quantization.chroma),
-        ]
+        chroma_plane[y][x]
     };
     let strength = settings.chroma_antiringing;
 
@@ -448,11 +440,7 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
                 let row = usize::try_from(row.clamp(0, last_row)).unwrap_or_default();
                 rows_filtered[row][x as usize]
             });
-            let ycbcr = [
-                dequantize(planes[0][y as usize][x as usize], quantization.luma),
-                chroma[0],
-                chroma[1],
-            ];
+            let ycbcr = [luma_plane[y as usize][x as usize][0], chroma[0], chroma[1]];
             let channel = |row: [f64; 3]| {
                 let encoded = row.iter().zip(ycbcr).map(|(a, b)| a * b).sum::<f64>();
                 #[allow(clippy::cast_possible_truncation)]
@@ -463,6 +451,64 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
             [channel(rows[0]), channel(rows[1]), channel(rows[2]), 1.0]
         },
     )
+}
+
+type DequantizedPlanes = (Vec<Vec<[f64; 1]>>, Vec<Vec<[f64; 2]>>);
+
+fn dequantized_planes(
+    planes: &SamplePlanes,
+    layout: &FrameLayout,
+    settings: &RgbConvertSettings,
+) -> DequantizedPlanes {
+    let quantization = Quantization::new(settings.format.depth, settings.range);
+    let (chroma_width, chroma_height) = settings.chroma_size();
+    let interleaved = layout.planes[1].content == PlaneContent::CbCr;
+    let dequantize = |code: u32, (scale, offset): (f64, f64)| (f64::from(code) - offset) / scale;
+    let luma_plane: Vec<Vec<[f64; 1]>> = planes[0]
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|&code| [dequantize(code, quantization.luma)])
+                .collect()
+        })
+        .collect();
+    let chroma_plane: Vec<Vec<[f64; 2]>> = (0..chroma_height as usize)
+        .map(|y| {
+            (0..chroma_width as usize)
+                .map(|x| {
+                    let (cb, cr) = if interleaved {
+                        (planes[1][y][2 * x], planes[1][y][2 * x + 1])
+                    } else {
+                        (planes[1][y][x], planes[2][y][x])
+                    };
+                    [
+                        dequantize(cb, quantization.chroma),
+                        dequantize(cr, quantization.chroma),
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+    match &settings.deband {
+        Some(deband) => {
+            let (luma_threshold, chroma_threshold) = deband.plane_thresholds(settings.range);
+            (
+                deband_plane(
+                    &luma_plane,
+                    deband,
+                    (DebandPlane::Luma, (0, 0)),
+                    luma_threshold,
+                ),
+                deband_plane(
+                    &chroma_plane,
+                    deband,
+                    (DebandPlane::Chroma, chroma_shift(settings.format.chroma)),
+                    chroma_threshold,
+                ),
+            )
+        }
+        None => (luma_plane, chroma_plane),
+    }
 }
 
 fn taps(table: &TapTable, index: u32) -> impl Iterator<Item = (i64, f32)> + '_ {
@@ -544,6 +590,61 @@ fn polar_upsampled_chroma(
                     }
 
                     antiring_chroma(sum, nearest_low, nearest_high, settings.chroma_antiringing)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn deband_plane<const CHANNELS: usize>(
+    plane: &[Vec<[f64; CHANNELS]>],
+    settings: &DebandSettings,
+    (kind, shift): (DebandPlane, (u32, u32)),
+    threshold: f64,
+) -> Vec<Vec<[f64; CHANNELS]>> {
+    let height = i64::try_from(plane.len()).unwrap_or(i64::MAX);
+    let width = i64::try_from(plane.first().map_or(0, Vec::len)).unwrap_or(i64::MAX);
+    let at = |x: i64, y: i64| {
+        let column = usize::try_from(x.clamp(0, width - 1)).unwrap_or_default();
+        let row = usize::try_from(y.clamp(0, height - 1)).unwrap_or_default();
+        plane[row][column]
+    };
+
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| {
+                    let centre = at(x, y);
+                    if threshold <= 0.0 {
+                        return centre;
+                    }
+
+                    let mut sum = centre;
+                    let mut total = 1.0;
+                    for iteration in 1..=settings.iterations {
+                        let pixel = (
+                            u32::try_from(x).unwrap_or_default(),
+                            u32::try_from(y).unwrap_or_default(),
+                        );
+                        for offset in settings.pair_offsets(pixel, kind, iteration, shift) {
+                            let ahead = at(x + offset.0, y + offset.1);
+                            let behind = at(x - offset.0, y - offset.1);
+                            let deviation = (0..CHANNELS)
+                                .map(|channel| {
+                                    (ahead[channel] - centre[channel])
+                                        .abs()
+                                        .max((behind[channel] - centre[channel]).abs())
+                                })
+                                .fold(0.0, f64::max);
+                            let weight = pair_weight(deviation, threshold);
+                            for channel in 0..CHANNELS {
+                                sum[channel] += weight * (ahead[channel] + behind[channel]);
+                            }
+                            total += 2.0 * weight;
+                        }
+                    }
+
+                    sum.map(|value| value / total)
                 })
                 .collect()
         })
