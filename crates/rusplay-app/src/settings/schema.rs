@@ -1111,6 +1111,15 @@ pub static FIELDS: &[Field] = &[
         Audience::Shared,
         Section::Network,
         "Transport",
+        "network.reassembly_reorder_grace_ms",
+        "Reassembly reorder grace",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Audience::Shared,
+        Section::Network,
+        "Transport",
         "network.reassembly_max_pending_frames",
         "Reassembly pending frames",
         U8,

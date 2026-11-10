@@ -14,6 +14,7 @@ pub struct ReassemblyLimits {
     pub max_pending_frames: usize,
     pub max_fragments: u16,
     pub frame_timeout: Duration,
+    pub reorder_grace: Duration,
 }
 
 impl Default for ReassemblyLimits {
@@ -22,6 +23,7 @@ impl Default for ReassemblyLimits {
             max_pending_frames: 8,
             max_fragments: u16::MAX,
             frame_timeout: Duration::from_millis(100),
+            reorder_grace: Duration::from_millis(2),
         }
     }
 }
@@ -32,6 +34,7 @@ impl From<&NetworkConfig> for ReassemblyLimits {
             max_pending_frames: usize::from(config.reassembly_max_pending_frames),
             max_fragments: config.reassembly_max_fragments,
             frame_timeout: Duration::from_millis(u64::from(config.reassembly_timeout_ms)),
+            reorder_grace: Duration::from_millis(u64::from(config.reassembly_reorder_grace_ms)),
         }
     }
 }
@@ -67,6 +70,8 @@ pub struct Reassembler {
     limits: ReassemblyLimits,
     pending: Vec<PendingFrame>,
     floor: Option<u32>,
+    newest: Option<u32>,
+    carries_parity: bool,
     next_sequence: Option<u32>,
     stats: ReassemblyStats,
     returned: Receiver<Vec<u8>>,
@@ -84,6 +89,8 @@ impl Reassembler {
             limits,
             pending: Vec::new(),
             floor: None,
+            newest: None,
+            carries_parity: false,
             next_sequence: None,
             stats: ReassemblyStats::default(),
             spare: SpareStorage::default(),
@@ -103,13 +110,15 @@ impl Reassembler {
             self.spare.reclaim(pending, &self.limits);
         }
         self.floor = None;
+        self.newest = None;
+        self.carries_parity = false;
         self.next_sequence = None;
     }
 
     pub fn next_timeout(&self) -> Option<Instant> {
         self.pending
             .iter()
-            .map(|pending| pending.first_seen + self.limits.frame_timeout)
+            .map(|pending| pending.deadline(&self.limits))
             .min()
     }
 
@@ -121,8 +130,10 @@ impl Reassembler {
     ) -> Result<(), NetError> {
         let (header, payload) = PacketHeader::parse(datagram)?;
         let packet = self.classify(header.stream, payload)?;
+        let ends_frame = self.ends_frame(&header, &packet);
 
         self.track_sequence(header.sequence, events);
+        self.track_parity(&packet);
 
         if self.is_stale(header.frame) {
             self.stats.stale_packets += 1;
@@ -149,22 +160,27 @@ impl Reassembler {
             Ok(inserted)
         });
 
-        match outcome {
+        let inserted = match outcome {
+            Ok(inserted) => inserted,
             Err(error) => {
                 if is_new {
                     self.spare.reclaim(pending, &self.limits);
                 } else {
                     self.insert_pending(pending);
                 }
-                Err(error)
+                return Err(error);
             }
-            Ok(Inserted::Duplicate) => {
+        };
+        self.track_sender(&mut pending, ends_frame, now);
+
+        match inserted {
+            Inserted::Duplicate => {
                 self.stats.duplicate_packets += 1;
                 self.insert_pending(pending);
                 Ok(())
             }
-            Ok(Inserted::New) if pending.is_complete() => self.complete(pending, events),
-            Ok(Inserted::New) => {
+            Inserted::New if pending.is_complete() => self.complete(pending, events),
+            Inserted::New => {
                 self.insert_pending(pending);
                 self.enforce_window(events);
                 Ok(())
@@ -176,9 +192,7 @@ impl Reassembler {
         while let Some(expired) = self
             .pending
             .iter()
-            .filter(|pending| {
-                now.saturating_duration_since(pending.first_seen) >= self.limits.frame_timeout
-            })
+            .filter(|pending| now >= pending.deadline(&self.limits))
             .map(|pending| pending.frame)
             .reduce(|newest, frame| {
                 if is_newer(frame, newest) {
@@ -208,6 +222,55 @@ impl Reassembler {
             expected: self.stream,
             found: stream,
         })
+    }
+
+    fn ends_frame(&self, header: &PacketHeader, packet: &Packet<'_>) -> bool {
+        let last_of_its_kind = header.fragment_index + 1 == header.fragment_count;
+
+        last_of_its_kind
+            && match packet {
+                Packet::Parity(..) => true,
+                Packet::Data(_) => !self.carries_parity && self.floor.is_some(),
+            }
+    }
+
+    fn track_parity(&mut self, packet: &Packet<'_>) {
+        if self.carries_parity || matches!(packet, Packet::Data(_)) {
+            return;
+        }
+        self.carries_parity = true;
+
+        let newest = self.newest;
+        if let Some(awaiting_parity) = self
+            .pending
+            .iter_mut()
+            .find(|pending| Some(pending.frame) == newest)
+        {
+            awaiting_parity.sender_done = None;
+        }
+    }
+
+    fn track_sender(&mut self, pending: &mut PendingFrame, ends_frame: bool, now: Instant) {
+        let frame = pending.frame;
+        let superseded = match self.newest {
+            Some(newest) if newest == frame => false,
+            Some(newest) if is_newer(newest, frame) => true,
+            _ => {
+                self.newest = Some(frame);
+                for older in self
+                    .pending
+                    .iter_mut()
+                    .filter(|other| is_newer(frame, other.frame))
+                {
+                    older.sender_done.get_or_insert(now);
+                }
+                false
+            }
+        };
+
+        if ends_frame || superseded {
+            pending.sender_done.get_or_insert(now);
+        }
     }
 
     fn track_sequence(&mut self, sequence: u32, events: &mut Vec<ReassemblyEvent>) {
@@ -390,6 +453,7 @@ struct ParityBlock {
 struct PendingFrame {
     frame: u32,
     first_seen: Instant,
+    sender_done: Option<Instant>,
     keyframe: bool,
     fragment_count: Option<u16>,
     shard_len: Option<usize>,
@@ -409,6 +473,7 @@ impl PendingFrame {
         Self {
             frame,
             first_seen,
+            sender_done: None,
             keyframe: false,
             fragment_count: None,
             shard_len: None,
@@ -422,6 +487,16 @@ impl PendingFrame {
             recovered: 0,
             blocks: Vec::new(),
         }
+    }
+
+    fn deadline(&self, limits: &ReassemblyLimits) -> Instant {
+        let timeout = self.first_seen + limits.frame_timeout;
+        if limits.reorder_grace.is_zero() {
+            return timeout;
+        }
+
+        self.sender_done
+            .map_or(timeout, |done| timeout.min(done + limits.reorder_grace))
     }
 
     fn is_complete(&self) -> bool {
@@ -809,6 +884,21 @@ mod tests {
         Reassembler::new(stream, ReassemblyLimits::default())
     }
 
+    fn without_grace(stream: StreamKind) -> Reassembler {
+        let limits = ReassemblyLimits {
+            reorder_grace: Duration::ZERO,
+            ..ReassemblyLimits::default()
+        };
+
+        Reassembler::new(stream, limits)
+    }
+
+    fn poll(reassembler: &mut Reassembler, now: Instant) -> Vec<ReassemblyEvent> {
+        let mut events = Vec::new();
+        reassembler.poll_timeouts(now, &mut events);
+        events
+    }
+
     fn feed<'a>(
         reassembler: &mut Reassembler,
         now: Instant,
@@ -1041,7 +1131,7 @@ mod tests {
     #[test]
     fn timeouts_terminate_when_frame_numbers_span_more_than_half_the_range() {
         let mut tx = packetizer(StreamKind::Video, FecScheme::None);
-        let mut rx = reassembler(StreamKind::Video);
+        let mut rx = without_grace(StreamKind::Video);
         let start = Instant::now();
         let later = start + Duration::from_millis(60);
         let expired = start + Duration::from_millis(120);
@@ -1194,6 +1284,365 @@ mod tests {
 
         rx.poll_timeouts(start + Duration::from_secs(1), &mut events);
         assert_eq!(lost(&events), [0]);
+    }
+
+    const GRACE: Duration = Duration::from_millis(2);
+    const BEFORE_GRACE: Duration = Duration::from_micros(1_999);
+
+    #[test]
+    fn a_frame_beyond_parity_is_lost_one_grace_after_its_final_datagram() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let finished = start + Duration::from_millis(5);
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
+            .unwrap();
+        let mut events = feed(&mut rx, start, [&datagrams[2], &datagrams[3]]);
+        let waiting = rx.next_timeout();
+        events.extend(feed(&mut rx, finished, [&datagrams[4]]));
+        let early = poll(&mut rx, finished + BEFORE_GRACE);
+        let due = poll(&mut rx, finished + GRACE);
+
+        assert!(parity_of(&datagrams[4]));
+        assert_eq!(datagrams.len(), 5);
+        assert_eq!(waiting, Some(start + Duration::from_millis(100)));
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(early.len(), 0);
+        assert_eq!(lost(&due), [0]);
+        assert_eq!(rx.stats().frames_lost, 1);
+        assert_eq!(rx.pending_frames(), 0);
+    }
+
+    #[test]
+    fn next_timeout_reports_the_grace_deadline() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let finished = start + Duration::from_millis(5);
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
+            .unwrap();
+        feed(&mut rx, start, [&datagrams[3]]);
+        feed(&mut rx, finished, [&datagrams[4]]);
+
+        assert_eq!(rx.next_timeout(), Some(finished + GRACE));
+    }
+
+    #[test]
+    fn the_timeout_still_bounds_a_grace_that_would_end_after_it() {
+        let limits = ReassemblyLimits {
+            reorder_grace: Duration::from_millis(500),
+            ..ReassemblyLimits::default()
+        };
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = Reassembler::new(StreamKind::Video, limits);
+        let start = Instant::now();
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
+            .unwrap();
+        feed(&mut rx, start, [&datagrams[3], &datagrams[4]]);
+        let deadline = rx.next_timeout();
+        let due = poll(&mut rx, start + Duration::from_millis(100));
+
+        assert_eq!(deadline, Some(start + Duration::from_millis(100)));
+        assert_eq!(lost(&due), [0]);
+    }
+
+    #[test]
+    fn a_lost_tail_is_noticed_one_grace_after_the_next_frame_starts() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let next_started = start + Duration::from_millis(16);
+
+        let first = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
+            .unwrap();
+        let second = tx
+            .packetize(1, false, &frame_data(SHARD_LEN * 4, 11))
+            .unwrap();
+        let mut events = feed(&mut rx, start, [&first[0], &first[1]]);
+        let waiting = rx.next_timeout();
+        events.extend(feed(&mut rx, next_started, [&second[0]]));
+        let deadline = rx.next_timeout();
+        let early = poll(&mut rx, next_started + BEFORE_GRACE);
+        let due = poll(&mut rx, next_started + GRACE);
+
+        assert_eq!(waiting, Some(start + Duration::from_millis(100)));
+        assert_eq!(deadline, Some(next_started + GRACE));
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(early.len(), 0);
+        assert_eq!(lost(&due), [0]);
+        assert_eq!(rx.pending_frames(), 1);
+        assert_eq!(
+            rx.next_timeout(),
+            Some(next_started + Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn a_parity_packet_of_the_next_frame_also_ends_the_previous_one() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+
+        let first = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
+            .unwrap();
+        let second = tx
+            .packetize(1, false, &frame_data(SHARD_LEN * 4, 11))
+            .unwrap();
+        feed(&mut rx, start, [&first[0]]);
+        feed(&mut rx, start, [&second[4]]);
+        let due = poll(&mut rx, start + GRACE);
+
+        assert!(parity_of(&second[4]));
+        assert!(!parity_of(&second[3]));
+        assert_eq!(lost(&due), [0]);
+    }
+
+    #[test]
+    fn a_reordered_straggler_inside_the_grace_completes_the_frame() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let data = frame_data(SHARD_LEN * 4, 12);
+
+        let datagrams = tx.packetize(0, false, &data).unwrap();
+        let mut events = feed(
+            &mut rx,
+            start,
+            [&datagrams[2], &datagrams[3], &datagrams[4]],
+        );
+        events.extend(poll(&mut rx, start + BEFORE_GRACE));
+        events.extend(feed(&mut rx, start + BEFORE_GRACE, [&datagrams[0]]));
+        events.extend(poll(&mut rx, start + Duration::from_secs(1)));
+
+        assert_eq!(frames(&events).len(), 1);
+        assert_eq!(frames(&events)[0].data, data);
+        assert_eq!(frames(&events)[0].recovered_fragments, 1);
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(rx.stats().frames_lost, 0);
+    }
+
+    #[test]
+    fn a_straggler_of_a_superseded_frame_inside_the_grace_completes_it() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::None);
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let data = frame_data(SHARD_LEN * 3, 13);
+
+        let first = tx.packetize(0, false, &data).unwrap();
+        let second = tx
+            .packetize(1, false, &frame_data(SHARD_LEN * 2, 14))
+            .unwrap();
+        let mut events = feed(&mut rx, start, [&first[0], &first[1]]);
+        events.extend(feed(&mut rx, start, [&second[0]]));
+        events.extend(feed(&mut rx, start + BEFORE_GRACE, [&first[2]]));
+        events.extend(poll(&mut rx, start + GRACE));
+
+        assert_eq!(frames(&events).len(), 1);
+        assert_eq!(frames(&events)[0].data, data);
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(rx.pending_frames(), 1);
+    }
+
+    #[test]
+    fn parity_arriving_inside_the_grace_still_recovers_the_frame() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let data = frame_data(SHARD_LEN * 4, 15);
+
+        let datagrams = tx.packetize(0, false, &data).unwrap();
+        let mut events = feed(
+            &mut rx,
+            start,
+            [&datagrams[2], &datagrams[3], &datagrams[5]],
+        );
+        events.extend(poll(&mut rx, start + BEFORE_GRACE));
+        events.extend(feed(&mut rx, start + BEFORE_GRACE, [&datagrams[4]]));
+        events.extend(poll(&mut rx, start + Duration::from_secs(1)));
+
+        assert_eq!(datagrams.len(), 6);
+        assert_eq!(frames(&events).len(), 1);
+        assert_eq!(frames(&events)[0].data, data);
+        assert_eq!(frames(&events)[0].recovered_fragments, 2);
+        assert_eq!(lost(&events).len(), 0);
+    }
+
+    #[test]
+    fn a_straggler_after_the_grace_is_dropped_as_stale() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 16))
+            .unwrap();
+        let mut events = feed(
+            &mut rx,
+            start,
+            [&datagrams[2], &datagrams[3], &datagrams[4]],
+        );
+        events.extend(poll(&mut rx, start + GRACE));
+        events.extend(feed(&mut rx, start + GRACE, [&datagrams[0], &datagrams[1]]));
+
+        assert_eq!(lost(&events), [0]);
+        assert_eq!(frames(&events).len(), 0);
+        assert_eq!(rx.stats().stale_packets, 2);
+        assert_eq!(rx.pending_frames(), 0);
+    }
+
+    #[test]
+    fn only_the_last_parity_packet_of_the_last_block_ends_a_frame() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let last_block_done = start + Duration::from_millis(7);
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 8, 17))
+            .unwrap();
+        let parity: Vec<&Vec<u8>> = datagrams
+            .iter()
+            .filter(|datagram| parity_of(datagram))
+            .collect();
+        feed(&mut rx, start, [&datagrams[7], parity[0]]);
+        let after_first_block = poll(&mut rx, start + GRACE);
+        let waiting = rx.next_timeout();
+        feed(&mut rx, last_block_done, [parity[1]]);
+        let due = poll(&mut rx, last_block_done + GRACE);
+
+        assert_eq!(parity.len(), 2);
+        assert_eq!(after_first_block.len(), 0);
+        assert_eq!(waiting, Some(start + Duration::from_millis(100)));
+        assert_eq!(lost(&due), [0]);
+    }
+
+    #[test]
+    fn the_last_data_fragment_ends_a_frame_only_on_a_stream_without_parity() {
+        let start = Instant::now();
+        let second_at = start + Duration::from_millis(16);
+
+        let deadlines: Vec<Option<Instant>> = [FecScheme::None, FecScheme::for_overhead(4, 25)]
+            .into_iter()
+            .map(|scheme| {
+                let mut tx = packetizer(StreamKind::Video, scheme);
+                let mut rx = reassembler(StreamKind::Video);
+                let first = tx
+                    .packetize(0, false, &frame_data(SHARD_LEN * 3, 18))
+                    .unwrap();
+                let second = tx
+                    .packetize(1, false, &frame_data(SHARD_LEN * 3, 19))
+                    .unwrap();
+
+                feed(&mut rx, start, &first);
+                feed(&mut rx, second_at, [&second[0], &second[2]]);
+                rx.next_timeout()
+            })
+            .collect();
+
+        assert_eq!(
+            deadlines,
+            [
+                Some(second_at + GRACE),
+                Some(second_at + Duration::from_millis(100))
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_frame_of_a_stream_waits_for_proof_that_it_carries_no_parity() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::None);
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+
+        let datagrams = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 3, 20))
+            .unwrap();
+        feed(&mut rx, start, [&datagrams[0], &datagrams[2]]);
+
+        assert_eq!(rx.next_timeout(), Some(start + Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn the_first_parity_packet_of_a_stream_withdraws_a_data_only_verdict() {
+        let mut plain = packetizer(StreamKind::Video, FecScheme::None);
+        let mut coded = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+        let second_at = start + Duration::from_millis(16);
+        let late = second_at + Duration::from_millis(50);
+        let data = frame_data(SHARD_LEN * 4, 21);
+
+        let first = plain
+            .packetize(0, false, &frame_data(SHARD_LEN * 2, 22))
+            .unwrap();
+        let second = coded.packetize(1, false, &data).unwrap();
+        feed(&mut rx, start, &first);
+        feed(&mut rx, second_at, [&second[2], &second[3]]);
+        let verdict = rx.next_timeout();
+        feed(&mut rx, second_at, [&second[4]]);
+        let withdrawn = rx.next_timeout();
+        let mut events = poll(&mut rx, late);
+        events.extend(feed(&mut rx, late, [&second[5]]));
+
+        assert_eq!(verdict, Some(second_at + GRACE));
+        assert_eq!(withdrawn, Some(second_at + Duration::from_millis(100)));
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(frames(&events)[0].data, data);
+    }
+
+    #[test]
+    fn without_a_grace_a_finished_frame_waits_for_the_timeout() {
+        let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut rx = without_grace(StreamKind::Video);
+        let start = Instant::now();
+
+        let first = tx
+            .packetize(0, false, &frame_data(SHARD_LEN * 4, 23))
+            .unwrap();
+        let second = tx
+            .packetize(1, false, &frame_data(SHARD_LEN * 4, 24))
+            .unwrap();
+        let mut events = feed(&mut rx, start, [&first[2], &first[3], &first[4]]);
+        events.extend(feed(&mut rx, start, [&second[0]]));
+        let deadline = rx.next_timeout();
+        events.extend(poll(&mut rx, start + Duration::from_millis(99)));
+        let due = poll(&mut rx, start + Duration::from_millis(100));
+
+        assert_eq!(deadline, Some(start + Duration::from_millis(100)));
+        assert_eq!(lost(&events).len(), 0);
+        assert_eq!(lost(&due), [0, 1]);
+    }
+
+    #[test]
+    fn reset_forgets_that_the_stream_carried_parity() {
+        let mut coded = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+        let mut plain = packetizer(StreamKind::Video, FecScheme::None);
+        let mut rx = reassembler(StreamKind::Video);
+        let start = Instant::now();
+
+        let before = coded
+            .packetize(40, false, &frame_data(SHARD_LEN * 2, 25))
+            .unwrap();
+        let first = plain
+            .packetize(0, false, &frame_data(SHARD_LEN * 2, 26))
+            .unwrap();
+        let second = plain
+            .packetize(1, false, &frame_data(SHARD_LEN * 3, 27))
+            .unwrap();
+        feed(&mut rx, start, &before);
+        rx.reset();
+        feed(&mut rx, start, &first);
+        feed(&mut rx, start, [&second[0], &second[2]]);
+
+        assert_eq!(rx.next_timeout(), Some(start + GRACE));
     }
 
     #[test]
@@ -1497,6 +1946,7 @@ mod tests {
     fn limits_follow_the_configuration() {
         let config = NetworkConfig {
             reassembly_timeout_ms: 40,
+            reassembly_reorder_grace_ms: 7,
             reassembly_max_pending_frames: 3,
             reassembly_max_fragments: 500,
             ..NetworkConfig::default()
@@ -1505,8 +1955,13 @@ mod tests {
         let limits = ReassemblyLimits::from(&config);
 
         assert_eq!(limits.frame_timeout, Duration::from_millis(40));
+        assert_eq!(limits.reorder_grace, Duration::from_millis(7));
         assert_eq!(limits.max_pending_frames, 3);
         assert_eq!(limits.max_fragments, 500);
+        assert_eq!(
+            ReassemblyLimits::from(&NetworkConfig::default()),
+            ReassemblyLimits::default()
+        );
     }
 
     #[test]

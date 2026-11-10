@@ -462,6 +462,54 @@ paths:
   frames are also lost when they exceed `max_pending_frames` or live longer than
   `network.reassembly_timeout_ms` (`poll_timeouts`, `next_timeout`). The caller answers a
   `FrameLost` with `ControlMessage::RequestRecovery` or `RequestKeyframe` (`client.md`).
+- A frame is also lost as soon as its sender is known to be done with it, without waiting for
+  the next frame to complete. Every sender (the host's video, audio and cursor stages, the
+  client's microphone) owns one `Packetizer` on one thread and emits a frame's datagrams in
+  packetizer order, all data fragments and then all parity, before it starts the next frame; a
+  frame it abandons half sent is never resumed. A `Packetizer` keeps one `FecScheme` for its
+  life, so either every frame of a stream has parity (at least one packet per block) or none
+  has. The `Reassembler` records on a pending frame the first instant (`sender_done`) at which
+  it accepted one of:
+  - the frame's last parity packet: the `Fec` packet whose header index is the last of its
+    count. Parity is numbered across the frame's blocks in block order, so that is the last
+    packet of the last block and never the last packet of an earlier block;
+  - the frame's last data fragment, on a stream that has already resolved a frame and has never
+    carried a parity packet. A stale parity packet counts as carried, which is how the parity
+    trailing a frame that completed from its data is seen. The first frame of a stream never
+    ends this way (its parity may simply not have shown yet), and the first parity packet of a
+    stream withdraws such a verdict from the newest frame;
+  - any datagram, data or parity, of a later frame.
+  A frame still pending `network.reassembly_reorder_grace_ms` after that instant is reported
+  `FrameLost` by `poll_timeouts`, and `next_timeout` is the earlier of that deadline and the
+  timeout, so the receive loops wake for it. Inside the grace a straggler or a parity packet
+  completes the frame as always (`push` recovers before anything is declared lost); after it the
+  frame's datagrams are stale like those of any lost frame. The recovery request for a frame
+  whose final datagram arrived leaves one grace after it instead of when the next frame
+  completes, about a frame interval earlier, and for the last frame before a static screen it
+  leaves after the grace instead of the timeout. A frame whose tail was lost is noticed one
+  grace after the next frame's first datagram instead of at its completion, which saves that
+  frame's pacing span. The three older rules stay as the fallback: a lost tail with no frame
+  after it still waits for the timeout. `0` turns the early verdict off. The rule holds for
+  every `Reassembler`, the host's microphone one included: a one-fragment audio packet is
+  complete on arrival, so it only matters for fragmented packets, and on the cursor it only
+  brings forward a loss the next message would declare anyway.
+- The grace is 2 ms by default. Nothing of a frame leaves after its final datagram and the next
+  frame's first datagram leaves after it, so the grace never covers pacing, only a datagram that
+  left before the trigger and arrives after it. The paced sender puts at least 250 µs
+  (`MIN_BURST_GAP`) between bursts and does not wait after the last one, so only a datagram of
+  the trigger's own burst, or one displaced by more than a burst gap, can be overtaken. A
+  switched LAN keeps a flow in order (one path, FIFO queues, per-flow hashing on aggregated
+  links) and Wi-Fi resequences in its block-ack window before IP sees the frames, which leaves
+  the spreading of one flow over receive queues and cores, well under a millisecond. The receive
+  loop takes one instant per `recvmmsg` batch and pushes everything already queued before it
+  polls, so its own scheduling delay does not eat into the grace. 2 ms is eight burst gaps and
+  several times that displacement, yet 12% of a 60 fps interval, 29% at 144 Hz and under half at
+  240 Hz. A wrong verdict costs one recovery frame and never the stream, while a longer grace
+  adds itself to the freeze after every real loss. The grace is not validated against the
+  timeout, since whichever ends first loses the frame, so every existing file keeps loading.
+  The wake is `SO_RCVTIMEO`, which the kernel rounds up to its tick, so the verdict can land a
+  tick (1 ms at `HZ=1000`, 4 ms at 250) after the deadline. The default comes from this
+  reasoning and from loopback tests; reordering on a real link was not measured.
 - Frame numbers and sequences use serial-number arithmetic (`wrapping_sub` as `i32`), so wrap is
   transparent. A sender that restarts its frame numbering needs `Reassembler::reset`.
 - `ReassemblyEvent::PacketsMissing` reports a sequence gap for `ControlMessage::ReportLoss`. A

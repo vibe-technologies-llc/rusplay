@@ -30,6 +30,7 @@ const STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 const UNARMED: u32 = u32::MAX;
 const FRAMES_BEFORE_LOSS: usize = 3;
 const FRAMES_AFTER_LOSS: usize = 2;
+const SECOND_KEYFRAME: u32 = 8;
 const HELD_KEY: u32 = 30;
 const SNAPSHOT_INTERVAL_MS: u16 = 30;
 const AUDIO_PACKETS: u32 = 40;
@@ -444,6 +445,44 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
         message,
         ControlMessage::BitrateHint { kbps } if *kbps < ceiling_kbps
     )));
+}
+
+#[test]
+fn an_unrecoverable_last_frame_requests_a_recovery_while_no_frame_follows_it() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        frames: SECOND_KEYFRAME + 1,
+        drop: Box::new(|outgoing: Outgoing| outgoing.frame == SECOND_KEYFRAME && !outgoing.parity),
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.network.reassembly_timeout_ms = u16::MAX;
+    let session = ClientSession::new(config);
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        LatestFrame::new(),
+    )
+    .unwrap();
+    let requested = host.wait_for(STREAM_TIMEOUT, |message| {
+        matches!(
+            message,
+            ControlMessage::RequestRecovery { frame, .. } | ControlMessage::RequestKeyframe { frame }
+                if *frame == SECOND_KEYFRAME
+        )
+    });
+    let stats = stream.stats();
+    stream.stop().unwrap();
+
+    assert!(requested);
+    assert!(stats.frames_lost >= 1);
+    assert_eq!(stats.decode_errors, 0);
 }
 
 #[test]

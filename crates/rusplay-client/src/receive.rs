@@ -1079,7 +1079,14 @@ mod tests {
         }
 
         fn start_with(audio_capacity: Option<usize>, clipboard: Option<ClipboardLink>) -> Self {
-            let network = NetworkConfig::default();
+            Self::start_on(NetworkConfig::default(), audio_capacity, clipboard)
+        }
+
+        fn start_on(
+            network: NetworkConfig,
+            audio_capacity: Option<usize>,
+            clipboard: Option<ClipboardLink>,
+        ) -> Self {
             let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
             let host = Transport::bind(loopback, TransportOptions::from(&network)).unwrap();
             let transport = Transport::bind(loopback, TransportOptions::from(&network)).unwrap();
@@ -1473,6 +1480,75 @@ mod tests {
         assert_eq!(stats.recovery_requests_sent, 1);
         assert_eq!(stats.reference_recoveries, 1);
         assert_eq!(stats.frames_skipped, 2);
+        assert!(rig.finish().is_ok());
+    }
+
+    fn rig_that_never_times_a_frame_out() -> Rig {
+        let network = NetworkConfig {
+            reassembly_timeout_ms: u16::MAX,
+            ..NetworkConfig::default()
+        };
+
+        Rig::start_on(network, None, None)
+    }
+
+    #[test]
+    fn a_frame_lost_beyond_parity_asks_for_recovery_before_another_frame_is_sent() {
+        let rig = rig_that_never_times_a_frame_out();
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 2);
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+        let datagrams = packetizer
+            .packetize(2, false, &video_frame(0, 4_000, 2))
+            .unwrap();
+        rig.send(&datagrams[2..]);
+        let request = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestRecovery { .. })
+        });
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(datagrams.len(), 4);
+        assert!(matches!(
+            request,
+            Some(ControlMessage::RequestRecovery { frame: 2, .. })
+        ));
+        assert_eq!(stats.frames_lost, 1);
+        assert_eq!(stats.recovery_requests_sent, 1);
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_frame_missing_its_tail_asks_for_recovery_once_the_next_frame_starts() {
+        let rig = rig_that_never_times_a_frame_out();
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::for_overhead(4, 25));
+
+        rig.describe(0, description(1, 1280));
+        decoded_through(&rig, &mut packetizer, 2);
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+        let cut_short = packetizer
+            .packetize(2, false, &video_frame(0, 4_000, 2))
+            .unwrap();
+        let next = packetizer
+            .packetize(3, false, &video_frame(0, 4_000, 3))
+            .unwrap();
+        rig.send(&cut_short[..1]);
+        let premature = rig.decode.recv_timeout(Duration::from_millis(100));
+        let lost_while_unfinished = rig.counters.snapshot().frames_lost;
+        rig.send(&next[..1]);
+        let request = next_message_matching(&rig, |message| {
+            matches!(message, ControlMessage::RequestRecovery { .. })
+        });
+        let stats = rig.counters.snapshot();
+
+        assert!(premature.is_err());
+        assert_eq!(lost_while_unfinished, 0);
+        assert!(matches!(
+            request,
+            Some(ControlMessage::RequestRecovery { frame: 2, .. })
+        ));
+        assert_eq!(stats.frames_lost, 1);
         assert!(rig.finish().is_ok());
     }
 

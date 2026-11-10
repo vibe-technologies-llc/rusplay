@@ -40,6 +40,7 @@ pub struct NetworkConfig {
     pub send_timer_slack_us: u32,
     pub socket_buffer_bytes: u32,
     pub reassembly_timeout_ms: u16,
+    pub reassembly_reorder_grace_ms: u16,
     pub reassembly_max_pending_frames: u8,
     pub reassembly_max_fragments: u16,
     pub control_retransmit_ms: u16,
@@ -86,6 +87,7 @@ impl Default for NetworkConfig {
             send_timer_slack_us: 1,
             socket_buffer_bytes: 8 * 1024 * 1024,
             reassembly_timeout_ms: 100,
+            reassembly_reorder_grace_ms: 2,
             reassembly_max_pending_frames: 8,
             reassembly_max_fragments: u16::MAX,
             control_retransmit_ms: 50,
@@ -461,6 +463,32 @@ mod tests {
             config.validate(),
             Err(ConfigError::ZeroReassemblyTimeout)
         ));
+    }
+
+    #[test]
+    fn the_reorder_grace_defaults_to_two_ms_and_any_value_is_valid() {
+        let off = NetworkConfig {
+            reassembly_reorder_grace_ms: 0,
+            ..NetworkConfig::default()
+        };
+        let beyond_the_timeout = NetworkConfig {
+            reassembly_reorder_grace_ms: u16::MAX,
+            reassembly_timeout_ms: 1,
+            ..NetworkConfig::default()
+        };
+        let parsed: NetworkConfig = toml::from_str("reassembly_reorder_grace_ms = 5").unwrap();
+
+        assert_eq!(NetworkConfig::default().reassembly_reorder_grace_ms, 2);
+        assert!(off.validate().is_ok());
+        assert!(beyond_the_timeout.validate().is_ok());
+        assert_eq!(parsed.reassembly_reorder_grace_ms, 5);
+        assert_eq!(
+            parsed,
+            NetworkConfig {
+                reassembly_reorder_grace_ms: 5,
+                ..NetworkConfig::default()
+            }
+        );
     }
 
     #[test]

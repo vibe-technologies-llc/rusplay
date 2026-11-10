@@ -71,8 +71,11 @@ paths:
   thread at its default and is counted in `ClientStats::thread_priority_failures`.
 - Receive owns the transport, the `ControlChannel` and one `Reassembler` per media stream (video,
   cursor, and audio when there is an output). It waits in
-  `Transport::recv_batch_timeout` until the nearest control deadline, reassembly timeout, keyframe
-  retry or peer deadline, at most 10 ms, so decode feedback is picked up without a wake-up socket.
+  `Transport::recv_batch_timeout` until the nearest control deadline, reassembly deadline (the
+  frame timeout or the reorder grace of a frame its sender has finished, `Reassembler::next_timeout`),
+  keyframe retry or peer deadline, at most 10 ms, so decode feedback is picked up without a wake-up
+  socket. Every pass pushes the whole batch and only then polls the reassemblers with the batch's
+  instant, so a straggler already in the socket is never beaten by its frame's deadline.
   Datagrams from any address but the host are ignored; FEC packets are routed by
   `FecHeader::protects`. Control events of a batch are handled before its video events, so a
   `StreamFormat` that arrived together with the keyframe it describes is applied first.
@@ -93,7 +96,10 @@ paths:
 - Feedback, all over the control channel, never blocking the frame path: `PacketsMissing` becomes
   `ReportLoss` (dropped and counted when the control window is full, since reports are advisory);
   a `FrameLost` newer than the last keyframe, a gap in completed frame numbers, a frame dropped
-  because the decode queue is full enters resync. The first request of that resync is
+  because the decode queue is full enters resync. The `FrameLost` of a frame that FEC cannot
+  restore comes `network.reassembly_reorder_grace_ms` (default 2) after the frame's final
+  datagram, or after the first datagram of the next frame when the tail was lost, not when the
+  next frame completes (`networking.md`). The first request of that resync is
   `RequestRecovery { frame, last_good }` when `network.loss_recovery = "reference"` (the default)
   and the decoder has a last good frame, else `RequestKeyframe { frame }`, naming the first missing
   frame. A decode error is not that path. FFmpeg 9 frees every reference it has already output
@@ -347,7 +353,10 @@ paths:
   channel's smoothed round trip, republished by the receive stage on every wake.
 - Unit tests need no hardware: `receive.rs` runs a `ReceiveStage` against a plain loopback
   `Transport` and checks audio and cursor routing, FEC, fragmentation, queue overflow and video
-  waiting for (and then carrying the newest) stream description;
+  waiting for (and then carrying the newest) stream description, and, with
+  `network.reassembly_timeout_ms` at its maximum so only the reorder grace can fire, that a frame
+  lost beyond parity is answered with `RequestRecovery` while no later frame is sent and that a
+  frame missing its tail is answered once the next frame's first fragment arrives;
   `audio.rs` drives `AudioPipeline` with a scripted decoder and a real Opus round trip;
   `microphone.rs` encodes a scripted source and decodes the datagrams back.
 - The loopback host records `StreamKind::Input` datagrams through `InputSequence` and the same
@@ -373,7 +382,10 @@ paths:
   keyframe" is asserted as "or `frames_superseded + frames_unpresented` covers the frames before
   it", and the keyframe restart test asserts `frames_skipped`, `decode_errors == 0` and a later
   presented frame rather than that the first one back is a keyframe. Host-side messages are
-  awaited with `TestHost::wait_for`, never read immediately. The scaling test holds the host
+  awaited with `TestHost::wait_for`, never read immediately. The early-loss test makes the lost
+  frame the last one the host sends (the fixture's second keyframe, every data fragment dropped
+  and its one parity packet delivered) and raises `network.reassembly_timeout_ms` to its maximum,
+  so the request it waits for can only come from the reorder grace. The scaling test holds the host
   back with `HostOptions::gate` until `set_target` has run, so every presented frame is scaled.
 
 ## Window (`window` feature)
