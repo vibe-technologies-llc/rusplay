@@ -21,6 +21,7 @@ const TAG_LIGHTBAR: u8 = 12;
 const TAG_PLAYER_LEDS: u8 = 13;
 const TAG_TRIGGER_EFFECT: u8 = 14;
 const TAG_DISPLAY: u8 = 15;
+const TAG_BITRATE_CEILING: u8 = 16;
 const TAG_CLIPBOARD: u8 = 20;
 const TAG_QUALITY_REQUEST: u8 = 21;
 const TAG_QUALITY_REPORT: u8 = 22;
@@ -84,6 +85,9 @@ pub enum ControlMessage {
         effect: [u8; TRIGGER_EFFECT_LEN],
     },
     Display(ClientDisplay),
+    BitrateCeiling {
+        kbps: u32,
+    },
     Clipboard(ClipboardChunk),
     QualityRequest {
         enabled: bool,
@@ -106,6 +110,7 @@ impl ControlMessage {
         match self {
             Self::RequestKeyframe { .. }
             | Self::BitrateHint { .. }
+            | Self::BitrateCeiling { .. }
             | Self::AcknowledgeFrame { .. }
             | Self::Lightbar { .. } => 5,
             Self::Hello { .. } | Self::ReportLoss { .. } => 7,
@@ -139,10 +144,7 @@ impl ControlMessage {
                 out[1..3].copy_from_slice(&version.0.to_be_bytes());
                 out[3..7].copy_from_slice(&formats.bits().to_be_bytes());
             }
-            Self::RequestKeyframe { frame } => {
-                out[0] = TAG_REQUEST_KEYFRAME;
-                out[1..5].copy_from_slice(&frame.to_be_bytes());
-            }
+            Self::RequestKeyframe { frame } => write_word(out, TAG_REQUEST_KEYFRAME, *frame),
             Self::ReportLoss {
                 first_sequence,
                 count,
@@ -151,10 +153,7 @@ impl ControlMessage {
                 out[1..5].copy_from_slice(&first_sequence.to_be_bytes());
                 out[5..7].copy_from_slice(&count.to_be_bytes());
             }
-            Self::BitrateHint { kbps } => {
-                out[0] = TAG_BITRATE_HINT;
-                out[1..5].copy_from_slice(&kbps.to_be_bytes());
-            }
+            Self::BitrateHint { kbps } => write_word(out, TAG_BITRATE_HINT, *kbps),
             Self::Goodbye => out[0] = TAG_GOODBYE,
             Self::Keepalive => out[0] = TAG_KEEPALIVE,
             Self::Rumble {
@@ -183,10 +182,7 @@ impl ControlMessage {
                 out[1..9].copy_from_slice(&sent_micros.to_be_bytes());
                 out[9..17].copy_from_slice(&host_micros.to_be_bytes());
             }
-            Self::AcknowledgeFrame { frame } => {
-                out[0] = TAG_ACKNOWLEDGE_FRAME;
-                out[1..5].copy_from_slice(&frame.to_be_bytes());
-            }
+            Self::AcknowledgeFrame { frame } => write_word(out, TAG_ACKNOWLEDGE_FRAME, *frame),
             Self::RequestRecovery { frame, last_good } => {
                 out[0] = TAG_REQUEST_RECOVERY;
                 out[1..5].copy_from_slice(&frame.to_be_bytes());
@@ -215,6 +211,7 @@ impl ControlMessage {
                 write_tagged(out, TAG_STREAM_FORMAT, |body| description.write(body));
             }
             Self::Display(display) => write_tagged(out, TAG_DISPLAY, |body| display.write(body)),
+            Self::BitrateCeiling { kbps } => write_word(out, TAG_BITRATE_CEILING, *kbps),
             Self::Clipboard(chunk) => {
                 out[0] = TAG_CLIPBOARD;
                 chunk.write(&mut out[1..]);
@@ -256,7 +253,10 @@ impl ControlMessage {
         }
 
         let body_len = match tag {
-            TAG_REQUEST_KEYFRAME | TAG_BITRATE_HINT | TAG_ACKNOWLEDGE_FRAME => 4,
+            TAG_REQUEST_KEYFRAME
+            | TAG_BITRATE_HINT
+            | TAG_ACKNOWLEDGE_FRAME
+            | TAG_BITRATE_CEILING => 4,
             TAG_HELLO | TAG_REPORT_LOSS => 6,
             TAG_GOODBYE | TAG_KEEPALIVE => 0,
             TAG_RUMBLE => 9,
@@ -309,6 +309,7 @@ impl ControlMessage {
                 count: u16::from_be_bytes([body[4], body[5]]),
             },
             TAG_BITRATE_HINT => Self::BitrateHint { kbps: word(0) },
+            TAG_BITRATE_CEILING => Self::BitrateCeiling { kbps: word(0) },
             TAG_ACKNOWLEDGE_FRAME => Self::AcknowledgeFrame { frame: word(0) },
             TAG_REQUEST_RECOVERY => Self::RequestRecovery {
                 frame: word(0),
@@ -335,6 +336,11 @@ impl ControlMessage {
             _ => Self::Goodbye,
         })
     }
+}
+
+fn write_word(out: &mut [u8], tag: u8, word: u32) {
+    out[0] = tag;
+    out[1..].copy_from_slice(&word.to_be_bytes());
 }
 
 fn write_tagged(out: &mut [u8], tag: u8, write: impl FnOnce(&mut Vec<u8>)) {
@@ -539,7 +545,7 @@ mod tests {
     use super::*;
     use crate::{QualityDecibels, QualityPlanes};
 
-    fn every_message() -> [ControlMessage; 19] {
+    fn every_message() -> [ControlMessage; 20] {
         [
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -588,6 +594,7 @@ mod tests {
                 right: true,
                 effect: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             },
+            ControlMessage::BitrateCeiling { kbps: 150_000 },
             ControlMessage::Clipboard(
                 ClipboardChunk::new(9, 0, 1, &[b'x'; ClipboardChunk::MAX_DATA]).unwrap(),
             ),
@@ -808,6 +815,47 @@ mod tests {
         .encode(&mut buf)
         .unwrap();
         assert_eq!(&buf[..request_len], [11, 5, 6, 7, 8, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_bitrate_ceiling_is_a_big_endian_word_after_its_tag() {
+        let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
+        let steered = ControlMessage::BitrateCeiling { kbps: 0x0102_0304 }
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..steered], [16, 1, 2, 3, 4]);
+
+        let unsteered = ControlMessage::BitrateCeiling { kbps: 0 }
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..unsteered], [16, 0, 0, 0, 0]);
+        assert_eq!(
+            ControlMessage::decode(&buf[..unsteered]),
+            Ok(ControlMessage::BitrateCeiling { kbps: 0 })
+        );
+    }
+
+    #[test]
+    fn a_bitrate_ceiling_with_trailing_or_missing_bytes_is_rejected() {
+        assert_eq!(
+            ControlMessage::decode(&[TAG_BITRATE_CEILING, 0, 0, 0, 1, 0]),
+            Err(ProtocolError::TrailingBytes { extra: 1 })
+        );
+        assert_eq!(
+            ControlMessage::decode(&[TAG_BITRATE_CEILING, 0, 0, 0]),
+            Err(ProtocolError::BufferTooShort {
+                needed: 5,
+                available: 4,
+            })
+        );
+        assert_eq!(
+            ControlMessage::decode(&[TAG_BITRATE_CEILING]),
+            Err(ProtocolError::BufferTooShort {
+                needed: 5,
+                available: 1,
+            })
+        );
     }
 
     #[test]

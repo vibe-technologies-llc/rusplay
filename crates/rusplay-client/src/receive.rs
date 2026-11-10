@@ -25,7 +25,7 @@ use rusplay_protocol::{
 use crate::{
     ClientError, LatestCursor,
     audio::EncodedAudio,
-    bitrate::{BitrateController, BitrateSettings, HintOutbox},
+    bitrate::{BitrateSettings, BitrateSteering},
     clock::ClockSync,
     quality::QualityRequester,
     resize::DisplayAnnouncer,
@@ -171,12 +171,6 @@ impl Acks {
     }
 }
 
-#[derive(Debug)]
-struct Adaptation {
-    controller: BitrateController,
-    outbox: HintOutbox,
-}
-
 #[derive(Debug, Default)]
 struct Pending {
     video: Vec<ReassemblyEvent>,
@@ -265,7 +259,7 @@ pub(crate) struct ReceiveStage {
     handshake_done: bool,
     resync: Resync,
     acks: Acks,
-    adaptation: Option<Adaptation>,
+    steering: Option<BitrateSteering>,
     announcer: DisplayAnnouncer,
     quality: QualityRequester,
     clock_sync: ClockSync,
@@ -282,13 +276,6 @@ impl ReceiveStage {
         mut links: Links,
     ) -> Self {
         let now = Instant::now();
-        let adaptation = bitrate.map(|settings| {
-            links.counters.set_bitrate_target(settings.ceiling_kbps);
-            Adaptation {
-                controller: BitrateController::new(settings, now),
-                outbox: HintOutbox::default(),
-            }
-        });
         let announcer = DisplayAnnouncer::new(links.display, links.display_debounce);
         let limits = ReassemblyLimits::from(network);
         let audio = links.audio_queue.take().map(|queue| AudioIngress {
@@ -320,7 +307,7 @@ impl ReceiveStage {
             handshake_done: false,
             resync: Resync::default(),
             acks: Acks::default(),
-            adaptation,
+            steering: bitrate.map(BitrateSteering::new),
             announcer,
             quality: QualityRequester::default(),
             clock_sync: ClockSync::new(network.clock_sync_interval_ms, now),
@@ -432,9 +419,9 @@ impl ReceiveStage {
             self.announcer.next_deadline(),
             self.acks
                 .next_due(now, self.timing.ack_interval, self.resync.last_good),
-            self.adaptation
+            self.steering
                 .as_ref()
-                .and_then(|adaptation| adaptation.controller.next_deadline(self.control.rtt())),
+                .and_then(|steering| steering.next_deadline(self.control.rtt())),
             self.handshake_done
                 .then(|| self.clock_sync.next_ping())
                 .flatten(),
@@ -675,6 +662,11 @@ impl ReceiveStage {
                     host_micros,
                 }) => self.record_clock(sent_micros, host_micros, now),
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
+                ControlEvent::Received(ControlMessage::BitrateCeiling { kbps }) => {
+                    if let Some(steering) = &mut self.steering {
+                        steering.host_ceiling(kbps, now);
+                    }
+                }
                 ControlEvent::Received(
                     message @ (ControlMessage::Rumble { .. }
                     | ControlMessage::Lightbar { .. }
@@ -693,9 +685,8 @@ impl ReceiveStage {
                 } if !self.handshake_done => return Err(ClientError::HelloUndeliverable),
                 ControlEvent::Undeliverable { id, .. } => {
                     self.links.counters.control_undeliverable.increment();
-                    if let Some(adaptation) = &mut self.adaptation {
-                        let current = adaptation.controller.target_kbps();
-                        adaptation.outbox.undeliverable(id, current);
+                    if let Some(steering) = &mut self.steering {
+                        steering.undeliverable(id);
                     }
                     self.announcer.undeliverable(id, now);
                     self.quality.undeliverable(id);
@@ -703,8 +694,8 @@ impl ReceiveStage {
                 ControlEvent::Acked { id } => {
                     self.announcer.acked(id);
                     self.quality.acked(id);
-                    if let Some(adaptation) = &mut self.adaptation {
-                        adaptation.outbox.acked(id);
+                    if let Some(steering) = &mut self.steering {
+                        steering.acked(id);
                     }
                 }
                 ControlEvent::Received(ControlMessage::Clipboard(chunk)) => {
@@ -831,32 +822,28 @@ impl ReceiveStage {
 
     fn congested(&mut self, now: Instant) {
         let rtt = self.control.rtt();
-        if let Some(adaptation) = &mut self.adaptation
-            && let Some(kbps) = adaptation.controller.congestion(now, rtt)
-        {
-            adaptation.outbox.queue(kbps);
+        if let Some(steering) = &mut self.steering {
+            steering.congestion(now, rtt);
         }
     }
 
     fn adapt_bitrate(&mut self, now: Instant) -> Result<(), ClientError> {
         let rtt = self.control.rtt();
-        let Some(adaptation) = &mut self.adaptation else {
+        let Some(steering) = &mut self.steering else {
             return Ok(());
         };
 
-        if let Some(kbps) = adaptation.controller.poll(now, rtt) {
-            adaptation.outbox.queue(kbps);
-        }
+        steering.poll(now, rtt);
         self.links
             .counters
-            .set_bitrate_target(adaptation.controller.target_kbps());
+            .set_bitrate_target(steering.target_kbps());
 
-        let Some(kbps) = adaptation.outbox.ready() else {
+        let Some(kbps) = steering.ready() else {
             return Ok(());
         };
         match self.control.send(ControlMessage::BitrateHint { kbps }, now) {
             Ok(id) => {
-                adaptation.outbox.sent(id);
+                steering.sent(id);
                 self.links.counters.bitrate_hints_sent.increment();
                 Ok(())
             }
@@ -1057,7 +1044,9 @@ mod tests {
     use super::*;
 
     const WAIT: Duration = Duration::from_secs(5);
+    const QUIET: Duration = Duration::from_millis(150);
     const AUDIO_QUEUE: usize = 16;
+    const CLIENT_KBPS: u32 = 80_000;
 
     struct Rig {
         host: Transport,
@@ -1125,7 +1114,7 @@ mod tests {
                 stop: Arc::clone(&stop),
                 counters: Arc::clone(&counters),
             };
-            let bitrate = BitrateSettings::from_config(&network, 80_000);
+            let bitrate = BitrateSettings::from_config(&network, CLIENT_KBPS);
             let stage = ReceiveStage::new(
                 Arc::new(transport),
                 host_address,
@@ -1162,11 +1151,62 @@ mod tests {
         }
 
         fn describe(&self, id: u32, description: StreamDescription) {
-            let packet = ControlPacket::Message {
-                id,
-                message: ControlMessage::StreamFormat(description),
-            };
+            self.control(id, ControlMessage::StreamFormat(description));
+        }
+
+        fn announce_ceiling(&self, id: u32, kbps: u32) {
+            self.control(id, ControlMessage::BitrateCeiling { kbps });
+        }
+
+        fn control(&self, id: u32, message: ControlMessage) {
+            let packet = ControlPacket::Message { id, message };
             self.send(&[packet.to_datagram().unwrap()]);
+        }
+
+        fn lose_a_frame(&self, packetizer: &mut Packetizer) {
+            self.send(
+                &packetizer
+                    .packetize(0, true, &video_frame(0, 64, 0))
+                    .unwrap(),
+            );
+            self.next_video();
+            packetizer
+                .packetize(1, false, &video_frame(0, 64, 1))
+                .unwrap();
+            self.send(
+                &packetizer
+                    .packetize(2, false, &video_frame(0, 64, 2))
+                    .unwrap(),
+            );
+        }
+
+        fn loss_noticed(&self) -> bool {
+            self.wait_until(|rig| rig.counters.snapshot().frames_lost >= 1)
+        }
+
+        fn next_hint(&self) -> Option<ControlMessage> {
+            std::iter::from_fn(|| self.next_control_message())
+                .find(|message| matches!(message, ControlMessage::BitrateHint { .. }))
+        }
+
+        fn control_messages_for(&self, span: Duration) -> Vec<ControlMessage> {
+            let deadline = Instant::now() + span;
+            let mut buf = vec![0; usize::from(self.host.mtu())];
+            let mut messages = Vec::new();
+            while Instant::now() < deadline {
+                let Some((len, _)) = self
+                    .host
+                    .recv_from_timeout(&mut buf, Duration::from_millis(10))
+                    .unwrap()
+                else {
+                    continue;
+                };
+                if let Ok(ControlPacket::Message { message, .. }) = ControlPacket::read(&buf[..len])
+                {
+                    messages.push(message);
+                }
+            }
+            messages
         }
 
         fn next_input(&self) -> DecodeInput {
@@ -1409,30 +1449,93 @@ mod tests {
         let rig = Rig::start(None);
         let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
 
-        assert_eq!(rig.counters.snapshot().bitrate_target_kbps, Some(80_000));
+        assert_eq!(rig.counters.snapshot().bitrate_target_kbps, None);
         rig.describe(0, description(1, 1280));
-        rig.send(
-            &packetizer
-                .packetize(0, true, &video_frame(0, 64, 0))
-                .unwrap(),
+        rig.announce_ceiling(1, CLIENT_KBPS);
+        assert!(
+            rig.wait_until(|rig| rig.counters.snapshot().bitrate_target_kbps == Some(CLIENT_KBPS))
         );
-        rig.next_video();
-        packetizer
-            .packetize(1, false, &video_frame(0, 64, 1))
-            .unwrap();
-        rig.send(
-            &packetizer
-                .packetize(2, false, &video_frame(0, 64, 2))
-                .unwrap(),
-        );
+        rig.lose_a_frame(&mut packetizer);
 
-        let hint = std::iter::from_fn(|| rig.next_control_message())
-            .find(|message| matches!(message, ControlMessage::BitrateHint { .. }));
+        let hint = rig.next_hint();
         let stats = rig.counters.snapshot();
 
         assert_eq!(hint, Some(ControlMessage::BitrateHint { kbps: 60_000 }));
         assert_eq!(stats.bitrate_hints_sent, 1);
         assert_eq!(stats.bitrate_target_kbps, Some(60_000));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn loss_before_the_host_ceiling_cuts_nothing_and_a_higher_host_is_hinted_down_once() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.lose_a_frame(&mut packetizer);
+        assert!(rig.loss_noticed());
+        let unsteered = rig.counters.snapshot();
+        rig.announce_ceiling(1, 150_000);
+
+        let hint = rig.next_hint();
+        let later = rig.control_messages_for(QUIET);
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(unsteered.bitrate_hints_sent, 0);
+        assert_eq!(unsteered.bitrate_target_kbps, None);
+        assert_eq!(
+            hint,
+            Some(ControlMessage::BitrateHint { kbps: CLIENT_KBPS })
+        );
+        assert!(later.iter().all(|message| !matches!(
+            message,
+            ControlMessage::BitrateHint { kbps } if *kbps != CLIENT_KBPS
+        )));
+        assert_eq!(stats.bitrate_hints_sent, 1);
+        assert_eq!(stats.bitrate_target_kbps, Some(CLIENT_KBPS));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_host_ceiling_below_the_client_is_cut_from_the_hosts_bitrate() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.announce_ceiling(1, 40_000);
+        assert!(rig.wait_until(|rig| rig.counters.snapshot().bitrate_target_kbps == Some(40_000)));
+        let before_loss = rig.counters.snapshot();
+        rig.lose_a_frame(&mut packetizer);
+
+        let hint = rig.next_hint();
+        let stats = rig.counters.snapshot();
+
+        assert_eq!(before_loss.bitrate_hints_sent, 0);
+        assert_eq!(hint, Some(ControlMessage::BitrateHint { kbps: 30_000 }));
+        assert_eq!(stats.bitrate_hints_sent, 1);
+        assert_eq!(stats.bitrate_target_kbps, Some(30_000));
+        assert!(rig.finish().is_ok());
+    }
+
+    #[test]
+    fn a_host_without_a_bitrate_to_steer_is_never_hinted() {
+        let rig = Rig::start(None);
+        let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
+
+        rig.describe(0, description(1, 1280));
+        rig.announce_ceiling(1, 0);
+        rig.lose_a_frame(&mut packetizer);
+        assert!(rig.loss_noticed());
+
+        let sent = rig.control_messages_for(QUIET);
+        let stats = rig.counters.snapshot();
+
+        assert!(
+            sent.iter()
+                .all(|message| !matches!(message, ControlMessage::BitrateHint { .. }))
+        );
+        assert_eq!(stats.bitrate_hints_sent, 0);
+        assert_eq!(stats.bitrate_target_kbps, None);
         assert!(rig.finish().is_ok());
     }
 

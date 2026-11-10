@@ -11,6 +11,7 @@ use crate::{
 };
 
 const SMOOTHING_DIVISOR: u64 = 8;
+const BITRATE_TARGET_UNSET: u64 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClientStats {
@@ -233,7 +234,7 @@ impl Counters {
             bitrate_hints_sent: self.bitrate_hints_sent.get(),
             display_updates_sent: self.display_updates_sent.get(),
             bitrate_target_kbps: match self.bitrate_target_kbps.get() {
-                0 => None,
+                BITRATE_TARGET_UNSET => None,
                 kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),
             },
             rtt: match self.rtt_nanos.get() {
@@ -250,8 +251,9 @@ impl Counters {
         }
     }
 
-    pub(crate) fn set_bitrate_target(&self, kbps: u32) {
-        self.bitrate_target_kbps.set(u64::from(kbps));
+    pub(crate) fn set_bitrate_target(&self, kbps: Option<u32>) {
+        self.bitrate_target_kbps
+            .set(kbps.map_or(BITRATE_TARGET_UNSET, u64::from));
     }
 
     pub(crate) fn set_rtt(&self, rtt: Option<Duration>) {

@@ -36,6 +36,7 @@ use crate::{
 const RECV_BATCH_DATAGRAMS: usize = 32;
 const IDLE_WAKE: Duration = Duration::from_millis(20);
 const GOODBYE_LINGER_RETRANSMITS: u32 = 4;
+const UNSTEERED_CEILING_KBPS: u32 = 0;
 
 fn protects_microphone(datagram: &[u8]) -> bool {
     PacketHeader::parse(datagram)
@@ -83,7 +84,17 @@ impl HintPolicy {
         if config.video.encoder.is_constant_quality() {
             Self::Ignore
         } else {
-            Self::Clamp(config.network.bitrate_hint_range())
+            let ceiling = config.video.bitrate_kbps;
+            let floor = config.network.bitrate_hint_min_kbps.min(ceiling);
+
+            Self::Clamp(floor..=ceiling)
+        }
+    }
+
+    pub(crate) fn ceiling_kbps(&self) -> u32 {
+        match self {
+            Self::Clamp(range) => *range.end(),
+            Self::Ignore => UNSTEERED_CEILING_KBPS,
         }
     }
 
@@ -119,6 +130,7 @@ pub(crate) struct ControlStage {
     takeover: SessionTakeover,
     streaming: bool,
     unanswered_hello: Option<FormatSet>,
+    ceiling_owed: bool,
     display: Option<ClientDisplay>,
     resize: ResizeGate,
     started: Instant,
@@ -150,6 +162,7 @@ impl ControlStage {
             links,
             streaming: false,
             unanswered_hello: None,
+            ceiling_owed: false,
             display: None,
             resize,
             started: now,
@@ -205,6 +218,7 @@ impl ControlStage {
                 return Ok(());
             }
             self.answer_hello(now)?;
+            self.announce_ceiling(now)?;
             self.apply_resize(now);
             self.keep_alive(now)?;
             self.service_clipboard(now);
@@ -335,6 +349,7 @@ impl ControlStage {
         }
         self.streaming = false;
         self.unanswered_hello = None;
+        self.ceiling_owed = false;
         self.started = now;
         self.last_heard = now;
     }
@@ -506,6 +521,13 @@ impl ControlStage {
                     shared.counters.control_undeliverable.increment();
                     self.links.outbox.reannounce(&description);
                 }
+                ControlEvent::Undeliverable {
+                    message: ControlMessage::BitrateCeiling { .. },
+                    ..
+                } => {
+                    shared.counters.control_undeliverable.increment();
+                    self.ceiling_owed = true;
+                }
                 ControlEvent::Undeliverable { .. } => {
                     shared.counters.control_undeliverable.increment();
                 }
@@ -516,6 +538,7 @@ impl ControlStage {
                     | ControlMessage::PlayerLeds { .. }
                     | ControlMessage::TriggerEffect { .. }
                     | ControlMessage::StreamFormat(_)
+                    | ControlMessage::BitrateCeiling { .. }
                     | ControlMessage::ClockPong { .. }
                     | ControlMessage::QualityReport(_)
                     | ControlMessage::QualityUnavailable { .. },
@@ -583,6 +606,8 @@ impl ControlStage {
             },
             now,
         )?;
+        self.ceiling_owed = true;
+        self.announce_ceiling(now)?;
         if self.streaming {
             return Ok(());
         }
@@ -675,6 +700,20 @@ impl ControlStage {
     fn awaiting_source(&self, now: Instant) -> bool {
         self.source_deadline()
             .is_some_and(|deadline| now < deadline)
+    }
+
+    fn announce_ceiling(&mut self, now: Instant) -> Result<(), HostError> {
+        if !self.ceiling_owed {
+            return Ok(());
+        }
+
+        let ceiling = ControlMessage::BitrateCeiling {
+            kbps: self.hints.ceiling_kbps(),
+        };
+        if self.send(ceiling, now)? {
+            self.ceiling_owed = false;
+        }
+        Ok(())
     }
 
     fn take_hint(&self, kbps: u32) {
@@ -775,9 +814,65 @@ fn same_family(first: SocketAddr, second: SocketAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use rusplay_config::{RateControl, VaapiConfig, VideoEncoderConfig};
     use rusplay_net::{FecScheme, Packetizer};
 
     use super::*;
+
+    fn policy(bitrate_kbps: u32, hint_min_kbps: u32, hint_max_kbps: u32) -> HintPolicy {
+        let mut config = Config::default();
+        config.video.bitrate_kbps = bitrate_kbps;
+        config.network.bitrate_hint_min_kbps = hint_min_kbps;
+        config.network.bitrate_hint_max_kbps = hint_max_kbps;
+
+        HintPolicy::from_config(&config)
+    }
+
+    #[test]
+    fn the_configured_bitrate_is_the_ceiling_of_every_hint() {
+        let hints = policy(40_000, 2_000, 200_000);
+
+        assert_eq!(hints, HintPolicy::Clamp(2_000..=40_000));
+        assert_eq!(hints.ceiling_kbps(), 40_000);
+        assert_eq!(hints.apply(60_000), Some(40_000));
+        assert_eq!(hints.apply(30_000), Some(30_000));
+        assert_eq!(hints.apply(1), Some(2_000));
+    }
+
+    #[test]
+    fn the_hint_maximum_neither_lowers_nor_raises_the_ceiling() {
+        let below = policy(150_000, 2_000, 100_000);
+        let above = policy(150_000, 2_000, 200_000);
+
+        assert_eq!(below, HintPolicy::Clamp(2_000..=150_000));
+        assert_eq!(below.apply(120_000), Some(120_000));
+        assert_eq!(above, below);
+        assert_eq!(above.apply(180_000), Some(150_000));
+    }
+
+    #[test]
+    fn a_hint_minimum_above_the_configured_bitrate_is_lowered_to_it() {
+        let hints = policy(1_500, 2_000, 200_000);
+
+        assert_eq!(hints, HintPolicy::Clamp(1_500..=1_500));
+        assert_eq!(hints.apply(1), Some(1_500));
+        assert_eq!(hints.apply(u32::MAX), Some(1_500));
+    }
+
+    #[test]
+    fn constant_quality_has_no_ceiling_to_announce() {
+        let mut config = Config::default();
+        config.video.encoder = VideoEncoderConfig::Vaapi(VaapiConfig {
+            rate_control: RateControl::DEFAULT_CONSTANT_QUALITY,
+            ..VaapiConfig::default()
+        });
+
+        let hints = HintPolicy::from_config(&config);
+
+        assert_eq!(hints, HintPolicy::Ignore);
+        assert_eq!(hints.ceiling_kbps(), 0);
+        assert_eq!(hints.apply(12_345), None);
+    }
 
     #[test]
     fn a_takeover_never_changes_the_address_family() {

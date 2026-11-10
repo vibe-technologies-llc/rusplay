@@ -32,6 +32,7 @@ paths:
     plus an epoch), `ControlOutbox::reset` (a fresh `ControlChannel`), the `Replay` replaced by
     the takeover's `Proof` and `Accepted`, pending control events dropped, and the handshake timer
     and peer timer restarted. The new client then says `Hello` like a fresh one: the control stage
+    answers, announces the `BitrateCeiling` again and
     resends the latest `StreamFormat` before `Shared::start`, so the description precedes the forced
     keyframe. When the epoch changes the input stage lifts everything the old client held
     (`release_all`), starts a fresh `HeldInput` and `InputSequence`, and the cursor stage resends
@@ -218,12 +219,25 @@ paths:
     `RequestKeyframe`, `RequestRecovery`, `AcknowledgeFrame`, `BitrateHint` and `ReportLoss` go to
     the mailbox or the counters without blocking; a `ClockPing` is answered at once with a
     `ClockPong` carrying the stream clock; a client `Goodbye` ends the session cleanly.
-    A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped to
-    `network.bitrate_hint_min_kbps..=network.bitrate_hint_max_kbps` (`bitrate_hints_clamped`), or
-    ignored (`bitrate_hints_ignored`) when the encoder runs `RateControl::ConstantQuality`, which
-    has no bitrate to steer. `HostStats::bitrate_target_kbps` is the bitrate in force:
+    A `BitrateHint` goes through `HintPolicy` (`HintPolicy::from_config`): it is clamped
+    (`bitrate_hints_clamped`) to a range whose top, the session's ceiling
+    (`HintPolicy::ceiling_kbps`), is the host's own `video.bitrate_kbps` and whose bottom is
+    `network.bitrate_hint_min_kbps`, lowered to the ceiling when it is above it. The configured
+    bitrate is therefore a real ceiling: a client configured for more can only steer the host
+    below what the host was told to send, never above it, and a stream that was cut can always
+    climb back to it. `network.bitrate_hint_max_kbps` takes no part: above the bitrate it could
+    never apply, and below it it would keep a cut stream from returning to the configured
+    bitrate. A hint is ignored
+    (`bitrate_hints_ignored`) when the encoder runs `RateControl::ConstantQuality`, which has no
+    bitrate to steer. The client cannot read the host's config, so the control stage tells it:
+    right after every `Hello` answer, ahead of anything else that answer sends (the `StreamFormat`
+    resend of a takeover included), it sends `ControlMessage::BitrateCeiling` (`networking.md`)
+    with that ceiling, or 0 under constant quality. A new client after a session takeover says
+    `Hello` like a fresh one and so gets it too. A full control window leaves the message owed
+    (`ceiling_owed`) for the next pass, an undeliverable one is sent again, and a takeover drops
+    what was owed to the old client. `HostStats::bitrate_target_kbps` is the bitrate in force:
     `video.bitrate_kbps` at session start, then the last applied hint; `None` under constant
-    quality.
+    quality. The ceiling lives in the `HintPolicy` and is never written to that counter.
     The `Hello` answer calls `Shared::start`, which opens the mailbox and sets the streaming flag
     the audio and cursor stages wait for. `StreamKind::Microphone` datagrams, and `Fec` datagrams
     that protect it, are forwarded after `Hello` with `try_send` (tagged with the `ClientLink` epoch,
@@ -575,7 +589,7 @@ paths:
 - Tests: `src/tests.rs` drives the network side without a GPU, over loopback, against a client
   built from `rusplay-net` primitives (its synthetic source produces nothing until the client has
   received the host's `Hello`, after which the mailbox is open), with a `FakePipeline` behind the internal `serve_with`
-  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, format negotiation with fallback and with no overlap, keyframe repeat and suppression, recovery against a reference and its keyframe fallbacks, bitrate hints, `Goodbye`
+  (pairing, reconnect, session takeover with its wrong-proof and `Busy` cases, `Hello` gating, format negotiation with fallback and with no overlap, keyframe repeat and suppression, recovery against a reference and its keyframe fallbacks, bitrate hints, the `BitrateCeiling` after the `Hello` (again for a takeover's new client, 0 under constant quality) and hints held under it, `Goodbye`
   both ways, keepalives, handshake and peer timeouts, the stream format announced before the
   first frame and again with a newer generation after a resize). `src/tests/input.rs` drives the
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
@@ -596,7 +610,7 @@ paths:
   VAAPI AV1 (GPU hand-off) into the real `rusplay_client::ClientSession` (software decode, a test-only
   dev-dependency, configured for H.264 so only the host's `StreamFormat` can make it decode AV1)
   with a capturing `AudioOutput`, and checks the decoded grey in linear light, the tone's
-  amplitude and the final cursor position and image. Two more cover negotiation end to end:
+  amplitude and the final cursor position and image. Two (VAAPI) cover the bitrate ceiling end to end: a host configured above the real client ends at the client's bitrate with no hint clamped, and a host configured below it is never raised. Two more cover negotiation end to end:
   SVT-AV1 configured for 4:4:4 falls back to 4:2:0 and the client's description shows it, and
   an x265 host against a software client that cannot decode HEVC fails with `NoCommonFormat` on both ends. With the `ffmpeg` feature compiled in, that client decodes HEVC, so the test returns before opening a session. Each skips visibly without a GPU adapter or
   without the encoder backend and format. The assertions hold on a loaded machine: the client's

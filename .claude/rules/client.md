@@ -45,8 +45,9 @@ paths:
   prepaint with the canvas area in device pixels whenever that changes, so a window resize,
   fullscreen and the header hiding all follow (`ui.md`).
 - Handshake contract the host side must follow: the client sends `ControlMessage::Hello` on the
-  control channel right after keys are installed, the host answers with its own `Hello` and starts
-  sending video. Before the first video frame, and again whenever any of it changes, the host
+  control channel right after keys are installed, the host answers with its own `Hello`, follows
+  it with `ControlMessage::BitrateCeiling` (the bitrate hints can steer below, see adaptive
+  bitrate) and starts sending video. Before the first video frame, and again whenever any of it changes, the host
   sends `ControlMessage::StreamFormat` with a newer generation; the client decodes and labels
   video only from it, never from its own `video.codec` or `video.color`. Its `configured` is the
   host's configured format, so `ClientStream::stream_format()` and `is_fallback` show a
@@ -141,20 +142,39 @@ paths:
   between `last_frame` and the new frame are added on top, so a frame FEC could not recover is
   not counted again by the gap check on the next completed frame.
 - Adaptive bitrate (`bitrate.rs`, on unless `network.adaptive_bitrate` is off): the receive stage
-  owns a `BitrateController`, a pure state machine driven by explicit instants and the control
-  channel's smoothed RTT, unit tested without I/O. Its target starts at the client's
-  `video.bitrate_kbps` (the ceiling). Every congestion signal (`PacketsMissing`, `FrameLost`, a gap
-  in completed frame numbers, a decode-queue overflow, a decode failure; not the skip before the
-  first `StreamFormat`) cuts it by `network.adaptive_bitrate_backoff_percent`, down to
-  `network.adaptive_bitrate_floor_kbps` (lowered to the ceiling if above it), then holds for
-  `max(window / 4, 2 × RTT)` so one burst of loss cuts once; each signal also restarts the clean
-  window. After a clean window of `max(network.adaptive_bitrate_window_ms, 8 × RTT)` the target
-  rises by `network.adaptive_bitrate_step_kbps`, never past the ceiling. Each change becomes a
+  owns a `BitrateSteering`, which holds a `BitrateController` and the `HintOutbox`, all pure state
+  machines driven by explicit instants and the control channel's smoothed RTT, unit tested
+  without I/O. The two role configs are separate files, so the client cannot know what the host
+  sends until the host says so: the controller starts when the host's
+  `ControlMessage::BitrateCeiling` arrives (`networking.md`; it follows the host's `Hello`, but
+  control delivery is unordered, so it is taken whenever it comes), and until then congestion
+  signals produce no hints. The ceiling, and the starting target, is the lower of the client's
+  `video.bitrate_kbps` (the most this client accepts) and the host's ceiling (what the host
+  sends). When the client's value is the lower one, `BitrateController::initial_hint` is sent
+  once so the stream runs at it from the start instead of only after the first loss; otherwise
+  nothing is sent until congestion, because the host already runs at the ceiling. A host ceiling
+  of 0 (constant quality, no bitrate to steer) starts no controller for the session and withdraws
+  a pending hint. A later `BitrateCeiling` with the same value changes nothing; one with a
+  different value re-bases: a fresh controller at the new ceiling whose target is hinted to the
+  host, since the bitrate the host has in force may be an older hint. Every congestion signal
+  (`PacketsMissing`, `FrameLost`, a gap in completed frame numbers, a decode-queue overflow, a
+  decode failure; not the skip before the first `StreamFormat`) cuts the target by
+  `network.adaptive_bitrate_backoff_percent`, down to `network.adaptive_bitrate_floor_kbps`
+  (lowered to the ceiling if above it), then holds for `max(window / 4, 2 × RTT)` so one burst of
+  loss cuts once; each signal also restarts the clean window. After a clean window of
+  `max(network.adaptive_bitrate_window_ms, 8 × RTT)` the target rises by
+  `network.adaptive_bitrate_step_kbps`, never past the ceiling. Each change becomes a
   `ControlMessage::BitrateHint` through `HintOutbox`: at most one hint in flight, the newest
   pending target sent once the previous is acknowledged (control delivery is unordered, so this is
   what keeps an old hint from overtaking a new one), a full control window leaves it pending, and
   an undeliverable hint is replaced by the current target. Nothing on the frame path waits for it.
-  `ClientStats` has `bitrate_hints_sent` and `bitrate_target_kbps` (`None` when disabled).
+  `ClientStats` has `bitrate_hints_sent` and `bitrate_target_kbps`: the controller's target,
+  `None` when adaptation is off, before the host's ceiling has arrived and for a host without a
+  bitrate to steer. The test host announces `HostOptions::bitrate_ceiling_kbps` after its `Hello`
+  (the default config's bitrate unless a test sets it), and the loopback tests check a host above
+  the client (an initial hint at the client's value, never one above it), a host below it (the
+  first cut is a quarter below the host's value, never a raise) and a host announcing 0 (no
+  hints).
 - Receive → decode is a bounded `sync_channel` of `video.decode_queue_frames` encoded frames,
   filled with `try_send`: encoded frames cannot be dropped silently because later frames reference
   them, so overflow drops the frame and resyncs. Decode → present is a latest-wins `Slot`: a

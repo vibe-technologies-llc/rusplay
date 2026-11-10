@@ -161,6 +161,7 @@ pub struct HostOptions {
     pub cursor: Vec<CursorMessage>,
     pub gate: Option<Arc<AtomicBool>>,
     pub encodable: FormatSet,
+    pub bitrate_ceiling_kbps: u32,
 }
 
 impl Default for HostOptions {
@@ -174,6 +175,7 @@ impl Default for HostOptions {
             cursor: Vec::new(),
             gate: None,
             encodable: FormatSet::ALL,
+            bitrate_ceiling_kbps: Config::default().video.bitrate_kbps,
         }
     }
 }
@@ -306,6 +308,17 @@ impl TestHost {
         false
     }
 
+    pub fn bitrate_hints(&self) -> Vec<u32> {
+        self.received
+            .lock()
+            .iter()
+            .filter_map(|message| match message {
+                ControlMessage::BitrateHint { kbps } => Some(*kbps),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn wait_for(&self, timeout: Duration, matches: impl Fn(&ControlMessage) -> bool) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -426,7 +439,12 @@ fn answer_hello(
         formats: options.encodable,
     };
 
+    let ceiling = ControlMessage::BitrateCeiling {
+        kbps: options.bitrate_ceiling_kbps,
+    };
+
     control.send(hello, Instant::now()).ok();
+    control.send(ceiling, Instant::now()).ok();
     if describe {
         control
             .send(

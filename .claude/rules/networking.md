@@ -45,6 +45,20 @@ paths:
   nothing newer than `last_good`, the client's last good frame; the host answers with a recovery
   frame or, when its encoder cannot, a keyframe. Both are big-endian u32s after the tag.
   `RequestKeyframe { frame }` stays for a client with no good frame.
+- `ControlMessage::BitrateHint { kbps }` (tag 3, client to host, 5 bytes) asks the host's encoder
+  for an absolute bitrate, and `ControlMessage::BitrateCeiling { kbps }` (tag 16, host to client,
+  5 bytes) is the most a hint can ask for: the bitrate the host's encoder is configured for (the
+  host's `video.bitrate_kbps`), with 0 meaning the encoder has no bitrate to steer (constant
+  quality). Both are a big-endian u32 of kbps after the tag, and a short or long body is rejected
+  like every other fixed message. The two role configs are separate files, so a client that
+  knew only its own `video.bitrate_kbps` would steer toward that: a host configured for more
+  would be held to the client's lower rate after the first loss for the rest of the session,
+  and a host configured for less would be raised above what it was told to send. The host
+  sends the ceiling right after it answers a `Hello` (`host.md`) and clamps every hint to it;
+  the client starts its controller from it (`client.md`). Delivery is unordered, so the
+  client takes it whenever it arrives and re-bases on a different value. `ProtocolVersion::CURRENT`
+  28 added it; the `control` fuzz target forces its tag in front of arbitrary bytes with the other
+  fixed layouts.
 - FEC is `reed-solomon-simd` (pure Rust, Leopard codes). A frame's data fragments are split into
   balanced blocks of at most `data_shards` fragments (`FecScheme::blocks`), each block with its
   own parity shards (`parity_shards` scaled to the block size, at least one), so a large keyframe
@@ -161,7 +175,7 @@ paths:
   still answers the `Hello` with its set before its `Goodbye`, and the client computes the same
   empty intersection from it. The order is unit tested in `rusplay-core/src/format.rs`.
 - The control channel (hello, keyframe and recovery requests, frame acknowledgements, loss
-  reports, bitrate hints, keepalives, stream format, clock ping and pong, clipboard text, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
+  reports, bitrate hints and the bitrate ceiling, keepalives, stream format, clock ping and pong, clipboard text, goodbye) has its own small acknowledgement and retransmit scheme on the same socket, kept off
   the media path.
 
 ## Control channel

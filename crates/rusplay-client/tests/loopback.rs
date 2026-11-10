@@ -488,6 +488,120 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
     )));
 }
 
+struct LossySession {
+    host: TestHost,
+    stats: rusplay_client::ClientStats,
+}
+
+fn stream_with_one_lost_frame(
+    gpu: rusplay_client::Gpu,
+    host_ceiling_kbps: u32,
+    client_kbps: u32,
+) -> LossySession {
+    let frames = 120;
+    let armed = Arc::new(AtomicBool::new(false));
+    let lost = Arc::new(AtomicU32::new(UNARMED));
+    let drop_rule = {
+        let armed = Arc::clone(&armed);
+        let lost = Arc::clone(&lost);
+        move |outgoing: Outgoing| {
+            if armed.load(Ordering::Acquire) && outgoing.frames_to_keyframe > FRAMES_AFTER_LOSS {
+                lost.compare_exchange(UNARMED, outgoing.frame, Ordering::AcqRel, Ordering::Acquire)
+                    .ok();
+            }
+            lost.load(Ordering::Acquire) == outgoing.frame
+        }
+    };
+    let host = TestHost::start(HostOptions {
+        frames,
+        drop: Box::new(drop_rule),
+        goodbye: false,
+        bitrate_ceiling_kbps: host_ceiling_kbps,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.video.bitrate_kbps = client_kbps;
+    let session = ClientSession::new(config);
+    let (seen, sink) = recorder();
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        sink,
+    )
+    .unwrap();
+    let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+    while seen.lock().len() < FRAMES_BEFORE_LOSS && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    armed.store(true, Ordering::Release);
+    let stats = settle(stream, &seen, frames - 1);
+
+    assert_ne!(lost.load(Ordering::Acquire), UNARMED);
+    assert!(stats.frames_lost >= 1);
+
+    LossySession { host, stats }
+}
+
+#[test]
+fn a_host_sending_more_than_the_client_accepts_is_hinted_down_at_once_and_never_above_it() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+
+    let session = stream_with_one_lost_frame(gpu, 150_000, 80_000);
+    let cut = session.host.wait_for(STREAM_TIMEOUT, |message| {
+        matches!(
+            message,
+            ControlMessage::BitrateHint { kbps } if *kbps < 80_000
+        )
+    });
+    let hints = session.host.bitrate_hints();
+
+    assert!(cut, "{hints:?}");
+    assert_eq!(hints.first(), Some(&80_000));
+    assert!(hints.iter().all(|kbps| *kbps <= 80_000), "{hints:?}");
+    assert!(session.stats.bitrate_hints_sent >= 2);
+}
+
+#[test]
+fn a_host_sending_less_than_the_client_accepts_is_cut_below_its_own_bitrate_never_raised() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+
+    let session = stream_with_one_lost_frame(gpu, 40_000, 80_000);
+    let hinted = session.host.wait_for(STREAM_TIMEOUT, |message| {
+        matches!(message, ControlMessage::BitrateHint { .. })
+    });
+    let hints = session.host.bitrate_hints();
+
+    assert!(hinted);
+    assert_eq!(hints.first(), Some(&30_000));
+    assert!(hints.iter().all(|kbps| *kbps <= 40_000), "{hints:?}");
+    assert!(
+        session
+            .stats
+            .bitrate_target_kbps
+            .is_some_and(|kbps| kbps <= 40_000)
+    );
+}
+
+#[test]
+fn a_constant_quality_host_gets_no_bitrate_hints() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+
+    let session = stream_with_one_lost_frame(gpu, 0, 80_000);
+
+    assert_eq!(session.host.bitrate_hints(), []);
+    assert_eq!(session.stats.bitrate_hints_sent, 0);
+    assert_eq!(session.stats.bitrate_target_kbps, None);
+}
+
 #[test]
 fn an_unrecoverable_last_frame_requests_a_recovery_while_no_frame_follows_it() {
     let Some(gpu) = common::gpu() else {

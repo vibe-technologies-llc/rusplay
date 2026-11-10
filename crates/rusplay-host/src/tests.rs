@@ -662,6 +662,10 @@ impl TestClient {
     fn has(&self, wanted: ControlMessage) -> bool {
         self.messages.contains(&wanted)
     }
+
+    fn position(&self, wanted: impl Fn(&ControlMessage) -> bool) -> Option<usize> {
+        self.messages.iter().position(wanted)
+    }
 }
 
 fn complete(reassembler: &mut Reassembler, datagram: &[u8]) -> Vec<ReassembledFrame> {
@@ -1147,10 +1151,9 @@ fn a_bitrate_hint_reaches_the_encoder() {
 }
 
 #[test]
-fn bitrate_hints_are_clamped_to_the_configured_range() {
+fn the_configured_bitrate_is_announced_after_the_hello_and_caps_every_hint() {
     let mut config = host_config();
-    config.network.bitrate_hint_min_kbps = 5_000;
-    config.network.bitrate_hint_max_kbps = 40_000;
+    config.video.bitrate_kbps = 150_000;
     let fixture = Fixture::new(config);
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
@@ -1158,7 +1161,73 @@ fn bitrate_hints_are_clamped_to_the_configured_range() {
     let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
     let (_, stream) = serving.join().unwrap().unwrap();
-    assert_eq!(stream.stats().bitrate_target_kbps, Some(80_000));
+    let announced =
+        client.pump_until(|client| client.has(ControlMessage::BitrateCeiling { kbps: 150_000 }));
+    let started_at = stream.stats().bitrate_target_kbps;
+    client.send(ControlMessage::BitrateHint { kbps: 80_000 });
+    let lowered = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 80_000);
+    let lowered_to = stream.stats().bitrate_target_kbps;
+    client.send(ControlMessage::BitrateHint { kbps: 180_000 });
+    let capped = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 150_000);
+    let stats = stream.stats();
+
+    let hello = client.position(|message| matches!(message, ControlMessage::Hello { .. }));
+    let ceiling =
+        client.position(|message| matches!(message, ControlMessage::BitrateCeiling { .. }));
+
+    assert!(announced);
+    assert_eq!(ceiling, hello.map(|hello| hello + 1));
+    assert_eq!(started_at, Some(150_000));
+    assert!(lowered);
+    assert_eq!(lowered_to, Some(80_000));
+    assert!(capped);
+    assert_eq!(stats.bitrate_hints_clamped, 1);
+    assert_eq!(stats.bitrate_target_kbps, Some(150_000));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn a_hint_above_the_configured_bitrate_never_raises_it() {
+    let mut config = host_config();
+    config.video.bitrate_kbps = 40_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    let announced =
+        client.pump_until(|client| client.has(ControlMessage::BitrateCeiling { kbps: 40_000 }));
+    client.send(ControlMessage::BitrateHint { kbps: 60_000 });
+    let held = client.pump_until(|_| stream.stats().bitrate_hints_clamped == 1);
+    let held_at = stream.stats().bitrate_target_kbps;
+    client.send(ControlMessage::BitrateHint { kbps: 30_000 });
+    let cut = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 30_000);
+    let stats = stream.stats();
+
+    assert!(announced);
+    assert!(held);
+    assert_eq!(held_at, Some(40_000));
+    assert!(cut);
+    assert_eq!(stats.bitrate_hints_clamped, 1);
+    assert_eq!(stats.bitrate_target_kbps, Some(30_000));
+    stream.stop().unwrap();
+}
+
+#[test]
+fn bitrate_hints_are_clamped_between_the_hint_minimum_and_the_configured_bitrate() {
+    let mut config = host_config();
+    config.network.bitrate_hint_min_kbps = 5_000;
+    config.video.bitrate_kbps = 40_000;
+    let fixture = Fixture::new(config);
+    let bitrate = Arc::new(AtomicU32::new(0));
+    let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
+
+    let (mut client, _) = TestClient::pair(fixture.address);
+    client.hello();
+    let (_, stream) = serving.join().unwrap().unwrap();
+    assert_eq!(stream.stats().bitrate_target_kbps, Some(40_000));
     client.send(ControlMessage::BitrateHint { kbps: 1 });
     let floored = client.pump_until(|_| bitrate.load(Ordering::Relaxed) == 5_000);
     client.send(ControlMessage::BitrateHint { kbps: u32::MAX });
@@ -1186,11 +1255,14 @@ fn bitrate_hints_are_ignored_under_constant_quality() {
     let (mut client, _) = TestClient::pair(fixture.address);
     client.hello();
     let (_, stream) = serving.join().unwrap().unwrap();
+    let unsteered =
+        client.pump_until(|client| client.has(ControlMessage::BitrateCeiling { kbps: 0 }));
     client.send(ControlMessage::BitrateHint { kbps: 12_345 });
     let counted = client.pump_until(|_| stream.stats().bitrate_hints_ignored == 1);
     client.pump(Duration::from_millis(50), |_| false);
     let stats = stream.stats();
 
+    assert!(unsteered);
     assert!(counted);
     assert_eq!(bitrate.load(Ordering::Relaxed), 0);
     assert_eq!(stats.bitrate_changes, 0);
@@ -1609,14 +1681,21 @@ fn the_session_peer_reconnecting_from_a_new_address_takes_the_session_over() {
     let (_, stream) = serving.join().unwrap().unwrap();
     assert!(first.pump_until(|client| client.has_hello() && client.frames.len() >= 2));
 
+    let ceiling = ControlMessage::BitrateCeiling {
+        kbps: host_config().video.bitrate_kbps,
+    };
+
     let mut restarted = TestClient::reconnect(fixture.address, &record);
     restarted.hello();
     let resumed = restarted.pump_until(|client| client.has_hello() && client.frames.len() >= 2);
+    let told_the_ceiling = restarted.pump_until(|client| client.has(ceiling));
     first.pump(Duration::from_millis(200), |_| false);
     let frozen = first.frames.len();
     first.pump(Duration::from_millis(200), |_| false);
 
+    assert!(first.has(ceiling));
     assert!(resumed);
+    assert!(told_the_ceiling);
     assert_eq!(stream.client(), restarted.transport.local_addr().unwrap());
     assert_eq!(stream.stats().sessions_taken_over, 1);
     assert!(restarted.frames[0].keyframe);

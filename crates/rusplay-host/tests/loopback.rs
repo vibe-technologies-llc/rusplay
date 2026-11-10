@@ -591,6 +591,100 @@ fn a_client_asking_for_quality_gets_reports_of_the_encoded_stream() {
     assert!(turned_off.quality_report.is_none());
 }
 
+struct SteeredSession {
+    client: rusplay_client::ClientStats,
+    host: HostStats,
+}
+
+fn stream_until_the_client_steers(host_kbps: u32, client_kbps: u32) -> Option<SteeredSession> {
+    let mut config = host_config(VideoEncoderConfig::Vaapi(VaapiConfig::default()));
+    config.video.bitrate_kbps = host_kbps;
+    if !supported(&config) {
+        return None;
+    }
+    let gpu = open_gpu()?;
+    let dir = TempDir::new().unwrap();
+    let host = bind_host(config, &dir, &RecordedInput::default());
+    let address = host.local_addr().unwrap();
+    let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
+    let mut client = client_config();
+    client.video.bitrate_kbps = client_kbps;
+    let hints_owed = u64::from(client_kbps < host_kbps);
+
+    let stream = ClientSession::new(client)
+        .connect_with_audio(
+            address,
+            &Credentials::Pin(Pin::parse(PIN).unwrap()),
+            client_gpu(&gpu),
+            LatestFrame::new(),
+            None,
+        )
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let steering = |stats: &rusplay_client::ClientStats| {
+        stats.bitrate_target_kbps.is_some() && stats.bitrate_hints_sent >= hints_owed
+    };
+    while !steering(&stream.stats()) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let client = stream.stats();
+    stream.stop().unwrap();
+    let host = serving.join().unwrap().unwrap();
+
+    Some(SteeredSession { client, host })
+}
+
+#[test]
+fn a_host_configured_above_the_client_streams_at_what_the_client_accepts() {
+    let Some(session) = stream_until_the_client_steers(150_000, 80_000) else {
+        return;
+    };
+
+    assert!(session.client.bitrate_hints_sent >= 1);
+    assert!(
+        session
+            .client
+            .bitrate_target_kbps
+            .is_some_and(|kbps| kbps <= 80_000),
+        "{:?}",
+        session.client.bitrate_target_kbps
+    );
+    assert!(
+        session
+            .host
+            .bitrate_target_kbps
+            .is_some_and(|kbps| kbps <= 80_000),
+        "{:?}",
+        session.host.bitrate_target_kbps
+    );
+    assert_eq!(session.host.bitrate_hints_clamped, 0);
+}
+
+#[test]
+fn a_host_configured_below_the_client_is_never_raised_above_its_own_bitrate() {
+    let Some(session) = stream_until_the_client_steers(40_000, 80_000) else {
+        return;
+    };
+
+    assert!(
+        session
+            .client
+            .bitrate_target_kbps
+            .is_some_and(|kbps| kbps <= 40_000),
+        "{:?}",
+        session.client.bitrate_target_kbps
+    );
+    assert!(
+        session
+            .host
+            .bitrate_target_kbps
+            .is_some_and(|kbps| kbps <= 40_000),
+        "{:?}",
+        session.host.bitrate_target_kbps
+    );
+    assert_eq!(session.host.bitrate_hints_clamped, 0);
+}
+
 #[test]
 fn a_host_and_client_without_a_shared_format_both_refuse() {
     if client_decodes(Codec::Hevc) {
