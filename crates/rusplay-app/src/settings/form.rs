@@ -127,6 +127,29 @@ impl FormModel {
         Ok(Self { values, role })
     }
 
+    pub fn defaults(role: ConfigRole) -> Result<Self, ConfigError> {
+        Self::from_config(&Config::default(), role)
+    }
+
+    fn section_fields(&self, section: Section) -> impl Iterator<Item = usize> {
+        let hosting = self.role == ConfigRole::Host;
+
+        (0..FIELDS.len()).filter(move |&index| {
+            FIELDS[index].section == section && audience(FIELDS[index].path).allows(hosting)
+        })
+    }
+
+    pub fn section_matches(&self, other: &Self, section: Section) -> bool {
+        self.section_fields(section)
+            .all(|index| self.values[index] == other.values[index])
+    }
+
+    pub fn adopt_section(&mut self, source: &Self, section: Section) {
+        for index in self.section_fields(section).collect::<Vec<_>>() {
+            self.values[index].clone_from(&source.values[index]);
+        }
+    }
+
     pub fn value(&self, field: usize) -> &Value {
         &self.values[field]
     }
@@ -1297,6 +1320,51 @@ mod tests {
             model.check_field(params),
             Err(FieldError::DuplicateParameter("a".to_owned()))
         );
+    }
+
+    #[test]
+    fn adopting_a_section_from_the_defaults_resets_that_section_only() {
+        let changed = populated_configs().remove(0);
+        let defaults = FormModel::defaults(ConfigRole::Client).unwrap();
+        let mut form = client_form(&changed);
+
+        assert!(!form.section_matches(&defaults, Section::Scaling));
+        assert!(!form.section_matches(&defaults, Section::Audio));
+
+        form.adopt_section(&defaults, Section::Scaling);
+        let built = form.build().unwrap();
+
+        assert!(form.section_matches(&defaults, Section::Scaling));
+        assert!(!form.section_matches(&defaults, Section::Audio));
+        assert_eq!(built.scaling, Config::default().scaling);
+        assert_eq!(built.audio, changed.audio);
+        assert_eq!(built.video.bitrate_kbps, changed.video.bitrate_kbps);
+    }
+
+    #[test]
+    fn a_default_form_matches_the_defaults_in_every_section() {
+        for role in [ConfigRole::Client, ConfigRole::Host] {
+            let defaults = FormModel::defaults(role).unwrap();
+            let form = form_as(&Config::default(), role);
+
+            assert!(
+                Section::ALL
+                    .into_iter()
+                    .all(|section| form.section_matches(&defaults, section))
+            );
+        }
+    }
+
+    #[test]
+    fn resetting_the_video_section_also_resets_the_rows_a_backend_hides() {
+        let changed = populated_configs().remove(0);
+        let defaults = FormModel::defaults(ConfigRole::Host).unwrap();
+        let mut form = form_as(&changed, ConfigRole::Host);
+
+        form.adopt_section(&defaults, Section::Video);
+        let built = form.build().unwrap();
+
+        assert_eq!(built.video, Config::default().video);
     }
 
     #[test]

@@ -306,6 +306,13 @@ paths:
   choice name, and lists matches from every section until the search is cleared or a section is
   chosen. A section with a field error carries a mark, and the footer names how many settings
   need attention.
+- `Reset to defaults` beside the section title puts every row of that section the active role
+  owns back to the config crate's defaults, the rows a backend or rate-control choice currently
+  hides included (`FormModel::adopt_section` from `FormModel::defaults(role)`, which the view
+  keeps per role). It is an edit like any other: nothing is written until `Save`, `Revert`
+  undoes it, and field errors in other sections stay marked. The button is enabled only while
+  the section differs from the defaults (`section_matches`) and is absent while searching,
+  where the list spans sections. Resetting Capture also clears a stored restore token.
 - `Kind::Primaries` (`settings/primaries.rs`) is one text value: a named set, or
   `custom RX,RY GX,GY BX,BY WX,WY` for a `primaries.custom` table. The view shows a dropdown of
   the names plus `custom` (choosing it seeds the BT.709 points, or keeps the edited ones) and,

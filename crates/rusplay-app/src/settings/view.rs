@@ -87,6 +87,7 @@ pub struct SettingsView {
     parked: Option<RoleState>,
     saved: Config,
     form: FormModel,
+    defaults: Option<FormModel>,
     color_defaults: Option<DisplayColorDefaults>,
     section: Section,
     search: Entity<TextField>,
@@ -160,6 +161,7 @@ impl SettingsView {
             parked: None,
             saved: config,
             form,
+            defaults: FormModel::defaults(ConfigRole::Client).ok(),
             color_defaults,
             section: Section::Video,
             search,
@@ -410,6 +412,46 @@ impl SettingsView {
         cx.notify();
     }
 
+    fn section_is_default(&self) -> bool {
+        self.defaults
+            .as_ref()
+            .is_none_or(|defaults| self.form.section_matches(defaults, self.section))
+    }
+
+    fn recheck_fields(&mut self) {
+        self.errors = (0..FIELDS.len())
+            .filter(|&index| self.form.is_visible(index))
+            .filter_map(|index| {
+                let error = self.form.check_field(index).err()?;
+                Some((index, error.to_string()))
+            })
+            .collect();
+    }
+
+    fn reset_section(&mut self, cx: &mut Context<Self>) {
+        if self.section_is_default() {
+            return;
+        }
+        let Some(defaults) = &self.defaults else {
+            return;
+        };
+
+        self.form.adopt_section(defaults, self.section);
+        self.sync_inputs(cx);
+        self.recheck_fields();
+        self.dirty = self
+            .form
+            .build()
+            .map_or(true, |config| config != self.saved);
+        self.sync_hardware(cx);
+        self.scroll_to = Some(ScrollTo::Top);
+        cx.emit(NoticeRaised(Notice::Info(format!(
+            "{} reset to defaults, not saved yet",
+            self.section.title()
+        ))));
+        cx.notify();
+    }
+
     fn sync_inputs(&mut self, cx: &mut Context<Self>) {
         for (index, input) in self.inputs.iter().enumerate() {
             if let Some(input) = input {
@@ -449,6 +491,7 @@ impl SettingsView {
             dirty: mem::replace(&mut self.dirty, incoming.dirty),
         });
         self.role = role;
+        self.defaults = FormModel::defaults(role).ok();
         self.sync_inputs(cx);
         self.settle_section();
         self.sync_hardware(cx);
@@ -962,6 +1005,43 @@ impl SettingsView {
             .into_any_element()
     }
 
+    fn render_section_title(
+        &self,
+        title: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let searching = self.searching();
+
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme::text())
+                    .child(title),
+            )
+            .when(searching, |this| {
+                this.child(
+                    button("settings-search-clear", "Clear", ButtonStyle::Quiet, true)
+                        .on_click(cx.listener(|this, _, _, cx| this.clear_search(cx))),
+                )
+            })
+            .when(!searching, |this| {
+                this.child(
+                    button(
+                        "settings-section-reset",
+                        "Reset to defaults",
+                        ButtonStyle::Quiet,
+                        !self.section_is_default(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_section(cx))),
+                )
+            })
+    }
+
     fn render_roles(&self, match_count: usize, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let mut tabs = Vec::with_capacity(ROLES.len());
         let searching = self.searching();
@@ -1019,30 +1099,7 @@ impl SettingsView {
                     .min_w_0()
                     .flex_col()
                     .gap_0p5()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::text())
-                                    .child(title),
-                            )
-                            .when(searching, |this| {
-                                this.child(
-                                    button(
-                                        "settings-search-clear",
-                                        "Clear",
-                                        ButtonStyle::Quiet,
-                                        true,
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| this.clear_search(cx))),
-                                )
-                            }),
-                    )
+                    .child(self.render_section_title(title, cx))
                     .child(
                         div()
                             .text_sm()
