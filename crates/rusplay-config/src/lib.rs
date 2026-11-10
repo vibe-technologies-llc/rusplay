@@ -106,6 +106,10 @@ impl Config {
             });
         }
 
+        if version < FAST_INPUT_REPAIR_VERSION {
+            migrate::drop_retired_keys(&mut table);
+        }
+
         let mut config: Self = table.try_into().map_err(parse_error)?;
         if version < AUTO_DEFAULTS_VERSION {
             migrate::unpin_legacy_defaults(&mut config);

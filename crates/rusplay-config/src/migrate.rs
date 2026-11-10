@@ -14,6 +14,8 @@ const LEGACY_CODEC: Codec = Codec::Hevc;
 const LEGACY_CHROMA: ChromaSubsampling = ChromaSubsampling::Yuv422;
 const LEGACY_DEPTH: BitDepth = BitDepth::Eight;
 const LEGACY_RESEND_DELAY_MS: u16 = 8;
+const NETWORK_SECTION: &str = "network";
+const RETIRED_BITRATE_HINT_MAX: &str = "bitrate_hint_max_kbps";
 
 pub fn unpin_legacy_defaults(config: &mut Config) {
     let video = &mut config.video;
@@ -71,6 +73,12 @@ pub fn retune_legacy_deband(config: &mut Config) {
     }
     if is_legacy(deband.chroma_threshold) {
         deband.chroma_threshold = retuned.chroma_threshold;
+    }
+}
+
+pub fn drop_retired_keys(table: &mut toml::Table) {
+    if let Some(toml::Value::Table(network)) = table.get_mut(NETWORK_SECTION) {
+        network.remove(RETIRED_BITRATE_HINT_MAX);
     }
 }
 
@@ -250,6 +258,16 @@ backend = "nvdec"
         assert_eq!(untouched.input.resend_delay_ms, 2);
         assert_eq!(changed.input.resend_delay_ms, 12);
         assert_eq!(unversioned.input.resend_delay_ms, 2);
+    }
+
+    #[test]
+    fn an_older_file_may_still_carry_the_retired_bitrate_hint_maximum() {
+        let stored = "version = 3\n[network]\nport = 4000\nbitrate_hint_max_kbps = 200000\n";
+        let current =
+            format!("version = {CONFIG_VERSION}\n[network]\nbitrate_hint_max_kbps = 200000\n");
+
+        assert_eq!(parse(stored).network.port, 4000);
+        assert!(Config::parse(&current, Path::new("test.toml")).is_err());
     }
 
     #[test]

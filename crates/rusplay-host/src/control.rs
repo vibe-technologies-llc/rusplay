@@ -819,18 +819,17 @@ mod tests {
 
     use super::*;
 
-    fn policy(bitrate_kbps: u32, hint_min_kbps: u32, hint_max_kbps: u32) -> HintPolicy {
+    fn policy(bitrate_kbps: u32, hint_min_kbps: u32) -> HintPolicy {
         let mut config = Config::default();
         config.video.bitrate_kbps = bitrate_kbps;
         config.network.bitrate_hint_min_kbps = hint_min_kbps;
-        config.network.bitrate_hint_max_kbps = hint_max_kbps;
 
         HintPolicy::from_config(&config)
     }
 
     #[test]
     fn the_configured_bitrate_is_the_ceiling_of_every_hint() {
-        let hints = policy(40_000, 2_000, 200_000);
+        let hints = policy(40_000, 2_000);
 
         assert_eq!(hints, HintPolicy::Clamp(2_000..=40_000));
         assert_eq!(hints.ceiling_kbps(), 40_000);
@@ -840,19 +839,8 @@ mod tests {
     }
 
     #[test]
-    fn the_hint_maximum_neither_lowers_nor_raises_the_ceiling() {
-        let below = policy(150_000, 2_000, 100_000);
-        let above = policy(150_000, 2_000, 200_000);
-
-        assert_eq!(below, HintPolicy::Clamp(2_000..=150_000));
-        assert_eq!(below.apply(120_000), Some(120_000));
-        assert_eq!(above, below);
-        assert_eq!(above.apply(180_000), Some(150_000));
-    }
-
-    #[test]
     fn a_hint_minimum_above_the_configured_bitrate_is_lowered_to_it() {
-        let hints = policy(1_500, 2_000, 200_000);
+        let hints = policy(1_500, 2_000);
 
         assert_eq!(hints, HintPolicy::Clamp(1_500..=1_500));
         assert_eq!(hints.apply(1), Some(1_500));

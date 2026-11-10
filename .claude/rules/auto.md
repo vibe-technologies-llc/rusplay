@@ -45,7 +45,10 @@ always wins over detection, and a pinned axis always outranks an automatic one.
   default sits in the file even if it was never touched), and `limit` takes its default as
   any absent key does. A file older than version 4 was written when the input repeat waited
   8 ms: `migrate::retune_legacy_resend_delay` turns an `input.resend_delay_ms` of exactly 8
-  into the current default, for the same reason. A newer version is `VersionUnsupported`.
+  into the current default, for the same reason, and `migrate::drop_retired_keys` removes
+  `network.bitrate_hint_max_kbps` from the parsed table before it is deserialized, since the
+  option is gone (the host's configured bitrate is the hint ceiling, `host.md`) and an unknown
+  key is otherwise an error. A newer version is `VersionUnsupported`.
   The Settings form converts through serde directly and never sees the version key.
 - `video.auto_detect_wait_ms` (default 500, 0 to 10000) bounds how long the host waits for the
   first captured frame before it answers a client while the format or colour follows the source.

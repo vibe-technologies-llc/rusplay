@@ -67,7 +67,6 @@ pub struct NetworkConfig {
     pub adaptive_bitrate_window_ms: u32,
     pub adaptive_bitrate_backoff_percent: u8,
     pub bitrate_hint_min_kbps: u32,
-    pub bitrate_hint_max_kbps: u32,
     pub clock_sync_interval_ms: u32,
 }
 
@@ -114,7 +113,6 @@ impl Default for NetworkConfig {
             adaptive_bitrate_window_ms: 1_000,
             adaptive_bitrate_backoff_percent: 25,
             bitrate_hint_min_kbps: 2_000,
-            bitrate_hint_max_kbps: 200_000,
             clock_sync_interval_ms: 1_000,
         }
     }
@@ -243,13 +241,6 @@ impl NetworkConfig {
             return Err(ConfigError::ZeroBitrateHintMin);
         }
 
-        if self.bitrate_hint_min_kbps > self.bitrate_hint_max_kbps {
-            return Err(ConfigError::BitrateHintRangeInverted {
-                min_kbps: self.bitrate_hint_min_kbps,
-                max_kbps: self.bitrate_hint_max_kbps,
-            });
-        }
-
         Ok(())
     }
 
@@ -259,10 +250,6 @@ impl NetworkConfig {
 
     pub fn pacing_max_kbps(&self) -> Option<u32> {
         (self.pacing_max_mbps > 0).then(|| self.pacing_max_mbps.saturating_mul(KBPS_PER_MBPS))
-    }
-
-    pub fn bitrate_hint_range(&self) -> RangeInclusive<u32> {
-        self.bitrate_hint_min_kbps..=self.bitrate_hint_max_kbps
     }
 }
 
@@ -667,19 +654,9 @@ mod tests {
     }
 
     #[test]
-    fn the_bitrate_hint_range_must_be_ordered_and_above_zero() {
+    fn the_bitrate_hint_minimum_must_be_above_zero() {
         let zero = NetworkConfig {
             bitrate_hint_min_kbps: 0,
-            ..NetworkConfig::default()
-        };
-        let inverted = NetworkConfig {
-            bitrate_hint_min_kbps: 50_000,
-            bitrate_hint_max_kbps: 40_000,
-            ..NetworkConfig::default()
-        };
-        let single = NetworkConfig {
-            bitrate_hint_min_kbps: 40_000,
-            bitrate_hint_max_kbps: 40_000,
             ..NetworkConfig::default()
         };
 
@@ -687,15 +664,7 @@ mod tests {
             zero.validate(),
             Err(ConfigError::ZeroBitrateHintMin)
         ));
-        assert!(matches!(
-            inverted.validate(),
-            Err(ConfigError::BitrateHintRangeInverted {
-                min_kbps: 50_000,
-                max_kbps: 40_000
-            })
-        ));
-        assert!(single.validate().is_ok());
-        assert_eq!(single.bitrate_hint_range(), 40_000..=40_000);
+        assert!(NetworkConfig::default().validate().is_ok());
     }
 
     #[test]

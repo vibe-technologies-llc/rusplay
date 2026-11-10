@@ -1350,15 +1350,6 @@ pub static FIELDS: &[Field] = &[
     )
     .unit("kbps"),
     field(
-        Audience::Shared,
-        Section::Network,
-        "Bitrate adaptation",
-        "network.bitrate_hint_max_kbps",
-        "Host hint maximum",
-        POSITIVE_U32,
-    )
-    .unit("kbps"),
-    field(
         Audience::Host,
         Section::Network,
         "Hosting",

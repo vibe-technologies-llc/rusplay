@@ -225,9 +225,9 @@ paths:
     `network.bitrate_hint_min_kbps`, lowered to the ceiling when it is above it. The configured
     bitrate is therefore a real ceiling: a client configured for more can only steer the host
     below what the host was told to send, never above it, and a stream that was cut can always
-    climb back to it. `network.bitrate_hint_max_kbps` takes no part: above the bitrate it could
-    never apply, and below it it would keep a cut stream from returning to the configured
-    bitrate. A hint is ignored
+    climb back to it. There is no separate hint maximum: above the bitrate it could never
+    apply, and below it it would keep a cut stream from returning to the configured bitrate.
+    A hint is ignored
     (`bitrate_hints_ignored`) when the encoder runs `RateControl::ConstantQuality`, which has no
     bitrate to steer. The client cannot read the host's config, so the control stage tells it:
     right after every `Hello` answer, ahead of anything else that answer sends (the `StreamFormat`
