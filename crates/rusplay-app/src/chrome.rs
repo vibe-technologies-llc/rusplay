@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, CursorStyle, Decorations, Div, HitboxBehavior,
-    MouseButton, Pixels, Point, ResizeEdge, Size, Stateful, Tiling, Window, canvas, div, point,
-    prelude::*, px,
+    MouseButton, PathBuilder, Pixels, Point, ResizeEdge, Size, Stateful, Tiling, Window, canvas,
+    div, point, prelude::*, px,
 };
 
 use crate::theme;
@@ -257,10 +257,20 @@ fn restore_glyph() -> impl IntoElement {
 }
 
 fn close_glyph() -> impl IntoElement {
-    div()
-        .text_lg()
-        .line_height(px(GLYPH_SIZE * 2.0))
-        .child("\u{00d7}")
+    canvas(
+        |_, _, _| {},
+        |bounds, (), window, _| {
+            let mut cross = PathBuilder::stroke(px(GLYPH_STROKE));
+            cross.move_to(bounds.origin);
+            cross.line_to(bounds.bottom_right());
+            cross.move_to(bounds.top_right());
+            cross.line_to(bounds.bottom_left());
+            if let Ok(path) = cross.build() {
+                window.paint_path(path, theme::text_muted());
+            }
+        },
+    )
+    .size(px(GLYPH_SIZE))
 }
 
 #[cfg(test)]
