@@ -64,8 +64,10 @@ pub struct Config {
     pub color: ColorConfig,
 }
 
-pub const CONFIG_VERSION: i64 = 2;
+pub const CONFIG_VERSION: i64 = 3;
 const FIRST_CONFIG_VERSION: i64 = 1;
+const AUTO_DEFAULTS_VERSION: i64 = 2;
+const BOUNDED_DEBAND_VERSION: i64 = 3;
 const VERSION_KEY: &str = "version";
 
 impl Config {
@@ -104,8 +106,11 @@ impl Config {
         }
 
         let mut config: Self = table.try_into().map_err(parse_error)?;
-        if version < CONFIG_VERSION {
+        if version < AUTO_DEFAULTS_VERSION {
             migrate::unpin_legacy_defaults(&mut config);
+        }
+        if version < BOUNDED_DEBAND_VERSION {
+            migrate::retune_legacy_deband(&mut config);
         }
 
         Ok(config)

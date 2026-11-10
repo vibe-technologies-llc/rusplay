@@ -11,6 +11,8 @@ const SIGMOID_SLOPE_RANGE: RangeInclusive<f32> = 1.0..=20.0;
 const DEBAND_ITERATIONS_RANGE: RangeInclusive<u32> = 1..=4;
 const DEBAND_RADIUS_RANGE: RangeInclusive<u32> = 1..=64;
 const DEBAND_THRESHOLD_RANGE: RangeInclusive<f32> = 0.0..=16.0;
+const DEBAND_LIMIT_RANGE: RangeInclusive<f32> = 0.0..=16.0;
+pub(crate) const LEGACY_DEBAND_THRESHOLD: f32 = 3.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -54,6 +56,7 @@ pub struct DebandConfig {
     pub radius: u32,
     pub threshold: f32,
     pub chroma_threshold: f32,
+    pub limit: f32,
 }
 
 impl DebandConfig {
@@ -72,6 +75,9 @@ impl DebandConfig {
                 self.chroma_threshold,
             ));
         }
+        if !DEBAND_LIMIT_RANGE.contains(&self.limit) {
+            return Err(ConfigError::DebandLimitOutOfRange(self.limit));
+        }
 
         Ok(())
     }
@@ -83,8 +89,9 @@ impl Default for DebandConfig {
             enabled: true,
             iterations: 2,
             radius: 16,
-            threshold: 3.0,
-            chroma_threshold: 3.0,
+            threshold: 2.0,
+            chroma_threshold: 2.0,
+            limit: 0.5,
         }
     }
 }
@@ -208,15 +215,17 @@ mod tests {
     #[test]
     fn deband_defaults_on_and_parses() {
         let parsed: ScalingConfig = toml::from_str(
-            "[deband]\nenabled = false\niterations = 3\nradius = 24\nthreshold = 4.5\nchroma_threshold = 0.0",
+            "[deband]\nenabled = false\niterations = 3\nradius = 24\nthreshold = 4.5\nchroma_threshold = 0.0\nlimit = 1.5",
         )
         .unwrap();
         let defaults = DebandConfig::default();
 
         assert!(defaults.enabled);
         assert_eq!((defaults.iterations, defaults.radius), (2, 16));
-        assert!((defaults.threshold - 3.0).abs() < f32::EPSILON);
-        assert!((defaults.chroma_threshold - 3.0).abs() < f32::EPSILON);
+        assert!((defaults.threshold - 2.0).abs() < f32::EPSILON);
+        assert!((defaults.chroma_threshold - 2.0).abs() < f32::EPSILON);
+        assert!((defaults.limit - 0.5).abs() < f32::EPSILON);
+        assert!((parsed.deband.limit - 1.5).abs() < f32::EPSILON);
         assert!(!parsed.deband.enabled);
         assert_eq!((parsed.deband.iterations, parsed.deband.radius), (3, 24));
         assert!((parsed.deband.threshold - 4.5).abs() < f32::EPSILON);
@@ -260,6 +269,14 @@ mod tests {
             })
             .validate(),
             Err(ConfigError::DebandChromaThresholdOutOfRange(_))
+        ));
+        assert!(matches!(
+            deband(DebandConfig {
+                limit: 16.5,
+                ..base
+            })
+            .validate(),
+            Err(ConfigError::DebandLimitOutOfRange(_))
         ));
     }
 

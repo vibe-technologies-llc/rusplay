@@ -31,14 +31,19 @@ always wins over detection, and a pinned axis always outranks an automatic one.
   value or the documented placeholder (`UNNEGOTIATED_CODEC`, `UNNEGOTIATED_PIXEL_FORMAT`,
   `UNDETECTED_FRAME_RATE`); the host pins the negotiated values (`VideoConfig::pin_stream`,
   `use_frame_rate`) before it builds the encoder, so encoders never see `auto`.
-- Config files carry `version = 2` as their first line (`CONFIG_VERSION`, written by
+- Config files carry `version = 3` as their first line (`CONFIG_VERSION`, written by
   `Config::to_toml_string`, removed before deserializing). A file without it is version 1, the
   shape the Settings page used to write in full, so its old shipped defaults cannot be told from a
   choice: `migrate::unpin_legacy_defaults` turns exactly those values into `auto` (a 60 fps rate,
   HEVC, 4:2:2, 8-bit, a VAAPI encoder on `/dev/dri/renderD128` with low power on, a VAAPI decoder on
   that node without CPU copy) and sets `color_mode` to `source` when `video.color` is the default,
-  `configured` otherwise. Any changed value stays pinned. A version-2 file is read as written, so a
-  value the user picks in the new UI is never unpinned. A newer version is `VersionUnsupported`.
+  `configured` otherwise. Any changed value stays pinned. From version 2 on those values are read
+  as written, so a value the user picks in the new UI is never unpinned. A file older than
+  version 3 was written when debanding shipped with thresholds of 3.0 and no bound:
+  `migrate::retune_legacy_deband` turns a `scaling.deband.threshold` or `chroma_threshold` of
+  exactly 3.0 into the current default (the Settings page writes every field, so the old
+  default sits in the file even if it was never touched), and `limit` takes its default as
+  any absent key does. A newer version is `VersionUnsupported`.
   The Settings form converts through serde directly and never sees the version key.
 - `video.auto_detect_wait_ms` (default 500, 0 to 10000) bounds how long the host waits for the
   first captured frame before it answers a client while the format or colour follows the source.

@@ -81,6 +81,8 @@ pub enum ConfigError {
     DebandThresholdOutOfRange(f32),
     #[error("deband chroma threshold {0} is outside 0.0..=16.0")]
     DebandChromaThresholdOutOfRange(f32),
+    #[error("deband limit {0} is outside 0.0..=16.0")]
+    DebandLimitOutOfRange(f32),
     #[error("reassembly timeout must be greater than zero")]
     ZeroReassemblyTimeout,
     #[error("reassembly pending frame limit must be greater than zero")]
@@ -259,6 +261,7 @@ impl ConfigError {
             Self::DebandRadiusOutOfRange(_) => Some("scaling.deband.radius"),
             Self::DebandThresholdOutOfRange(_) => Some("scaling.deband.threshold"),
             Self::DebandChromaThresholdOutOfRange(_) => Some("scaling.deband.chroma_threshold"),
+            Self::DebandLimitOutOfRange(_) => Some("scaling.deband.limit"),
             Self::FecOverheadOutOfRange(_) => Some("network.fec_overhead_percent"),
             Self::EmptyRestoreTokenFile => Some("capture.restore_token_file"),
             Self::EmptyVirtualMaxResolution { .. } => Some("capture.virtual_max_resolution"),

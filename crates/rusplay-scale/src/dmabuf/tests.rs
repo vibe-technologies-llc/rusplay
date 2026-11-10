@@ -268,8 +268,9 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
         let deband = DebandSettings {
             iterations: 2,
             radius: 16,
-            threshold: 3.0,
-            chroma_threshold: 3.0,
+            threshold: 2.0,
+            chroma_threshold: 2.0,
+            limit: 0.5,
         };
         for (size, deband) in [
             ((64, 36), None),

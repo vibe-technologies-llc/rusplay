@@ -21,6 +21,8 @@ pub enum ScaleError {
     DebandThresholdOutOfRange(f32),
     #[error("deband chroma threshold {0} is outside 0.0..=16.0")]
     DebandChromaThresholdOutOfRange(f32),
+    #[error("deband limit {0} is outside 0.0..=16.0")]
+    DebandLimitOutOfRange(f32),
     #[error("sigmoid center {0} is outside 0.0..=1.0")]
     SigmoidCenterOutOfRange(f32),
     #[error("sigmoid slope {0} is outside 1.0..=20.0")]

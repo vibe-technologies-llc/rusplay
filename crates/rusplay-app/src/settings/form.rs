@@ -637,7 +637,8 @@ mod tests {
         base.scaling.deband.iterations = 3;
         base.scaling.deband.radius = 24;
         base.scaling.deband.threshold = 4.5;
-        base.scaling.deband.chroma_threshold = 2.5;
+        base.scaling.deband.chroma_threshold = 1.5;
+        base.scaling.deband.limit = 0.75;
         base.capture.restore_token = Some("token".to_owned());
         base.capture.restore_token_file = Some("/tmp/rusplay-token".into());
         base.network.bind_address = "192.168.1.5".parse().unwrap();

@@ -3,9 +3,9 @@ use std::path::Path;
 use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorSpace, FrameRate};
 
 use crate::{
-    AutoDecoderConfig, AutoEncoderConfig, ChromaChoice, CodecChoice, Config, DepthChoice,
-    FrameRateChoice, LEGACY_DEFAULT_RENDER_NODE, StreamColorMode, VaapiConfig, VaapiDecoderConfig,
-    VideoDecoderConfig, VideoEncoderConfig,
+    AutoDecoderConfig, AutoEncoderConfig, ChromaChoice, CodecChoice, Config, DebandConfig,
+    DepthChoice, FrameRateChoice, LEGACY_DEFAULT_RENDER_NODE, StreamColorMode, VaapiConfig,
+    VaapiDecoderConfig, VideoDecoderConfig, VideoEncoderConfig, scaling::LEGACY_DEBAND_THRESHOLD,
 };
 
 const LEGACY_FRAME_RATE: FrameRate = FrameRate::integer(60);
@@ -56,6 +56,19 @@ pub fn unpin_legacy_defaults(config: &mut Config) {
         && is_legacy_node(device)
     {
         video.decoder = VideoDecoderConfig::Auto(AutoDecoderConfig::default());
+    }
+}
+
+pub fn retune_legacy_deband(config: &mut Config) {
+    let deband = &mut config.scaling.deband;
+    let retuned = DebandConfig::default();
+    let is_legacy = |threshold: f32| threshold.to_bits() == LEGACY_DEBAND_THRESHOLD.to_bits();
+
+    if is_legacy(deband.threshold) {
+        deband.threshold = retuned.threshold;
+    }
+    if is_legacy(deband.chroma_threshold) {
+        deband.chroma_threshold = retuned.chroma_threshold;
     }
 }
 
@@ -185,6 +198,39 @@ backend = "nvdec"
         assert_eq!(config.video.codec, CodecChoice::Hevc);
         assert!(matches!(config.video.encoder, VideoEncoderConfig::Vaapi(_)));
         assert!(matches!(config.video.decoder, VideoDecoderConfig::Vaapi(_)));
+    }
+
+    #[test]
+    fn a_version_two_file_keeps_its_video_choices_and_loses_the_old_deband_thresholds() {
+        let stored = format!(
+            "version = 2\n{VERSION_ONE}\n[scaling.deband]\niterations = 3\nthreshold = 3.0\nchroma_threshold = 3.0\n"
+        );
+
+        let config = parse(&stored);
+
+        let deband = config.scaling.deband;
+        assert_eq!(config.video.codec, CodecChoice::Hevc);
+        assert!(matches!(config.video.encoder, VideoEncoderConfig::Vaapi(_)));
+        assert_eq!(deband.iterations, 3);
+        assert_eq!(
+            (deband.threshold, deband.chroma_threshold, deband.limit),
+            (2.0, 2.0, 0.5)
+        );
+    }
+
+    #[test]
+    fn an_older_file_keeps_a_deband_threshold_that_was_changed() {
+        let config = parse("[scaling.deband]\nthreshold = 4.0\nchroma_threshold = 0.0\n");
+
+        let deband = config.scaling.deband;
+        assert_eq!((deband.threshold, deband.chroma_threshold), (4.0, 0.0));
+    }
+
+    #[test]
+    fn a_current_file_keeps_a_deband_threshold_equal_to_the_old_default() {
+        let stored = format!("version = {CONFIG_VERSION}\n[scaling.deband]\nthreshold = 3.0\n");
+
+        assert_eq!(parse(&stored).scaling.deband.threshold, 3.0);
     }
 
     #[test]

@@ -248,6 +248,14 @@ fn present_color_cases() -> Vec<(&'static str, ColorMapSettings)> {
     ]
 }
 
+const DEFAULT_DEBAND: DebandSettings = DebandSettings {
+    iterations: 2,
+    radius: 16,
+    threshold: 2.0,
+    chroma_threshold: 2.0,
+    limit: 0.5,
+};
+
 fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     let pipelines = ScalePipelines::new(&gpu.device);
     let (unpack, frame) = hdr_frame(gpu, &pipelines, size);
@@ -262,12 +270,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     };
     let mut lineariser = Lineariser::new(&pipelines, &gpu.device, linearise).unwrap();
 
-    let deband = DebandSettings {
-        iterations: 2,
-        radius: 16,
-        threshold: 3.0,
-        chroma_threshold: 3.0,
-    };
+    let deband = DEFAULT_DEBAND;
     for (chroma_filter, chroma_antiringing, deband) in [
         (ScaleFilter::Lanczos3, 0.0, None),
         (ScaleFilter::Lanczos3, 1.0, None),

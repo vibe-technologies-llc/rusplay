@@ -196,43 +196,69 @@ paths:
   paths produce identical output, which a test checks bit for bit.
 - Debanding (`deband.rs`, `deband.wgsl`) runs on the client inside `RgbConverter` when
   `RgbConvertSettings::deband` is `Some(DebandSettings { iterations, radius, threshold,
-  chroma_threshold })`, filled from `scaling.deband` (on by default: 2 iterations, radius 16
-  luma pixels, both thresholds 3.0; `enabled = false` makes it `None`). It works on the
-  dequantised Y'CbCr planes, before chroma upsampling and the fused colour chain or LUT, so values
-  are still in the source's own perceptual coding and chroma is debanded at its own resolution.
-  `deband_luma` and `deband_chroma` read the frame through the buffer or planes input module
-  (`unpack_codes.wgsl` holds `dequantize`/`luma_at`/`chroma_at` for both) and write an `r32float`
-  luma and an `rg32float` CbCr texture (f32 keeps sub-code precision; `r16float` is not a core
-  storage format). The unpack then reads those through a third input module,
+  chroma_threshold, limit })`, filled from `scaling.deband` (on by default: 2 iterations, radius
+  16 luma pixels, both thresholds 2.0, limit 0.5; `enabled = false` makes it `None`). It works
+  on the dequantised Y'CbCr planes, before chroma upsampling and the fused colour chain or LUT,
+  so values are still in the source's own perceptual coding and chroma is debanded at its own
+  resolution. `deband_luma` and `deband_chroma` read the frame through the buffer or planes
+  input module (`unpack_codes.wgsl` holds `dequantize`/`luma_at`/`chroma_at` for both) and write
+  an `r32float` luma and an `rg32float` CbCr texture (f32 keeps sub-code precision; `r16float`
+  is not a core storage format). The unpack then reads those through a third input module,
   `unpack_debanded.wgsl` (`UnpackSource::Debanded`, its own `debanded_layout` and its own
   chroma, RGB, LUT and chain pipelines); every unpack shader reads only through
   `luma_at`/`chroma_at`, so the separable, polar and 4:4:4 paths need no change.
-  Per pixel and iteration `i` of `n`, a static PCG hash of `(x, y, plane, i)` picks an integer
-  distance in the ring `(r(i-1)/n, ri/n]` and one of 8 directions over a quarter turn, uploaded in
-  Q12 fixed point so the offset is integer arithmetic (`(d·dir + 2048) >> 12`, one more shift per
-  subsampled chroma axis) and the CPU reference picks exactly the same texels. Two
-  perpendicular point-symmetric pairs `(p ± o)` are taken per iteration and each pair is accepted
-  or rejected as a unit: `w = clamp(2 - 2·max(|a - c|, |b - c|) / t, 0, 1)` (max over Cb and Cr
-  for chroma), result `(c + Σ w(a + b)) / (1 + Σ 2w)`. This is what keeps it from smearing: a
-  symmetric pair's mean reproduces any locally linear signal, so gradients are not biased when
-  pairs across an edge are dropped, and any pair touching structure of `t` or more is ignored
-  outright, so edges, thin lines and texture at or above the threshold come out unchanged; loads
-  are whole texels (no interpolation blur), the ramp avoids on/off seams, and the hash is static
-  so a still picture does not shimmer. No grain is added: the planes stay f32 and the compose
-  pass already dithers to the swapchain. Thresholds are 8-bit code values of the stream's own
-  range (`Quantization` at 8 bits: 1/219 limited luma, 1/224 limited chroma, 1/255 full), so 8-,
-  10- and 12-bit streams behave alike; 0 turns that plane off. Ranges are 1..=4 iterations,
-  1..=64 radius and 0..=16 thresholds (`DebandIterationsOutOfRange`, `DebandRadiusOutOfRange`,
-  `DebandThresholdOutOfRange`, `DebandChromaThresholdOutOfRange` in both `ScaleError` and
-  `ConfigError`). `reference::deband_plane` is the f64 mirror; tests (`unpack/tests/deband.rs`)
-  check GPU parity for every subsampling and layout, separable and polar chroma, 8 and 10 bit and
-  the fused PQ output, that a one-code staircase loses its steps (largest column step 1.0 to 0.23
-  codes, mean error to the ideal ramp 0.25 to 0.085), that a 20-code edge, a 5-code line and a
-  4-code checkerboard are unchanged at `t = 3`, that an unquantised gradient passes, and that a
-  zero threshold is the identity; the buffer and DMA-BUF plane paths stay bit-identical with it
-  on. Cost on an RX 9070 at 3840x2160 10-bit 4:2:0: the Lanczos3 unpack goes from 0.28 to
-  0.64 ms at the defaults and 1.0 ms at 4 iterations and radius 32 (EWA Lanczos chroma 0.87 to
-  1.22 ms). The passes run at 16x16 (8x8 was 7% slower, 32x8 equal).
+- The debanding filter is built on one fact: a banded sample is the true value rounded, so the
+  right answer is never further than half a source code from it. Everything else follows.
+  - Sampling: per pixel and iteration `i` of `n`, a static PCG hash of `(x, y, plane, i)` picks
+    an integer distance in the ring `(r(i-1)/n, ri/n]` and one of 8 directions over a quarter
+    turn, uploaded in Q12 fixed point so the offset is integer arithmetic
+    (`(d·dir + 2048) >> 12`, one more shift per subsampled chroma axis) and the CPU reference
+    picks exactly the same texels. Two perpendicular point-symmetric pairs `(p ± o)` are taken
+    per iteration; loads clamp to the frame edge.
+  - Pair weight (`pair_weight`, `luma_pair_weight`/`chroma_pair_weight`): with
+    `w(x, tol) = clamp(2 - 2x/tol, 0, 1)`, a pair `(a, b)` around centre `c` weighs
+    `w(max(|a - c|, |b - c|), t) · w(|(a + b)/2 - c|, t/2)` (max over Cb and Cr for chroma).
+    The first factor is the edge stop: a pair touching structure of `t` or more is ignored. The
+    second is the curvature stop, and it is what keeps soft low-contrast shading (clouds, fog,
+    skin) from being flattened: across a rounded *linear* ramp a symmetric pair's mean is
+    within half a code of the centre, so a pair whose mean sits further off is seeing a real
+    bump or dip, not a band edge. Without it the ring average is a 16-pixel low-pass on
+    everything under the threshold, which is what the first version did (threshold 3.0, no
+    bound) and why it visibly smoothed bright scenes.
+  - Flatness gate: the same weight on the two adjacent pairs `(p ± (1, 0))`, `(p ± (0, 1))`,
+    `g = min` of the two. A band edge passes (one side differs by a code, the mean by half);
+    grain and fine texture do not. `g = 0` skips the far loads altogether, so detailed
+    pictures cost less than flat ones.
+  - Result: `c + g · clamp(avg - c, -limit, +limit)` with
+    `avg = (c + Σ w(a + b)) / (1 + Σ 2w)`. `limit` (`scaling.deband.limit`, default 0.5) is the
+    hard guarantee: no sample ever moves further than that, whatever the picture.
+  - `threshold`, `chroma_threshold` and `limit` are in 8-bit code values of the stream's range
+    (`Quantization` at 8 bits: 1/219 limited luma, 1/224 limited chroma, 1/255 full), because
+    the usual banding in a 10-bit stream is an 8-bit source's; 0 turns that plane (threshold)
+    or the whole filter (limit) off. 2.0 gives full weight to a one-code band step and none to
+    two codes. A noisy low-bitrate stream debands better at 2.5 to 3 (codec noise pushes band
+    edges past the tolerances) and stays bounded by `limit`. Ranges are 1..=4 iterations,
+    1..=64 radius, 0..=16 thresholds and limit (`DebandIterationsOutOfRange`,
+    `DebandRadiusOutOfRange`, `DebandThresholdOutOfRange`, `DebandChromaThresholdOutOfRange`,
+    `DebandLimitOutOfRange` in both `ScaleError` and `ConfigError`).
+  - Measured against ground truth (the unquantised picture; a numpy model of the same filter,
+    256², 8-bit rounding): the old filter roughly doubled the error of low-contrast texture
+    (1/f fields of 1 to 4 codes, grain on a ramp: RMS error x1.8 to x2.2, samples moved up to
+    1.7 codes) while the new one leaves it within x1.0 to x1.15 and moves nothing past 0.5;
+    one-code ramps lose the same share of their error with either (band width 16: x0.37).
+  - `reference::deband_plane` is the f64 mirror; tests (`unpack/tests/deband.rs`) check GPU
+    parity for every subsampling and layout, separable and polar chroma, 8 and 10 bit and the
+    fused PQ output, that a one-code staircase loses its steps (largest column step 1.0 to
+    0.23 codes, mean error to the ideal ramp 0.25 to 0.085), that a 20-code edge, a 5-code
+    line and a 4-code checkerboard are unchanged, that a faint texture (two soft sinusoids
+    plus grain, rounded) moves by at most `limit` and 0.1 codes on average with its error to
+    the unrounded picture within 15 %, that rounded soft blobs come out closer to the
+    unrounded ones (error x0.73), that an unquantised gradient passes, and that a zero
+    threshold or a zero limit is the identity; the buffer and DMA-BUF plane paths stay
+    bit-identical with it on. Cost on an RX 9070 at 3840x2160 10-bit 4:2:0, measured while
+    the machine was also hosting a stream: the Lanczos3 unpack goes from 0.35 to 0.59 ms at
+    the defaults and 0.60 ms at 4 iterations and radius 32 (EWA Lanczos chroma 0.92 to
+    1.16 ms). The passes run at 16x16 (8x8 was 7% slower, 32x8 equal).
 - `ColorConverter::create_exported_frame(device, MemoryHandle)` (`export.rs`, every Vulkan call in
   `export/vulkan.rs`) allocates the frame in memory another API can read: a `VkBuffer` with
   `VkExternalMemoryBufferCreateInfo` for `DMA_BUF_EXT` (`MemoryHandle::DmaBuf`, needs

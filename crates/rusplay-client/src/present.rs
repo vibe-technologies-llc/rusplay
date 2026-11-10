@@ -535,6 +535,7 @@ fn deband_settings(config: &DebandConfig) -> Option<DebandSettings> {
         radius: config.radius,
         threshold: config.threshold,
         chroma_threshold: config.chroma_threshold,
+        limit: config.limit,
     })
 }
 

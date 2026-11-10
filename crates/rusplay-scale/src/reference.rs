@@ -4,7 +4,7 @@ use crate::{
     ConvertSettings, DebandSettings, FrameLayout, InputLight, Kernel, LineariseSettings,
     OutputLight, PlaneContent, PlaneLayout, Quantization, RgbConvertSettings, ScaleSettings,
     TapTable,
-    deband::{DebandPlane, chroma_shift, pair_weight},
+    deband::{DebandPlane, NEIGHBOUR_STEPS, PlaneTolerance, chroma_shift, pair_weight},
     polar::{PolarGeometry, polar_footprint},
     scaler::Axis,
     shaping::Shaping,
@@ -491,19 +491,19 @@ fn dequantized_planes(
         .collect();
     match &settings.deband {
         Some(deband) => {
-            let (luma_threshold, chroma_threshold) = deband.plane_thresholds(settings.range);
+            let (luma_tolerance, chroma_tolerance) = deband.plane_tolerances(settings.range);
             (
                 deband_plane(
                     &luma_plane,
                     deband,
                     (DebandPlane::Luma, (0, 0)),
-                    luma_threshold,
+                    luma_tolerance,
                 ),
                 deband_plane(
                     &chroma_plane,
                     deband,
                     (DebandPlane::Chroma, chroma_shift(settings.format.chroma)),
-                    chroma_threshold,
+                    chroma_tolerance,
                 ),
             )
         }
@@ -600,14 +600,25 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
     plane: &[Vec<[f64; CHANNELS]>],
     settings: &DebandSettings,
     (kind, shift): (DebandPlane, (u32, u32)),
-    threshold: f64,
+    tolerance: PlaneTolerance,
 ) -> Vec<Vec<[f64; CHANNELS]>> {
+    let PlaneTolerance { threshold, limit } = tolerance;
     let height = i64::try_from(plane.len()).unwrap_or(i64::MAX);
     let width = i64::try_from(plane.first().map_or(0, Vec::len)).unwrap_or(i64::MAX);
     let at = |x: i64, y: i64| {
         let column = usize::try_from(x.clamp(0, width - 1)).unwrap_or_default();
         let row = usize::try_from(y.clamp(0, height - 1)).unwrap_or_default();
         plane[row][column]
+    };
+    let weigh = |x: i64, y: i64, offset: (i64, i64)| {
+        let ahead = at(x + offset.0, y + offset.1);
+        let behind = at(x - offset.0, y - offset.1);
+
+        (
+            pair_weight(ahead, behind, at(x, y), threshold),
+            ahead,
+            behind,
+        )
     };
 
     (0..height)
@@ -619,24 +630,23 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
                         return centre;
                     }
 
+                    let flatness = NEIGHBOUR_STEPS
+                        .into_iter()
+                        .map(|step| weigh(x, y, step).0)
+                        .fold(1.0, f64::min);
+                    if flatness <= 0.0 {
+                        return centre;
+                    }
+
+                    let pixel = (
+                        u32::try_from(x).unwrap_or_default(),
+                        u32::try_from(y).unwrap_or_default(),
+                    );
                     let mut sum = centre;
                     let mut total = 1.0;
                     for iteration in 1..=settings.iterations {
-                        let pixel = (
-                            u32::try_from(x).unwrap_or_default(),
-                            u32::try_from(y).unwrap_or_default(),
-                        );
                         for offset in settings.pair_offsets(pixel, kind, iteration, shift) {
-                            let ahead = at(x + offset.0, y + offset.1);
-                            let behind = at(x - offset.0, y - offset.1);
-                            let deviation = (0..CHANNELS)
-                                .map(|channel| {
-                                    (ahead[channel] - centre[channel])
-                                        .abs()
-                                        .max((behind[channel] - centre[channel]).abs())
-                                })
-                                .fold(0.0, f64::max);
-                            let weight = pair_weight(deviation, threshold);
+                            let (weight, ahead, behind) = weigh(x, y, offset);
                             for channel in 0..CHANNELS {
                                 sum[channel] += weight * (ahead[channel] + behind[channel]);
                             }
@@ -644,7 +654,11 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
                         }
                     }
 
-                    sum.map(|value| value / total)
+                    std::array::from_fn(|channel| {
+                        let correction =
+                            (sum[channel] / total - centre[channel]).clamp(-limit, limit);
+                        centre[channel] + flatness * correction
+                    })
                 })
                 .collect()
         })

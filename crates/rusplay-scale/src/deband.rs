@@ -7,6 +7,7 @@ use crate::{Quantization, ScaleError};
 pub const DEBAND_ITERATIONS: RangeInclusive<u32> = 1..=4;
 pub const DEBAND_RADIUS: RangeInclusive<u32> = 1..=64;
 pub const DEBAND_THRESHOLD: RangeInclusive<f32> = 0.0..=16.0;
+pub const DEBAND_LIMIT: RangeInclusive<f32> = 0.0..=16.0;
 
 const DIRECTION_COUNT: u32 = 8;
 const DIRECTION_BITS: u32 = 12;
@@ -21,6 +22,13 @@ pub struct DebandSettings {
     pub radius: u32,
     pub threshold: f32,
     pub chroma_threshold: f32,
+    pub limit: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PlaneTolerance {
+    pub threshold: f64,
+    pub limit: f64,
 }
 
 impl DebandSettings {
@@ -39,16 +47,26 @@ impl DebandSettings {
                 self.chroma_threshold,
             ));
         }
+        if !DEBAND_LIMIT.contains(&self.limit) {
+            return Err(ScaleError::DebandLimitOutOfRange(self.limit));
+        }
 
         Ok(())
     }
 
-    pub(crate) fn plane_thresholds(&self, range: ColorRange) -> (f64, f64) {
+    pub(crate) fn plane_tolerances(&self, range: ColorRange) -> (PlaneTolerance, PlaneTolerance) {
         let eight_bit = Quantization::new(BitDepth::Eight, range);
+        let limit = f64::from(self.limit);
 
         (
-            f64::from(self.threshold) / eight_bit.luma.0,
-            f64::from(self.chroma_threshold) / eight_bit.chroma.0,
+            PlaneTolerance {
+                threshold: f64::from(self.threshold) / eight_bit.luma.0,
+                limit: limit / eight_bit.luma.0,
+            },
+            PlaneTolerance {
+                threshold: f64::from(self.chroma_threshold) / eight_bit.chroma.0,
+                limit: limit / eight_bit.chroma.0,
+            },
         )
     }
 
@@ -101,8 +119,30 @@ pub(crate) const fn chroma_shift(chroma: ChromaSubsampling) -> (u32, u32) {
 }
 
 #[cfg(test)]
-pub(crate) fn pair_weight(deviation: f64, threshold: f64) -> f64 {
-    (2.0 - 2.0 * deviation / threshold).clamp(0.0, 1.0)
+pub(crate) const NEIGHBOUR_STEPS: [(i64, i64); 2] = [(1, 0), (0, 1)];
+
+#[cfg(test)]
+fn tolerance_weight(deviation: f64, tolerance: f64) -> f64 {
+    (2.0 - 2.0 * deviation / tolerance).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+pub(crate) fn pair_weight<const CHANNELS: usize>(
+    ahead: [f64; CHANNELS],
+    behind: [f64; CHANNELS],
+    centre: [f64; CHANNELS],
+    threshold: f64,
+) -> f64 {
+    let largest = |measure: fn(f64, f64, f64) -> f64| {
+        (0..CHANNELS)
+            .map(|channel| measure(ahead[channel], behind[channel], centre[channel]))
+            .fold(0.0, f64::max)
+    };
+    let spread =
+        largest(|ahead, behind, centre| (ahead - centre).abs().max((behind - centre).abs()));
+    let bend = largest(|ahead, behind, centre| (f64::midpoint(ahead, behind) - centre).abs());
+
+    tolerance_weight(spread, threshold) * tolerance_weight(bend, 0.5 * threshold)
 }
 
 fn directions() -> [(u32, u32); DIRECTION_COUNT as usize] {
@@ -128,7 +168,7 @@ pub(crate) fn params_bytes(
     range: ColorRange,
     chroma: ChromaSubsampling,
 ) -> Vec<u8> {
-    let (luma_threshold, chroma_threshold) = settings.plane_thresholds(range);
+    let (luma_tolerance, chroma_tolerance) = settings.plane_tolerances(range);
     let (shift_x, shift_y) = chroma_shift(chroma);
     let narrow = |value: f64| {
         #[allow(clippy::cast_possible_truncation)]
@@ -140,14 +180,14 @@ pub(crate) fn params_bytes(
         .into_iter()
         .flat_map(|(cosine, sine)| [cosine, sine]);
     let tail = [
-        narrow(luma_threshold),
-        narrow(chroma_threshold),
+        narrow(luma_tolerance.threshold),
+        narrow(chroma_tolerance.threshold),
         settings.iterations,
         settings.radius,
         shift_x,
         shift_y,
-        0,
-        0,
+        narrow(luma_tolerance.limit),
+        narrow(chroma_tolerance.limit),
     ];
 
     table.chain(tail).flat_map(u32::to_ne_bytes).collect()
@@ -161,8 +201,9 @@ mod tests {
         DebandSettings {
             iterations: 2,
             radius: 16,
-            threshold: 3.0,
-            chroma_threshold: 3.0,
+            threshold: 2.5,
+            chroma_threshold: 2.5,
+            limit: 0.5,
         }
     }
 
@@ -214,16 +255,32 @@ mod tests {
     }
 
     #[test]
-    fn thresholds_are_eight_bit_codes_of_the_range() {
+    fn tolerances_are_eight_bit_codes_of_the_range() {
         let settings = settings();
 
-        let (limited_luma, limited_chroma) = settings.plane_thresholds(ColorRange::Limited);
-        let (full_luma, full_chroma) = settings.plane_thresholds(ColorRange::Full);
+        let (limited_luma, limited_chroma) = settings.plane_tolerances(ColorRange::Limited);
+        let (full_luma, full_chroma) = settings.plane_tolerances(ColorRange::Full);
 
-        assert!((limited_luma - 3.0 / 219.0).abs() < 1e-12);
-        assert!((limited_chroma - 3.0 / 224.0).abs() < 1e-12);
-        assert!((full_luma - 3.0 / 255.0).abs() < 1e-12);
-        assert!((full_chroma - 3.0 / 255.0).abs() < 1e-12);
+        assert!((limited_luma.threshold - 2.5 / 219.0).abs() < 1e-12);
+        assert!((limited_chroma.threshold - 2.5 / 224.0).abs() < 1e-12);
+        assert!((full_luma.threshold - 2.5 / 255.0).abs() < 1e-12);
+        assert!((full_chroma.threshold - 2.5 / 255.0).abs() < 1e-12);
+        assert!((limited_luma.limit - 0.5 / 219.0).abs() < 1e-12);
+        assert!((limited_chroma.limit - 0.5 / 224.0).abs() < 1e-12);
+        assert!((full_luma.limit - 0.5 / 255.0).abs() < 1e-12);
+        assert!((full_chroma.limit - 0.5 / 255.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_pair_counts_only_when_it_is_close_and_straddles_the_centre_evenly() {
+        let weight = |ahead: f64, behind: f64| pair_weight([ahead], [behind], [0.0], 2.0);
+
+        assert!((weight(1.0, 0.0) - 1.0).abs() < 1e-12);
+        assert!((weight(1.0, -1.0) - 1.0).abs() < 1e-12);
+        assert!((weight(1.5, 0.0) - 0.25).abs() < 1e-12);
+        assert!(weight(1.0, 1.0).abs() < 1e-12);
+        assert!(weight(2.0, -2.0).abs() < 1e-12);
+        assert!(pair_weight([0.2, 1.0], [0.0, 1.0], [0.0, 0.0], 2.0).abs() < 1e-12);
     }
 
     #[test]
@@ -258,6 +315,14 @@ mod tests {
             }
             .validate(),
             Err(ScaleError::DebandChromaThresholdOutOfRange(_))
+        ));
+        assert!(matches!(
+            DebandSettings {
+                limit: 16.5,
+                ..base
+            }
+            .validate(),
+            Err(ScaleError::DebandLimitOutOfRange(_))
         ));
     }
 }

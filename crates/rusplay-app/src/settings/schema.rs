@@ -1887,6 +1887,14 @@ pub static FIELDS: &[Field] = &[
     ),
     field(
         Audience::Client,
+        Section::Scaling,
+        "Debanding",
+        "scaling.deband.limit",
+        "Largest change",
+        Kind::Decimal,
+    ),
+    field(
+        Audience::Client,
         Section::Color,
         "Display target",
         "color.target.primaries",

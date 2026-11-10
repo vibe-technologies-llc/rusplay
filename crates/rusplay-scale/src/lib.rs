@@ -39,7 +39,7 @@ pub use crate::{
         ChromaSiting, ColorConverter, ConvertSettings, DEFAULT_ROW_ALIGNMENT, FrameLayout,
         InputLight, Plane, PlaneContent, PlaneLayout, Quantization, SampleAlignment, YuvFrame,
     },
-    deband::{DEBAND_ITERATIONS, DEBAND_RADIUS, DEBAND_THRESHOLD, DebandSettings},
+    deband::{DEBAND_ITERATIONS, DEBAND_LIMIT, DEBAND_RADIUS, DEBAND_THRESHOLD, DebandSettings},
     dmabuf::{
         DMABUF_FEATURES, DmaBuf, DmaBufFormat, DmaBufImporter, DmaBufPlane, DmaBufTexture,
         GpuFenceWait, GpuFenceWaiter, IMPORT_CACHE_ENTRIES, WriteFence, device_descriptor,

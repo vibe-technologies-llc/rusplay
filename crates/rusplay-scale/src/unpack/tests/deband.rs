@@ -3,9 +3,14 @@ use super::*;
 const DEBAND: DebandSettings = DebandSettings {
     iterations: 2,
     radius: 16,
-    threshold: 3.0,
-    chroma_threshold: 3.0,
+    threshold: 2.0,
+    chroma_threshold: 2.0,
+    limit: 0.5,
 };
+const FAINT_SIZE: (u32, u32) = (160, 120);
+const FAINT_MARGIN: usize = 20;
+const HALF_FLOAT_ROUNDING_CODES: f32 = 0.07;
+const LARGEST_CHANGE: f32 = DEBAND.limit + HALF_FLOAT_ROUNDING_CODES;
 const EIGHT_BIT_FULL_SCALE: f32 = 255.0;
 const NEUTRAL_CHROMA: u8 = 128;
 const UNCHANGED_TOLERANCE: f32 = 1.0e-3;
@@ -246,6 +251,139 @@ fn deband_leaves_detail_at_the_threshold_untouched() {
     assert!(expected.max_difference(&unchanged) <= UNCHANGED_TOLERANCE);
 }
 
+fn hash_noise(x: u32, y: u32) -> f32 {
+    let mixed =
+        (x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77)).wrapping_mul(0xC2B2_AE3D);
+    f32::from(u16::try_from(mixed >> 16).unwrap()) / 65_535.0 - 0.5
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn faint_texture(x: u32, y: u32) -> f32 {
+    let (u, v) = (x as f32, y as f32);
+
+    110.3
+        + 1.5 * (u / 7.0).sin() * (v / 9.0).cos()
+        + 1.0 * ((u + v) / 3.1).sin()
+        + 2.0 * hash_noise(x, y)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn soft_blobs(x: u32, y: u32) -> f32 {
+    let blob = |centre: (f32, f32), spread: f32| {
+        let (dx, dy) = (x as f32 - centre.0, y as f32 - centre.1);
+        4.0 * (-(dx * dx + dy * dy) / (2.0 * spread * spread)).exp()
+    };
+
+    110.3 + blob((45.0, 40.0), 10.0) + blob((115.0, 80.0), 16.0)
+}
+
+fn quantised(level: f32) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let code = level.round() as u8;
+    code
+}
+
+struct Change {
+    largest: f32,
+    mean: f32,
+}
+
+fn interior(codes: &[Vec<f32>]) -> impl Iterator<Item = (usize, usize, f32)> + '_ {
+    let rows = FAINT_MARGIN..codes.len() - FAINT_MARGIN;
+    rows.flat_map(move |y| {
+        (FAINT_MARGIN..codes[y].len() - FAINT_MARGIN).map(move |x| (x, y, codes[y][x]))
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn change(before: &[Vec<f32>], after: &[Vec<f32>]) -> Change {
+    let moved: Vec<f32> = interior(after)
+        .map(|(x, y, code)| (code - before[y][x]).abs())
+        .collect();
+
+    Change {
+        largest: moved.iter().copied().fold(0.0, f32::max),
+        mean: moved.iter().sum::<f32>() / moved.len() as f32,
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn error_to(truth: impl Fn(u32, u32) -> f32, codes: &[Vec<f32>]) -> f32 {
+    let squared: Vec<f32> = interior(codes)
+        .map(|(x, y, code)| {
+            (code - truth(u32::try_from(x).unwrap(), u32::try_from(y).unwrap())).powi(2)
+        })
+        .collect();
+
+    (squared.iter().sum::<f32>() / squared.len() as f32).sqrt()
+}
+
+struct Debanded {
+    plain: Vec<Vec<f32>>,
+    filtered: Vec<Vec<f32>>,
+    expected: Vec<Vec<f32>>,
+}
+
+fn deband_scene(gpu: &testing::Gpu, scene: impl Fn(u32, u32) -> f32) -> Debanded {
+    let debanded = luma_settings(FAINT_SIZE);
+    let plain = RgbConvertSettings {
+        deband: None,
+        ..debanded
+    };
+    let bytes = luma_frame(&debanded, |x, y| quantised(scene(x, y)));
+
+    Debanded {
+        plain: luma_codes(&unpack_on_gpu(gpu, &bytes, plain)),
+        filtered: luma_codes(&unpack_on_gpu(gpu, &bytes, debanded)),
+        expected: luma_codes(&reference::unpack_rgb(&bytes, &debanded)),
+    }
+}
+
+#[test]
+fn deband_never_moves_a_sample_beyond_its_limit_and_barely_touches_faint_texture() {
+    let Some(gpu) = testing::gpu() else {
+        return;
+    };
+
+    let texture = deband_scene(gpu, faint_texture);
+    let rendered = change(&texture.plain, &texture.filtered);
+    let mirrored = change(&texture.plain, &texture.expected);
+    let before = error_to(faint_texture, &texture.plain);
+    let after = error_to(faint_texture, &texture.filtered);
+
+    assert!(rendered.largest <= LARGEST_CHANGE, "{}", rendered.largest);
+    assert!(mirrored.largest <= LARGEST_CHANGE, "{}", mirrored.largest);
+    assert!(rendered.mean < 0.1, "mean change {}", rendered.mean);
+    assert!(
+        after < before * 1.15,
+        "error {before} before and {after} after"
+    );
+}
+
+#[test]
+fn deband_brings_soft_features_closer_to_what_was_quantised() {
+    let Some(gpu) = testing::gpu() else {
+        return;
+    };
+
+    let blobs = deband_scene(gpu, soft_blobs);
+    let before = error_to(soft_blobs, &blobs.plain);
+    let after = error_to(soft_blobs, &blobs.filtered);
+    let peak = |codes: &[Vec<f32>]| codes[40][45];
+
+    assert!(
+        after < before * 0.9,
+        "error {before} before and {after} after"
+    );
+    assert!(
+        (peak(&blobs.filtered) - peak(&blobs.plain)).abs() <= LARGEST_CHANGE,
+        "peak moved from {} to {}",
+        peak(&blobs.plain),
+        peak(&blobs.filtered)
+    );
+    assert!(change(&blobs.plain, &blobs.filtered).largest <= LARGEST_CHANGE);
+}
+
 #[test]
 fn deband_keeps_an_unquantised_gradient() {
     let Some(gpu) = testing::gpu() else {
@@ -288,6 +426,30 @@ fn a_zero_threshold_turns_its_plane_off() {
         deband: Some(DebandSettings {
             threshold: 0.0,
             chroma_threshold: 0.0,
+            ..DEBAND
+        }),
+        ..luma_settings((RAMP_WIDTH, RAMP_HEIGHT))
+    };
+    let plain = RgbConvertSettings {
+        deband: None,
+        ..debanded
+    };
+
+    let bytes = luma_frame(&debanded, |x, _| ramp_code(x));
+    let unchanged = unpack_on_gpu(gpu, &bytes, plain);
+    let filtered = unpack_on_gpu(gpu, &bytes, debanded);
+
+    assert_eq!(filtered, unchanged);
+}
+
+#[test]
+fn a_zero_limit_changes_nothing() {
+    let Some(gpu) = testing::gpu() else {
+        return;
+    };
+    let debanded = RgbConvertSettings {
+        deband: Some(DebandSettings {
+            limit: 0.0,
             ..DEBAND
         }),
         ..luma_settings((RAMP_WIDTH, RAMP_HEIGHT))
