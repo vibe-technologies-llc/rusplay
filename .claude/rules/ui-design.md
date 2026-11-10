@@ -6,15 +6,15 @@ paths:
 # Desktop app visual design
 
 The app is meant to read like an instrument (OBS, a DAW, a grading tool), not like a SaaS
-template: flat graphite surfaces, one accent used sparingly, hairlines instead of shadows, state
+template: flat neutral graphite surfaces, one accent used sparingly, hairlines instead of shadows, state
 written as words, and numbers that hold still.
 
 - **Palette** (`theme.rs`, one function per role, never a literal colour in a view): `canvas`
   (page), `chrome` (titlebar, status bar, sidebars, details panel), `surface` (panels), `raised`
   (hover, selected rows and segments, secondary buttons), `inset` (inputs, tracks), `rule` and
   `rule_strong` (hairlines, control borders), `text`, `text_muted`, `text_faint`. The neutrals are
-  warm graphite with no blue tint. Status colours are `live`, `warning` and `danger`.
-- **One accent, copper** (`accent`, `accent_hover`, with `accent_ink` as the text on it). It
+  near-neutral graphite with only a faint cool cast, never warm or yellow. Status colours are `live`, `warning` and `danger`.
+- **One accent, blue** (`accent`, `accent_hover`, with `accent_ink` as the text on it). It
   marks only the primary action, a selection bar, a toggle that is on, focus, the caret and an
   override. `accent_quiet` is the fill of a chosen option button and the base of the text
   selection colour. Selected rows use `raised` with the 2px accent `selection_bar`, not a tinted
