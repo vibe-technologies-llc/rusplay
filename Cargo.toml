@@ -99,6 +99,7 @@ khronos-egl = {
     git = "https://github.com/zed-industries/khronos-egl",
     rev = "42214b36347b108fd9630ca6254b96dde59e04fe"
 }
+cros-codecs.path = "vendor/cros-codecs"
 rav1d.path = "vendor/rav1d"
 
 [workspace.lints.rust]

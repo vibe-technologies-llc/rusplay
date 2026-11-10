@@ -118,6 +118,7 @@ doc = false
 bench = false
 
 [patch.crates-io]
+cros-codecs.path = "../vendor/cros-codecs"
 rav1d.path = "../vendor/rav1d"
 
 [profile.release.package.cros-codecs]
