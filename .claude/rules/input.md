@@ -495,13 +495,20 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   lost sequence 0). Records decode with `InputEvent::decode`; a malformed one is dropped and
   counted. `InputSequence::reset` when a new client session starts. Events then go to the
   `SplitSink`, which routes gamepad events to `VirtualGamepads` and the rest to `LibeiInjector`.
-- The client sends one extra datagram with an empty `current` `input.resend_delay_ms` after any
-  datagram that changed key, button or pad-button state (`0` disables), so a lost final release
-  is recovered even when nothing follows.
-- Two datagrams lost in a row would still lose events, so every `input.snapshot_interval_ms`
-  (default 1000, `0` disables) the client also sends its held state as `StateRecord`s in an
-  ordinary datagram of the same sequence, repeated by the next datagram's `previous` section like
-  any other. A record decodes through `InputRecord::decode`, which tells events from state by the
+- The client sends one extra datagram with an empty `current` `input.resend_delay_ms` (default
+  2) after any datagram that changed key, button or pad-button state (`0` disables), so a lost
+  final release is recovered even when nothing follows. The delay is short because it is how
+  late a lost press or release arrives; a loss burst longer than it is the snapshot's to repair.
+- Two datagrams lost in a row would still lose events, so the client also sends its held state
+  as `StateRecord`s in an ordinary datagram of the same sequence, repeated by the next
+  datagram's `previous` section like any other: every `input.snapshot_interval_ms` (default
+  1000, `0` disables all snapshots), and sooner after a state change (`SnapshotSchedule` in
+  `rusplay-client/src/input.rs`, pure and unit tested). A change pulls the next snapshot to 4
+  resend delays after it, and each snapshot sent quadruples the gap to the next (8, 32, 128,
+  512 ms at the default) until it reaches the interval, so a press or release lost with
+  its repeat in a burst is repaired a few times the burst's length later instead of up to a
+  second later, at the cost of a few datagrams per change. A later change restarts the back-off
+  and never postpones a snapshot already due; a resend delay of 0 leaves only the interval. A record decodes through `InputRecord::decode`, which tells events from state by the
   tag byte (events use 0 to 10, state records 16 to 23). Each state record replaces one whole
   scope, so a snapshot split across datagrams, or a lost half of it, never undoes the other half:
   `Keys` and `Buttons` carry a `KeySet` bitset (96 bytes over evdev codes below 768), `Pads`

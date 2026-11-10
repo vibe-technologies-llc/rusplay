@@ -64,10 +64,11 @@ pub struct Config {
     pub color: ColorConfig,
 }
 
-pub const CONFIG_VERSION: i64 = 3;
+pub const CONFIG_VERSION: i64 = 4;
 const FIRST_CONFIG_VERSION: i64 = 1;
 const AUTO_DEFAULTS_VERSION: i64 = 2;
 const BOUNDED_DEBAND_VERSION: i64 = 3;
+const FAST_INPUT_REPAIR_VERSION: i64 = 4;
 const VERSION_KEY: &str = "version";
 
 impl Config {
@@ -111,6 +112,9 @@ impl Config {
         }
         if version < BOUNDED_DEBAND_VERSION {
             migrate::retune_legacy_deband(&mut config);
+        }
+        if version < FAST_INPUT_REPAIR_VERSION {
+            migrate::retune_legacy_resend_delay(&mut config);
         }
 
         Ok(config)

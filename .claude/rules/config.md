@@ -36,8 +36,9 @@ paths:
   off). The client
   side is `video.display_debounce_ms` (default 200, up to 5000). See `host.md` and `client.md`.
 - Settings that depend on the machine, the display or the source default to `auto`; files carry
-  `version = 3`, a version-1 file has its old shipped defaults turned into `auto` on load and a
-  file older than version 3 has the old deband thresholds retuned (`auto.md`). A stored-format change bumps `CONFIG_VERSION` with a migration and a test against
+  `version = 4`, a version-1 file has its old shipped defaults turned into `auto` on load, a
+  file older than version 3 has the old deband thresholds retuned and one older than version 4
+  the old input resend delay (`auto.md`). A stored-format change bumps `CONFIG_VERSION` with a migration and a test against
   the older shape.
 - New options go through the `add-config-option` skill.
 - `HostProfile` is not part of `Config`: it is the sparse per-host overlay of client options the

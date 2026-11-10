@@ -4,14 +4,16 @@ use rusplay_core::{BitDepth, ChromaSubsampling, Codec, ColorSpace, FrameRate};
 
 use crate::{
     AutoDecoderConfig, AutoEncoderConfig, ChromaChoice, CodecChoice, Config, DebandConfig,
-    DepthChoice, FrameRateChoice, LEGACY_DEFAULT_RENDER_NODE, StreamColorMode, VaapiConfig,
-    VaapiDecoderConfig, VideoDecoderConfig, VideoEncoderConfig, scaling::LEGACY_DEBAND_THRESHOLD,
+    DepthChoice, FrameRateChoice, InputConfig, LEGACY_DEFAULT_RENDER_NODE, StreamColorMode,
+    VaapiConfig, VaapiDecoderConfig, VideoDecoderConfig, VideoEncoderConfig,
+    scaling::LEGACY_DEBAND_THRESHOLD,
 };
 
 const LEGACY_FRAME_RATE: FrameRate = FrameRate::integer(60);
 const LEGACY_CODEC: Codec = Codec::Hevc;
 const LEGACY_CHROMA: ChromaSubsampling = ChromaSubsampling::Yuv422;
 const LEGACY_DEPTH: BitDepth = BitDepth::Eight;
+const LEGACY_RESEND_DELAY_MS: u16 = 8;
 
 pub fn unpin_legacy_defaults(config: &mut Config) {
     let video = &mut config.video;
@@ -69,6 +71,12 @@ pub fn retune_legacy_deband(config: &mut Config) {
     }
     if is_legacy(deband.chroma_threshold) {
         deband.chroma_threshold = retuned.chroma_threshold;
+    }
+}
+
+pub fn retune_legacy_resend_delay(config: &mut Config) {
+    if config.input.resend_delay_ms == LEGACY_RESEND_DELAY_MS {
+        config.input.resend_delay_ms = InputConfig::default().resend_delay_ms;
     }
 }
 
@@ -231,6 +239,24 @@ backend = "nvdec"
         let stored = format!("version = {CONFIG_VERSION}\n[scaling.deband]\nthreshold = 3.0\n");
 
         assert_eq!(parse(&stored).scaling.deband.threshold, 3.0);
+    }
+
+    #[test]
+    fn a_version_three_file_loses_the_old_resend_delay_and_keeps_a_changed_one() {
+        let untouched = parse("version = 3\n[input]\nresend_delay_ms = 8\n");
+        let changed = parse("version = 3\n[input]\nresend_delay_ms = 12\n");
+        let unversioned = parse("[input]\nresend_delay_ms = 8\n");
+
+        assert_eq!(untouched.input.resend_delay_ms, 2);
+        assert_eq!(changed.input.resend_delay_ms, 12);
+        assert_eq!(unversioned.input.resend_delay_ms, 2);
+    }
+
+    #[test]
+    fn a_current_file_keeps_a_resend_delay_equal_to_the_old_default() {
+        let stored = format!("version = {CONFIG_VERSION}\n[input]\nresend_delay_ms = 8\n");
+
+        assert_eq!(parse(&stored).input.resend_delay_ms, 8);
     }
 
     #[test]

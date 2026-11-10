@@ -31,7 +31,7 @@ always wins over detection, and a pinned axis always outranks an automatic one.
   value or the documented placeholder (`UNNEGOTIATED_CODEC`, `UNNEGOTIATED_PIXEL_FORMAT`,
   `UNDETECTED_FRAME_RATE`); the host pins the negotiated values (`VideoConfig::pin_stream`,
   `use_frame_rate`) before it builds the encoder, so encoders never see `auto`.
-- Config files carry `version = 3` as their first line (`CONFIG_VERSION`, written by
+- Config files carry `version = 4` as their first line (`CONFIG_VERSION`, written by
   `Config::to_toml_string`, removed before deserializing). A file without it is version 1, the
   shape the Settings page used to write in full, so its old shipped defaults cannot be told from a
   choice: `migrate::unpin_legacy_defaults` turns exactly those values into `auto` (a 60 fps rate,
@@ -43,7 +43,9 @@ always wins over detection, and a pinned axis always outranks an automatic one.
   `migrate::retune_legacy_deband` turns a `scaling.deband.threshold` or `chroma_threshold` of
   exactly 3.0 into the current default (the Settings page writes every field, so the old
   default sits in the file even if it was never touched), and `limit` takes its default as
-  any absent key does. A newer version is `VersionUnsupported`.
+  any absent key does. A file older than version 4 was written when the input repeat waited
+  8 ms: `migrate::retune_legacy_resend_delay` turns an `input.resend_delay_ms` of exactly 8
+  into the current default, for the same reason. A newer version is `VersionUnsupported`.
   The Settings form converts through serde directly and never sees the version key.
 - `video.auto_detect_wait_ms` (default 500, 0 to 10000) bounds how long the host waits for the
   first captured frame before it answers a client while the format or colour follows the source.

@@ -186,7 +186,7 @@ impl Default for InputConfig {
             inhibit_shortcuts: true,
             sync_locks: true,
             rumble_max_ms: 5000,
-            resend_delay_ms: 8,
+            resend_delay_ms: 2,
             snapshot_interval_ms: 1000,
             accept_remote: true,
             clipboard: ClipboardDirection::Off,

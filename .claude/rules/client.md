@@ -273,9 +273,11 @@ paths:
   a batch into sections of at most half the datagram budget, repeats the previous section in
   every datagram and emits the empty repeat datagram after state changes
   (`input.resend_delay_ms`). The stage feeds every event it sends to a `HeldInput` and, every
-  `input.snapshot_interval_ms`, packs its `snapshot` records with `InputPacketer::pack_state`
+  `input.snapshot_interval_ms` and in a back-off after each state change (`SnapshotSchedule`,
+  `input.md`), packs its `snapshot` records with `InputPacketer::pack_state`
   into datagrams of the same sequence (`input_snapshots_sent`), so the host can repair a key
-  whose release was lost with its repeat (`input.md`). A send error ends the input stage and with
+  whose release was lost with its repeat. The stage's wait ends at the repeat or the snapshot,
+  whichever is due first. A send error ends the input stage and with
   it the stream; the gamepad stage never returns an error.
 - The gamepad stage drives `PhysicalGamepads` (5 ms poll, which also bounds how long a rumble
   command or a stop waits), sends its events through the same `InputHandle`, and applies

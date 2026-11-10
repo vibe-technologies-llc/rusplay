@@ -22,6 +22,8 @@ use crate::{ClientError, stats::Counters};
 const IDLE_WAKE: Duration = Duration::from_millis(10);
 const GAMEPAD_POLL: Duration = Duration::from_millis(5);
 const MAX_RECORD_LEN: usize = StateRecord::MAX_ENCODED_LEN + 1;
+const FOLLOW_UP_RESEND_DELAYS: u32 = 4;
+const FOLLOW_UP_BACKOFF: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct InputHandle {
@@ -180,6 +182,48 @@ pub(crate) struct InputTiming {
     pub snapshot_interval: Duration,
 }
 
+#[derive(Debug)]
+struct SnapshotSchedule {
+    interval: Duration,
+    first_follow_up: Duration,
+    follow_up: Duration,
+    due: Option<Instant>,
+}
+
+impl SnapshotSchedule {
+    fn new(timing: InputTiming, now: Instant) -> Self {
+        let interval = timing.snapshot_interval;
+
+        Self {
+            interval,
+            first_follow_up: timing.resend_delay * FOLLOW_UP_RESEND_DELAYS,
+            follow_up: interval,
+            due: (!interval.is_zero()).then(|| now + interval),
+        }
+    }
+
+    fn due(&self) -> Option<Instant> {
+        self.due
+    }
+
+    fn state_changed(&mut self, now: Instant) {
+        let Some(due) = self.due else {
+            return;
+        };
+        if self.first_follow_up.is_zero() {
+            return;
+        }
+
+        self.due = Some(due.min(now + self.first_follow_up));
+        self.follow_up = self.first_follow_up.saturating_mul(FOLLOW_UP_BACKOFF);
+    }
+
+    fn sent(&mut self, now: Instant) {
+        self.due = Some(now + self.follow_up.min(self.interval));
+        self.follow_up = self.follow_up.saturating_mul(FOLLOW_UP_BACKOFF);
+    }
+}
+
 pub(crate) struct InputStage {
     transport: Arc<Transport>,
     host: SocketAddr,
@@ -217,12 +261,15 @@ impl InputStage {
         let mut held = HeldInput::new();
         let mut records = Vec::new();
         let mut repeat_at: Option<Instant> = None;
-        let mut next_snapshot = self.next_snapshot(Instant::now());
+        let mut snapshots = SnapshotSchedule::new(self.timing, Instant::now());
 
         loop {
             let finishing = self.links.stop.load(Ordering::Relaxed)
                 && self.links.gamepads_done.load(Ordering::Relaxed);
-            let wait = repeat_at
+            let wait = [repeat_at, snapshots.due()]
+                .into_iter()
+                .flatten()
+                .min()
                 .map_or(IDLE_WAKE, |due| {
                     due.saturating_duration_since(Instant::now())
                 })
@@ -251,20 +298,25 @@ impl InputStage {
                     .counters
                     .input_events_sent
                     .add(u64::try_from(events.len()).unwrap_or(u64::MAX));
-                repeat_at = (packeter.needs_repeat() && !self.timing.resend_delay.is_zero())
-                    .then(|| Instant::now() + self.timing.resend_delay);
+                let changed_at = packeter.needs_repeat().then(Instant::now);
+                repeat_at = changed_at
+                    .filter(|_| !self.timing.resend_delay.is_zero())
+                    .map(|at| at + self.timing.resend_delay);
+                if let Some(at) = changed_at {
+                    snapshots.state_changed(at);
+                }
             } else if repeat_at.is_some_and(|due| Instant::now() >= due) {
                 packeter.repeat(&mut datagrams)?;
                 repeat_at = None;
             }
 
             let now = Instant::now();
-            if next_snapshot.is_some_and(|due| now >= due) {
+            if snapshots.due().is_some_and(|due| now >= due) {
                 records.clear();
                 held.snapshot(&mut records);
                 packeter.pack_state(&records, &mut datagrams)?;
                 self.links.counters.input_snapshots_sent.increment();
-                next_snapshot = self.next_snapshot(now);
+                snapshots.sent(now);
                 if !packeter.needs_repeat() {
                     repeat_at = None;
                 }
@@ -276,10 +328,6 @@ impl InputStage {
                 return Ok(());
             }
         }
-    }
-
-    fn next_snapshot(&self, from: Instant) -> Option<Instant> {
-        (!self.timing.snapshot_interval.is_zero()).then(|| from + self.timing.snapshot_interval)
     }
 
     fn send(&self, datagrams: &mut Vec<Vec<u8>>) -> Result<(), ClientError> {
@@ -762,6 +810,82 @@ mod tests {
         assert!(out.len() > 1);
         assert!(out.iter().all(|datagram| datagram.len() <= SMALL_BUDGET));
         assert_eq!(host_view(&out, &[]), client);
+    }
+
+    fn timing(resend_delay_ms: u64, snapshot_interval_ms: u64) -> InputTiming {
+        InputTiming {
+            resend_delay: Duration::from_millis(resend_delay_ms),
+            snapshot_interval: Duration::from_millis(snapshot_interval_ms),
+        }
+    }
+
+    fn snapshot_delays(schedule: &mut SnapshotSchedule, from: Instant, count: usize) -> Vec<u64> {
+        let mut last = from;
+
+        (0..count)
+            .map(|_| {
+                let due = schedule.due().unwrap();
+                let delay = due.duration_since(last);
+                schedule.sent(due);
+                last = due;
+
+                u64::try_from(delay.as_millis()).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn snapshots_without_state_changes_keep_the_interval() {
+        let start = Instant::now();
+        let mut schedule = SnapshotSchedule::new(timing(2, 1000), start);
+
+        assert_eq!(snapshot_delays(&mut schedule, start, 3), [1000, 1000, 1000]);
+    }
+
+    #[test]
+    fn a_state_change_is_followed_by_snapshots_that_back_off_to_the_interval() {
+        let start = Instant::now();
+        let mut schedule = SnapshotSchedule::new(timing(2, 1000), start);
+
+        schedule.state_changed(start);
+
+        assert_eq!(
+            snapshot_delays(&mut schedule, start, 6),
+            [8, 32, 128, 512, 1000, 1000]
+        );
+    }
+
+    #[test]
+    fn a_later_state_change_restarts_the_back_off_and_never_postpones_a_snapshot() {
+        let start = Instant::now();
+        let mut schedule = SnapshotSchedule::new(timing(2, 1000), start);
+        let second_change = start + Duration::from_millis(5);
+
+        schedule.state_changed(start);
+        schedule.state_changed(second_change);
+
+        assert_eq!(snapshot_delays(&mut schedule, start, 3), [8, 32, 128]);
+
+        let third_change = start + Duration::from_millis(200);
+        schedule.state_changed(third_change);
+
+        assert_eq!(
+            schedule.due(),
+            Some(third_change + Duration::from_millis(8))
+        );
+    }
+
+    #[test]
+    fn snapshots_stay_off_at_a_zero_interval_and_plain_without_a_resend_delay() {
+        let start = Instant::now();
+        let mut off = SnapshotSchedule::new(timing(2, 0), start);
+        let mut plain = SnapshotSchedule::new(timing(0, 1000), start);
+
+        off.state_changed(start);
+        plain.state_changed(start);
+
+        assert_eq!(off.due(), None);
+        assert_eq!(snapshot_delays(&mut plain, start, 2), [1000, 1000]);
     }
 
     #[test]
