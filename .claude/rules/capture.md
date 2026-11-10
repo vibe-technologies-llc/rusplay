@@ -80,7 +80,11 @@ paths:
   connects to the portal's remote fd and node id and implements `CaptureSource`. The PipeWire main
   loop runs on its own `rusplay-pipewire` thread; setup errors come back synchronously from
   `connect`, later ones (stream error state, a malformed buffer) are stored and returned by the
-  next `next_frame` once the handoff closes.
+  next `next_frame` once the handoff closes. Every captured frame crosses that thread, so
+  `connect_with_thread_start` and `from_portal_with_thread_start` take an `FnOnce() + Send`
+  hook that runs on it before anything else (`spawn_worker`, unit tested), and has returned by
+  the time `connect` does. Capture builds on `core` and `config` only, so it never applies
+  `rusplay-priority` itself: the host passes the hook (`priority.md`, `host.md`).
 - Frames cross threads through `handoff::latest`, a single-slot mailbox: a new frame replaces an
   unconsumed one (counted by `superseded_frames`), so the consumer always gets the newest frame
   and nothing queues. `process` also drains PipeWire's queue down to the newest buffer. `latest`,

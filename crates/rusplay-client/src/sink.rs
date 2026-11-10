@@ -40,6 +40,10 @@ pub trait FrameSink: Send + 'static {
     fn color_target(&self) -> Option<ColorVolume> {
         None
     }
+
+    fn thread_priority_failures(&self) -> u64 {
+        0
+    }
 }
 
 impl<F: FnMut(PresentedFrame) + Send + 'static> FrameSink for F {

@@ -357,9 +357,11 @@ fn authenticate(
 
 const fn thread_role(stage: Stage) -> Option<ThreadRole> {
     match stage {
-        Stage::Receive | Stage::Audio | Stage::Microphone => Some(ThreadRole::TimerDriven),
+        Stage::Receive | Stage::Audio | Stage::Microphone | Stage::Input | Stage::Gamepad => {
+            Some(ThreadRole::TimerDriven)
+        }
         Stage::Decode | Stage::Present => Some(ThreadRole::Frame),
-        _ => None,
+        Stage::Window => None,
     }
 }
 
@@ -436,6 +438,17 @@ impl ClientStream {
         self.stages.iter().any(|(_, handle)| handle.is_finished())
     }
 
+    pub(crate) fn thread_start(&self, role: ThreadRole) -> impl FnOnce() + Send + 'static + use<> {
+        let tuning = self.tuning;
+        let counters = Arc::clone(&self.counters);
+
+        move || {
+            let refused = tuning.apply(role).len() as u64;
+
+            counters.thread_priority_failures.add(refused);
+        }
+    }
+
     pub fn stop(mut self) -> Result<(), ClientError> {
         self.stop.store(true, Ordering::Relaxed);
         self.join()
@@ -473,13 +486,11 @@ impl ClientStream {
             None => builder,
         };
 
-        let tuning = self.tuning;
-        let counters = Arc::clone(&self.counters);
+        let tune = thread_role(stage).map(|role| self.thread_start(role));
         let handle = builder
             .spawn(move || {
-                if let Some(role) = thread_role(stage) {
-                    let failures = tuning.apply(role);
-                    counters.thread_priority_failures.add(failures.len() as u64);
+                if let Some(tune) = tune {
+                    tune();
                 }
                 body()
             })
@@ -508,6 +519,9 @@ impl ClientStream {
             stop: Arc::clone(&self.stop),
             counters: Arc::clone(&self.counters),
         };
+        self.counters
+            .thread_priority_failures
+            .add(links.sink.thread_priority_failures());
 
         self.spawn(Stage::Present, None, move || {
             present::run(gpu, options, links)
@@ -668,6 +682,27 @@ mod tests {
 
     use super::*;
     use crate::testing;
+
+    #[test]
+    fn every_stage_on_the_frame_and_input_paths_is_tuned() {
+        for timed in [
+            Stage::Receive,
+            Stage::Audio,
+            Stage::Microphone,
+            Stage::Input,
+            Stage::Gamepad,
+        ] {
+            assert_eq!(thread_role(timed), Some(ThreadRole::TimerDriven));
+        }
+
+        assert_eq!(thread_role(Stage::Decode), Some(ThreadRole::Frame));
+        assert_eq!(thread_role(Stage::Present), Some(ThreadRole::Frame));
+    }
+
+    #[test]
+    fn the_window_thread_is_not_tuned_as_a_stream_stage() {
+        assert_eq!(thread_role(Stage::Window), None);
+    }
 
     #[test]
     fn a_resolution_past_the_device_limit_is_a_client_error() {

@@ -63,6 +63,16 @@ impl WaylandCapture {
         options: CaptureOptions,
         sink: impl FnMut(InputEvent) + Send + 'static,
     ) -> Result<Self, InputError> {
+        unsafe { Self::attach_with_thread_start(target, options, || {}, sink) }
+    }
+
+    #[allow(clippy::missing_safety_doc)]
+    pub unsafe fn attach_with_thread_start(
+        target: WaylandTarget,
+        options: CaptureOptions,
+        on_thread_start: impl FnOnce() + Send + 'static,
+        sink: impl FnMut(InputEvent) + Send + 'static,
+    ) -> Result<Self, InputError> {
         let backend = unsafe { Backend::from_foreign_display(target.display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
         let surface_id =
@@ -97,10 +107,9 @@ impl WaylandCapture {
         let (commands, queued) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
-        let thread = thread::Builder::new()
-            .name(THREAD_NAME.to_owned())
-            .spawn(move || serve(&connection, queue, state, &queued, &worker_stop))
-            .map_err(InputError::WaylandSpawn)?;
+        let thread = spawn_capture(on_thread_start, move || {
+            serve(&connection, queue, state, &queued, &worker_stop)
+        })?;
 
         Ok(Self {
             core,
@@ -175,6 +184,19 @@ impl Drop for WaylandCapture {
     fn drop(&mut self) {
         self.shut_down().ok();
     }
+}
+
+fn spawn_capture(
+    on_thread_start: impl FnOnce() + Send + 'static,
+    work: impl FnOnce() -> Result<(), InputError> + Send + 'static,
+) -> Result<JoinHandle<Result<(), InputError>>, InputError> {
+    thread::Builder::new()
+        .name(THREAD_NAME.to_owned())
+        .spawn(move || {
+            on_thread_start();
+            work()
+        })
+        .map_err(InputError::WaylandSpawn)
 }
 
 fn serve(
@@ -330,6 +352,34 @@ mod tests {
         fn stop(&mut self) -> Result<(), InputError> {
             self.capture.take().unwrap().stop()
         }
+    }
+
+    #[test]
+    fn the_thread_start_hook_runs_on_the_capture_thread_before_its_work() {
+        let (steps, recorded) = channel();
+        let hook_steps = steps.clone();
+
+        let capture = spawn_capture(
+            move || {
+                let thread = thread::current().name().map(str::to_owned);
+                hook_steps.send(("hook", thread)).unwrap();
+            },
+            move || {
+                let thread = thread::current().name().map(str::to_owned);
+                steps.send(("work", thread)).unwrap();
+                Ok(())
+            },
+        )
+        .unwrap();
+        capture.join().unwrap().unwrap();
+
+        assert_eq!(
+            recorded.iter().collect::<Vec<_>>(),
+            vec![
+                ("hook", Some(THREAD_NAME.to_owned())),
+                ("work", Some(THREAD_NAME.to_owned())),
+            ]
+        );
     }
 
     #[test]

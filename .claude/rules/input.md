@@ -434,6 +434,10 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   `prepare_read` with a 10 ms poll, so it can be stopped. `WaylandTarget` takes the raw pointers
   so `rusplay-input` does not depend on gpui; the app gets them from gpui's raw window handles.
   The connection must outlive the capture: stop or drop it before the window.
+  `attach_with_thread_start` is `attach` with an `FnOnce() + Send` hook that runs first on the
+  capture thread (`spawn_capture`, unit tested): every input event crosses that thread, and
+  `rusplay-input` builds on `rusplay-config` only, so the client passes the hook that applies
+  its `rusplay-priority` tuning (`priority.md`) instead of this crate depending on it.
 - It makes its own `wl_pointer`, `wl_keyboard`, `wl_touch` (only with `input.touch` and a touch
   seat; downs count only on the target surface) and relative pointer on the shared seat. Keyboard
   keys arrive as raw evdev codes (layout independent, no xkb library); pointer buttons likewise.

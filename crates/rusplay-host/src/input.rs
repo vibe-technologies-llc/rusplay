@@ -9,12 +9,15 @@ use std::{
 };
 
 use parking_lot::{Mutex, MutexGuard};
+use rusplay_config::NetworkConfig;
 use rusplay_input::{HeldInput, InputError, InputEvent, InputRecord, PadFeedback, StateRecord};
 use rusplay_net::NetError;
+use rusplay_priority::{ThreadRole, ThreadTuning};
 use rusplay_protocol::{ControlMessage, InputAdmission, InputPacket, InputRecords, InputSequence};
 
 use crate::{
     HostError, Stage, datagrams::ForwardedDatagram, outbox::ControlOutbox, shared::Shared,
+    tuning::TuningRefusals,
 };
 
 const SERVICE_INTERVAL: Duration = Duration::from_millis(4);
@@ -22,6 +25,7 @@ const MAX_BATCH_EVENTS: usize = 128;
 const IDLE_SERVICE_INTERVAL: Duration = Duration::from_millis(50);
 const INJECT_TIMEOUT: Duration = Duration::from_millis(250);
 const INJECTOR_THREAD: &str = "rusplay-host-injector";
+const INJECTOR_ROLE: ThreadRole = ThreadRole::Frame;
 
 pub trait InputTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError>;
@@ -36,16 +40,25 @@ pub trait InputTarget {
 
 pub struct InputFeed {
     target: Mutex<Box<dyn InputTarget + Send>>,
+    refusals: TuningRefusals,
 }
 
 impl InputFeed {
     pub fn new(target: impl InputTarget + Send + 'static) -> Arc<Self> {
+        Self::tuned(target, TuningRefusals::default())
+    }
+
+    pub(crate) fn tuned(
+        target: impl InputTarget + Send + 'static,
+        refusals: TuningRefusals,
+    ) -> Arc<Self> {
         Arc::new(Self {
             target: Mutex::new(Box::new(target)),
+            refusals,
         })
     }
 
-    pub fn spawn<T, F>(build: F) -> Result<Arc<Self>, HostError>
+    pub fn spawn<T, F>(network: &NetworkConfig, build: F) -> Result<Arc<Self>, HostError>
     where
         T: InputTarget + 'static,
         F: FnOnce() -> Result<T, HostError> + Send + 'static,
@@ -53,16 +66,23 @@ impl InputFeed {
         let (requests, request_queue) = mpsc::channel();
         let (reply_sender, replies) = mpsc::channel();
         let (ready_sender, ready) = mpsc::channel();
+        let tuning = ThreadTuning::from_config(network);
+        let refusals = TuningRefusals::default();
+        let tally = refusals.clone();
 
         thread::Builder::new()
             .name(INJECTOR_THREAD.to_owned())
-            .spawn(move || match build() {
-                Ok(target) => {
-                    ready_sender.send(Ok(())).ok();
-                    serve_requests(target, &request_queue, &reply_sender);
-                }
-                Err(error) => {
-                    ready_sender.send(Err(error)).ok();
+            .spawn(move || {
+                tally.tune(tuning, INJECTOR_ROLE);
+
+                match build() {
+                    Ok(target) => {
+                        ready_sender.send(Ok(())).ok();
+                        serve_requests(target, &request_queue, &reply_sender);
+                    }
+                    Err(error) => {
+                        ready_sender.send(Err(error)).ok();
+                    }
                 }
             })
             .map_err(|source| HostError::SpawnStage {
@@ -71,11 +91,14 @@ impl InputFeed {
             })?;
 
         match ready.recv() {
-            Ok(Ok(())) => Ok(Self::new(RemoteTarget {
-                requests,
-                replies,
-                next_id: 0,
-            })),
+            Ok(Ok(())) => Ok(Self::tuned(
+                RemoteTarget {
+                    requests,
+                    replies,
+                    next_id: 0,
+                },
+                refusals,
+            )),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(HostError::StagePanicked {
                 stage: Stage::Input,
@@ -85,6 +108,10 @@ impl InputFeed {
 
     pub(crate) fn target(&self) -> MutexGuard<'_, Box<dyn InputTarget + Send>> {
         self.target.lock()
+    }
+
+    pub(crate) fn thread_priority_failures(&self) -> u64 {
+        self.refusals.count()
     }
 }
 
@@ -524,7 +551,14 @@ mod tests {
     use rusplay_protocol::push_input_record;
 
     use super::*;
-    use crate::stats::HostStats;
+    use crate::{
+        stats::HostStats,
+        tests::{TEST_NICE, current_thread_nice, network_with_nice, refusals_of},
+    };
+
+    fn untuned() -> NetworkConfig {
+        network_with_nice(0)
+    }
 
     const NEVER: Duration = Duration::from_secs(3600);
     const WAIT: Duration = Duration::from_secs(5);
@@ -666,7 +700,7 @@ mod tests {
             duration_ms: 100,
         });
         let recorded = Arc::clone(&events);
-        let feed = InputFeed::spawn(move || {
+        let feed = InputFeed::spawn(&untuned(), move || {
             Ok(ThreadBound {
                 events: recorded,
                 rumble,
@@ -707,7 +741,7 @@ mod tests {
 
     #[test]
     fn a_stalled_injector_times_out_and_its_late_reply_is_not_mistaken_for_the_next() {
-        let feed = InputFeed::spawn(|| Ok(StallsOnce { stalled: false })).unwrap();
+        let feed = InputFeed::spawn(&untuned(), || Ok(StallsOnce { stalled: false })).unwrap();
         let mut target = feed.target();
 
         let stalled = target.inject(key(30, true));
@@ -719,7 +753,7 @@ mod tests {
 
     #[test]
     fn a_target_that_fails_to_build_reports_why() {
-        let built = InputFeed::spawn(|| -> Result<Recorder, HostError> {
+        let built = InputFeed::spawn(&untuned(), || -> Result<Recorder, HostError> {
             Err(HostError::CaptureNotCompiled)
         });
 
@@ -727,10 +761,38 @@ mod tests {
     }
 
     #[test]
+    fn the_injector_thread_is_tuned_before_it_builds_its_target() {
+        let (observed, building_nice) = mpsc::channel();
+
+        let feed = InputFeed::spawn(&network_with_nice(TEST_NICE), move || {
+            observed.send(current_thread_nice()).ok();
+            Ok(Recorder::default())
+        })
+        .unwrap();
+
+        assert_eq!(building_nice.recv().unwrap(), i32::from(TEST_NICE));
+        assert_eq!(feed.thread_priority_failures(), 0);
+    }
+
+    #[test]
+    fn a_refused_injector_tuning_is_counted_and_the_feed_still_injects() {
+        let network = network_with_nice(-20);
+
+        let feed = InputFeed::spawn(&network, || Ok(Recorder::default())).unwrap();
+        let injected = feed.target().inject(key(30, true));
+
+        assert!(injected.is_ok());
+        assert_eq!(
+            feed.thread_priority_failures(),
+            refusals_of(&network, INJECTOR_ROLE)
+        );
+    }
+
+    #[test]
     fn dropping_the_feed_stops_the_injector_thread_and_drops_the_target() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
-        let feed = InputFeed::spawn(move || {
+        let feed = InputFeed::spawn(&untuned(), move || {
             Ok(ThreadBound {
                 events: recorded,
                 rumble: PadFeedback::Rumble(RumbleCommand::stop(0)),
@@ -875,7 +937,7 @@ mod tests {
 
     #[test]
     fn a_batch_through_the_injector_thread_returns_a_result_per_event() {
-        let feed = InputFeed::spawn(|| Ok(RejectsOdd)).unwrap();
+        let feed = InputFeed::spawn(&untuned(), || Ok(RejectsOdd)).unwrap();
         let mut target = feed.target();
         let mut results = Vec::new();
 

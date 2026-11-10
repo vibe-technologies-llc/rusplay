@@ -15,8 +15,8 @@ use common::{FIXTURE_HEIGHT, FIXTURE_WIDTH, HostOptions, Outgoing, TestHost};
 use parking_lot::Mutex;
 use rusplay_audio::AudioError;
 use rusplay_client::{
-    AudioInput, ClientError, ClientSession, ColorVolume, Credentials, FrameColor, LatestFrame,
-    OutputLight, Pin, PresentedFrame, announced_display,
+    AudioInput, ClientError, ClientSession, ColorVolume, Credentials, FrameColor, FrameSink,
+    LatestFrame, OutputLight, Pin, PresentedFrame, announced_display,
 };
 use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, CodecFormat, ColorPrimaries, ColorRange, ColorSpace,
@@ -117,6 +117,47 @@ fn the_stage_threads_take_the_configured_nice_value() {
 
     assert_eq!(*present_nice.lock(), Some(i32::from(TEST_NICE)));
     assert_eq!(stats.thread_priority_failures, 0);
+}
+
+const SINK_REFUSALS: u64 = 3;
+
+struct RefusedSink<F>(F);
+
+impl<F: FnMut(PresentedFrame) + Send + 'static> FrameSink for RefusedSink<F> {
+    fn present(&mut self, frame: PresentedFrame) {
+        (self.0)(frame);
+    }
+
+    fn thread_priority_failures(&self) -> u64 {
+        SINK_REFUSALS
+    }
+}
+
+#[test]
+fn the_refused_tuning_of_a_sinks_own_thread_counts_in_the_stream_stats() {
+    let Some(gpu) = common::gpu() else {
+        return;
+    };
+    let host = TestHost::start(HostOptions {
+        goodbye: false,
+        ..HostOptions::default()
+    });
+    let mut config = common::client_config();
+    config.network.frame_thread_nice = TEST_NICE;
+    let session = ClientSession::new(config);
+    let (seen, recording) = recorder();
+
+    let stream = common::connect_silent(
+        &session,
+        host.address,
+        &Credentials::Pin(common::pin()),
+        gpu,
+        RefusedSink(recording),
+    )
+    .unwrap();
+    let stats = settle(stream, &seen, common::DEFAULT_FRAMES - 1);
+
+    assert_eq!(stats.thread_priority_failures, SINK_REFUSALS);
 }
 
 #[test]

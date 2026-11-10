@@ -13,7 +13,7 @@ use rusplay_capture::{
 };
 use rusplay_core::{BitDepth, ColorSpace, FrameRate, Resolution};
 
-use crate::upload::source_depth;
+use crate::{tuning::TuningRefusals, upload::source_depth};
 
 pub trait FrameSource: Send {
     fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError>;
@@ -65,11 +65,17 @@ pub struct CaptureFeed {
     refresh: Option<SourceRefresh>,
     traits: Mutex<Option<SourceTraits>>,
     capture_size: AtomicU64,
+    refusals: TuningRefusals,
 }
 
 impl CaptureFeed {
     pub fn new(source: impl FrameSource + 'static) -> Arc<Self> {
+        Self::tuned(source, TuningRefusals::default())
+    }
+
+    pub(crate) fn tuned(source: impl FrameSource + 'static, refusals: TuningRefusals) -> Arc<Self> {
         Arc::new(Self {
+            refusals,
             cursor: source.cursor_feed(),
             fallback: source.shm_fallback(),
             offer: source.output_offer(),
@@ -84,6 +90,10 @@ impl CaptureFeed {
 
     pub(crate) fn source(&self) -> MutexGuard<'_, Box<dyn FrameSource>> {
         self.source.lock()
+    }
+
+    pub(crate) fn thread_priority_failures(&self) -> u64 {
+        self.refusals.count()
     }
 
     pub(crate) fn retain(&self, frame: Frame) {
@@ -163,9 +173,14 @@ mod portal {
         StreamOptions, Subscriber,
     };
     use rusplay_config::Config;
+    use rusplay_priority::{ThreadRole, ThreadTuning};
     use rusplay_scale::{DmaBufFormat, DmaBufImporter};
 
-    use crate::{CaptureFeed, FrameSource, Gpu, HostError, upload::upload_format_for};
+    use crate::{
+        CaptureFeed, FrameSource, Gpu, HostError, tuning::TuningRefusals, upload::upload_format_for,
+    };
+
+    const CAPTURE_LOOP_ROLE: ThreadRole = ThreadRole::Frame;
 
     impl FrameSource for PipeWireCapture {
         fn next_frame(&mut self, timeout: Duration) -> Result<Option<Frame>, CaptureError> {
@@ -215,9 +230,15 @@ mod portal {
             importable_modifiers(importer.as_ref(), fourcc)
         });
 
-        Ok(CaptureFeed::new(PipeWireCapture::from_portal(
-            session, options,
-        )?))
+        let tuning = ThreadTuning::from_config(&config.network);
+        let refusals = TuningRefusals::default();
+        let tally = refusals.clone();
+        let capture =
+            PipeWireCapture::from_portal_with_thread_start(session, options, move || {
+                tally.tune(tuning, CAPTURE_LOOP_ROLE);
+            })?;
+
+        Ok(CaptureFeed::tuned(capture, refusals))
     }
 
     fn importable_modifiers(importer: Option<&DmaBufImporter>, fourcc: DrmFourcc) -> Vec<u64> {

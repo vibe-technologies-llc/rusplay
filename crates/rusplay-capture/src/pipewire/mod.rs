@@ -151,6 +151,15 @@ impl PipeWireCapture {
         node_id: u32,
         options: StreamOptions,
     ) -> Result<Self, CaptureError> {
+        Self::connect_with_thread_start(remote, node_id, options, || {})
+    }
+
+    pub fn connect_with_thread_start(
+        remote: OwnedFd,
+        node_id: u32,
+        options: StreamOptions,
+        on_thread_start: impl FnOnce() + Send + 'static,
+    ) -> Result<Self, CaptureError> {
         let (publisher, deliveries) = latest();
         let (cursor_publisher, cursor) = latest();
         let failure = Failure::default();
@@ -173,14 +182,11 @@ impl PipeWireCapture {
             control: control.clone(),
             commands,
         };
-        let worker = thread::Builder::new()
-            .name(THREAD_NAME.to_owned())
-            .spawn(move || {
-                if let Err(error) = run_worker(setup, &started_tx) {
-                    let _ = started_tx.send(Err(error));
-                }
-            })
-            .map_err(CaptureError::ThreadSpawn)?;
+        let worker = spawn_worker(on_thread_start, move || {
+            if let Err(error) = run_worker(setup, &started_tx) {
+                let _ = started_tx.send(Err(error));
+            }
+        })?;
 
         let mut capture = Self {
             deliveries,
@@ -207,7 +213,15 @@ impl PipeWireCapture {
 
     pub fn from_portal(
         session: PortalSession,
+        options: StreamOptions,
+    ) -> Result<Self, CaptureError> {
+        Self::from_portal_with_thread_start(session, options, || {})
+    }
+
+    pub fn from_portal_with_thread_start(
+        session: PortalSession,
         mut options: StreamOptions,
+        on_thread_start: impl FnOnce() + Send + 'static,
     ) -> Result<Self, CaptureError> {
         let PortalSession {
             remote, streams, ..
@@ -218,7 +232,7 @@ impl PipeWireCapture {
             options.size_hint = stream.size;
         }
 
-        Self::connect(remote, stream.node_id, options)
+        Self::connect_with_thread_start(remote, stream.node_id, options, on_thread_start)
     }
 
     pub fn try_next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
@@ -290,6 +304,19 @@ impl Drop for PipeWireCapture {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn spawn_worker(
+    on_thread_start: impl FnOnce() + Send + 'static,
+    work: impl FnOnce() + Send + 'static,
+) -> Result<JoinHandle<()>, CaptureError> {
+    thread::Builder::new()
+        .name(THREAD_NAME.to_owned())
+        .spawn(move || {
+            on_thread_start();
+            work();
+        })
+        .map_err(CaptureError::ThreadSpawn)
 }
 
 struct WorkerSetup {
@@ -664,6 +691,33 @@ mod tests {
         format::{parse_object, property},
         *,
     };
+
+    #[test]
+    fn the_thread_start_hook_runs_on_the_capture_thread_before_its_work() {
+        let (steps, recorded) = mpsc::channel();
+        let hook_steps = steps.clone();
+
+        let worker = spawn_worker(
+            move || {
+                let thread = thread::current().name().map(str::to_owned);
+                hook_steps.send(("hook", thread)).unwrap();
+            },
+            move || {
+                let thread = thread::current().name().map(str::to_owned);
+                steps.send(("work", thread)).unwrap();
+            },
+        )
+        .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(
+            recorded.iter().collect::<Vec<_>>(),
+            vec![
+                ("hook", Some(THREAD_NAME.to_owned())),
+                ("work", Some(THREAD_NAME.to_owned())),
+            ]
+        );
+    }
 
     #[test]
     fn colour_is_offered_only_where_unmatched_properties_are_dropped() {

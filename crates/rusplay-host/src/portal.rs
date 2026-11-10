@@ -136,7 +136,7 @@ mod shared {
             Some(eis) => {
                 let input_config = config.input;
                 let session = Arc::clone(&opened.session);
-                match InputFeed::spawn(move || {
+                match InputFeed::spawn(&config.network, move || {
                     let options = LibeiOptions {
                         target,
                         ..LibeiOptions::default()

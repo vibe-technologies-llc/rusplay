@@ -194,6 +194,15 @@ impl HostSession {
         })
     }
 
+    fn standing_thread_failures(&self, feed: &CaptureFeed) -> u64 {
+        let injector = self
+            .input
+            .as_ref()
+            .map_or(0, |input| input.thread_priority_failures());
+
+        feed.thread_priority_failures() + injector
+    }
+
     fn microphone_factory(&self) -> Result<Option<MicrophoneOutputFactory>, HostError> {
         if !self.config.audio.microphone.enabled {
             return Ok(None);
@@ -231,6 +240,10 @@ impl HostSession {
             clipboard: ClipboardState::Off,
             _busy: BusyGuard::raise(&self.busy),
         };
+        shared
+            .counters
+            .thread_priority_failures
+            .add(self.standing_thread_failures(feed));
 
         let outbox = Arc::new(ControlOutbox::new(
             ControlChannel::new(ControlConfig::from(network)),
@@ -380,8 +393,10 @@ fn send_options(config: &Config) -> SendOptions {
 const fn thread_role(stage: Stage) -> Option<ThreadRole> {
     match stage {
         Stage::Encode | Stage::Control => Some(ThreadRole::Frame),
-        Stage::Send | Stage::Audio | Stage::Microphone => Some(ThreadRole::TimerDriven),
-        _ => None,
+        Stage::Capture | Stage::Send | Stage::Audio | Stage::Microphone | Stage::Input => {
+            Some(ThreadRole::TimerDriven)
+        }
+        Stage::Cursor => None,
     }
 }
 
@@ -511,5 +526,31 @@ impl Drop for HostStream {
     fn drop(&mut self) {
         self.shared.stop();
         self.join().ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_stage_on_the_frame_and_input_paths_is_tuned() {
+        assert_eq!(thread_role(Stage::Encode), Some(ThreadRole::Frame));
+        assert_eq!(thread_role(Stage::Control), Some(ThreadRole::Frame));
+
+        for timed in [
+            Stage::Capture,
+            Stage::Send,
+            Stage::Audio,
+            Stage::Microphone,
+            Stage::Input,
+        ] {
+            assert_eq!(thread_role(timed), Some(ThreadRole::TimerDriven));
+        }
+    }
+
+    #[test]
+    fn the_cursor_stage_keeps_the_default_scheduling() {
+        assert_eq!(thread_role(Stage::Cursor), None);
     }
 }

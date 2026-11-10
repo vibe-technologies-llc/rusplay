@@ -62,13 +62,19 @@ paths:
   `-gamepad`, each returning `Result<(), ClientError>`. Any stage that ends sets the
   shared stop flag; `ClientStream::wait` and `stop` join them all and return the first error.
   Dropping the stream stops it.
-- The receive, decode and present threads apply `rusplay_priority::ThreadTuning`
-  (`.claude/rules/priority.md`) as the first thing they do, in `ClientStream::spawn`: receive as
+- Every stage thread applies `rusplay_priority::ThreadTuning`
+  (`.claude/rules/priority.md`) as the first thing it does, in `ClientStream::spawn`
+  (`thread_role`): receive as
   `ThreadRole::TimerDriven` (it waits on timeouts), decode and present as `ThreadRole::Frame`, and
   the audio and microphone threads as `ThreadRole::TimerDriven` as well, so a decode thread busy
   with a software decoder or a VAAPI readback cannot keep them at the default nice and starve the
-  playback ring. The input and gamepad threads keep the default. A refused request leaves the
-  thread at its default and is counted in `ClientStats::thread_priority_failures`.
+  playback ring. The input stage (it sleeps toward the repeat and snapshot deadlines) and the
+  gamepad stage (5 ms poll) are `ThreadRole::TimerDriven` too: an input event crosses them on
+  its way to the socket and must not wait behind that decode thread either. A refused request
+  leaves the thread at its default and is counted in `ClientStats::thread_priority_failures`,
+  which also takes what the sink's own thread was refused (`FrameSink::thread_priority_failures`,
+  read once at connect; the window's presenter, below) and the Wayland input capture thread's
+  (`ClientStream::thread_start`, the hook `StreamWindow::capture_input` hands the capture).
 - Receive owns the transport, the `ControlChannel` and one `Reassembler` per media stream (video,
   cursor, and audio when there is an output). It waits in
   `Transport::recv_batch_timeout` until the nearest control deadline, reassembly deadline (the
@@ -416,6 +422,14 @@ paths:
   `round(logical * scale)`. The subsurface position is set at once (it applies on the parent's
   next commit); the caller sets `ClientStream::set_target(layout.pixels)` so the present stage
   scales to exactly the swapchain size.
+- The `rusplay-client-window` thread composes and presents every frame, so it is tuned like a
+  stage (`spawn_presenter`, the first thing the thread does, from `network.*` of the config
+  `attach` was given): `ThreadRole::Frame` with `video.present_pacing = "off"`, where it only
+  waits for wakes, and `ThreadRole::TimerDriven` in `latency` and `smooth`, where it sleeps
+  until a paced frame is due and the timer slack decides how late it wakes (`presenter_role`).
+  `attach` waits for that step, so the refused count is on the window before any stream
+  connects, and `WindowSink::thread_priority_failures` hands it to the stream's stats. The
+  output follower thread is off the frame path and keeps the default.
 - The `rusplay-client-window` thread waits on one condvar for a new frame, a layout change, a
   cursor update (`LatestCursor` notifies registered `CursorWatcher`s after each message), stop,
   or the due time of the earliest paced frame (`wait_until`, the one deliberate wait on the frame

@@ -12,7 +12,7 @@ mod presentation;
 mod surface;
 
 use std::{
-    sync::Arc,
+    sync::{Arc, mpsc},
     thread::{self, JoinHandle},
     time::Instant,
 };
@@ -20,7 +20,7 @@ use std::{
 use parking_lot::{Condvar, Mutex};
 use rusplay_config::{
     Config, DisplayOutputConfig, DisplayTargetConfig, InputConfig, PointerMode, PresentMode,
-    VideoDecoderConfig,
+    PresentPacing, VideoDecoderConfig,
 };
 use rusplay_core::Resolution;
 pub use rusplay_input::wayland::WaylandTarget;
@@ -28,6 +28,7 @@ use rusplay_input::{
     capture::{ActivePointer, CaptureOptions, ClientAction},
     wayland::{HostCursorObserver, WaylandCapture},
 };
+use rusplay_priority::{ThreadRole, ThreadTuning};
 use rusplay_scale::ColorVolume;
 
 pub use crate::window::{
@@ -54,6 +55,15 @@ use crate::{
     },
 };
 
+const INPUT_CAPTURE_ROLE: ThreadRole = ThreadRole::Frame;
+
+const fn presenter_role(pacing: PresentPacing) -> ThreadRole {
+    match pacing {
+        PresentPacing::Off => ThreadRole::Frame,
+        PresentPacing::Latency | PresentPacing::Smooth => ThreadRole::TimerDriven,
+    }
+}
+
 #[derive(Debug, Default)]
 struct Pending {
     frame: Option<PresentedFrame>,
@@ -72,6 +82,7 @@ struct Shared {
     color_target: Mutex<ColorVolume>,
     cursors_skipped: Arc<Counter>,
     presentation: PresentationCounters,
+    tuning_refusals: Counter,
 }
 
 impl Shared {
@@ -82,6 +93,7 @@ impl Shared {
             color_target: Mutex::new(color_target),
             cursors_skipped: Arc::new(Counter::default()),
             presentation: PresentationCounters::default(),
+            tuning_refusals: Counter::default(),
         }
     }
 
@@ -156,6 +168,37 @@ impl FrameSink for WindowSink {
     fn color_target(&self) -> Option<ColorVolume> {
         Some(*self.shared.color_target.lock())
     }
+
+    fn thread_priority_failures(&self) -> u64 {
+        self.shared.tuning_refusals.get()
+    }
+}
+
+fn spawn_presenter(
+    tuning: ThreadTuning,
+    role: ThreadRole,
+    shared: &Arc<Shared>,
+    present: impl FnOnce(&Shared) -> Result<(), ClientError> + Send + 'static,
+) -> Result<JoinHandle<Result<(), ClientError>>, ClientError> {
+    let worker = Arc::clone(shared);
+    let (tuned, tuning_done) = mpsc::sync_channel(1);
+
+    let thread = thread::Builder::new()
+        .name(format!("rusplay-client-{}", Stage::Window))
+        .spawn(move || {
+            let refused = tuning.apply(role).len() as u64;
+            worker.tuning_refusals.add(refused);
+            tuned.send(()).ok();
+
+            present(&worker)
+        })
+        .map_err(|source| ClientError::SpawnStage {
+            stage: Stage::Window,
+            source,
+        })?;
+    tuning_done.recv().ok();
+
+    Ok(thread)
 }
 
 pub struct StreamWindow {
@@ -236,14 +279,12 @@ impl StreamWindow {
             overlay: None,
         };
 
-        let worker = Arc::clone(&shared);
-        let thread = thread::Builder::new()
-            .name(format!("rusplay-client-{}", Stage::Window))
-            .spawn(move || presenter.run(&worker))
-            .map_err(|source| ClientError::SpawnStage {
-                stage: Stage::Window,
-                source,
-            })?;
+        let thread = spawn_presenter(
+            ThreadTuning::from_config(&config.network),
+            presenter_role(pacing.mode),
+            &shared,
+            move |shared| presenter.run(shared),
+        )?;
 
         let follower = config
             .color
@@ -312,9 +353,14 @@ impl StreamWindow {
 
         let handle = stream.input();
         let capture = unsafe {
-            WaylandCapture::attach(self.target, CaptureOptions::from(input), move |event| {
-                handle.send(event);
-            })
+            WaylandCapture::attach_with_thread_start(
+                self.target,
+                CaptureOptions::from(input),
+                stream.thread_start(INPUT_CAPTURE_ROLE),
+                move |event| {
+                    handle.send(event);
+                },
+            )
         }?;
         capture.set_region(self.layout.map(WindowLayout::region));
 
@@ -774,5 +820,108 @@ impl Presenter {
         self.mapped = true;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusplay_config::NetworkConfig;
+
+    use super::*;
+
+    const TEST_NICE: i8 = 7;
+    const REFUSED_NICE: i8 = -20;
+    const NICE_FIELD_AFTER_COMM: usize = 16;
+
+    fn current_thread_nice() -> i32 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+        let after_comm = &stat[stat.rfind(')').unwrap() + 1..];
+
+        after_comm
+            .split_whitespace()
+            .nth(NICE_FIELD_AFTER_COMM)
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
+    fn refusals_of(tuning: ThreadTuning, role: ThreadRole) -> u64 {
+        thread::spawn(move || tuning.apply(role).len() as u64)
+            .join()
+            .unwrap()
+    }
+
+    fn tuning(nice: i8) -> ThreadTuning {
+        ThreadTuning::from_config(&NetworkConfig {
+            frame_thread_nice: nice,
+            ..NetworkConfig::default()
+        })
+    }
+
+    fn sink_of(shared: &Arc<Shared>) -> WindowSink {
+        WindowSink {
+            shared: Arc::clone(shared),
+        }
+    }
+
+    #[test]
+    fn the_presenter_is_timer_driven_only_when_it_paces_frames() {
+        assert_eq!(presenter_role(PresentPacing::Off), ThreadRole::Frame);
+        assert_eq!(
+            presenter_role(PresentPacing::Latency),
+            ThreadRole::TimerDriven
+        );
+        assert_eq!(
+            presenter_role(PresentPacing::Smooth),
+            ThreadRole::TimerDriven
+        );
+    }
+
+    #[test]
+    fn the_presenter_thread_is_tuned_before_it_presents() {
+        let shared = Arc::new(Shared::new(ColorVolume::srgb_display()));
+        let (observed, presenting) = mpsc::channel();
+
+        let presenter = spawn_presenter(tuning(TEST_NICE), ThreadRole::Frame, &shared, move |_| {
+            let thread = thread::current().name().map(str::to_owned);
+            observed.send((thread, current_thread_nice())).ok();
+            Ok(())
+        })
+        .unwrap();
+        presenter.join().unwrap().unwrap();
+
+        assert_eq!(
+            presenting.recv().unwrap(),
+            (
+                Some("rusplay-client-window".to_owned()),
+                i32::from(TEST_NICE)
+            )
+        );
+        assert_eq!(sink_of(&shared).thread_priority_failures(), 0);
+    }
+
+    #[test]
+    fn a_refused_presenter_tuning_is_known_to_the_sink_once_the_thread_is_spawned() {
+        let shared = Arc::new(Shared::new(ColorVolume::srgb_display()));
+        let (release, released) = mpsc::channel::<()>();
+
+        let presenter = spawn_presenter(
+            tuning(REFUSED_NICE),
+            ThreadRole::TimerDriven,
+            &shared,
+            move |_| {
+                released.recv().ok();
+                Ok(())
+            },
+        )
+        .unwrap();
+        let counted = sink_of(&shared).thread_priority_failures();
+        release.send(()).unwrap();
+        presenter.join().unwrap().unwrap();
+
+        assert_eq!(
+            counted,
+            refusals_of(tuning(REFUSED_NICE), ThreadRole::TimerDriven)
+        );
     }
 }

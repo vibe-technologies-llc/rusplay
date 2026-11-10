@@ -2,6 +2,7 @@ mod clipboard;
 mod input;
 mod media;
 mod microphone;
+mod priority;
 mod service;
 mod virtual_output;
 
@@ -27,6 +28,7 @@ use rusplay_net::{
     Pin, ReassembledFrame, Reassembler, ReassemblyEvent, ReassemblyLimits, ReconnectInitiator,
     ReconnectTiming, Transport, TransportOptions, pair_as_client, reconnect_as_client,
 };
+use rusplay_priority::{ThreadRole, ThreadTuning};
 use rusplay_protocol::{
     ClientName, ControlMessage, CursorMessage, FecHeader, PacketFlags, PacketHeader,
     PairingRejection, ProtocolVersion, QualityUnavailableReason, ReconnectMessage,
@@ -70,6 +72,36 @@ fn network() -> NetworkConfig {
         keepalive_interval_ms: 100,
         ..NetworkConfig::default()
     }
+}
+
+pub(crate) const TEST_NICE: i8 = 7;
+const NICE_FIELD_AFTER_COMM: usize = 16;
+
+pub(crate) fn current_thread_nice() -> i32 {
+    let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+    let after_comm = &stat[stat.rfind(')').unwrap() + 1..];
+
+    after_comm
+        .split_whitespace()
+        .nth(NICE_FIELD_AFTER_COMM)
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+pub(crate) fn network_with_nice(nice: i8) -> NetworkConfig {
+    NetworkConfig {
+        frame_thread_nice: nice,
+        ..network()
+    }
+}
+
+pub(crate) fn refusals_of(network: &NetworkConfig, role: ThreadRole) -> u64 {
+    let tuning = ThreadTuning::from_config(network);
+
+    thread::spawn(move || tuning.apply(role).len() as u64)
+        .join()
+        .unwrap()
 }
 
 fn host_config() -> Config {

@@ -36,6 +36,7 @@ mod stats;
 mod stats_json;
 #[cfg(test)]
 mod tests;
+mod tuning;
 mod upload;
 mod virtual_output;
 

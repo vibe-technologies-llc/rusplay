@@ -92,12 +92,21 @@ paths:
   - `HostSession::busy_flag()` is an `Arc<AtomicBool>` that every `HostStream` raises when it
     is created and lowers when it is dropped (`BusyGuard`), for the discovery responder
     (`rusplay-hostd`) to announce; accepting and pairing alone do not raise it.
-  - The encode, send and control threads apply `rusplay_priority::ThreadTuning`
-    (`.claude/rules/priority.md`) as the first thing they do: encode and control as
-    `ThreadRole::Frame`, send, audio and microphone as `ThreadRole::TimerDriven`, so only those
-    three also lower their timer slack and a busy encode thread cannot starve the audio capture
-    or the virtual microphone. A refused request leaves the thread at its default and is counted in
+  - Every stage but cursor applies `rusplay_priority::ThreadTuning`
+    (`.claude/rules/priority.md`) as the first thing it does (`thread_role` in `session.rs`):
+    encode and control as `ThreadRole::Frame`; capture, send, audio, microphone and input as
+    `ThreadRole::TimerDriven`, so only those also lower their timer slack, a busy encode thread
+    cannot starve the audio capture or the virtual microphone, and neither a captured frame nor
+    an input datagram waits at the default nice behind the encoder and a game that uses every
+    core. A refused request leaves the thread at its default and is counted in
     `HostStats::thread_priority_failures`.
+  - Two threads on those paths outlive the session and are tuned where they are spawned, as
+    `ThreadRole::Frame`: the PipeWire capture loop, through the thread-start hook
+    `feed_from_session` passes to `PipeWireCapture::from_portal_with_thread_start`
+    (`capture.md`), and the injector thread in `InputFeed::spawn(&NetworkConfig, build)`, before
+    it builds its target. Each keeps what it was refused in a `TuningRefusals` (`tuning.rs`) on
+    its feed, and `serve_with` adds both tallies to the new stream's
+    `thread_priority_failures`, so every session's stats show them.
   - `rusplay-host-capture` locks the `CaptureFeed`'s `FrameSource` for the session and polls
     `next_frame` with a 20 ms timeout so it sees the stop flag. It stamps each frame with the
     session's `StreamClock` the moment `next_frame` returns (`Captured`), and that stamp travels
@@ -482,7 +491,8 @@ paths:
   behind a mutex that the session's input stage holds for the
   session, so tests inject a recording target and no portal is involved. `InputFeed::new` takes a
   `Send` target; `InputFeed::spawn` builds a target that cannot leave its thread (`LibeiInjector`
-  holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread and drives it through
+  holds non-`Send` callbacks) on the dedicated `rusplay-host-injector` thread (tuned first, from
+  the `NetworkConfig` it is given) and drives it through
   a request channel (each call waits at most `INJECT_TIMEOUT`, 250 ms, then fails with
   `SinkClosed`, and a late reply is told apart by its request id), servicing it every 50 ms while no session uses it so the compositor's pings
   are answered between clients. The injector thread ends when the feed drops.
@@ -574,7 +584,11 @@ paths:
   unit-tests the datagram handling, the batching of datagrams read in one pass (up to a state
   record, the event limit and a takeover), the service cadence (no service on a datagram wake,
   one every interval while idle and while flooded)
-  and the injector thread. `src/tests/media.rs` covers the
+  and the injector thread (its nice value, a refused request counted). `src/tests/priority.rs`
+  reads the nice value of the capture and input stage threads from inside a source and a target
+  and checks that a session adds the feeds' tallies; a refusal is provoked with nice -20 and
+  compared with what `ThreadTuning::apply` reports on a probe thread, so the tests hold with or
+  without `RLIMIT_NICE` headroom. `src/tests/media.rs` covers the
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
   image repeat, the image surviving into the next session). `tests/loopback.rs` streams a
