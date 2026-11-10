@@ -365,10 +365,67 @@ paths:
   misc buffers go out on every keyframe and on the frame after `set_bitrate`, which is how
   `set_bitrate` applies without re-creating the encoder.
 - Intra refresh: when the driver offers rolling rows (preferred) or columns
-  (`VAConfigAttribEncIntraRefresh`), every P frame carries `VAEncMiscParameterRIR` stepping across
-  the picture in units of 16 (H.264 macroblocks) or 64 (HEVC CTBs, AV1 superblocks), one full sweep
-  per `intra-refresh-frames` frames (default: the frame rate rounded up, one second). radeonsi
-  repeats the parameter sets when a sweep restarts.
+  (`VAConfigAttribEncIntraRefresh`), a sweep crosses the picture in units of 16 (H.264
+  macroblocks) or 64 (HEVC CTBs, AV1 superblocks) once per `intra-refresh-frames` frames (default:
+  the frame rate rounded up, one second). `RefreshCadence` (`vaapi/refresh.rs`) spreads the units
+  evenly over the period: `f` frames into a sweep, `f * units / period` units are done. With fewer
+  units than frames (17 CTB rows at 1080p against 60 frames) one row is refreshed on 17 of the 60
+  frames and the frames between carry no intra region; with more (135 macroblock rows at 4K)
+  every frame takes two or three. Any `period` consecutive frames cover every unit exactly once,
+  and a keyframe restarts the sweep. A P frame with a region carries `VAEncMiscParameterRIR` with
+  its location and size; every other P frame carries it with `rir_flags` 0 and no size
+  (`refresh_parameters`, `a_frame_without_a_region_switches_intra_refresh_off`), which both Mesa
+  (`handleVAEncMiscParameterTypeRIR`) and Intel's media-driver (`ParseMiscParameterRIR`, read in
+  the source, not run) take as no intra refresh. Mesa 26.2 also
+  resets the mode at every `vlVaBeginPicture`, so leaving the buffer out would do on radeonsi,
+  but the media-driver keeps the last value in its picture parameters. radeonsi adds one unit to
+  the region when the loop filter is on, always for AV1
+  (`radeon_vcn_enc_get_intra_refresh_param`), so a region of one row is two rows of intra blocks,
+  the second coded again by the next region. It does not repeat the parameter sets when a sweep
+  restarts (the VA frontend sets `need_sequence_header`, radeonsi does not read it).
+  - Why the cadence: the former code sent a region on every P frame, `units.div_ceil(period)`
+    units and at least one, whatever the period, so 1080p HEVC and AV1 swept in 17 frames
+    instead of 60 and coded two CTB rows of 17 as intra blocks in every P frame. Measured on an
+    RX 9070 XT (radeonsi, Mesa 26.2.6, VCN 5) by `vaapi/tests/measure.rs`: CBR at 60 fps, 8-bit
+    4:2:0, DMA-BUF input, on 16 looping frames of a noise texture panning on a circle with fine
+    detail that varies across the picture, a gradient sky, three textured blocks on their own
+    orbits, a half-transparent layer moving the other way, grain, and a static high-contrast
+    block. One encoder per configuration takes the same frame, in an order shuffled every round;
+    after 30 frames each has 504 timed frames (the `encode` call, import lookup to bitstream) and
+    126 scored ones (`capture_reconstruction` against the source through `rusplay_core::measure`,
+    not timed). The three cadences
+    (`cargo test -p rusplay-encode --all-features --lib intra_refresh_cadence_times_and_scores --
+    --ignored --nocapture`), luma PSNR / luma XPSNR in dB:
+
+    | CBR at 60 fps | Former sweep | One sweep per 60 frames | No intra refresh |
+    |---|---|---|---|
+    | AV1 1920x1080, 20 Mbps | 17 frames: 36.46 / 37.19 | 37.65 / 38.27 | 37.57 / 38.28 |
+    | HEVC 1920x1080, 20 Mbps | 17 frames: 36.15 / 36.92 | 36.99 / 37.71 | 37.07 / 37.84 |
+    | H.264 1920x1080, 20 Mbps | 34 frames: 35.84 / 36.60 | 36.02 / 36.75 | 36.40 / 37.14 |
+    | AV1 3840x2160, 80 Mbps | 34 frames: 37.66 / 40.74 | 38.13 / 41.15 | 38.12 / 41.25 |
+    | HEVC 3840x2160, 80 Mbps | 34 frames: 37.48 / 40.58 | 37.85 / 40.93 | 37.96 / 41.10 |
+    | H.264 3840x2160, 80 Mbps | 45 frames: 36.43 / 39.57 | 36.53 / 39.66 | 36.81 / 39.95 |
+
+    The bitrates of a row are within 2% of each other (the former cadence produced the fewest
+    bits) and the encode times are the same.
+  - What a sweep heals (same GPU): a lost picture in H.264 only. The hardware tests drop the P
+    frame that carries a scene change (14 macroblock rows over 42 frames, textured content) and
+    decode the rest with FFmpeg, comparing each picture with the unbroken stream's: the frame
+    after the loss is under 30 dB from it, and the pictures are identical to it (the tests ask
+    for 50 dB) from the end of the sweep the loss came before
+    (`an_h264_frame_lost_before_a_sweep_heals_by_the_end_of_that_sweep`) or, for a loss in the
+    middle of a sweep, from the end of the next one
+    (`an_h264_frame_lost_in_mid_sweep_heals_by_the_end_of_the_next_sweep`): the rows refreshed
+    after such a loss do not come out clean, since intra blocks predict from the broken rows
+    above them, so a sweep heals only from its first row on. The former cadence always took
+    until the end of the next sweep, because the lost frame itself carried a region. The firmware
+    does not keep motion vectors out of the rows not yet refreshed, so the healing is exact only
+    where prediction does not reach across them: a still smooth gradient (vertical vectors cost
+    nothing there) decoded at 23 dB against its source after its sweep and 42 dB after the next,
+    and vertical motion of 4 pixels a frame needed a second sweep to be exact. HEVC and
+    AV1 streams do not decode past a lost picture at all
+    (`encode-vaapi-intra-refresh-heals-h264-only` in `docs/BUGS.md`); there the recovery is
+    `recover` or a keyframe.
 - `params` keys: `intra-refresh-frames` (frames per sweep, `0` turns intra refresh off) and
   `quality-level` (`1` up to the driver's `VAConfigAttribEncQualityRange`, sent on keyframes).
   Another key is `UnknownParameter`, a bad value `InvalidParameterValue`, both at open.
@@ -407,7 +464,12 @@ paths:
   hardware; on hardware the output is decoded with `rusplay-decode`'s `VaapiDecoder` (and rav1d for
   AV1), the decoded DMA-BUF is read back with `vaGetImage`, and every frame of a smooth moving
   pattern must reach 34 dB luma PSNR, at 400x216 and at 402x226 for cropping. DMA-BUF input comes
-  from exported VA surfaces. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
+  from exported VA surfaces. `intra_refresh_spends_its_rows_over_the_whole_period` encodes a still
+  textured frame at constant QP for two sweeps of three frames a row and requires, for the three
+  codecs, that exactly the frames `RefreshCadence` names stand out in size (each larger than
+  the frames before and after it, four times the others on average); the two `an_h264_frame_lost_*`
+  tests are the healing above. `vaapi/tests/measure.rs` holds the ignored cadence measurement and
+  its scene. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
   this file's pattern frames, PSNR and VAAPI decode for the x264 recovery tests. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
   the format is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing.
 

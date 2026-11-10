@@ -1,4 +1,5 @@
 mod compare;
+mod measure;
 
 use std::{
     fs::File,
@@ -23,6 +24,7 @@ use rusplay_core::{
     FrameBuffer, PixelFormat, Plane, Resolution, Timestamp,
 };
 use rusplay_decode::{DecodedBuffer, DecodedFrame, Rav1dDecoder, VaapiDecoder, VideoDecoder};
+use rusplay_va::ffi;
 
 use crate::{
     EncodeError, OutputIndex, Recovery, VideoEncoder, capabilities, hardware,
@@ -30,8 +32,11 @@ use crate::{
     input::{bytes_per_sample, fixtures::yuv_frame, fourcc_for},
     open,
     vaapi::{
+        IntraRefresh, RefreshDirection,
         format::{pack, surface_format},
         long_term::driver_honours_long_term,
+        refresh::{RefreshCadence, RefreshRegion},
+        refresh_parameters,
         va::{
             Display, DmaBufImport, Image, Surface, export_surface, exportable_surface,
             imported_surface,
@@ -622,7 +627,12 @@ struct Ffmpeg {
     errors: String,
 }
 
-fn decode_ffmpeg(codec: Codec, format: PixelFormat, frames: &[EncodedFrame]) -> Option<Ffmpeg> {
+fn decode_ffmpeg(
+    codec: Codec,
+    format: PixelFormat,
+    resolution: Resolution,
+    frames: &[EncodedFrame],
+) -> Option<Ffmpeg> {
     let demuxer = if codec == Codec::H264 { "h264" } else { "hevc" };
     let (planar, sample) = if format.depth == BitDepth::Eight {
         ("yuv420p", 1)
@@ -656,7 +666,7 @@ fn decode_ffmpeg(codec: Codec, format: PixelFormat, frames: &[EncodedFrame]) -> 
     let output = child.wait_with_output().unwrap();
     writer.join().unwrap();
 
-    let luma_size = usize::try_from(RESOLUTION.pixel_count()).unwrap() * sample;
+    let luma_size = usize::try_from(resolution.pixel_count()).unwrap() * sample;
     let lumas = output
         .stdout
         .chunks_exact(luma_size * 3 / 2)
@@ -715,7 +725,7 @@ fn check_every_decoder(
     if let Some(pictures) = decode_vaapi(codec, &survivors) {
         check_received(codec, received, &lumas(pictures), format, "vaapi");
     }
-    if let Some(ffmpeg) = decode_ffmpeg(codec, format, &survivors) {
+    if let Some(ffmpeg) = decode_ffmpeg(codec, format, RESOLUTION, &survivors) {
         assert_eq!(ffmpeg.errors, "", "{codec} through ffmpeg");
         check_received(codec, received, &ffmpeg.lumas, format, "ffmpeg");
     }
@@ -1229,6 +1239,177 @@ fn intra_refresh_and_quality_params_encode() {
             }
         }
     }
+}
+
+#[test]
+fn a_frame_without_a_region_switches_intra_refresh_off() {
+    let refresh = IntraRefresh {
+        direction: RefreshDirection::Rows,
+        period: 60,
+    };
+    let region = RefreshRegion {
+        location: 5,
+        size: 2,
+    };
+
+    let refreshing = refresh_parameters(refresh, Some(region));
+    let idle = refresh_parameters(refresh, None);
+
+    assert_eq!(
+        unsafe { refreshing.rir_flags.value },
+        ffi::VA_ENC_INTRA_REFRESH_ROLLING_ROW
+    );
+    assert_eq!(refreshing.intra_insertion_location, 5);
+    assert_eq!(refreshing.intra_insert_size, 2);
+    assert_eq!(unsafe { idle.rir_flags.value }, 0);
+    assert_eq!(idle.intra_insertion_location, 0);
+    assert_eq!(idle.intra_insert_size, 0);
+}
+
+fn mean_bytes(sizes: &[usize]) -> usize {
+    sizes.iter().sum::<usize>() / sizes.len().max(1)
+}
+
+fn refresh_rows(codec: Codec) -> u32 {
+    let block = if codec == Codec::H264 { 16 } else { 64 };
+
+    RESOLUTION.height.div_ceil(block)
+}
+
+fn refresh_config(codec: Codec, period: u32, rate_control: RateControl) -> VideoConfig {
+    with_vaapi(video(codec, yuv420(BitDepth::Eight), RESOLUTION), |vaapi| {
+        vaapi.rate_control = rate_control;
+        vaapi.params = [("intra-refresh-frames".to_owned(), period.to_string())].into();
+    })
+}
+
+#[test]
+fn intra_refresh_spends_its_rows_over_the_whole_period() {
+    const SWEEPS: u32 = 2;
+    const REFRESH_TO_IDLE_BYTES: usize = 4;
+
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        let rows = refresh_rows(codec);
+        let period = rows * 3;
+        let config = refresh_config(codec, period, RateControl::ConstantQuality { qp: 26 });
+        let Some(mut encoder) = try_open(&config) else {
+            continue;
+        };
+        let still = yuv_frame(yuv420(BitDepth::Eight), RESOLUTION, 0, timestamp(0));
+        let mut cadence = RefreshCadence::new(rows, period);
+
+        let sizes: Vec<usize> = (0..=period * SWEEPS)
+            .map(|_| encoder.encode(&still).unwrap().unwrap().data.len())
+            .collect();
+        let refreshes: Vec<bool> = (0..sizes.len())
+            .map(|frame| frame > 0 && cadence.advance().is_some())
+            .collect();
+        let sizes_where = |refreshing: bool| -> Vec<usize> {
+            (1..sizes.len())
+                .filter(|&frame| refreshes[frame] == refreshing)
+                .map(|frame| sizes[frame])
+                .collect()
+        };
+        let (refreshing, idle) = (sizes_where(true), sizes_where(false));
+        let outweighs_its_neighbours = |frame: usize| {
+            sizes[frame] > sizes[frame - 1]
+                && sizes.get(frame + 1).is_none_or(|&next| sizes[frame] > next)
+        };
+
+        assert_eq!(refreshing.len(), (rows * SWEEPS) as usize, "{codec}");
+        assert!(
+            (1..sizes.len())
+                .filter(|&frame| refreshes[frame])
+                .all(outweighs_its_neighbours),
+            "{codec}: {sizes:?}"
+        );
+        assert!(
+            mean_bytes(&refreshing) > mean_bytes(&idle) * REFRESH_TO_IDLE_BYTES,
+            "{codec}: frames with an intra region average {} bytes, the others {}",
+            mean_bytes(&refreshing),
+            mean_bytes(&idle)
+        );
+    }
+}
+
+fn likeness_after_a_lost_h264_frame(period: u32, lost: u64, count: u64) -> Option<Vec<f64>> {
+    const SCENE_CHANGE: u64 = 40;
+
+    let codec = Codec::H264;
+    let format = yuv420(BitDepth::Eight);
+    let mut encoder = try_open(&refresh_config(codec, period, RateControl::default()))?;
+    let frames: Vec<Frame> = (0..count)
+        .map(|index| {
+            let scene = if index < lost { 0 } else { SCENE_CHANGE };
+            yuv_frame(format, RESOLUTION, scene, timestamp(index))
+        })
+        .collect();
+
+    let packets = encode_all(encoder.as_mut(), &frames);
+    let received: Vec<u64> = (0..count).filter(|&index| index != lost).collect();
+    let whole = decode_ffmpeg(codec, format, RESOLUTION, &packets)?;
+    let broken = decode_ffmpeg(codec, format, RESOLUTION, &pick(&packets, &received))?;
+
+    assert_eq!(whole.errors, "");
+    assert_eq!(whole.lumas.len(), packets.len());
+    assert_eq!(broken.lumas.len(), received.len());
+
+    Some(
+        (lost + 1..count)
+            .map(|index| {
+                let index = usize::try_from(index).unwrap();
+                psnr(&whole.lumas[index], &broken.lumas[index - 1], format.depth)
+            })
+            .collect(),
+    )
+}
+
+fn assert_healed_from(likeness: &[f64], lost: u64, healed: u64) {
+    const CORRUPT_CEILING_DB: f64 = 30.0;
+    const HEALED_FLOOR_DB: f64 = 50.0;
+
+    let after_loss = usize::try_from(healed - lost - 1).unwrap();
+
+    assert!(
+        likeness[0] < CORRUPT_CEILING_DB,
+        "the frame after the loss is {:.1} dB from the unbroken stream",
+        likeness[0]
+    );
+    for (offset, quality) in likeness.iter().enumerate().skip(after_loss) {
+        assert!(
+            *quality >= HEALED_FLOOR_DB,
+            "frame {} is {quality:.1} dB from the unbroken stream, the sweep ended at frame {healed}",
+            lost + 1 + offset as u64
+        );
+    }
+}
+
+#[test]
+fn an_h264_frame_lost_before_a_sweep_heals_by_the_end_of_that_sweep() {
+    let period = refresh_rows(Codec::H264) * 3;
+    let sweep = u64::from(period);
+    let lost = sweep + 1;
+    let healed = 2 * sweep;
+
+    let Some(likeness) = likeness_after_a_lost_h264_frame(period, lost, healed + sweep) else {
+        return;
+    };
+
+    assert_healed_from(&likeness, lost, healed);
+}
+
+#[test]
+fn an_h264_frame_lost_in_mid_sweep_heals_by_the_end_of_the_next_sweep() {
+    let period = refresh_rows(Codec::H264) * 3;
+    let sweep = u64::from(period);
+    let lost = sweep + sweep / 2;
+    let healed = 3 * sweep;
+
+    let Some(likeness) = likeness_after_a_lost_h264_frame(period, lost, healed + sweep) else {
+        return;
+    };
+
+    assert_healed_from(&likeness, lost, healed);
 }
 
 fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Surface, Frame) {

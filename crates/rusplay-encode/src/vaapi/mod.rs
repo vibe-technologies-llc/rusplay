@@ -9,6 +9,7 @@ mod hevc;
 mod level;
 mod long_term;
 mod params;
+mod refresh;
 #[cfg(test)]
 pub(crate) mod tests;
 mod va;
@@ -43,6 +44,7 @@ use crate::{
         hevc::{HevcProfile, HevcStream},
         long_term::driver_honours_long_term,
         params::VaapiParams,
+        refresh::{RefreshCadence, RefreshRegion},
         va::{
             Buffer, CodedBuffer, Config, Context, Display, DmaBufImport, DmaBufPlaneLayout,
             EncoderContext, Entrypoint, Image, PackedHeader, SizeLimits, Surface, SurfaceId,
@@ -326,6 +328,10 @@ impl IntraRefresh {
             RefreshDirection::Columns => resolution.width.div_ceil(block),
         }
     }
+
+    fn cadence(self, resolution: Resolution, block: u32) -> RefreshCadence {
+        RefreshCadence::new(self.units(resolution, block), self.period)
+    }
 }
 
 struct Device {
@@ -591,7 +597,7 @@ struct Session {
     current: usize,
     index: u64,
     needs_keyframe: bool,
-    refresh_cursor: u32,
+    refresh: Option<RefreshCadence>,
 }
 
 impl Session {
@@ -633,21 +639,10 @@ impl Session {
             current: 0,
             index: 0,
             needs_keyframe: true,
-            refresh_cursor: 0,
+            refresh: device.intra_refresh.map(|refresh| {
+                refresh.cadence(resolution, device.selection.profile.refresh_block_size())
+            }),
         })
-    }
-
-    fn advance_refresh(&mut self, refresh: IntraRefresh, block: u32) -> (u32, u32, u32) {
-        let units = refresh.units(self.resolution, block).max(1);
-        let size = units.div_ceil(refresh.period).max(1);
-        let location = self.refresh_cursor;
-        self.refresh_cursor = if location + size >= units {
-            0
-        } else {
-            location + size
-        };
-
-        (refresh.flags(), location, size)
     }
 
     fn read_reconstruction(
@@ -903,18 +898,26 @@ fn sequence_misc_buffers(
     Ok(buffers)
 }
 
+fn refresh_parameters(
+    refresh: IntraRefresh,
+    region: Option<RefreshRegion>,
+) -> ffi::VAEncMiscParameterRIR {
+    let mut parameters = ffi::VAEncMiscParameterRIR::default();
+    if let Some(region) = region {
+        parameters.rir_flags.value = refresh.flags();
+        parameters.intra_insertion_location = u16::try_from(region.location).unwrap_or(0);
+        parameters.intra_insert_size = u16::try_from(region.size).unwrap_or(u16::MAX);
+    }
+
+    parameters
+}
+
 fn refresh_buffer(
     context: &Context,
-    flags: u32,
-    location: u32,
-    size: u32,
+    refresh: IntraRefresh,
+    region: Option<RefreshRegion>,
 ) -> Result<Buffer, EncodeError> {
-    let mut parameters = ffi::VAEncMiscParameterRIR {
-        intra_insertion_location: u16::try_from(location).unwrap_or(0),
-        intra_insert_size: u16::try_from(size).unwrap_or(u16::MAX),
-        ..Default::default()
-    };
-    parameters.rir_flags.value = flags;
+    let parameters = refresh_parameters(refresh, region);
 
     context.misc(
         ffi::VAEncMiscParameterType_VAEncMiscParameterTypeRIR,
@@ -992,7 +995,9 @@ impl VaapiEncoder {
         let keyframe = session.needs_keyframe || requested;
         if keyframe {
             session.index = 0;
-            session.refresh_cursor = 0;
+            if let Some(cadence) = &mut session.refresh {
+                cadence.restart();
+            }
         }
         let picture = Picture {
             keyframe,
@@ -1005,11 +1010,8 @@ impl VaapiEncoder {
             bits_per_second: settings.bits_per_second(),
             packed_headers: device.packed_headers,
         };
-        let refresh = match device.intra_refresh {
-            Some(refresh) if !keyframe => {
-                let block = device.selection.profile.refresh_block_size();
-                Some(session.advance_refresh(refresh, block))
-            }
+        let refresh = match (device.intra_refresh, &mut session.refresh) {
+            (Some(refresh), Some(cadence)) if !keyframe => Some((refresh, cadence.advance())),
             _ => None,
         };
 
@@ -1023,8 +1025,8 @@ impl VaapiEncoder {
         if keyframe {
             buffers.extend(sequence_misc_buffers(settings, context)?);
         }
-        if let Some((flags, location, size)) = refresh {
-            buffers.push(refresh_buffer(context, flags, location, size)?);
+        if let Some((refresh, region)) = refresh {
+            buffers.push(refresh_buffer(context, refresh, region)?);
         }
         buffers.push(codec_buffers.picture);
         buffers.extend(codec_buffers.headers);
