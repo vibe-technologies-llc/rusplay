@@ -13,11 +13,13 @@ const POC_LSB_BITS: u32 = 4;
 const MAX_DEC_PIC_BUFFERING_MINUS1: u64 = 16;
 const CODING_BLOCK_SIZE: u64 = 16;
 const SCALING_LISTS: usize = 20;
-const FIXTURES: [&str; 4] = [
+const WAVEFRONT_FIXTURE: &str = "hevc-420-8bit-wpp.hevc";
+const FIXTURES: [&str; 5] = [
     "hevc-420-8bit.hevc",
     "hevc-420-10bit.hevc",
     "hevc-422-8bit.hevc",
     "hevc-420-8bit-bframes.hevc",
+    WAVEFRONT_FIXTURE,
 ];
 
 #[derive(Default)]
@@ -669,28 +671,45 @@ fn long_term_pictures_from_the_sequence_count_against_the_limit() {
 }
 
 #[test]
-fn more_than_thirty_two_entry_points_are_malformed() {
-    let sequence = Sequence {
-        height_in_ctbs: 40,
-        ..Sequence::default()
-    };
-    let picture = Picture {
-        tiles: None,
-        entropy_coding_sync: true,
-    };
+fn slices_with_more_than_thirty_two_entry_points_pass_and_parse() {
+    let data = common::fixture(WAVEFRONT_FIXTURE);
+    let mut cursor = Cursor::new(data.as_slice());
+    let mut parser = Parser::default();
+    let mut sets = ParameterSets::default();
+    let mut entry_points = Vec::new();
 
-    let with_entry_points = |entry_points| {
-        slice(IDR_W_RADL, |writer| {
-            writer.unsigned(0);
-            writer.unsigned(entry_points);
-        })
-    };
+    while let Some(nalu) = next_nalu::<NaluHeader>(&mut cursor, Codec::Hevc).unwrap() {
+        match nalu.header.type_ {
+            NaluType::VpsNut => parser.parse_vps(&nalu).map(drop).unwrap(),
+            NaluType::SpsNut => {
+                sets.keep_sequence_parameter_set(
+                    check_sequence_parameter_set(nalu.as_ref()).unwrap(),
+                );
+                parser.parse_sps(&nalu).unwrap();
+            }
+            NaluType::PpsNut => {
+                let checked = sets.check_picture_parameter_set(nalu.as_ref()).unwrap();
+                parser.parse_pps(&nalu).unwrap();
+                sets.keep_picture_parameter_set(checked);
+            }
+            kind if kind.is_irap() || (0..=9).contains(&(kind as u32)) => {
+                sets.check_slice_header(nalu.as_ref(), kind).unwrap();
+                let header = parser.parse_slice_header(nalu).unwrap().header;
+                assert_eq!(
+                    header.entry_point_offset_minus1.len(),
+                    usize::try_from(header.num_entry_point_offsets).unwrap()
+                );
+                entry_points.push(header.num_entry_point_offsets);
+            }
+            _ => {}
+        }
+    }
 
-    slice_result(&sequence, &picture, &with_entry_points(32), IDR_W_RADL).unwrap();
-    assert!(is_malformed(
-        &slice_result(&sequence, &picture, &with_entry_points(33), IDR_W_RADL),
-        BitstreamUnit::SliceHeader
-    ));
+    assert_eq!(entry_points.len(), 4);
+    assert!(
+        entry_points.iter().all(|&count| count > 32),
+        "{entry_points:?}"
+    );
 }
 
 #[test]

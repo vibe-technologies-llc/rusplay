@@ -35,7 +35,7 @@ Dependency direction: `core` sits at the bottom. `config`, `protocol` and `scale
 and the media crates (`capture`, `encode`, `decode`, `audio`, `input`) build on `core`/`config`; `encode` and `decode` also
 use `va` and `cuda`, which is how the two share driver code without depending on each other. `clipboard` builds on `config` and `protocol` (its portal backend also on `input`); `host` and `client` compose them and `priority`, and the binaries
 depend only on `host`/`client`/`config` (`hostd` on `host`, `app` on both). No crate depends upward, and no media crate depends on
-`net`. `vendor/rav1d` is a patched copy of rav1d, outside the workspace and outside the style checks (`.claude/rules/dependencies.md`). `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
+`net`. `vendor/rav1d` and `vendor/cros-codecs` are patched copies of rav1d and cros-codecs, outside the workspace and outside the style checks (`.claude/rules/dependencies.md`). `fuzz/` is a cargo-fuzz crate outside the workspace (its own `[workspace]`, so `--workspace`
 commands skip it) that feeds arbitrary bytes to the `protocol`, `net` and `input` decoders and to
 the `decode` bitstream parsers (through its `fuzzing` feature).
 

@@ -15,6 +15,9 @@ ffmpeg $source -frames:v 8 -pix_fmt yuv420p $x264 h264-420-8bit.h264
 ffmpeg $source -frames:v 8 -pix_fmt yuv420p $x265 hevc-420-8bit.hevc
 ffmpeg $source -frames:v 8 -pix_fmt yuv420p10le $x265 hevc-420-10bit.hevc
 ffmpeg $source -frames:v 8 -pix_fmt yuv422p $x265 hevc-422-8bit.hevc
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=64x1024:rate=30 -frames:v 4 \
+    -pix_fmt yuv420p -c:v libx265 -preset ultrafast -tune zerolatency \
+    -x265-params aud=1:log-level=error:ctu=16:wpp=1 -f hevc hevc-420-8bit-wpp.hevc
 
 ffmpeg $source -frames:v 12 -pix_fmt yuv420p -c:v libx264 -preset medium \
     -x264-params aud=1:slices=4:bframes=3:ref=4:weightp=2:b-pyramid=normal \

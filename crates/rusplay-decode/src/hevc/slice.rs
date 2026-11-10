@@ -10,7 +10,6 @@ use super::{
 const MAX_PICTURE_PARAMETER_SET_ID: u32 = 63;
 const MAX_LONG_TERM_PICTURES: u32 = 16;
 const MAX_REFERENCES_MINUS1: u32 = 14;
-const MAX_ENTRY_POINTS: u32 = 32;
 const MAX_LUMA_LOG2_WEIGHT_DENOMINATOR: u32 = 7;
 const SCREEN_CONTENT_INTEGER_MOTION_VECTOR_SELECT: u32 = 2;
 const COLOUR_PLANE_ID_BITS: usize = 2;
@@ -376,10 +375,7 @@ fn scan_entry_points(bits: &mut Bits, pictures: &PictureParameters) -> Result<()
         (true, true) => (pictures.tile_columns_minus1 + 1) * sequence.height_in_ctbs - 1,
     };
 
-    let entry_points = bits.unsigned_max(maximum)?;
-    if entry_points > MAX_ENTRY_POINTS {
-        return Err(Stop::EntryPointCount);
-    }
+    bits.unsigned_max(maximum)?;
 
     Ok(())
 }

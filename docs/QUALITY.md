@@ -1,0 +1,2 @@
+# Decode
+- [S] `decode-hevc-slice-scan-trim`: `src/hevc/slice.rs` scans every slice header field up to the entry point count, but since the vendored `cros-codecs` holds any number of entry points, the only thing the slice scan still guards is the long-term picture count. End the scan after the long-term pictures and delete the fields of the SPS and PPS scans (`SequenceParameters`, `PictureParameters`) that only the dropped part read, with their test builders

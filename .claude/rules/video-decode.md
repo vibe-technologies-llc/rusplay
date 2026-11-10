@@ -287,10 +287,12 @@ paths:
   or more pictures, a palette predictor initializer count past the 128 slots, more than 19 tile
   columns or 21 tile rows (the arrays are one short of the spec's 20 and 22), explicit tile column
   widths or row heights that do not fit the picture in CTBs, a slice header with more than 16
-  long-term pictures or more than 32 entry points, and a slice of a PPS the checks never accepted.
-  The slice scan (`src/hevc/slice.rs`) follows 7.3.6.1 up to the entry point count, including
-  short-term set prediction, long-term pictures, reference list modification and the prediction
-  weight tables, because the entry point count depends on all of them. The scans copy the parser's
+  long-term pictures, and a slice of a PPS the checks never accepted. The entry point count has
+  no limit beyond the spec's: the vendored `cros-codecs` keeps the offsets in a `Vec`
+  (`.claude/rules/dependencies.md`), and x265's wavefront streams carry one per CTU row, 44 at
+  1440p. The slice scan (`src/hevc/slice.rs`) still follows 7.3.6.1 up to the entry point count,
+  including short-term set prediction, reference list modification and the prediction weight
+  tables, though only the long-term pictures need checking now (`decode-hevc-slice-scan-trim`). The scans copy the parser's
   layout, not the spec's, wherever the two differ (a sub-layer's profile and level are both read
   only when its level flag is set; the chroma weight flags of list 1 follow `chroma_format_idc`,
   list 0's follow `chroma_array_type`), since a scan that desyncs from the parser misses what it
@@ -398,7 +400,8 @@ paths:
 
 - `tests/data/` holds 256x144 clips made by `tests/data/generate.sh` with ffmpeg: 8 frames of
   AV1 in IVF (8-bit and 10-bit 4:2:0, 8-bit 4:4:4), H.264 and HEVC as Annex B with access unit
-  delimiters (8-bit 4:2:0, HEVC 10-bit and 4:2:2), plus 12-frame stress clips: H.264 and HEVC
+  delimiters (8-bit 4:2:0, HEVC 10-bit and 4:2:2, and a 64x1024 HEVC clip with 16-pixel CTUs and
+  wavefronts whose slices carry 63 entry points), plus 12-frame stress clips: H.264 and HEVC
   with B-pyramids, four slices, several references and weighted prediction, H.264 MBAFF with
   B-frames, and AV1 with hidden frames, `show_existing_frame` and 2x2 tiles. `tests/common` has
   the IVF and Annex B splitters.

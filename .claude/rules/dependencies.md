@@ -119,6 +119,17 @@ paths:
   source keeps upstream's comments and style. The vendored copy and its `[patch]` entries go
   away once an upstream release carries these fixes; update the `rav1d` version in
   `[workspace.dependencies]` then, and check each fix against the release first.
+- **`vendor/cros-codecs` is cros-codecs 0.0.6 with one local fix**, set up exactly like
+  `vendor/rav1d` (`[patch.crates-io]` in both manifests, `[workspace] exclude`, outside the style
+  checks; the import is `chore: vendor cros-codecs 0.0.6 unchanged`). 0.0.6 is the latest release
+  and its HEVC slice header kept `entry_point_offset_minus1` in a `[u32; 32]`, indexed with the
+  count read from the stream, so a slice with more than 32 entry points would panic. Wavefront
+  parallel processing gives one per CTU row after the first, which x265 does by default: 44 for
+  1440p at 32-pixel CTUs, 67 for 2160p. The change, in `src/codec/h265/parser.rs`:
+  `entry_point_offset_minus1` is a `Vec<u32>` filled with one push per offset, and
+  `Slice::replace_header` (dependent slice segments) takes it with `mem::take` and also keeps the
+  segment's own `num_entry_point_offsets` instead of the independent segment's. The copy and its
+  `[patch]` entries go away once an upstream release fixes the array.
 - gpui comes from git (the Zed repository), pinned to a `rev`, in `rusplay-app` only.
   - Its Linux backend links C libraries through `xkbcommon` (system libxkbcommon) and
     `zed-font-kit` (`freetype-sys`, `yeslogic-fontconfig-sys`). That is accepted for gpui and

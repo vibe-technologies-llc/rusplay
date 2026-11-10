@@ -10,7 +10,6 @@ pub(super) enum Stop {
     TileColumnWidth,
     TileRowHeight,
     LongTermPictureCount,
-    EntryPointCount,
     UnknownPictureParameterSet,
 }
 
@@ -35,7 +34,6 @@ impl Stop {
             Self::LongTermPictureCount => {
                 Some("more long term reference pictures than the parser can hold")
             }
-            Self::EntryPointCount => Some("more entry points than the parser can hold"),
             Self::UnknownPictureParameterSet => {
                 Some("slice header refers to a picture parameter set that was not accepted")
             }
