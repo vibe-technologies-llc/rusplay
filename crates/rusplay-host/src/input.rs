@@ -18,6 +18,7 @@ use crate::{
 };
 
 const SERVICE_INTERVAL: Duration = Duration::from_millis(4);
+const MAX_BATCH_EVENTS: usize = 128;
 const IDLE_SERVICE_INTERVAL: Duration = Duration::from_millis(50);
 const INJECT_TIMEOUT: Duration = Duration::from_millis(250);
 const INJECTOR_THREAD: &str = "rusplay-host-injector";
@@ -280,24 +281,51 @@ impl<'a> InputStage<'a> {
         target: &mut dyn InputTarget,
         datagrams: &Receiver<ForwardedDatagram>,
     ) -> Result<(), HostError> {
+        self.serve_every(SERVICE_INTERVAL, target, datagrams)
+    }
+
+    fn serve_every(
+        &mut self,
+        interval: Duration,
+        target: &mut dyn InputTarget,
+        datagrams: &Receiver<ForwardedDatagram>,
+    ) -> Result<(), HostError> {
+        let mut cadence = ServiceCadence::starting(Instant::now(), interval);
+
         while !self.shared.stopped() {
             self.follow_client(target);
 
-            match datagrams.recv_timeout(SERVICE_INTERVAL) {
+            match datagrams.recv_timeout(cadence.wait(Instant::now())) {
                 Ok(datagram) => {
                     self.admit(target, &datagram);
-                    while let Ok(next) = datagrams.try_recv() {
-                        self.admit(target, &next);
-                    }
+                    self.admit_queued(target, datagrams, cadence);
+                    self.flush(target);
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
 
-            self.service(target)?;
+            let now = Instant::now();
+            if cadence.is_due(now) {
+                self.service(target)?;
+                cadence.serviced(now);
+            }
         }
 
         Ok(())
+    }
+
+    fn admit_queued(
+        &mut self,
+        target: &mut dyn InputTarget,
+        datagrams: &Receiver<ForwardedDatagram>,
+        cadence: ServiceCadence,
+    ) {
+        while !cadence.is_due(Instant::now())
+            && let Ok(next) = datagrams.try_recv()
+        {
+            self.admit(target, &next);
+        }
     }
 
     fn follow_client(&mut self, target: &mut dyn InputTarget) {
@@ -316,13 +344,13 @@ impl<'a> InputStage<'a> {
         self.follow_client(target);
 
         if datagram.epoch == self.epoch {
-            self.apply_datagram(target, &datagram.bytes);
+            self.queue_datagram(target, &datagram.bytes);
         } else {
             self.shared.counters.input_packets_stale.increment();
         }
     }
 
-    fn apply_datagram(&mut self, target: &mut dyn InputTarget, datagram: &[u8]) {
+    fn queue_datagram(&mut self, target: &mut dyn InputTarget, datagram: &[u8]) {
         let counters = &self.shared.counters;
         let Ok(packet) = InputPacket::read(datagram) else {
             counters.malformed_datagrams.increment();
@@ -332,31 +360,35 @@ impl<'a> InputStage<'a> {
 
         match self.sequence.admit(packet.sequence) {
             InputAdmission::Stale => counters.input_packets_stale.increment(),
-            InputAdmission::Current => self.apply_section(target, packet.current_records()),
+            InputAdmission::Current => self.queue_section(target, packet.current_records()),
             InputAdmission::PreviousAndCurrent => {
-                self.apply_section(target, packet.previous_records());
-                self.apply_section(target, packet.current_records());
+                self.queue_section(target, packet.previous_records());
+                self.queue_section(target, packet.current_records());
             }
         }
     }
 
-    fn apply_section(&mut self, target: &mut dyn InputTarget, records: InputRecords<'_>) {
-        let mut events = std::mem::take(&mut self.pending);
-        events.clear();
-
+    fn queue_section(&mut self, target: &mut dyn InputTarget, records: InputRecords<'_>) {
         for bytes in records {
             let decoded = bytes.ok().and_then(|bytes| InputRecord::decode(bytes).ok());
 
             match decoded {
-                Some(InputRecord::Event(event)) => events.push(event),
+                Some(InputRecord::Event(event)) => self.pending.push(event),
                 Some(InputRecord::State(state)) => {
-                    self.inject_all(target, &events);
-                    events.clear();
+                    self.flush(target);
                     self.reconcile(target, &state);
                 }
                 None => self.shared.counters.malformed_datagrams.increment(),
             }
         }
+
+        if self.pending.len() >= MAX_BATCH_EVENTS {
+            self.flush(target);
+        }
+    }
+
+    fn flush(&mut self, target: &mut dyn InputTarget) {
+        let mut events = std::mem::take(&mut self.pending);
 
         self.inject_all(target, &events);
         events.clear();
@@ -440,6 +472,8 @@ impl<'a> InputStage<'a> {
     }
 
     fn release_all(&mut self, target: &mut dyn InputTarget) {
+        self.flush(target);
+
         let mut events = Vec::new();
         self.held.release_all(&mut events);
 
@@ -447,9 +481,43 @@ impl<'a> InputStage<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ServiceCadence {
+    interval: Duration,
+    due: Instant,
+}
+
+impl ServiceCadence {
+    fn starting(now: Instant, interval: Duration) -> Self {
+        Self {
+            interval,
+            due: now + interval,
+        }
+    }
+
+    fn wait(self, now: Instant) -> Duration {
+        self.due.saturating_duration_since(now)
+    }
+
+    fn is_due(self, now: Instant) -> bool {
+        now >= self.due
+    }
+
+    fn serviced(&mut self, started: Instant) {
+        self.due = started + self.interval;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{marker::PhantomData, net::SocketAddr, sync::Arc};
+    use std::{
+        marker::PhantomData,
+        net::SocketAddr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use rusplay_input::{GamepadButton, GamepadEvent, RumbleCommand};
     use rusplay_net::{ControlChannel, ControlConfig, Transport, TransportOptions};
@@ -457,6 +525,20 @@ mod tests {
 
     use super::*;
     use crate::stats::HostStats;
+
+    const NEVER: Duration = Duration::from_secs(3600);
+    const WAIT: Duration = Duration::from_secs(5);
+    const POLL: Duration = Duration::from_millis(1);
+    const QUEUE_DATAGRAMS: usize = 256;
+    const SERVICES_AWAITED: usize = 5;
+    const FLOOD_DATAGRAMS: u64 = 2_000;
+
+    impl InputStage<'_> {
+        fn apply_datagram(&mut self, target: &mut dyn InputTarget, datagram: &[u8]) {
+            self.queue_datagram(target, datagram);
+            self.flush(target);
+        }
+    }
 
     #[derive(Default)]
     struct Recorder {
@@ -908,6 +990,7 @@ mod tests {
                 bytes: datagram(0, &[event(key(2, true))], &[]),
             },
         );
+        stage.flush(&mut target);
 
         assert_eq!(target.events, vec![key(2, true)]);
         assert_eq!(rig.stats().input_packets_stale, 1);
@@ -1056,5 +1139,300 @@ mod tests {
                 },
             ]
         );
+    }
+
+    fn forwarded(rig: &Rig, sequence: u32, records: &[InputRecord]) -> ForwardedDatagram {
+        ForwardedDatagram {
+            epoch: rig.shared.client.epoch(),
+            bytes: datagram(sequence, records, &[]),
+        }
+    }
+
+    fn queued(datagrams: Vec<ForwardedDatagram>) -> Receiver<ForwardedDatagram> {
+        let (sender, receiver) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+        for datagram in datagrams {
+            sender.send(datagram).unwrap();
+        }
+
+        receiver
+    }
+
+    fn wait_until(done: impl Fn() -> bool) -> bool {
+        let deadline = Instant::now() + WAIT;
+        while !done() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(POLL);
+        }
+
+        true
+    }
+
+    #[derive(Default)]
+    struct BatchLog {
+        batches: Vec<Vec<InputEvent>>,
+    }
+
+    impl InputTarget for BatchLog {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            Ok(())
+        }
+
+        fn inject_batch(
+            &mut self,
+            events: &[InputEvent],
+            results: &mut Vec<Result<(), InputError>>,
+        ) {
+            self.batches.push(events.to_vec());
+            results.clear();
+            results.extend(events.iter().map(|_| Ok(())));
+        }
+
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn datagrams_queued_together_are_injected_as_one_batch_up_to_a_state_record() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = BatchLog::default();
+        let mut repaired = vec![event(key(3, true))];
+        repaired.extend(snapshot_of(&[]));
+        let datagrams = queued(vec![
+            forwarded(&rig, 0, &[event(key(1, true))]),
+            forwarded(&rig, 1, &[event(key(2, true))]),
+            forwarded(&rig, 2, &repaired),
+            forwarded(&rig, 3, &[event(key(4, true))]),
+        ]);
+
+        stage.serve_every(NEVER, &mut target, &datagrams).unwrap();
+
+        assert_eq!(
+            target.batches,
+            vec![
+                vec![key(1, true), key(2, true), key(3, true)],
+                vec![key(1, false), key(2, false), key(3, false)],
+                vec![key(4, true)],
+            ]
+        );
+        assert_eq!(rig.stats().input_packets, 4);
+        assert_eq!(rig.stats().input_events_repaired, 3);
+    }
+
+    #[test]
+    fn a_batch_is_flushed_once_it_holds_the_event_limit() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = BatchLog::default();
+        let count = u32::try_from(MAX_BATCH_EVENTS + 72).unwrap();
+        let datagrams = queued(
+            (0..count)
+                .map(|sequence| forwarded(&rig, sequence, &[event(key(sequence, true))]))
+                .collect(),
+        );
+
+        stage.serve_every(NEVER, &mut target, &datagrams).unwrap();
+        let sizes: Vec<usize> = target.batches.iter().map(Vec::len).collect();
+
+        assert_eq!(sizes, vec![MAX_BATCH_EVENTS, 72]);
+        assert_eq!(
+            target.batches.concat(),
+            (0..count).map(|code| key(code, true)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_takeover_injects_what_was_queued_before_lifting_it() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+        let mut target = Recorder::default();
+        let old = forwarded(&rig, 0, &[event(key(1, true))]);
+
+        stage.admit(&mut target, &old);
+        rig.shared
+            .client
+            .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+        stage.admit(&mut target, &forwarded(&rig, 0, &[event(key(2, true))]));
+        stage.flush(&mut target);
+
+        assert_eq!(
+            target.events,
+            vec![key(1, true), key(1, false), key(2, true)]
+        );
+    }
+
+    struct Counting {
+        services: Arc<AtomicUsize>,
+        injected: Sender<()>,
+    }
+
+    impl InputTarget for Counting {
+        fn inject(&mut self, _event: InputEvent) -> Result<(), InputError> {
+            self.injected.send(()).ok();
+            Ok(())
+        }
+
+        fn service(&mut self, _feedback: &mut Vec<PadFeedback>) -> Result<(), InputError> {
+            self.services.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn motion(epoch: u32, sequence: u32) -> ForwardedDatagram {
+        ForwardedDatagram {
+            epoch,
+            bytes: datagram(
+                sequence,
+                &[event(InputEvent::PointerMotion { dx: 1.0, dy: 0.0 })],
+                &[],
+            ),
+        }
+    }
+
+    #[test]
+    fn datagrams_arriving_back_to_back_do_not_service_the_target() {
+        const DATAGRAMS: u32 = 200;
+
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+
+        let services = Arc::new(AtomicUsize::new(0));
+        let (injected, injections) = mpsc::channel();
+        let mut target = Counting {
+            services: Arc::clone(&services),
+            injected,
+        };
+        let epoch = rig.shared.client.epoch();
+        let (sender, datagrams) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+        let feeder = thread::spawn(move || {
+            for sequence in 0..DATAGRAMS {
+                sender.send(motion(epoch, sequence)).unwrap();
+                injections.recv_timeout(WAIT).unwrap();
+            }
+        });
+
+        stage.serve_every(NEVER, &mut target, &datagrams).unwrap();
+        feeder.join().unwrap();
+
+        assert_eq!(rig.stats().input_events, u64::from(DATAGRAMS));
+        assert_eq!(services.load(Ordering::Relaxed), 0);
+    }
+
+    fn serviced_within(services: usize, elapsed: Duration) -> bool {
+        SERVICE_INTERVAL * u32::try_from(services).unwrap() <= elapsed
+    }
+
+    #[test]
+    fn an_idle_stage_services_the_target_every_interval() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+
+        let services = Arc::new(AtomicUsize::new(0));
+        let (injected, _injections) = mpsc::channel();
+        let mut target = Counting {
+            services: Arc::clone(&services),
+            injected,
+        };
+        let (_sender, datagrams) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+        let watcher = {
+            let shared = Arc::clone(&rig.shared);
+            let services = Arc::clone(&services);
+            thread::spawn(move || {
+                let reached = wait_until(|| services.load(Ordering::Relaxed) >= SERVICES_AWAITED);
+                shared.stop();
+                reached
+            })
+        };
+
+        let started = Instant::now();
+        stage.serve(&mut target, &datagrams).unwrap();
+        let elapsed = started.elapsed();
+        let count = services.load(Ordering::Relaxed);
+
+        assert!(watcher.join().unwrap());
+        assert!(count >= SERVICES_AWAITED);
+        assert!(serviced_within(count, elapsed));
+    }
+
+    #[test]
+    fn a_flooded_stage_still_services_the_target_every_interval() {
+        let rig = Rig::new();
+        let mut stage = rig.stage();
+
+        let services = Arc::new(AtomicUsize::new(0));
+        let (injected, _injections) = mpsc::channel();
+        let mut target = Counting {
+            services: Arc::clone(&services),
+            injected,
+        };
+        let epoch = rig.shared.client.epoch();
+        let (sender, datagrams) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+        let flood = {
+            let shared = Arc::clone(&rig.shared);
+            thread::spawn(move || {
+                let mut sequence = 0;
+                while !shared.stopped() {
+                    if sender.try_send(motion(epoch, sequence)).is_ok() {
+                        sequence += 1;
+                    }
+                }
+            })
+        };
+        let watcher = {
+            let shared = Arc::clone(&rig.shared);
+            let services = Arc::clone(&services);
+            thread::spawn(move || {
+                let flooded =
+                    wait_until(|| shared.counters.snapshot().input_packets >= FLOOD_DATAGRAMS);
+                let before = services.load(Ordering::Relaxed);
+                let kept_up =
+                    wait_until(|| services.load(Ordering::Relaxed) >= before + SERVICES_AWAITED);
+                shared.stop();
+                flooded && kept_up
+            })
+        };
+
+        let started = Instant::now();
+        stage.serve(&mut target, &datagrams).unwrap();
+        let elapsed = started.elapsed();
+        flood.join().unwrap();
+
+        assert!(watcher.join().unwrap());
+        assert!(rig.stats().input_packets >= FLOOD_DATAGRAMS);
+        assert!(serviced_within(services.load(Ordering::Relaxed), elapsed));
+    }
+
+    #[test]
+    fn the_receive_wait_ends_when_the_next_service_is_due() {
+        let start = Instant::now();
+        let cadence = ServiceCadence::starting(start, SERVICE_INTERVAL);
+
+        assert_eq!(cadence.wait(start), SERVICE_INTERVAL);
+        assert_eq!(
+            cadence.wait(start + Duration::from_millis(3)),
+            Duration::from_millis(1)
+        );
+        assert_eq!(cadence.wait(start + SERVICE_INTERVAL), Duration::ZERO);
+        assert_eq!(cadence.wait(start + Duration::from_secs(1)), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_service_is_due_one_interval_after_the_last_one_started() {
+        let start = Instant::now();
+        let mut cadence = ServiceCadence::starting(start, SERVICE_INTERVAL);
+        let late = start + Duration::from_millis(9);
+
+        assert!(!cadence.is_due(start));
+        assert!(!cadence.is_due(start + Duration::from_millis(3)));
+        assert!(cadence.is_due(start + SERVICE_INTERVAL));
+
+        cadence.serviced(late);
+
+        assert!(!cadence.is_due(late + Duration::from_millis(3)));
+        assert!(cadence.is_due(late + SERVICE_INTERVAL));
+        assert_eq!(cadence.wait(late), SERVICE_INTERVAL);
     }
 }

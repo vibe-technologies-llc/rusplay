@@ -494,19 +494,31 @@ paths:
     one from an earlier epoch (`input_packets_stale`) so a takeover never lets the old client's
     datagrams raise the new sequence. It reads them with `InputPacket::read`
     and `InputSequence::admit` (a fresh sequence per session), decodes each record with
-    `InputRecord::decode` and injects the events of a section as one `inject_batch` (a single round
-    trip to the injector thread, one result per event, each recorded in `HeldInput` only on
-    success); a state record first flushes the events before it, then is turned into the events
+    `InputRecord::decode` and queues the events of a section whole, in order. The queue is
+    injected as one `inject_batch` (a single round trip to the injector thread, one result per
+    event, each recorded in `HeldInput` only on success) once every datagram that was already
+    waiting has been read, so datagrams that piled up behind a round trip cost one more round
+    trip, not one each, and a datagram that arrives alone is injected at once. A section is never
+    split: the queue is also flushed at a section boundary once it holds `MAX_BATCH_EVENTS`
+    (128, which bounds what one libei flush writes), before a takeover lifts the held input, and
+    before a state record, which is then turned into the events
     that bring the host to the client's held state (`HeldInput::reconcile`,
-    `input_events_repaired`), which are injected as a batch too. A failed injection
+    `input_events_repaired`), injected as a batch too, so a state record always sees the outcome
+    of the events before it. A failed injection
     is not recorded as held, so the next snapshot tries again. A malformed datagram or record
     counts in `malformed_datagrams`, a stale one in `input_packets_stale`, and a failed injection
     in `input_failures` without ending the session, since a paused device or a closed compositor
-    seat must not take the video down. Every 4 ms it calls `InputTarget::service` and sends each
+    seat must not take the video down. Every `SERVICE_INTERVAL` (4 ms, from the start of the
+    previous one, `ServiceCadence`) it calls `InputTarget::service` and sends each
     `PadFeedback` as a `ControlMessage` (`Rumble`, `Lightbar`, `PlayerLeds`, `TriggerEffect`)
     through the `ControlOutbox`; a full control window drops the message (`rumble_dropped` for
     rumble, `feedback_dropped` for the rest; `rumble_sent` and `feedback_sent` count the sent
-    ones), because the client caps every effect length. On
+    ones), because the client caps every effect length. A datagram wake alone never services:
+    on the portal path `service` is a second round trip to the injector thread, during which
+    the next datagram waits, and a 1 kHz mouse would make it a thousand a second. The receive
+    wait ends when the next service is due, and reading waiting datagrams stops there too, so a
+    flood cannot starve rumble or the compositor's pings; an overdue service still admits one
+    datagram per pass. On
     the way out it releases whatever `HeldInput` says the client still held.
     The portal's `InputTarget::service` always polls both halves, the libei connection and the
     virtual pads' rumble, and returns the first error, so a compositor that dropped EIS never leaves
@@ -559,7 +571,9 @@ paths:
   input stage over loopback with a recording `InputTarget` (delivery in order, nothing before the
   `Hello`, a snapshot repairing a stuck key, rumble back as control messages, held input released
   when the session ends, failing injections counted, no feed ignores input) and `src/input.rs`
-  unit-tests the datagram handling
+  unit-tests the datagram handling, the batching of datagrams read in one pass (up to a state
+  record, the event limit and a takeover), the service cadence (no service on a datagram wake,
+  one every interval while idle and while flooded)
   and the injector thread. `src/tests/media.rs` covers the
   audio and cursor stages with synthetic sources (numbering from 0 after the `Hello`, Opus
   decodes, a starved or failing source, cursor image on the first message, burst coalescing,
