@@ -9,6 +9,7 @@ mod hevc;
 mod level;
 mod long_term;
 mod params;
+mod radeonsi;
 mod refresh;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -341,6 +342,7 @@ struct Device {
     limits: SizeLimits,
     packed_headers: u32,
     intra_refresh: Option<IntraRefresh>,
+    quality_level: Option<u32>,
     long_term_references: bool,
 }
 
@@ -385,7 +387,8 @@ impl Device {
             });
         }
 
-        params.check_quality_level(quality_levels)?;
+        let vendor = display.vendor().unwrap_or_default();
+        let quality_level = params.quality_level(&vendor, quality_levels)?;
 
         let packed_headers = packed.unwrap_or(0) & WANTED_PACKED_HEADERS;
         let period = params
@@ -428,9 +431,7 @@ impl Device {
             limits.max.height = limits.max.height.min(height);
         }
 
-        let long_term_references = display
-            .vendor()
-            .is_some_and(|vendor| driver_honours_long_term(&vendor));
+        let long_term_references = driver_honours_long_term(&vendor);
 
         Ok(Self {
             selection,
@@ -439,6 +440,7 @@ impl Device {
             limits,
             packed_headers,
             intra_refresh,
+            quality_level,
             long_term_references,
         })
     }
@@ -462,7 +464,6 @@ struct Settings {
     resolution: Option<Resolution>,
     bitrate_kbps: u32,
     rate_control: RateControl,
-    params: VaapiParams,
 }
 
 impl Settings {
@@ -815,7 +816,6 @@ impl VaapiEncoder {
             resolution: video.resolution,
             bitrate_kbps: video.bitrate_kbps,
             rate_control: vaapi.rate_control,
-            params,
         };
 
         let session = settings
@@ -873,6 +873,7 @@ fn rate_buffers(settings: &Settings, context: &Context) -> Result<Vec<Buffer>, E
 
 fn sequence_misc_buffers(
     settings: &Settings,
+    quality_level: Option<u32>,
     context: &Context,
 ) -> Result<Vec<Buffer>, EncodeError> {
     let frame_rate = ffi::VAEncMiscParameterFrameRate {
@@ -884,7 +885,7 @@ fn sequence_misc_buffers(
         &frame_rate,
     )?];
 
-    if let Some(quality_level) = settings.params.quality_level {
+    if let Some(quality_level) = quality_level {
         let quality = ffi::VAEncMiscParameterBufferQualityLevel {
             quality_level,
             ..Default::default()
@@ -1023,7 +1024,11 @@ impl VaapiEncoder {
             buffers.extend(rate_buffers(settings, context)?);
         }
         if keyframe {
-            buffers.extend(sequence_misc_buffers(settings, context)?);
+            buffers.extend(sequence_misc_buffers(
+                settings,
+                device.quality_level,
+                context,
+            )?);
         }
         if let Some((refresh, region)) = refresh {
             buffers.push(refresh_buffer(context, refresh, region)?);

@@ -426,9 +426,72 @@ paths:
     AV1 streams do not decode past a lost picture at all
     (`encode-vaapi-intra-refresh-heals-h264-only` in `docs/BUGS.md`); there the recovery is
     `recover` or a keyframe.
-- `params` keys: `intra-refresh-frames` (frames per sweep, `0` turns intra refresh off) and
-  `quality-level` (`1` up to the driver's `VAConfigAttribEncQualityRange`, sent on keyframes).
-  Another key is `UnknownParameter`, a bad value `InvalidParameterValue`, both at open.
+- `params` keys: `intra-refresh-frames` (frames per sweep, `0` turns intra refresh off);
+  `quality-level`, the raw `VAEncMiscParameterBufferQualityLevel::quality_level` (`1` up to the
+  driver's `VAConfigAttribEncQualityRange`, sent on keyframes), whose meaning is the driver's: a
+  level trading speed against quality on Intel, the bits below on radeonsi; and, on radeonsi
+  only, `preset` (`speed`, `balanced`, `quality`, `high-quality`), `vbaq` and `pre-encode`
+  (`true`/`false`, `1`/`0`, `on`/`off`), which build that value. A named key on another driver,
+  or one whose value is above the driver's range, is `DriverParameterUnsupported`; a named key
+  together with `quality-level` is `ConflictingParameters`; another key is `UnknownParameter`, a
+  bad value `InvalidParameterValue`; all at open.
+- radeonsi quality modes (`vaapi/radeonsi.rs`): on radeonsi `quality_level` is not a level. Mesa
+  reads it as `vlVaQualityBits` (`frontends/va/va_private.h`, `encode.c`): bit 0 marks a setting,
+  bits 1 and 2 are the preset (0 speed, 1 balanced, 2 quality, 3 high quality, which is quality
+  before VCN 4), bit 3 is pre-encode (a first pass on a 4x smaller picture, fixed by the first
+  frame of a context) and bit 4 VBAQ (adaptive quantisation, off under constant QP). 0, or no
+  buffer at all, is speed without pre-encode or VBAQ; exactly 1 is Mesa's "suggested" setting,
+  balanced with both. `VAConfigAttribEncQualityRange` is 32 for every codec, the range of those
+  bits (`vainfo -a`). `QualityModes::quality_level` packs the three named keys laid over the
+  driver's default (`QualityOverrides::over`) and gives no value for that default, so no key ever
+  becomes the suggested 1; `is_radeonsi` reads the driver name from the `vaQueryVendorString`
+  text. `VaapiParams::quality_level` picks what goes out: a raw `quality-level` unchanged on
+  every driver, else the named keys, else nothing.
+  - The default sends nothing on every driver, radeonsi included: speed, no pre-encode, no VBAQ.
+    The rule for changing it was a mode whose median encode time stays within 0.15 ms of the
+    default at 1080p and within 0.25 ms at 4K for every codec, and that raises PSNR and XPSNR at
+    equal bitrate. Nothing passes both. VBAQ costs no time (at most 0.05 ms) but lowers luma PSNR
+    by 0.05 to 0.13 dB in every case and moves luma XPSNR by +0.01 to -0.04 dB (chroma XPSNR by
+    -0.04 to +0.15). Pre-encode costs 0.18 to 0.27 ms at 1080p and 0.5 to 0.95 ms at 4K for at
+    most 0.05 dB either way (-0.1 dB for AV1 at 1080p, where it also produced 1% fewer bits).
+    `balanced` costs 0.16 ms at 1080p and 0.7 to 1.0 ms at 4K on AV1 and HEVC for 0.04 to 0.13 dB
+    of luma, loses 0.16 to 0.42 dB of chroma XPSNR on HEVC, and on H.264 gives the bitrate and
+    scores of `speed` to the last digit. `quality` gains 0.15 to 0.52 dB for 1.4 to 2.3 ms at
+    1080p and 5.3 to 9.0 ms at 4K. `high-quality` takes 33 ms for a 4K frame on AV1 and HEVC,
+    two 60 fps frame intervals, and on H.264 gives the bitrate and scores of `quality`. So the
+    modes stay opt in.
+  - Measured like the intra refresh cadences above (same GPU, scene and method, default intra
+    refresh) with sixteen encoders in the round: every preset with VBAQ and pre-encode on and
+    off. Median ms, then luma PSNR / luma XPSNR in dB; the bitrates of a column are within 1.6%
+    of each other and 6 to 10% above the target
+    (`cargo test -p rusplay-encode --all-features --lib radeonsi_quality_mode_times_and_scores --
+    --ignored --nocapture`, 20 minutes):
+
+    | 1920x1080, 20 Mbps | AV1 | HEVC | H.264 |
+    |---|---|---|---|
+    | `speed` (default) | 1.69 ms, 37.65 / 38.27 | 2.31 ms, 36.99 / 37.71 | 2.68 ms, 36.02 / 36.75 |
+    | `speed`, `vbaq` | 1.69 ms, 37.60 / 38.28 | 2.36 ms, 36.92 / 37.72 | 2.63 ms, 35.91 / 36.73 |
+    | `speed`, `pre-encode` | 1.95 ms, 37.56 / 38.17 | 2.48 ms, 37.02 / 37.75 | 2.89 ms, 36.03 / 36.75 |
+    | `speed`, `vbaq`, `pre-encode` | 1.95 ms, 37.51 / 38.17 | 2.49 ms, 36.92 / 37.73 | 2.83 ms, 35.91 / 36.73 |
+    | `balanced` | 1.85 ms, 37.70 / 38.32 | 2.47 ms, 37.12 / 37.83 | 2.65 ms, 36.02 / 36.75 |
+    | `balanced`, `vbaq` | 1.85 ms, 37.65 / 38.32 | 2.54 ms, 37.05 / 37.83 | 2.73 ms, 35.91 / 36.73 |
+    | `quality` | 3.72 ms, 37.82 / 38.44 | 4.61 ms, 37.51 / 38.18 | 4.06 ms, 36.21 / 36.93 |
+    | `high-quality` | 8.88 ms, 37.87 / 38.47 | 9.79 ms, 37.60 / 38.26 | 4.06 ms, 36.21 / 36.93 |
+
+    | 3840x2160, 80 Mbps | AV1 | HEVC | H.264 |
+    |---|---|---|---|
+    | `speed` (default) | 4.10 ms, 38.13 / 41.15 | 4.25 ms, 37.85 / 40.92 | 5.46 ms, 36.53 / 39.66 |
+    | `speed`, `vbaq` | 4.12 ms, 38.06 / 41.14 | 4.17 ms, 37.74 / 40.90 | 5.41 ms, 36.40 / 39.62 |
+    | `speed`, `pre-encode` | 4.68 ms, 38.14 / 41.17 | 4.75 ms, 37.88 / 40.97 | 6.41 ms, 36.54 / 39.67 |
+    | `speed`, `vbaq`, `pre-encode` | 4.96 ms, 38.07 / 41.15 | 4.93 ms, 37.78 / 40.94 | 6.16 ms, 36.41 / 39.63 |
+    | `balanced` | 5.09 ms, 38.17 / 41.19 | 4.95 ms, 37.91 / 40.99 | 5.56 ms, 36.53 / 39.66 |
+    | `balanced`, `vbaq` | 5.11 ms, 38.09 / 41.17 | 5.04 ms, 37.82 / 40.97 | 5.54 ms, 36.40 / 39.62 |
+    | `quality` | 12.16 ms, 38.27 / 41.29 | 13.23 ms, 38.23 / 41.27 | 10.78 ms, 36.74 / 39.86 |
+    | `high-quality` | 32.86 ms, 38.38 / 41.39 | 33.38 ms, 38.41 / 41.43 | 10.76 ms, 36.74 / 39.86 |
+
+    VBAQ and pre-encode shift the other presets the way they shift `speed`. The machine was
+    busy with other builds, and absolute times moved by up to 1.5x between runs, so only the
+    rows of one column compare.
 - Input: a `FrameBuffer::DmaBuf` is imported (`DRM_PRIME_2`, one object) and must be in the
   VA-native layout of `video.pixel_format`: `NV12`, `P010`, `P012` (two planes) for 4:2:0,
   `YUYV`, `Y210`, `Y212` for 4:2:2 and `AYUV`, `Y410`, `Y412` for 4:4:4 (one plane). Another fourcc
@@ -468,8 +531,9 @@ paths:
   textured frame at constant QP for two sweeps of three frames a row and requires, for the three
   codecs, that exactly the frames `RefreshCadence` names stand out in size (each larger than
   the frames before and after it, four times the others on average); the two `an_h264_frame_lost_*`
-  tests are the healing above. `vaapi/tests/measure.rs` holds the ignored cadence measurement and
-  its scene. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
+  tests are the healing above, and `radeonsi_quality_modes_encode` decodes streams opened with the
+  named keys (skipped visibly on another driver). `vaapi/tests/measure.rs` holds the two ignored
+  measurements and their scene. `src/loss.rs` (encode a run, drop packets, `recover`, check the decoded rest) reuses
   this file's pattern frames, PSNR and VAAPI decode for the x264 recovery tests. Every hardware test skips visibly (`src/hardware.rs`) when the codec or
   the format is missing, and fails under `RUSPLAY_REQUIRE_HW=1` when the render node is missing.
 

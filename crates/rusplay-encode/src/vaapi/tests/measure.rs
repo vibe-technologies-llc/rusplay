@@ -498,6 +498,40 @@ fn measured_cases() -> Vec<(Codec, Resolution, u32)> {
         .collect()
 }
 
+fn quality_mode_variants() -> Vec<Variant> {
+    let switch = |on: bool| if on { "on" } else { "off" };
+    let mut variants = Vec::new();
+
+    for preset in ["speed", "balanced", "quality", "high-quality"] {
+        for vbaq in [false, true] {
+            for pre_encode in [false, true] {
+                variants.push(Variant {
+                    name: format!(
+                        "{preset} vbaq {} pre-encode {}",
+                        switch(vbaq),
+                        switch(pre_encode)
+                    ),
+                    params: vec![
+                        ("preset", preset.to_owned()),
+                        ("vbaq", switch(vbaq).to_owned()),
+                        ("pre-encode", switch(pre_encode).to_owned()),
+                    ],
+                });
+            }
+        }
+    }
+
+    variants
+}
+
+#[test]
+#[ignore = "measures the radeonsi quality modes on the VAAPI device"]
+fn radeonsi_quality_mode_times_and_scores() {
+    for (codec, resolution, bitrate_kbps) in measured_cases() {
+        compare(codec, resolution, bitrate_kbps, &quality_mode_variants());
+    }
+}
+
 fn refresh_variants(codec: Codec, resolution: Resolution) -> Vec<Variant> {
     let block = if codec == Codec::H264 { 16 } else { 64 };
     let rows = resolution.height.div_ceil(block);

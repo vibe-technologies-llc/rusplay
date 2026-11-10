@@ -44,6 +44,14 @@ pub enum EncodeError {
         key: String,
         value: String,
     },
+    #[error("the {backend} encoder takes the parameter {first} or {second}, not both")]
+    ConflictingParameters {
+        backend: Backend,
+        first: String,
+        second: String,
+    },
+    #[error("the {backend} driver in use does not take the parameter {key}")]
+    DriverParameterUnsupported { backend: Backend, key: String },
     #[error("the {backend} encoder rejects the tune {tune:?}")]
     TuneRejected { backend: Backend, tune: String },
     #[error("the {backend} encoder could not open at {resolution}")]

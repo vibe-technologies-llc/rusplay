@@ -35,6 +35,7 @@ use crate::{
         IntraRefresh, RefreshDirection,
         format::{pack, surface_format},
         long_term::driver_honours_long_term,
+        radeonsi::is_radeonsi,
         refresh::{RefreshCadence, RefreshRegion},
         refresh_parameters,
         va::{
@@ -1410,6 +1411,54 @@ fn an_h264_frame_lost_in_mid_sweep_heals_by_the_end_of_the_next_sweep() {
     };
 
     assert_healed_from(&likeness, lost, healed);
+}
+
+#[test]
+fn radeonsi_quality_modes_encode() {
+    if !device_present() {
+        return;
+    }
+    let vendor = Display::open(&VaapiConfig::default().device)
+        .ok()
+        .and_then(|display| display.vendor())
+        .unwrap_or_default();
+    if !is_radeonsi(&vendor) {
+        hardware::unsupported(format_args!("the radeonsi quality modes on {vendor}"));
+        return;
+    }
+    let modes = [
+        [("preset", "balanced"), ("vbaq", "on"), ("pre-encode", "on")],
+        [
+            ("preset", "high-quality"),
+            ("vbaq", "off"),
+            ("pre-encode", "off"),
+        ],
+        [("preset", "speed"), ("vbaq", "on"), ("pre-encode", "off")],
+    ];
+
+    for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
+        for pairs in modes {
+            let format = yuv420(BitDepth::Eight);
+            let config = with_vaapi(video(codec, format, RESOLUTION), |vaapi| {
+                vaapi.params = pairs
+                    .iter()
+                    .map(|&(key, value)| (key.to_owned(), value.to_owned()))
+                    .collect();
+            });
+            let Some(mut encoder) = try_open(&config) else {
+                continue;
+            };
+
+            let packets = encode_all(
+                encoder.as_mut(),
+                &pattern_frames(format, RESOLUTION, FRAMES),
+            );
+
+            if let Some(pictures) = decode_vaapi(codec, &packets) {
+                check_pictures(codec, &pictures, format, RESOLUTION);
+            }
+        }
+    }
 }
 
 fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Surface, Frame) {
