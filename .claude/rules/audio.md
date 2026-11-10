@@ -28,6 +28,12 @@ paths:
   interpolation between oversampled sincs, 64-tap filter, 120-frame input chunks, so the delay is
   a few milliseconds). `push` accepts any chunk length and appends whatever whole output chunks
   are ready; equal rates copy straight through. Never a C resampler.
+  `PcmResampler::rate_matching` is the playback variant: it always resamples, even at equal
+  rates, so `set_speed` can bend the ratio by parts per million (clamped to the widest speed it
+  was built for, ramped over the next chunk). Its kernel is 64 taps, Hann² window, cubic
+  interpolation, chosen by measurement: flat to 20 kHz (the 64-tap Blackman-Harris² of the
+  fixed converter is 6 dB down at 19 kHz, fine for a rate conversion that is rarely needed,
+  wrong for a filter every sample passes through), residual below -100 dB, 32 frames of delay.
 - PipeWire capture (`AudioCapture`, feature `pipewire`) runs the PipeWire main loop on its own
   thread (`pw_common::PipewireThread`) and connects an input stream. `CaptureTarget::SinkMonitor`
   (`AudioCapture::start`) sets `stream.capture.sink`, so it follows the default sink's monitor;
@@ -52,9 +58,25 @@ paths:
   allocates. The ring holds `max(250 ms, 3 * max(jitter_buffer_max_ms, jitter_buffer_ms))` at
   192 kHz, because it is built before the device rate is known and must fit twice the jitter
   floor at any device rate; `Playout::retarget` stores the negotiated rate, from which the
-  callback computes the floor in native-rate frames. `submit` writes decoded frames into the
-  ring, through `PcmResampler` if the stream negotiated another rate, and counts frames dropped
-  when the ring is full as `overflows`.
+  callback computes the floor in native-rate frames. `submit` (`Feed`) writes decoded frames
+  into the ring through the rate-matching `PcmResampler` (below; a plain one, passthrough at
+  equal rates, when `audio.rate_match_max_ppm` is 0), and counts frames dropped when the ring is
+  full as `overflows`.
+- Clock recovery (`ClockRecovery`): the host's capture clock and the playback device's clock are
+  different crystals, so without correction the queue drifts until it underruns or is trimmed,
+  an audible glitch every few minutes whatever the codec or buffer size. While playing, each
+  callback low-passes the queue level left after its read (1 s) and runs a critically damped PI
+  loop on its distance from the jitter target (natural frequency 0.1 rad/s: proportional
+  0.2 /s, integral 0.01 /s², both on the error in seconds), which yields a playback speed
+  `1 + correction`, clamped to `audio.rate_match_max_ppm` (default 5000, at most 20 000, 0
+  turns the loop and the always-on resampler off). The speed is published through an atomic and
+  `Feed::submit` applies it with `PcmResampler::set_speed` before each frame, so the realtime
+  callback never resamples. The integral is the drift estimate and survives underruns and
+  trims; the smoothed level is re-seeded when playback (re)starts or a trim jumps it. The loop
+  is deliberately slow: packet-phase sawtooth on the level moves the speed by well under
+  0.1 %, a 5 ms target change settles in under a minute. A simulated ±300 ppm drift plays
+  ten minutes with no underrun and no trim (`playback_speed_locks_to_…`), and the same link
+  without rate matching does not.
 - `AudioPlayback::start_to(config, PlaybackTarget::VirtualSource)` publishes the stream as a
   PipeWire `Audio/Source` node (`media.class`, `node.name = rusplay-microphone`) instead of
   autoconnecting to a sink, which is how the host exposes the client's microphone to games. A
@@ -68,17 +90,26 @@ paths:
   absorb whatever the graph's quantum is. The callback outputs silence until `target + quantum`
   frames are queued, then plays. A quantum that arrives short plays what there is, pads with
   silence, counts an `underrun` and re-buffers up to the target before playing again, so small
-  refills under load do not stutter between sound and silence. If the queue grows past twice
-  `target + quantum` (clock drift, a burst) the surplus above it is dropped and counted as a
-  `trim`, so latency cannot creep up.
+  refills under load do not stutter between sound and silence. Neither edge is a hard cut: the
+  samples after the last one played decay from it to zero over `DECLICK_SPAN` (2 ms, raised
+  cosine, continuing into the next callback if the quantum is shorter), and playback fades in
+  over the same span whenever it starts. If the queue grows past twice
+  `target + quantum` (a burst after a stall, a consumer appearing on the virtual source) the
+  surplus above it is dropped and counted as a `trim`, so latency cannot creep up; anything
+  smaller the clock recovery plays off.
 - The target adapts (`JitterPolicy`): each underrun raises it by one codec frame up to
   `audio.jitter_buffer_max_ms` (default 50, at most 500, never below `jitter_buffer_ms`; equal
   disables growth), and after `audio.jitter_relax_ms` (default 10 000, 0 never relaxes) of
-  playback without an underrun it falls back one codec frame toward `jitter_buffer_ms`, dropping
-  up to one codec frame of the backlog it no longer needs. Time is counted in rendered frames,
-  so the realtime callback makes no clock calls. A drop while audio is playing (trim or relax)
-  crossfades linearly over the quantum from the audio that would have played to the audio after
-  the drop, so it does not click. The ring is sized from the ceiling, and the current target is
+  playback without an underrun it falls back one codec frame toward `jitter_buffer_ms`, but
+  only if the window showed room for it: the callback tracks the deepest dip of the queue level
+  below its smoothed value, and the target is lowered only when the lowered target minus that
+  dip still leaves half a codec frame. Otherwise the window restarts and the target stays, so a
+  link that needs the larger buffer is not probed into an underrun every relax interval.
+  Lowering the target drops nothing: the clock recovery plays the surplus off. Only with rate
+  matching off does a relax drop up to one codec frame of backlog. Time is counted in rendered
+  frames, so the realtime callback makes no clock calls. A drop while audio is playing (a trim,
+  or a relax without rate matching) crossfades linearly over the quantum from the audio that
+  would have played to the audio after the drop, so it does not click. The ring is sized from the ceiling, and the current target is
   published as `AudioOutputStats::jitter_target_us` (the client's `audio_jitter_target_us`).
 - Lost packets are the caller's to conceal before `submit`: `AudioDecoder::conceal` runs Opus
   PLC (`decode` with an empty packet) for mono and stereo, `recover` rebuilds the lost frame from
@@ -100,8 +131,8 @@ paths:
 - The microphone (client to host) reuses all of it with the derived config
   `AudioConfig::microphone_stream`: Opus, mono, `audio.sample_rate`, with the bitrate, frame
   duration, in-band FEC, jitter buffer and FEC overhead of `audio.microphone`, and the queue,
-  concealment and adaptive jitter limits (`jitter_buffer_max_ms`, `jitter_relax_ms`) of the main
-  audio. The client captures with `CaptureTarget::Source`, encodes
+  concealment, adaptive jitter limits (`jitter_buffer_max_ms`, `jitter_relax_ms`) and rate
+  matching (`rate_match_max_ppm`) of the main audio. The client captures with `CaptureTarget::Source`, encodes
   and sends on `StreamKind::Microphone`; the host decodes with `ConcealingPlayer` into an
   `AudioPlayback` on `PlaybackTarget::VirtualSource`. Opus decoding needs the frame duration, so
   both ends must use the same `audio.microphone.frame_duration`.

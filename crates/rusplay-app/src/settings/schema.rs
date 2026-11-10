@@ -871,6 +871,15 @@ pub static FIELDS: &[Field] = &[
         Audience::Shared,
         Section::Audio,
         "Stream",
+        "audio.rate_match_max_ppm",
+        "Clock drift correction limit",
+        U32,
+    )
+    .unit("ppm"),
+    field(
+        Audience::Shared,
+        Section::Audio,
+        "Stream",
         "audio.decode_queue_packets",
         "Decode queue",
         U16,

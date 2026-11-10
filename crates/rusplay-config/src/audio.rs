@@ -5,6 +5,7 @@ use crate::ConfigError;
 
 const MAX_FLAC_COMPRESSION: u8 = 8;
 const MAX_JITTER_BUFFER_MS: u32 = 500;
+const MAX_RATE_MATCH_PPM: u32 = 20_000;
 const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const MICROPHONE_CHANNELS: ChannelLayout = ChannelLayout::Mono;
 const FLAC_BLOCK_SIZES: std::ops::RangeInclusive<u16> = 32..=32767;
@@ -18,6 +19,7 @@ pub struct AudioConfig {
     pub jitter_buffer_ms: u32,
     pub jitter_buffer_max_ms: u32,
     pub jitter_relax_ms: u32,
+    pub rate_match_max_ppm: u32,
     pub decode_queue_packets: u16,
     pub max_conceal_ms: u16,
     pub fec_overhead_percent: u8,
@@ -35,6 +37,7 @@ impl Default for AudioConfig {
             jitter_buffer_ms: 10,
             jitter_buffer_max_ms: 50,
             jitter_relax_ms: 10_000,
+            rate_match_max_ppm: 5_000,
             decode_queue_packets: 32,
             max_conceal_ms: 50,
             fec_overhead_percent: 0,
@@ -94,6 +97,10 @@ impl AudioConfig {
             return Err(ConfigError::JitterBufferMaxOutOfRange(
                 self.jitter_buffer_max_ms,
             ));
+        }
+
+        if self.rate_match_max_ppm > MAX_RATE_MATCH_PPM {
+            return Err(ConfigError::RateMatchOutOfRange(self.rate_match_max_ppm));
         }
 
         if !FLAC_BLOCK_SIZES.contains(&self.flac.block_size) {
@@ -243,6 +250,23 @@ mod tests {
             config.validate(),
             Err(ConfigError::JitterBufferMaxOutOfRange(501))
         ));
+    }
+
+    #[test]
+    fn rate_matching_defaults_to_half_a_percent_and_is_range_checked() {
+        let beyond = AudioConfig {
+            rate_match_max_ppm: 20_001,
+            ..AudioConfig::default()
+        };
+        let disabled: AudioConfig = toml::from_str("rate_match_max_ppm = 0").unwrap();
+
+        assert_eq!(AudioConfig::default().rate_match_max_ppm, 5_000);
+        assert!(matches!(
+            beyond.validate(),
+            Err(ConfigError::RateMatchOutOfRange(20_001))
+        ));
+        assert_eq!(disabled.rate_match_max_ppm, 0);
+        assert!(disabled.validate().is_ok());
     }
 
     #[test]

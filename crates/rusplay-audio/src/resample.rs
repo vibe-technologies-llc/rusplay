@@ -1,19 +1,72 @@
 use rubato::{
-    Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
+    Adjustable, Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
     WindowFunction, audioadapter_buffers::direct::InterleavedSlice,
 };
 
 use crate::AudioError;
 
 const CHUNK_INPUT_FRAMES: usize = 120;
-const SINC_LENGTH: usize = 64;
 const OVERSAMPLING_FACTOR: usize = 128;
 const FIXED_RATIO_RELATIVE: f64 = 1.0;
+
+#[derive(Debug, Clone, Copy)]
+struct SincShape {
+    length: usize,
+    window: WindowFunction,
+    interpolation: SincInterpolationType,
+}
+
+const CONVERSION_SHAPE: SincShape = SincShape {
+    length: 64,
+    window: WindowFunction::BlackmanHarris2,
+    interpolation: SincInterpolationType::Linear,
+};
+const MATCHING_SHAPE: SincShape = SincShape {
+    length: 64,
+    window: WindowFunction::Hann2,
+    interpolation: SincInterpolationType::Cubic,
+};
 
 struct Converter {
     resampler: Async<f32>,
     pending: Vec<f32>,
     scratch: Vec<f32>,
+    widest_relative_ratio: f64,
+}
+
+impl Converter {
+    fn new(
+        ratio: f64,
+        widest_relative_ratio: f64,
+        shape: SincShape,
+        channels: usize,
+    ) -> Result<Self, AudioError> {
+        let parameters = SincInterpolationParameters {
+            sinc_len: shape.length,
+            f_cutoff: None,
+            oversampling_factor: OVERSAMPLING_FACTOR,
+            interpolation: shape.interpolation,
+            window: shape.window,
+        };
+
+        let resampler = Async::<f32>::new_sinc(
+            ratio,
+            widest_relative_ratio,
+            &parameters,
+            CHUNK_INPUT_FRAMES,
+            channels,
+            FixedAsync::Input,
+        )
+        .map_err(AudioError::ResamplerInit)?;
+        let scratch = vec![0.0; resampler.output_frames_max() * channels];
+
+        Ok(Self {
+            resampler,
+            pending: Vec::new(),
+            scratch,
+            widest_relative_ratio,
+        })
+    }
 }
 
 pub struct PcmResampler {
@@ -32,34 +85,51 @@ impl PcmResampler {
             });
         }
 
-        let parameters = SincInterpolationParameters {
-            sinc_len: SINC_LENGTH,
-            f_cutoff: None,
-            oversampling_factor: OVERSAMPLING_FACTOR,
-            interpolation: SincInterpolationType::Linear,
-            window: WindowFunction::BlackmanHarris2,
-        };
         let ratio = f64::from(output_hz) / f64::from(input_hz);
 
-        let resampler = Async::<f32>::new_sinc(
-            ratio,
-            FIXED_RATIO_RELATIVE,
-            &parameters,
-            CHUNK_INPUT_FRAMES,
-            channels,
-            FixedAsync::Input,
-        )
-        .map_err(AudioError::ResamplerInit)?;
-        let scratch = vec![0.0; resampler.output_frames_max() * channels];
-
         Ok(Self {
-            converter: Some(Converter {
-                resampler,
-                pending: Vec::new(),
-                scratch,
-            }),
+            converter: Some(Converter::new(
+                ratio,
+                FIXED_RATIO_RELATIVE,
+                CONVERSION_SHAPE,
+                channels,
+            )?),
             channels,
         })
+    }
+
+    pub fn rate_matching(
+        input_hz: u32,
+        output_hz: u32,
+        channels: u8,
+        widest_speed: f64,
+    ) -> Result<Self, AudioError> {
+        let channels = usize::from(channels);
+        let ratio = f64::from(output_hz) / f64::from(input_hz);
+
+        Ok(Self {
+            converter: Some(Converter::new(
+                ratio,
+                widest_speed.max(FIXED_RATIO_RELATIVE),
+                MATCHING_SHAPE,
+                channels,
+            )?),
+            channels,
+        })
+    }
+
+    pub fn set_speed(&mut self, speed: f64) -> Result<(), AudioError> {
+        let Some(converter) = &mut self.converter else {
+            return Ok(());
+        };
+
+        let widest = converter.widest_relative_ratio;
+        let relative = speed.recip().clamp(widest.recip(), widest);
+
+        converter
+            .resampler
+            .set_resample_ratio_relative(relative, true)
+            .map_err(AudioError::Resample)
     }
 
     pub fn is_passthrough(&self) -> bool {
@@ -215,6 +285,88 @@ mod tests {
         let expected = SECONDS * OUTPUT_HZ as usize * 2;
         let slack = (CHUNK_INPUT_FRAMES * 2 * 2) * 2;
         assert!(output.len() <= expected && output.len() + slack >= expected);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn tone_residual_decibels(samples: &[f32], cycles_per_sample: f64) -> f64 {
+        let basis = |index: usize| (TAU * cycles_per_sample * index as f64).sin_cos();
+        let mut sums = [0.0; 5];
+        for (index, sample) in samples.iter().enumerate() {
+            let (sine, cosine) = basis(index);
+            let value = f64::from(*sample);
+            sums[0] += sine * sine;
+            sums[1] += cosine * cosine;
+            sums[2] += sine * cosine;
+            sums[3] += value * sine;
+            sums[4] += value * cosine;
+        }
+        let determinant = sums[0] * sums[1] - sums[2] * sums[2];
+        let in_phase = (sums[3] * sums[1] - sums[4] * sums[2]) / determinant;
+        let quadrature = (sums[4] * sums[0] - sums[3] * sums[2]) / determinant;
+
+        let (signal, residual) =
+            samples
+                .iter()
+                .enumerate()
+                .fold((0.0, 0.0), |(signal, residual), (index, sample)| {
+                    let (sine, cosine) = basis(index);
+                    let fitted = in_phase * sine + quadrature * cosine;
+                    (
+                        signal + fitted * fitted,
+                        residual + (f64::from(*sample) - fitted).powi(2),
+                    )
+                });
+
+        10.0 * (residual / signal).log10()
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn rate_matching_resamples_even_at_equal_rates_and_follows_the_speed() {
+        for speed in [1.0, 1.000_4, 0.999_6, 1.005] {
+            let mut resampler =
+                PcmResampler::rate_matching(OUTPUT_HZ, OUTPUT_HZ, 2, 1.005).unwrap();
+            let input = tone(OUTPUT_HZ, 2, 4);
+            let mut output = Vec::new();
+
+            resampler.set_speed(speed).unwrap();
+            for chunk in input.chunks(240 * 2) {
+                resampler.push(chunk, &mut output).unwrap();
+            }
+
+            let expected = (input.len() / 2) as f64 / speed;
+            let settled: Vec<f32> = output[OUTPUT_HZ as usize..]
+                .iter()
+                .step_by(2)
+                .copied()
+                .collect();
+            let residual = tone_residual_decibels(&settled, TONE_HZ * speed / f64::from(OUTPUT_HZ));
+            assert!(!resampler.is_passthrough());
+            assert!((31..=32).contains(&resampler.delay_frames()));
+            assert!(
+                ((output.len() / 2) as f64 - expected).abs() < 200.0,
+                "speed {speed}: {} frames, expected {expected}",
+                output.len() / 2
+            );
+            assert!(residual < -100.0, "speed {speed}: residual {residual} dB");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn a_speed_beyond_the_widest_is_clamped_and_a_passthrough_ignores_it() {
+        let mut matching = PcmResampler::rate_matching(OUTPUT_HZ, OUTPUT_HZ, 1, 1.005).unwrap();
+        let mut passthrough = PcmResampler::new(OUTPUT_HZ, OUTPUT_HZ, 1).unwrap();
+        let input = tone(OUTPUT_HZ, 1, 2);
+        let mut output = Vec::new();
+
+        matching.set_speed(2.0).unwrap();
+        passthrough.set_speed(2.0).unwrap();
+        matching.push(&input, &mut output).unwrap();
+
+        let slowest = input.len() as f64 / 1.005;
+        assert!((output.len() as f64 - slowest).abs() < 200.0);
+        assert!(passthrough.is_passthrough());
     }
 
     #[test]
