@@ -25,6 +25,7 @@ const CADENCE_SMOOTHING: u32 = 8;
 pub(crate) struct Pacing {
     pub frame_interval: Duration,
     pub window_percent: u8,
+    pub bitrate_multiple: Option<u32>,
     pub max_kbps: Option<u32>,
 }
 
@@ -48,10 +49,22 @@ impl Pacing {
         interval * u32::from(self.window_percent) / PERCENT
     }
 
-    fn for_frame(self, measured: Option<Duration>) -> FramePacing {
+    fn rate_kbps(self, stream_kbps: Option<u32>) -> Option<u32> {
+        let proportional = self
+            .bitrate_multiple
+            .zip(stream_kbps)
+            .map(|(multiple, kbps)| kbps.saturating_mul(multiple));
+
+        match (proportional, self.max_kbps) {
+            (Some(proportional), Some(cap)) => Some(proportional.min(cap)),
+            (proportional, cap) => proportional.or(cap),
+        }
+    }
+
+    fn for_frame(self, measured: Option<Duration>, stream_kbps: Option<u32>) -> FramePacing {
         FramePacing {
             window: self.window(measured),
-            max_kbps: self.max_kbps,
+            rate_kbps: self.rate_kbps(stream_kbps),
         }
     }
 }
@@ -59,12 +72,12 @@ impl Pacing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FramePacing {
     window: Duration,
-    max_kbps: Option<u32>,
+    rate_kbps: Option<u32>,
 }
 
 impl FramePacing {
     fn span(self, bytes: usize) -> Duration {
-        self.max_kbps.map_or(self.window, |kbps| {
+        self.rate_kbps.map_or(self.window, |kbps| {
             Pacer::from_kbps(kbps).interval_for(bytes).min(self.window)
         })
     }
@@ -134,9 +147,12 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
                 let agreed = links.shared.agreed_rate();
-                let pacing = options
-                    .pacing
-                    .map(|pacing| pacing.following(agreed).for_frame(cadence.smoothed));
+                let stream_kbps = links.shared.counters.bitrate_target();
+                let pacing = options.pacing.map(|pacing| {
+                    pacing
+                        .following(agreed)
+                        .for_frame(cadence.smoothed, stream_kbps)
+                });
                 send_frame(
                     &mut packetizer,
                     &mut arena,
@@ -283,7 +299,7 @@ mod tests {
         let window = Duration::from_millis(8);
         let pacing = FramePacing {
             window,
-            max_kbps: None,
+            rate_kbps: None,
         };
 
         let plan = BurstPlan::new(100, 100_000, pacing);
@@ -321,6 +337,7 @@ mod tests {
         let pacing = Pacing {
             frame_interval: Duration::from_millis(16),
             window_percent: 50,
+            bitrate_multiple: None,
             max_kbps: None,
         };
 
@@ -339,7 +356,7 @@ mod tests {
     fn a_small_frame_leaves_in_one_burst_per_datagram() {
         let pacing = FramePacing {
             window: Duration::from_millis(8),
-            max_kbps: None,
+            rate_kbps: None,
         };
 
         let plan = BurstPlan::new(3, 3_000, pacing);
@@ -351,7 +368,7 @@ mod tests {
     fn a_rate_cap_shortens_a_frame_that_fits_inside_the_window() {
         let pacing = FramePacing {
             window: Duration::from_millis(8),
-            max_kbps: Some(1_000_000),
+            rate_kbps: Some(1_000_000),
         };
 
         let plan = BurstPlan::new(100, 100_000, pacing);
@@ -365,24 +382,76 @@ mod tests {
     fn the_window_still_bounds_a_frame_too_large_for_the_cap() {
         let pacing = FramePacing {
             window: Duration::from_millis(8),
-            max_kbps: Some(100_000),
+            rate_kbps: Some(100_000),
         };
 
         assert_eq!(pacing.span(1_000_000), Duration::from_millis(8));
         assert_eq!(pacing.span(10_000), Duration::from_micros(800));
     }
 
-    #[test]
-    fn the_cap_travels_from_the_configuration_into_each_frame() {
-        let pacing = Pacing {
+    fn pacing(bitrate_multiple: Option<u32>, max_kbps: Option<u32>) -> Pacing {
+        Pacing {
             frame_interval: Duration::from_millis(16),
             window_percent: 50,
-            max_kbps: Some(500_000),
-        };
+            bitrate_multiple,
+            max_kbps,
+        }
+    }
 
-        let frame = pacing.for_frame(None);
+    #[test]
+    fn the_cap_travels_from_the_configuration_into_each_frame() {
+        let frame = pacing(None, Some(500_000)).for_frame(None, Some(80_000));
 
         assert_eq!(frame.window, Duration::from_millis(8));
-        assert_eq!(frame.max_kbps, Some(500_000));
+        assert_eq!(frame.rate_kbps, Some(500_000));
+    }
+
+    #[test]
+    fn a_frame_is_paced_at_a_multiple_of_the_stream_bitrate() {
+        let frame = pacing(Some(4), None).for_frame(None, Some(80_000));
+        let average_frame_bytes = 80_000_000 / 8 / 60;
+
+        assert_eq!(frame.rate_kbps, Some(320_000));
+        assert_eq!(
+            frame.span(average_frame_bytes),
+            Duration::from_nanos(4_166_650)
+        );
+        assert_eq!(
+            frame.span(average_frame_bytes / 10),
+            Duration::from_nanos(416_650)
+        );
+        assert_eq!(
+            frame.span(average_frame_bytes * 3),
+            Duration::from_millis(8)
+        );
+    }
+
+    #[test]
+    fn the_multiple_follows_the_bitrate_in_force_and_needs_one() {
+        let proportional = pacing(Some(4), None);
+
+        assert_eq!(proportional.rate_kbps(Some(20_000)), Some(80_000));
+        assert_eq!(proportional.rate_kbps(None), None);
+        assert_eq!(
+            proportional.for_frame(None, None).span(1_000),
+            Duration::from_millis(8)
+        );
+    }
+
+    #[test]
+    fn the_rate_cap_bounds_the_multiple() {
+        assert_eq!(
+            pacing(Some(4), Some(200_000)).rate_kbps(Some(80_000)),
+            Some(200_000)
+        );
+        assert_eq!(
+            pacing(Some(4), Some(900_000)).rate_kbps(Some(80_000)),
+            Some(320_000)
+        );
+        assert_eq!(
+            pacing(Some(4), Some(200_000)).rate_kbps(None),
+            Some(200_000)
+        );
+        assert_eq!(pacing(None, None).rate_kbps(Some(80_000)), None);
     }
 }

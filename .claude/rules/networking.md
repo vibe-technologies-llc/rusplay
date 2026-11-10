@@ -69,12 +69,22 @@ paths:
   the name, iovec and `mmsghdr` arrays and re-arms them in place on every call, so a receive
   allocates nothing; it holds raw pointers while armed and is therefore not `Send`. rustix has no `recvmmsg`, so that call
   is the crate's single `unsafe` block, over `libc`. Truncated datagrams are dropped from the batch.
-- Frames are paced across the frame interval (`Pacer`) instead of sent in a burst, to keep switch
-  buffers and the client's socket from dropping packets. The host spreads each frame over
-  `network.pacing_window_percent` (default 50) of the interval, so pacing never delays a frame by
-  more than that window; `network.pacing = false` sends each frame in one `sendmmsg` burst, and
-  `network.pacing_max_mbps` (default 0, off) paces a frame at that rate when it takes less than
-  the window.
+- Frames are paced (`Pacer`) instead of sent in one burst, to keep switch buffers and the
+  client's socket from dropping packets, and a frame is only decodable once its last datagram is
+  in, so the pacing span is latency on every frame. The host sends a frame at
+  `network.pacing_bitrate_multiple` (default 4, 0 off) times the stream bitrate in force (the
+  configured bitrate, then the last applied hint), so a frame of average size takes a quarter of
+  the frame interval (4.2 ms at 60 fps against 8.3 for the whole window), a small frame
+  proportionally less, and a static desktop's few datagrams leave at once. The span never
+  exceeds `network.pacing_window_percent` (default 50) of the interval, which is what a larger
+  frame gets and what every frame gets when the multiple is off or the encoder has no bitrate
+  (constant quality). Four times the bitrate is no faster than the window already sends a
+  keyframe: with `video.vbv_frames` 2 a keyframe is up to two or three average frames in half
+  an interval, four to six times the bitrate, so a link that carries the keyframes carries
+  this, and a link that loses packets lowers the rate with the bitrate through the client's
+  hints. `network.pacing_max_mbps` (default 0, off) is an absolute rate for a link that was
+  measured: alone it paces every frame at that rate, with the multiple it caps it.
+  `network.pacing = false` sends each frame in one `sendmmsg` burst.
 - Every video frame handed to the `Packetizer` starts with the 13-byte big-endian
   `VideoFrameHeader`: the capture time in microseconds on the host's stream clock (zero at session
   start, `rusplay-host`'s `StreamClock`), a flags byte (bit 0 recovery; other bits are

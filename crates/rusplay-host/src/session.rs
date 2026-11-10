@@ -367,6 +367,7 @@ fn send_options(config: &Config) -> SendOptions {
         .map(|frame_interval| Pacing {
             frame_interval,
             window_percent: network.pacing_window_percent,
+            bitrate_multiple: network.pacing_multiple(),
             max_kbps: network.pacing_max_kbps(),
         });
 

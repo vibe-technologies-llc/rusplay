@@ -166,10 +166,7 @@ impl Counters {
             bitrate_changes: self.bitrate_changes.get(),
             bitrate_hints_clamped: self.bitrate_hints_clamped.get(),
             bitrate_hints_ignored: self.bitrate_hints_ignored.get(),
-            bitrate_target_kbps: match self.bitrate_target_kbps.get() {
-                0 => None,
-                kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),
-            },
+            bitrate_target_kbps: self.bitrate_target(),
             keepalives_sent: self.keepalives_sent.get(),
             sessions_taken_over: self.sessions_taken_over.get(),
             display_updates_received: self.display_updates_received.get(),
@@ -206,6 +203,13 @@ impl Counters {
                 0 => None,
                 nanos => Some(Duration::from_nanos(nanos)),
             },
+        }
+    }
+
+    pub(crate) fn bitrate_target(&self) -> Option<u32> {
+        match self.bitrate_target_kbps.get() {
+            0 => None,
+            kbps => Some(u32::try_from(kbps).unwrap_or(u32::MAX)),
         }
     }
 

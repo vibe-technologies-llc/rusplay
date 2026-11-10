@@ -159,15 +159,15 @@ paths:
     prefix (`packetize_into`, one reused 8-byte buffer, the frame is not joined) into one reused
     `DatagramArena`, owns the video `Packetizer` (created after the keys are installed, FEC
     blocks of up to 32 data shards with `network.fec_overhead_percent` parity) and sends each
-    frame with `send_arena`, which seals the datagrams in place. With `network.pacing` a frame is spread over
-    `network.pacing_window_percent` of the frame interval, the shorter of the agreed or configured
-    frame interval and the smoothed spacing of the frames' capture stamps (so a
-    faster capture never overlaps its own pacing), in bursts at least 250 µs apart, so a
-    frame never waits behind the previous one's pacing for long. With `network.pacing_max_mbps`
-    above 0 the frame is instead sent at that rate when it fits inside the window (a frame
-    that would take longer at the cap still takes the whole window, so the window stays the
-    bound); 0 keeps the window-only behaviour and is the default until loss has been measured
-    on real links.
+    frame with `send_arena`, which seals the datagrams in place. With `network.pacing` a frame is sent at
+    `network.pacing_bitrate_multiple` times the bitrate in force (`Counters::bitrate_target`,
+    read per frame, so a hint changes the pacing with the encoder), in bursts at least 250 µs
+    apart, and never over more than `network.pacing_window_percent` of the frame interval, the
+    shorter of the agreed or configured frame interval and the smoothed spacing of the frames'
+    capture stamps (so a faster capture never overlaps its own pacing), so a frame never waits
+    behind the previous one's pacing for long. `network.pacing_max_mbps` above 0 caps that rate,
+    or sets it when the multiple is 0 or the encoder runs without a bitrate; with neither rate
+    a frame takes the whole window (`Pacing::rate_kbps`, `networking.md` has the reasoning).
   - `rusplay-host-control` owns the `ControlChannel` and is the only reader of the socket. It
     keeps the client's `Hello` (another version is `VersionMismatch`, after a `Goodbye`) until the
     encode stage has offered its encodable set, then answers with its own `Hello` carrying that

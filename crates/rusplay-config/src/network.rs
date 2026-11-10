@@ -33,6 +33,7 @@ pub struct NetworkConfig {
     pub fec_overhead_percent: u8,
     pub pacing: bool,
     pub pacing_window_percent: u8,
+    pub pacing_bitrate_multiple: u8,
     pub pacing_max_mbps: u32,
     pub frame_thread_nice: i8,
     pub rtkit_priority: u8,
@@ -78,6 +79,7 @@ impl Default for NetworkConfig {
             fec_overhead_percent: 10,
             pacing: true,
             pacing_window_percent: 50,
+            pacing_bitrate_multiple: 4,
             pacing_max_mbps: 0,
             frame_thread_nice: -5,
             rtkit_priority: 0,
@@ -249,6 +251,10 @@ impl NetworkConfig {
         Ok(())
     }
 
+    pub fn pacing_multiple(&self) -> Option<u32> {
+        (self.pacing_bitrate_multiple > 0).then(|| u32::from(self.pacing_bitrate_multiple))
+    }
+
     pub fn pacing_max_kbps(&self) -> Option<u32> {
         (self.pacing_max_mbps > 0).then(|| self.pacing_max_mbps.saturating_mul(KBPS_PER_MBPS))
     }
@@ -372,6 +378,17 @@ mod tests {
                 Err(ConfigError::PacingWindowOutOfRange(found)) if found == percent
             ));
         }
+    }
+
+    #[test]
+    fn the_pacing_multiple_is_four_by_default_and_off_at_zero() {
+        let off = NetworkConfig {
+            pacing_bitrate_multiple: 0,
+            ..NetworkConfig::default()
+        };
+
+        assert_eq!(NetworkConfig::default().pacing_multiple(), Some(4));
+        assert_eq!(off.pacing_multiple(), None);
     }
 
     #[test]
