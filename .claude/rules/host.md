@@ -106,10 +106,25 @@ paths:
     retained frame, so a client joining a static screen still gets a picture. Frames are capped at
     the frame rate before the mailbox (`Cadence` in `capture.rs`): `Shared::frame_rate`, the
     virtual output's refresh once `Shared::output` is set, else the automatic stream rate, else
-    `video.frame_rate` (`auto.md`). A frame that arrives before the next
-    slot is held as pending, a newer one replaces it (`frames_superseded`), and the pending frame
-    goes out when its slot comes, so the last frame of a burst is never lost; a stall restarts
-    the cadence instead of releasing a burst. `src/tests.rs`'s `host_config` sets a 1000 Hz cap,
+    `video.frame_rate` (`auto.md`). The cap bounds the rate, it never
+    retimes frames: slots sit one interval apart (a stall restarts them instead of releasing a
+    burst) and a frame that arrives at or after its slot goes out at once. One that arrives
+    before its slot goes out at once too when no newer frame is due before the slot (its arrival
+    plus the shortest of the last 8 arrival gaps, at most one interval and the interval itself
+    before any gap is known, reaches the slot); it borrows the slot, so the rate still holds.
+    Otherwise it is held as pending and a newer one replaces it (`frames_superseded`). The
+    pending frame goes out at its slot when the longest recent gap says its successor would
+    already have come, and an eighth of an interval after the slot when the successor may still
+    land around it, so the last frame of a burst is never lost and a successor arriving just
+    after the slot goes out instead, unheld. Holding every early frame until its slot would
+    delay each frame by the phase between the source and a grid fixed at session start: a
+    constant up to one interval once the retained frame anchors it, and a sawtooth from nothing
+    to a whole interval for a source a few ppm faster than its nominal rate, which is any
+    monitor (simulated over 20000 frames with 1 to 1.5 ms of arrival jitter: a mean hold of
+    7.9 ms for a 60 Hz source 400 ppm fast, 2.7 ms at 20 ppm, 3.5 ms for 144 Hz capped to 60,
+    5.8 ms for an irregular 90 fps, against 0, 0, 0.01 and 3.1 ms here with the same number of
+    frames sent). The unit tests in `capture.rs` run those arrival patterns through
+    the stage's own loop logic. `src/tests.rs`'s `host_config` sets a 1000 Hz cap,
     well above its 100 Hz synthetic source, because the tests count every frame they feed.
   - `rusplay-host-encode` runs the `PipelineFactory` on its own thread: `encodable` first
     (`GpuPipelineFactory` runs `rusplay_encode::capabilities` for `video.encoder` and builds the
