@@ -150,6 +150,7 @@ pub struct InputConfig {
     pub hotkey_disconnect: HotkeyKey,
     pub hotkey_pointer_mode: HotkeyKey,
     pub escape_hold_ms: u16,
+    pub escape_tap_ms: u16,
     pub fullscreen_hint_ms: u16,
     pub inhibit_shortcuts: bool,
     pub sync_locks: bool,
@@ -182,6 +183,7 @@ impl Default for InputConfig {
             hotkey_disconnect: HotkeyKey::D,
             hotkey_pointer_mode: HotkeyKey::P,
             escape_hold_ms: 1000,
+            escape_tap_ms: 50,
             fullscreen_hint_ms: 3000,
             inhibit_shortcuts: true,
             sync_locks: true,
@@ -366,11 +368,20 @@ mod tests {
     fn holding_escape_leaves_after_a_second_and_the_hint_shows_for_three() {
         let default = InputConfig::default();
         let off: InputConfig =
-            toml::from_str("escape_hold_ms = 0\nfullscreen_hint_ms = 0").unwrap();
+            toml::from_str("escape_hold_ms = 0\nescape_tap_ms = 0\nfullscreen_hint_ms = 0")
+                .unwrap();
 
         assert_eq!(default.escape_hold_ms, 1000);
+        assert_eq!(default.escape_tap_ms, 50);
         assert_eq!(default.fullscreen_hint_ms, 3000);
-        assert_eq!((off.escape_hold_ms, off.fullscreen_hint_ms), (0, 0));
+        assert_eq!(
+            (
+                off.escape_hold_ms,
+                off.escape_tap_ms,
+                off.fullscreen_hint_ms
+            ),
+            (0, 0, 0)
+        );
         assert!(off.validate().is_ok());
     }
 

@@ -143,6 +143,7 @@ pub struct CaptureOptions {
     pub touch: bool,
     pub auto_delay: Duration,
     pub escape_hold: Option<Duration>,
+    pub escape_tap: Duration,
 }
 
 impl From<&InputConfig> for CaptureOptions {
@@ -160,6 +161,7 @@ impl From<&InputConfig> for CaptureOptions {
             auto_delay: Duration::from_millis(u64::from(config.pointer_auto_delay_ms)),
             escape_hold: (config.escape_hold_ms != 0)
                 .then(|| Duration::from_millis(u64::from(config.escape_hold_ms))),
+            escape_tap: Duration::from_millis(u64::from(config.escape_tap_ms)),
         }
     }
 }
@@ -197,6 +199,7 @@ struct PendingSwitch {
 enum EscapeState {
     Free,
     Withheld,
+    Tapping { since: Option<Instant> },
     Spent,
 }
 
@@ -359,6 +362,8 @@ impl CaptureCore {
     }
 
     pub fn hold_escape(&mut self, now: Instant, out: &mut Vec<InputEvent>) -> Transition {
+        self.advance_escape_tap(now, out);
+
         let Some(hold) = self.options.escape_hold else {
             return Transition::Unchanged;
         };
@@ -389,6 +394,46 @@ impl CaptureCore {
 
     fn withholds_escape(&self) -> bool {
         self.options.escape_hold.is_some()
+    }
+
+    fn advance_escape_tap(&mut self, now: Instant, out: &mut Vec<InputEvent>) {
+        let EscapeState::Tapping { since } = self.escape else {
+            return;
+        };
+
+        let since = since.unwrap_or(now);
+        if now.saturating_duration_since(since) < self.options.escape_tap {
+            self.escape = EscapeState::Tapping { since: Some(since) };
+        } else {
+            self.end_escape_tap(out);
+        }
+    }
+
+    fn replay_withheld_escape_tap(&mut self, out: &mut Vec<InputEvent>) {
+        self.held_keys.insert(KEY_ESC);
+        out.push(InputEvent::Key {
+            keycode: KEY_ESC,
+            pressed: true,
+        });
+
+        self.escape = EscapeState::Tapping { since: None };
+        if self.options.escape_tap.is_zero() {
+            self.end_escape_tap(out);
+        }
+    }
+
+    fn end_escape_tap(&mut self, out: &mut Vec<InputEvent>) {
+        if !matches!(self.escape, EscapeState::Tapping { .. }) {
+            return;
+        }
+
+        self.escape = EscapeState::Free;
+        if self.held_keys.remove(&KEY_ESC) {
+            out.push(InputEvent::Key {
+                keycode: KEY_ESC,
+                pressed: false,
+            });
+        }
     }
 
     fn flush_withheld_escape(&mut self, out: &mut Vec<InputEvent>) {
@@ -436,7 +481,10 @@ impl CaptureCore {
         }
 
         self.engaged = false;
-        if self.escape == EscapeState::Withheld {
+        if matches!(
+            self.escape,
+            EscapeState::Withheld | EscapeState::Tapping { .. }
+        ) {
             self.escape = EscapeState::Free;
         }
         out.extend(
@@ -494,6 +542,9 @@ impl CaptureCore {
         }
         if keycode == KEY_ESC {
             self.escape_since = None;
+            if pressed {
+                self.end_escape_tap(out);
+            }
             if self.escape == EscapeState::Spent {
                 self.escape = EscapeState::Free;
             }
@@ -527,15 +578,7 @@ impl CaptureCore {
                 return Transition::Unchanged;
             }
             if !pressed && self.escape == EscapeState::Withheld {
-                self.escape = EscapeState::Free;
-                out.push(InputEvent::Key {
-                    keycode,
-                    pressed: true,
-                });
-                out.push(InputEvent::Key {
-                    keycode,
-                    pressed: false,
-                });
+                self.replay_withheld_escape_tap(out);
                 return Transition::Unchanged;
             }
         }
@@ -765,6 +808,7 @@ mod tests {
             touch: true,
             auto_delay: Duration::from_millis(100),
             escape_hold: Some(Duration::from_millis(1000)),
+            escape_tap: Duration::from_millis(50),
         }
     }
 
@@ -1233,6 +1277,7 @@ mod tests {
                 inhibit_shortcuts: true,
                 auto_delay: Duration::from_millis(250),
                 escape_hold: Some(Duration::from_secs(1)),
+                escape_tap: Duration::from_millis(50),
             }
         );
     }
@@ -1548,7 +1593,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tapped_escape_reaches_the_host_and_leaves_nothing_behind() {
+    fn a_tapped_escape_reaches_the_host_held_for_the_tap_length() {
         let mut core = engaged(options());
         let mut out = Vec::new();
         let start = Instant::now();
@@ -1556,15 +1601,79 @@ mod tests {
         core.key(KEY_ESC, true, &mut out);
         let early = core.hold_escape(start, &mut out);
         core.key(KEY_ESC, false, &mut out);
-        let after = core.hold_escape(start + Duration::from_secs(5), &mut out);
+        let on_release = out.clone();
+        core.hold_escape(start + Duration::from_millis(100), &mut out);
+        core.hold_escape(start + Duration::from_millis(149), &mut out);
+        let within_tap = out.clone();
+        let after = core.hold_escape(start + Duration::from_millis(150), &mut out);
+        core.hold_escape(start + Duration::from_secs(5), &mut out);
 
         assert_eq!(
             (early, after),
             (Transition::Unchanged, Transition::Unchanged)
         );
+        assert_eq!(on_release, vec![key(KEY_ESC, true)]);
+        assert_eq!(within_tap, vec![key(KEY_ESC, true)]);
         assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
         assert!(core.is_engaged());
         assert_eq!(core.take_actions(), Vec::new());
+    }
+
+    #[test]
+    fn a_zero_tap_length_sends_the_tapped_escape_at_once() {
+        let mut core = engaged(CaptureOptions {
+            escape_tap: Duration::ZERO,
+            ..options()
+        });
+        let mut out = Vec::new();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.key(KEY_ESC, false, &mut out);
+
+        assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
+    }
+
+    #[test]
+    fn pressing_escape_during_a_replayed_tap_ends_it_first() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.key(KEY_ESC, false, &mut out);
+        core.hold_escape(start, &mut out);
+        core.key(KEY_ESC, true, &mut out);
+        let second_press = out.clone();
+        core.key(KEY_ESC, false, &mut out);
+        core.hold_escape(start + Duration::from_millis(10), &mut out);
+        core.hold_escape(start + Duration::from_millis(60), &mut out);
+
+        assert_eq!(second_press, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
+        assert_eq!(
+            out,
+            vec![
+                key(KEY_ESC, true),
+                key(KEY_ESC, false),
+                key(KEY_ESC, true),
+                key(KEY_ESC, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn releasing_input_during_a_replayed_tap_lifts_escape_once() {
+        let mut core = engaged(options());
+        let mut out = Vec::new();
+        let start = Instant::now();
+
+        core.key(KEY_ESC, true, &mut out);
+        core.key(KEY_ESC, false, &mut out);
+        core.hold_escape(start, &mut out);
+        let transition = core.focus_lost(&mut out);
+        core.hold_escape(start + Duration::from_secs(1), &mut out);
+
+        assert_eq!(transition, Transition::Released);
+        assert_eq!(out, vec![key(KEY_ESC, true), key(KEY_ESC, false)]);
     }
 
     #[test]
@@ -1714,6 +1823,7 @@ mod tests {
         });
 
         assert_eq!(default.escape_hold, Some(Duration::from_secs(1)));
+        assert_eq!(default.escape_tap, Duration::from_millis(50));
         assert_eq!(off.escape_hold, None);
     }
 }

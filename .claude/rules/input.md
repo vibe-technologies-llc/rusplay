@@ -328,8 +328,11 @@ Live tests need a Wayland session with the portal and a person to confirm its di
   when the window is fullscreen, and while engaged it also releases input. It works while
   released too, so an uncaptured fullscreen window is left the same way. While engaged and the
   hold is on, the Esc press is withheld from the host: released before the hold time it goes out
-  as a press and release together (a tap reaches the game when the key comes up), held to the end
-  the game never sees it, so a game menu does not open on the way out. Any other key or button
+  as a press when the key comes up and a release `input.escape_tap_ms` later (default 50, timed by
+  the capture-thread `tick` like the hold; 0 sends both at once), because a game that polls key
+  state once per frame never sees a press and release injected in the same instant. Held to the
+  end the game never sees it, so a game menu does not open on the way out. Another Esc press
+  during the replayed tap, or a release of input, sends its release first. Any other key or button
   pressed while Esc is withheld sends the Esc press first and cancels the hold, so Esc combinations
   and an Esc held as a game key still work. With the hold off Esc is forwarded as it happens.
   `CaptureCore::hold_escape(now, out)` keeps the timer, started by the first capture-thread `tick`

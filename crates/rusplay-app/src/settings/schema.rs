@@ -1577,6 +1577,15 @@ pub static FIELDS: &[Field] = &[
         Audience::Client,
         Section::Input,
         "Hotkeys",
+        "input.escape_tap_ms",
+        "Tapped Esc length",
+        U16,
+    )
+    .unit("ms"),
+    field(
+        Audience::Client,
+        Section::Input,
+        "Hotkeys",
         "input.fullscreen_hint_ms",
         "Fullscreen hint",
         U16,
