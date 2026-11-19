@@ -394,8 +394,8 @@ paths:
     after 30 frames each has 504 timed frames (the `encode` call, import lookup to bitstream) and
     126 scored ones (`capture_reconstruction` against the source through `rusplay_core::measure`,
     not timed). The three cadences
-    (`cargo test -p rusplay-encode --all-features --lib intra_refresh_cadence_times_and_scores --
-    --ignored --nocapture`), luma PSNR / luma XPSNR in dB:
+    (`cargo nextest run -p rusplay-encode --all-features --lib --run-ignored only --no-capture
+    intra_refresh_cadence_times_and_scores`), luma PSNR / luma XPSNR in dB:
 
     | CBR at 60 fps | Former sweep | One sweep per 60 frames | No intra refresh |
     |---|---|---|---|
@@ -464,8 +464,8 @@ paths:
     refresh) with sixteen encoders in the round: every preset with VBAQ and pre-encode on and
     off. Median ms, then luma PSNR / luma XPSNR in dB; the bitrates of a column are within 1.6%
     of each other and 6 to 10% above the target
-    (`cargo test -p rusplay-encode --all-features --lib radeonsi_quality_mode_times_and_scores --
-    --ignored --nocapture`, 20 minutes):
+    (`cargo nextest run -p rusplay-encode --all-features --lib --run-ignored only --no-capture
+    radeonsi_quality_mode_times_and_scores`, 20 minutes):
 
     | 1920x1080, 20 Mbps | AV1 | HEVC | H.264 |
     |---|---|---|---|

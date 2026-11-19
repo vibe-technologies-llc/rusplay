@@ -3,7 +3,7 @@ use std::{process::Output, thread, time::Duration};
 use rusplay_client::{Credentials, PeerRecord};
 
 use super::{
-    FIRST_FRAME_WAIT, Live, SERIAL, connect,
+    FIRST_FRAME_WAIT, Live, connect,
     daemon::Daemon,
     gpu, recorder,
     stack::{read_trimmed, wait_for},
@@ -64,7 +64,6 @@ fn open_window_and_renew_pin(live: &Live) -> String {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "") else {
         return;
     };
@@ -163,7 +162,6 @@ fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn a_restart_with_the_saved_token_skips_the_portal_dialog() {
-    let _serial = SERIAL.lock();
     let Some(mut live) = Live::start(false, "") else {
         return;
     };

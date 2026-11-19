@@ -14,7 +14,7 @@ padding. Packet lengths preserve access-unit boundaries without requiring AUDs.
 Run the portable comparison on the affected client:
 
 ```sh
-RUSPLAY_REQUIRE_HW=1 cargo test -p rusplay-decode --features vaapi --test vaapi_motion -- --nocapture
+RUSPLAY_REQUIRE_HW=1 cargo nextest run -p rusplay-decode --features vaapi --test vaapi_motion --no-capture
 ```
 
 This compares Rusplay VAAPI CPU-copy output and FFmpeg VAAPI output separately
@@ -26,7 +26,7 @@ When CPU copy output is clean and DMA-BUF output is not, run the pipelined
 import comparison on that client:
 
 ```sh
-RUSPLAY_REQUIRE_HW=1 cargo test -p rusplay-decode --features vaapi --test vaapi_pipeline -- --ignored --nocapture
+RUSPLAY_REQUIRE_HW=1 cargo nextest run -p rusplay-decode --features vaapi --test vaapi_pipeline --run-ignored only --no-capture
 ```
 
 It decodes on one thread and reads through Vulkan on another, with frames in
@@ -41,7 +41,7 @@ When that is clean too, compare the whole present stage, which also runs the
 unpack shaders:
 
 ```sh
-RUSPLAY_REQUIRE_HW=1 cargo test -p rusplay-client --features software,vaapi --lib vaapi_dmabuf_hevc -- --nocapture --test-threads=1
+RUSPLAY_REQUIRE_HW=1 cargo nextest run -p rusplay-client --features software,vaapi --lib --no-capture vaapi_dmabuf_hevc
 ```
 
 One test presents every frame through DMA-BUF import and through `copy_output`
@@ -54,7 +54,7 @@ Regenerate from the repository root on hardware whose long-term references are
 verified, with FFmpeg installed:
 
 ```sh
-RUSPLAY_REQUIRE_HW=1 RUSPLAY_HEVC_FIXTURE_DIR="$PWD/crates/rusplay-decode/tests/data" cargo test -p rusplay-encode --all-features hevc_luma_and_chroma_match_software_decoding -- --nocapture
+RUSPLAY_REQUIRE_HW=1 RUSPLAY_HEVC_FIXTURE_DIR="$PWD/crates/rusplay-decode/tests/data" cargo nextest run -p rusplay-encode --all-features --no-capture hevc_luma_and_chroma_match_software_decoding
 ```
 
 Regeneration changes both bitstreams and reference checksums. The test compares

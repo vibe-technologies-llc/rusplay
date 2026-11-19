@@ -434,8 +434,8 @@ paths:
   `ref_pic_list_modification`, B ordering, pairing, unpaired fields) and every stream runs with
   one packet per field and one per frame. The marking scenarios were also checked against
   ffmpeg's software decode. A scenario the driver gets wrong stays as an `#[ignore]`d test named
-  in its `docs/BUGS.md` item, run with `cargo test -p rusplay-decode --features vaapi --lib --
-  --ignored` to check a driver update.
+  in its `docs/BUGS.md` item, run with `cargo nextest run -p rusplay-decode --features vaapi --lib
+  --run-ignored only` to check a driver update.
 
 - `tests/vaapi_import.rs` compares both HEVC luma and chroma planes read through Vulkan with
   libva image readback for 8-bit and 10-bit fixtures, repeating the sequence to reuse decoded

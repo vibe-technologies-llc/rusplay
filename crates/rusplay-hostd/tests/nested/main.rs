@@ -11,7 +11,7 @@ mod stack;
 
 use std::{
     net::SocketAddr,
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -25,8 +25,6 @@ use rusplay_client::{
 use rusplay_config::{Config, SoftwareDecoderConfig, VideoDecoderConfig};
 use rusplay_core::{Codec, FrameRate, Resolution};
 use stack::{Stack, read_trimmed, wait_for};
-
-static SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 const DIALOG_WAIT: Duration = Duration::from_secs(40);
 const LISTEN_WAIT: Duration = Duration::from_secs(10);
@@ -232,7 +230,6 @@ fn observe_with(
     seconds: u64,
     extra: &str,
 ) -> Option<Observation> {
-    let _serial = SERIAL.lock();
     let live = Live::start(animate, extra)?;
     let gpu = gpu()?;
 

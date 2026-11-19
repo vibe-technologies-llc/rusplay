@@ -2,7 +2,7 @@
 set -euo pipefail
 
 directory="${1:?usage: scripts/xpsnr-reference.sh <fixture directory>}"
-RUSPLAY_XPSNR_FIXTURE_DIR="$directory" cargo test -q -p rusplay-core write_xpsnr_fixtures -- --ignored >/dev/null
+RUSPLAY_XPSNR_FIXTURE_DIR="$directory" cargo nextest run --cargo-quiet -p rusplay-core --run-ignored only write_xpsnr_fixtures >/dev/null
 
 cd "$directory"
 while read -r name size format fps; do

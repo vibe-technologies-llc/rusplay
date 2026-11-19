@@ -49,7 +49,7 @@ paths:
   `read_frame`/`try_read_frame`. Startup waits for the first negotiated format and fails with a
   specific error on a stream error, a channel-count mismatch or a timeout.
 - Live PipeWire tests are `#[ignore]`d and run by hand with
-  `cargo test -p rusplay-audio --all-features -- --ignored`. `PIPEWIRE_NODE=<sink name>` points
+  `cargo nextest run -p rusplay-audio --all-features --run-ignored only`. `PIPEWIRE_NODE=<sink name>` points
   the capture at another sink, which allows a loopback check against a null sink without sound.
   `PIPEWIRE_NODE=rusplay-microphone` points a `Source` capture at the virtual microphone for the
   `playback` loopback test.

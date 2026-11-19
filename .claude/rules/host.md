@@ -461,8 +461,8 @@ paths:
     back.
   - Measured at 3840x2160 on an RX 9070 XT (radeonsi, VCN 5) from a DMA-BUF `XR24` capture,
     `GpuPipeline::encode` from import to encoded frame, median of 240 frames with both paths run
-    round robin (`cargo test --release -p rusplay-host --all-features --lib handoff_frame_times --
-    --ignored --nocapture`): 8-bit AV1 and HEVC take 5.4 ms handed off against 9.6 ms read back,
+    round robin (`cargo nextest run --release -p rusplay-host --all-features --lib --run-ignored only
+    --no-capture handoff_frame_times`): 8-bit AV1 and HEVC take 5.4 ms handed off against 9.6 ms read back,
     10-bit (`P010`) 10.6 ms against 25 to 27 ms, where the readback also pays the CPU shift into
     `P010`. GPU clocks swing a whole run by up to 2x (one run gave 8-bit AV1 10.9 against 17.1 ms),
     so only paths timed in the same run compare.

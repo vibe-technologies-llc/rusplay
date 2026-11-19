@@ -60,19 +60,24 @@ the `decode` bitstream parsers (through its `fuzzing` feature).
 |---|---|
 | Build | `cargo build --workspace --all-features` |
 | Lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
-| Test | `cargo test --workspace --all-features` |
+| Test | `scripts/test.sh --workspace --all-features` |
 | Format | `rust-formatter` (never `cargo fmt`/`rustfmt`) |
 | Format check | `rust-formatter --check` |
 | Comment scan | `scripts/check-comments.sh` |
-| Nested KWin run | `cargo test -p rusplay-hostd --features pipewire,svt-av1 --test nested -- --ignored --test-threads=1` |
-| Hardware test run | `RUSPLAY_REQUIRE_HW=1 cargo test --workspace --all-features` |
+| Nested KWin run | `cargo nextest run -p rusplay-hostd --features pipewire,svt-av1 --test nested --run-ignored only` |
+| Hardware test run | `RUSPLAY_REQUIRE_HW=1 scripts/test.sh --workspace --all-features` |
 | Fuzz a decoder | `cargo +nightly fuzz run <target>` in `fuzz/` (`discovery`, `pairing`, `reconnect`, `control`, `clipboard`, `cursor`, `input`, `headers`, `reassembly`, `decode_h264`, `decode_hevc`, `decode_av1`, `decode_software`, `decode_color`); the `decode_*` targets run with `-O` (release arithmetic) |
 | Release / profiling build | `cargo build --release` / `cargo build --profile profiling` |
 | Daemon with encoders and PipeWire | `cargo build --release -p rusplay-hostd --features vaapi,nvenc,software-encoders,pipewire,input,flac` |
 | App with decoders and host encoders | `cargo build --release -p rusplay-app --features vaapi,nvdec,software,ffmpeg,input` |
 
+Tests run on cargo-nextest, one process per test. `scripts/test.sh` passes its arguments to
+`cargo nextest run` and prints the tests that skipped at run time after the summary. There is no
+`cargo test --doc` step: doc comments are banned, so no doctests exist.
+
 Tests that need a GPU, a VAAPI render node or an NVIDIA driver skip when it is missing, writing
-`skipped <test>: <reason>` straight to stderr so `cargo test` shows it despite output capture. With
+`skipped <test>: <reason>` to stderr and, when `RUSPLAY_SKIP_LOG` names a file, appending it there,
+which is how `scripts/test.sh` collects them past nextest's output capture. With
 `RUSPLAY_REQUIRE_HW=1` a missing device fails the test instead; a device that exists but lacks a
 codec, chroma or bit depth still skips visibly. The skip logic is `src/hardware.rs` in each crate
 with such tests, included by path from that crate's integration tests.

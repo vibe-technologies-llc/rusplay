@@ -143,7 +143,8 @@ paths:
   `/dev/uinput` (`input.md`).
 - `tests/nested/` is the live check against a real compositor and portals without touching the
   user's session. It is the `nested` test target (`required-features = ["pipewire", "svt-av1"]`),
-  every test `#[ignore]`d and serialised, skipping visibly through `src/hardware.rs` when a tool,
+  every test `#[ignore]`d and run one at a time by the `nested-compositor` test group in
+  `.config/nextest.toml`, skipping visibly through `src/hardware.rs` when a tool,
   the PipeWire socket or a GPU adapter is missing. `Stack` runs `dbus-run-session` (a private bus
   whose address must differ from the caller's) and a `kwin_wayland --virtual` on its own socket,
   with `XDG_*_HOME` in a temp directory and `WAYLAND_DISPLAY` and `DISPLAY` set by the harness
@@ -158,7 +159,7 @@ paths:
   to the new client), `service.rs` the pairing, `pin`,
   `new-pin`, `status`, `peers list`, `forget`, stats line and reconnect run and a restart with the
   restore token. Run them with
-  `cargo test -p rusplay-hostd --features pipewire,svt-av1 --test nested -- --ignored --test-threads=1`.
+  `cargo nextest run -p rusplay-hostd --features pipewire,svt-av1 --test nested --run-ignored only`.
   `rusplay-client`, `wayland-client` and the Plasma and xdg protocol bindings are dev-dependencies
   of the daemon for these tests only. They show a nested virtual backend over loopback; none of it
   is a second machine or a real display (`hostd-service-live-check`).

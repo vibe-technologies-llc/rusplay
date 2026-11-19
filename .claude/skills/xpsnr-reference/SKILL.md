@@ -18,7 +18,7 @@ are what FFmpeg's `xpsnr` filter reports for the third frame.
    `<case> <y> <u> <v>` for frame 2.
 3. Copy the printed scores into the case's `expected`, grouping the six decimals as
    `34.303_249` for clippy's `unreadable_literal`, and run
-   `cargo test -p rusplay-core xpsnr_matches_ffmpeg_on_the_reference_sequences`. The tolerance is
+   `cargo nextest run -p rusplay-core xpsnr_matches_ffmpeg_on_the_reference_sequences`. The tolerance is
    0.001 dB.
 4. A sequence in the downsampled path (more than 2048x1152 luma samples) must have an even width
    and height: FFmpeg reads one sample past an odd block there, from row padding whose contents

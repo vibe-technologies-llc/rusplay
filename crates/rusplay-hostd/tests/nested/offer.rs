@@ -1,6 +1,6 @@
 use rusplay_core::{ColorPrimaries, Resolution, TransferFunction};
 
-use super::{SERIAL, hardware, observe, observe_with, stack::Stack};
+use super::{hardware, observe, observe_with, stack::Stack};
 
 const VIRTUAL_SOURCE_BIT: u32 = 4;
 const OUTPUT_REFRESH_HZ: usize = 60;
@@ -25,7 +25,6 @@ fn offered(width: u32, height: u32) -> Resolution {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde and PipeWire"]
 fn the_portal_lists_the_virtual_source_type() {
-    let _serial = SERIAL.lock();
     let Some(stack) = Stack::start() else {
         return;
     };

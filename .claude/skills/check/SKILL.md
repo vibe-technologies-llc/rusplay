@@ -11,7 +11,7 @@ Run from the repository root and stop at the first failure:
    Never `cargo fmt`.
 2. `scripts/check-comments.sh`. Any output is a comment that must go.
 3. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-4. `cargo test --workspace --all-features`
+4. `scripts/test.sh --workspace --all-features` (cargo-nextest; it lists run-time hardware skips after the summary)
 
 Fix failures at the source. Do not add `#[allow]` to quiet clippy unless the lint is wrong for that
 exact item, and then on the narrowest item.

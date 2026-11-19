@@ -3,7 +3,7 @@ use std::{thread, time::Duration};
 use rusplay_client::{ClientStream, ColorVolume, Credentials, PeerRecord, announced_display};
 use rusplay_core::{FrameRate, Resolution};
 
-use super::{FIRST_FRAME_WAIT, Live, Recording, SERIAL, connect, gpu, recorder, stack::wait_for};
+use super::{FIRST_FRAME_WAIT, Live, Recording, connect, gpu, recorder, stack::wait_for};
 
 const DISPLAY: (u32, u32, u32) = (1280, 720, 60_000);
 const RESIZE_WAIT: Duration = Duration::from_secs(10);
@@ -48,7 +48,6 @@ fn counter(line: &str, name: &str) -> u64 {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn a_live_resize_takes_the_stream_to_each_new_size_on_kwin() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "") else {
         return;
     };
@@ -94,7 +93,6 @@ fn a_live_resize_takes_the_stream_to_each_new_size_on_kwin() {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn a_window_below_the_compositor_minimum_streams_at_the_minimum_on_kwin() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "") else {
         return;
     };
@@ -127,7 +125,6 @@ fn a_window_below_the_compositor_minimum_streams_at_the_minimum_on_kwin() {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn what_kwin_does_with_an_offer_below_its_minimum() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "virtual_min_resolution = { width = 1, height = 1 }") else {
         return;
     };
@@ -162,7 +159,6 @@ fn what_kwin_does_with_an_offer_below_its_minimum() {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn a_flood_of_resizes_reaches_the_last_size_with_few_offers_on_kwin() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "virtual_resize_min_interval_ms = 300") else {
         return;
     };
@@ -201,7 +197,6 @@ fn a_flood_of_resizes_reaches_the_last_size_with_few_offers_on_kwin() {
 #[test]
 #[ignore = "needs kwin_wayland, xdg-desktop-portal, xdg-desktop-portal-kde, PipeWire and a GPU"]
 fn a_takeover_resizes_the_output_to_the_new_clients_display_on_kwin() {
-    let _serial = SERIAL.lock();
     let Some(live) = Live::start(true, "") else {
         return;
     };

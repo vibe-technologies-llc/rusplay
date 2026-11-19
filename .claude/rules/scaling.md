@@ -379,8 +379,8 @@ paths:
   the boundary table's bake at 16x4 and its hue erosion at 64x1 (`BoundaryPipelines`), and the histogram and peak passes on an analysis layout), the source and destination layouts and
   the `GroupCache` scheme with the scaler. Their design is in `.claude/rules/color.md`.
 - `bench.rs` is an ignored test that prints per-frame GPU times for the representative
-  workloads: `cargo test --release -p rusplay-scale scaling_frame_times -- --ignored
-  --nocapture`. It takes the best of several batches after a long warm-up, because the GPU's
+  workloads: `cargo nextest run --release -p rusplay-scale --run-ignored only
+  --no-capture scaling_frame_times`. It takes the best of several batches after a long warm-up, because the GPU's
   clocks otherwise swing results by 30%. Rerun it before and after any shader performance
   change. Its `present` lines time a whole 4K HDR frame through the separate analytic colour
   passes, the fused `ColorChain`, and the colour LUT at 65³, 97³ and 129³ with the one-off

@@ -17,8 +17,8 @@ To compare a capture through the presentation stage:
 ```sh
 RUSPLAY_HEVC_FIXTURE_DIR=/tmp/rusplay-hevc/REPORTED-SUBDIRECTORY \
 RUSPLAY_HEVC_FIXTURE_NAME=stream \
-cargo test -p rusplay-client --features software,vaapi --lib \
-  vaapi_dmabuf_hevc_motion_presents_like_copied_frames -- --nocapture
+cargo nextest run -p rusplay-client --features software,vaapi --lib --no-capture \
+  vaapi_dmabuf_hevc_motion_presents_like_copied_frames
 ```
 
 This compares DMA-BUF and CPU-copy output at native size and scaled to 3072x1728.
