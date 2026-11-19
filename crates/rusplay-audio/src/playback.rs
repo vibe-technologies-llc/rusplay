@@ -415,7 +415,7 @@ impl Playout {
                 1.0
             };
             let gain = fade_gain(self.faded_in.saturating_add(frame), fade_span);
-            for channel in 0..channels {
+            for (channel, last) in self.last_frame.iter_mut().enumerate() {
                 let fresh = sample((discarded + frame) * channels + channel);
                 let blended = if crossfade {
                     let stale = sample(frame * channels + channel);
@@ -424,7 +424,7 @@ impl Playout {
                     fresh
                 };
                 let value = blended * gain;
-                self.last_frame[channel] = value;
+                *last = value;
                 out[written..written + BYTES_PER_SAMPLE].copy_from_slice(&value.to_le_bytes());
                 written += BYTES_PER_SAMPLE;
             }
