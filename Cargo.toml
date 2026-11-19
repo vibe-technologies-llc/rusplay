@@ -28,7 +28,7 @@ rusplay-scale.path = "crates/rusplay-scale"
 rusplay-va.path = "crates/rusplay-va"
 
 ash = { version = "0.38.0", default-features = false }
-ashpd = { version = "0.14.0", default-features = false }
+ashpd = { version = "0.14.1", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false }
 claxon = "0.4.3"
@@ -55,7 +55,7 @@ opus-rs = { version = "0.1.42", default-features = false }
 parking_lot = { version = "0.13.0", default-features = false }
 pipewire = { version = "0.10.1", default-features = false }
 pkg-config = "0.3.34"
-pollster = "1.0.2"
+pollster = "1.0.3"
 raw-window-handle = { version = "0.6.2", default-features = false }
 rav1d = { version = "1.1.0", default-features = false }
 reed-solomon-simd = { version = "3.1.0", default-features = false }
