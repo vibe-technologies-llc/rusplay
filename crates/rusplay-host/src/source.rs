@@ -35,7 +35,7 @@ pub trait FrameSource: Send {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SourceTraits {
     pub depth: BitDepth,
     pub color: ColorSpace,
@@ -115,12 +115,14 @@ impl CaptureFeed {
 
     pub(crate) fn set_capture_size(&self, size: Resolution) {
         let packed = u64::from(size.width) << u32::BITS | u64::from(size.height);
+
         self.capture_size.store(packed, Ordering::Relaxed);
     }
 
     pub(crate) fn capture_size(&self) -> Option<Resolution> {
         let packed = self.capture_size.load(Ordering::Relaxed).to_be_bytes();
         let (width, height) = packed.split_at(4);
+
         let size = Resolution::new(
             u32::from_be_bytes(width.try_into().ok()?),
             u32::from_be_bytes(height.try_into().ok()?),
@@ -233,6 +235,7 @@ mod portal {
         let tuning = ThreadTuning::from_config(&config.network);
         let refusals = TuningRefusals::default();
         let tally = refusals.clone();
+
         let capture =
             PipeWireCapture::from_portal_with_thread_start(session, options, move || {
                 tally.tune(tuning, CAPTURE_LOOP_ROLE);
@@ -252,6 +255,7 @@ mod portal {
         importable: impl Fn(DrmFourcc) -> Vec<u64>,
     ) -> StreamOptions {
         let mut options = StreamOptions::new(&config.capture, &config.video);
+
         options
             .formats
             .retain(|fourcc| upload_format_for(*fourcc).is_ok());
@@ -283,6 +287,7 @@ mod portal {
 
         fn ten_bit() -> Config {
             let mut config = Config::default();
+
             config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
                 chroma: ChromaSubsampling::Yuv444,
                 depth: BitDepth::Ten,
@@ -327,6 +332,7 @@ mod portal {
         #[test]
         fn capture_honours_prefer_dmabuf_off() {
             let mut config = Config::default();
+
             config.capture.prefer_dmabuf = false;
 
             let options = capture_options(&config, |_| vec![DRM_FORMAT_MOD_LINEAR]);

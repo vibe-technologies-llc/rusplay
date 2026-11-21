@@ -19,6 +19,7 @@ pub(crate) fn send_all(
 
     while sent < datagrams.len() {
         let progress = transport.send_batch(&datagrams[sent..], client)?;
+
         if progress == 0 {
             thread::sleep(SEND_RETRY_WAIT);
         }

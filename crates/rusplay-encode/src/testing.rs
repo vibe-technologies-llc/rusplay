@@ -83,6 +83,7 @@ pub fn check_stream_starts_on_a_keyframe(
         .encode(&frame((format).or_unnegotiated(), 0))
         .unwrap()
         .unwrap();
+
     assert!(first.keyframe);
     assert!(contains_idr(&first.data));
     assert_eq!(first.codec, config.stream_codec());
@@ -93,6 +94,7 @@ pub fn check_stream_starts_on_a_keyframe(
             .encode(&frame((format).or_unnegotiated(), index))
             .unwrap()
             .unwrap();
+
         assert!(!next.keyframe);
         assert!(!contains_idr(&next.data));
         assert_eq!(next.timestamp.as_micros(), index * FRAME_INTERVAL_MICROS);
@@ -137,6 +139,7 @@ pub fn check_recovery_falls_back_to_a_keyframe(
             .unwrap();
     }
     encoder.acknowledge(OutputIndex(1));
+
     let recovery = encoder.recover(OutputIndex(1));
 
     let recovered = encoder
@@ -152,11 +155,13 @@ pub fn check_recovery_falls_back_to_a_keyframe(
 pub fn check_set_bitrate_in_place(config: &VideoConfig) {
     let format = config.pixel_format;
     let mut encoder = open(config).unwrap();
+
     encoder
         .encode(&frame((format).or_unnegotiated(), 0))
         .unwrap();
 
     encoder.set_bitrate(2_000).unwrap();
+
     let next = encoder
         .encode(&frame((format).or_unnegotiated(), 1))
         .unwrap();
@@ -265,6 +270,7 @@ pub fn check_colour_reaches_the_decoder(
 
 pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
     const MEASURED: u64 = 5;
+
     let format = config.pixel_format;
     let mut encoder = open(config).unwrap();
 
@@ -273,11 +279,15 @@ pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
             .encode(&frame((format).or_unnegotiated(), index))
             .unwrap();
     }
+
     assert!(encoder.take_reconstruction().unwrap().is_none());
 
     assert!(encoder.capture_reconstruction());
+
     let source_frame = frame((format).or_unnegotiated(), MEASURED);
+
     encoder.encode(&source_frame).unwrap();
+
     let reconstruction = encoder.take_reconstruction().unwrap().unwrap();
     let source = YuvFrame::from_frame(
         &source_frame,
@@ -295,6 +305,7 @@ pub fn check_reconstruction_follows_the_source(config: &VideoConfig) {
         rusplay_core::TemporalOrder::First,
     )
     .unwrap();
+
     assert_eq!(reconstruction.format(), (format).or_unnegotiated());
     assert_eq!(reconstruction.resolution(), TEST_RESOLUTION);
     assert!(

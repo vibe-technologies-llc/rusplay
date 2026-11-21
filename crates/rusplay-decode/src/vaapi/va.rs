@@ -100,7 +100,7 @@ impl Session {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct PoolSurface {
     pub(super) id: SurfaceId,
     pub(super) image: Arc<DmaBufImage>,
@@ -189,6 +189,7 @@ impl SurfacePool {
             let surface = PoolSurface::detached(
                 SurfaceId::try_from(self.surfaces.len()).unwrap_or(INVALID_SURFACE),
             );
+
             self.surfaces.push(surface.clone());
             return Ok(surface);
         }
@@ -206,6 +207,7 @@ impl SurfacePool {
             id: owned.id(),
             image: Arc::new(image),
         };
+
         self.owned.push(owned);
         self.surfaces.push(surface.clone());
 
@@ -309,6 +311,7 @@ impl ReadBack for Rc<Display> {
         )?;
 
         let mut va_image = Image::new(self, image.fourcc.as_u32(), Resolution::new(width, height))?;
+
         let data = va_image.get(&surface)?;
         let layout = va_image.layout();
 

@@ -10,7 +10,7 @@ const BACKEND: Backend = Backend::Nvenc;
 const PITCH_ALIGNMENT: u32 = 4;
 pub(super) const LINEAR_MODIFIER: u64 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Layout {
     SemiPlanar420,
     SemiPlanar422,
@@ -66,7 +66,7 @@ pub(crate) const fn dma_buf_fourcc(format: PixelFormat) -> DrmFourcc {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DmaBufLayout {
     pub base: u64,
     pub pitch: u32,
@@ -88,13 +88,16 @@ pub(crate) fn dma_buf_layout(
     };
 
     let pitch = first.stride;
+
     if pitch % PITCH_ALIGNMENT != 0 {
         return Err(EncodeError::DmaBufStrideUnaligned {
             stride: pitch,
             alignment: PITCH_ALIGNMENT,
         });
     }
+
     let minimum = resolution.width as usize * bytes_per_sample(format.depth);
+
     if (pitch as usize) < minimum {
         return Err(EncodeError::FrameStrideTooSmall {
             minimum,
@@ -104,6 +107,7 @@ pub(crate) fn dma_buf_layout(
 
     let base = u64::from(first.offset);
     let plane_bytes = u64::from(pitch) * u64::from(resolution.height);
+
     for (index, plane) in planes.iter().enumerate().skip(1) {
         if plane.stride != pitch {
             return Err(EncodeError::DmaBufPlaneStride {
@@ -113,6 +117,7 @@ pub(crate) fn dma_buf_layout(
                 actual: plane.stride,
             });
         }
+
         let expected = base + index as u64 * plane_bytes;
         if u64::from(plane.offset) != expected {
             return Err(EncodeError::DmaBufPlaneOffset {
@@ -183,6 +188,7 @@ pub(super) fn pack(view: &YuvFrame<'_>, data: &mut [u8], pitch: usize) {
                 let row = pitch * height + y * pitch;
                 for x in 0..cb.width {
                     let at = row + 2 * sample_bytes * x;
+
                     put(data, at, wide, sample(&cb, wide, x, y), shift);
                     put(
                         data,
@@ -232,6 +238,7 @@ mod tests {
             buffer_format(yuv444_10),
             Some(ffi::BUFFER_FORMAT_YUV444_10BIT)
         );
+
         for chroma in [
             ChromaSubsampling::Yuv420,
             ChromaSubsampling::Yuv422,
@@ -252,15 +259,18 @@ mod tests {
     fn semi_planar_422_carries_a_full_height_chroma_plane() {
         let nv16 = format(ChromaSubsampling::Yuv422, BitDepth::Eight);
         let frame = yuv_frame(nv16, SIZE, 4, Timestamp::from_micros(0));
+
         let view = YuvFrame::from_frame(&frame, BACKEND, nv16).unwrap();
         let pitch = 8;
         let rows = Layout::of(nv16).rows(SIZE.height);
+
         let mut data = vec![0xee; pitch * rows];
 
         pack(&view, &mut data, pitch);
 
         let [_, cb, cr] = view.planes;
         let chroma = pitch * 4;
+
         assert_eq!(rows, 8);
         assert_eq!(cb.rows, 4);
         assert_eq!(data[chroma], cb.data[0]);
@@ -274,6 +284,7 @@ mod tests {
     fn p210_moves_ten_bit_chroma_to_the_most_significant_bits() {
         let p210 = format(ChromaSubsampling::Yuv422, BitDepth::Ten);
         let frame = yuv_frame(p210, SIZE, 5, Timestamp::from_micros(0));
+
         let view = YuvFrame::from_frame(&frame, BACKEND, p210).unwrap();
         let pitch = 12;
         let mut data = vec![0; pitch * Layout::of(p210).rows(SIZE.height)];
@@ -283,6 +294,7 @@ mod tests {
         let [_, cb, cr] = view.planes;
         let packed = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]);
         let chroma = pitch * 4;
+
         assert_eq!(data.len(), pitch * 8);
         assert_eq!(packed(chroma), sample(&cb, true, 0, 0) << 6);
         assert_eq!(packed(chroma + 2), sample(&cr, true, 0, 0) << 6);
@@ -297,6 +309,7 @@ mod tests {
     fn nv12_interleaves_chroma_after_the_luma_rows() {
         let nv12 = format(ChromaSubsampling::Yuv420, BitDepth::Eight);
         let frame = yuv_frame(nv12, SIZE, 1, Timestamp::from_micros(0));
+
         let view = YuvFrame::from_frame(&frame, BACKEND, nv12).unwrap();
         let pitch = 8;
         let mut data = vec![0xee; pitch * Layout::of(nv12).rows(SIZE.height)];
@@ -304,13 +317,16 @@ mod tests {
         pack(&view, &mut data, pitch);
 
         let [luma, cb, cr] = view.planes;
+
         assert_eq!(&data[..6], &luma.data[..6]);
         assert_eq!(&data[6..8], &[0xee, 0xee]);
         assert_eq!(
             &data[pitch..pitch + 6],
             &luma.data[luma.stride..luma.stride + 6]
         );
+
         let chroma = pitch * 4;
+
         assert_eq!(data[chroma], cb.data[0]);
         assert_eq!(data[chroma + 1], cr.data[0]);
         assert_eq!(data[chroma + 4], cb.data[2]);
@@ -322,6 +338,7 @@ mod tests {
     fn ten_bit_samples_move_to_the_most_significant_bits() {
         let p010 = format(ChromaSubsampling::Yuv420, BitDepth::Ten);
         let frame = yuv_frame(p010, SIZE, 2, Timestamp::from_micros(0));
+
         let view = YuvFrame::from_frame(&frame, BACKEND, p010).unwrap();
         let pitch = 16;
         let mut data = vec![0; pitch * Layout::of(p010).rows(SIZE.height)];
@@ -331,6 +348,7 @@ mod tests {
         let [luma, cb, cr] = view.planes;
         let source = |plane: &YuvPlane<'_>, x: usize| sample(plane, true, x, 0);
         let packed = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]);
+
         assert_eq!(packed(0), source(&luma, 0) << 6);
         assert_eq!(packed(10), source(&luma, 5) << 6);
         assert_eq!(packed(pitch * 4), source(&cb, 0) << 6);
@@ -343,6 +361,7 @@ mod tests {
     fn planar_444_stacks_three_full_planes() {
         let yuv444 = format(ChromaSubsampling::Yuv444, BitDepth::Ten);
         let frame = yuv_frame(yuv444, SIZE, 3, Timestamp::from_micros(0));
+
         let view = YuvFrame::from_frame(&frame, BACKEND, yuv444).unwrap();
         let pitch = 12;
         let mut data = vec![0; pitch * Layout::of(yuv444).rows(SIZE.height)];
@@ -351,6 +370,7 @@ mod tests {
 
         let [_, cb, cr] = view.planes;
         let packed = |at: usize| u16::from_le_bytes([data[at], data[at + 1]]);
+
         assert_eq!(packed(pitch * 4), sample(&cb, true, 0, 0) << 6);
         assert_eq!(packed(pitch * 8 + 2), sample(&cr, true, 1, 0) << 6);
         assert_eq!(packed(pitch * 11 + 10), sample(&cr, true, 5, 3) << 6);

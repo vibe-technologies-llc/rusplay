@@ -53,6 +53,7 @@ pub(crate) fn run(config: &VideoDecoderConfig, links: &DecodeLinks) -> Result<()
     let _close = CloseOnExit(&links.output);
 
     let result = decode_loop(config, links);
+
     links.stop.store(true, Ordering::Relaxed);
 
     result
@@ -127,6 +128,7 @@ fn decode_with_active(
         }
 
         let result = decoder_for(&mut active, video.stream.codec, config)?.decode(&video.frame);
+
         if result.is_ok() {
             links
                 .feedback
@@ -138,12 +140,14 @@ fn decode_with_active(
         match result {
             Ok(Some(picture)) => {
                 links.counters.frames_decoded.increment();
+
                 let color = picture.color.over(video.stream.color);
                 let siting = Some(resolve_siting(
                     picture.color.chroma_siting,
                     video.stream.siting,
                 ));
                 let decoded_at = Instant::now();
+
                 if let Some(latency) = links
                     .counters
                     .clock
@@ -151,6 +155,7 @@ fn decode_with_active(
                 {
                     links.counters.capture_to_decode.record(latency);
                 }
+
                 let output = DecodedVideo {
                     decoded: picture,
                     number: video.number,
@@ -223,6 +228,7 @@ mod tests {
     fn a_decoder_open_request_opens_the_decoder_before_any_frame() {
         let (queue, queued) = mpsc::sync_channel(4);
         let (feedback, _feedback_received) = mpsc::channel();
+
         let links = DecodeLinks {
             queue: queued,
             output: Arc::new(Slot::new()),
@@ -234,9 +240,12 @@ mod tests {
             device: "/dev/null".into(),
             ..Default::default()
         });
+
         queue.send(DecodeInput::Open(Codec::H264)).unwrap();
         drop(queue);
+
         let result = run(&config, &links);
+
         assert!(matches!(result, Err(ClientError::Decode(_))));
         assert_eq!(links.counters.snapshot().frames_decoded, 0);
     }
@@ -246,6 +255,7 @@ mod tests {
         let (queue, queued) = mpsc::sync_channel(4);
         let (feedback, _feedback_received) = mpsc::channel();
         let output = Arc::new(Slot::new());
+
         let links = DecodeLinks {
             queue: queued,
             output: Arc::clone(&output),
@@ -260,13 +270,16 @@ mod tests {
         let worker = std::thread::spawn(move || {
             finished.send(run(&config, &links)).ok();
         });
+
         stop.store(true, Ordering::Relaxed);
 
         let result = finished_received.recv_timeout(Duration::from_secs(10));
+
         worker.join().unwrap();
 
         assert!(matches!(result, Ok(Ok(()))));
         assert!(output.take().is_none());
+
         drop(queue);
     }
     struct FailingInter;
@@ -289,8 +302,10 @@ mod tests {
         use rusplay_protocol::StreamDescription;
 
         use crate::receive::EncodedVideo;
+
         let (queue, queued) = mpsc::channel();
         let (feedback, received) = mpsc::channel();
+
         let links = DecodeLinks {
             queue: queued,
             output: Arc::new(Slot::new()),
@@ -299,6 +314,7 @@ mod tests {
             counters: Arc::new(Counters::default()),
         };
         let codec = Codec::H264;
+
         for (number, keyframe) in [(0, false), (1, false), (2, true)] {
             queue
                 .send(DecodeInput::Video(EncodedVideo {
@@ -325,7 +341,9 @@ mod tests {
                 .unwrap();
         }
         drop(queue);
+
         let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
+
         decode_with_active(
             &config,
             &links,
@@ -335,6 +353,7 @@ mod tests {
             }),
         )
         .unwrap();
+
         assert_eq!(links.counters.snapshot().frames_skipped, 1);
         assert_eq!(links.counters.snapshot().decode_errors, 1);
         assert_eq!(

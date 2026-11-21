@@ -3,7 +3,7 @@ use crate::vaapi::va::PackedHeader;
 const START_CODE: [u8; 4] = [0, 0, 0, 1];
 const EMULATION_PREVENTION_BYTE: u8 = 3;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct BitWriter {
     bytes: Vec<u8>,
     length: usize,
@@ -71,10 +71,12 @@ impl BitWriter {
 pub(super) fn nal_unit(header: &[u8], rbsp: BitWriter) -> Vec<u8> {
     let payload = rbsp.into_bytes();
     let mut nal = Vec::with_capacity(START_CODE.len() + header.len() + payload.len() + 8);
+
     nal.extend_from_slice(&START_CODE);
     nal.extend_from_slice(header);
 
     let mut zeros = 0;
+
     for byte in payload {
         if zeros >= 2 && byte <= EMULATION_PREVENTION_BYTE {
             nal.push(EMULATION_PREVENTION_BYTE);
@@ -109,8 +111,11 @@ pub(super) fn leb128(value: usize, width: usize) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(width.max(1));
     loop {
         let low = u8::try_from(remaining & 0x7f).unwrap_or(0);
+
         remaining >>= 7;
+
         let more = remaining != 0 || bytes.len() + 1 < width;
+
         bytes.push(if more { low | 0x80 } else { low });
         if !more {
             return bytes;
@@ -139,6 +144,7 @@ mod tests {
     #[test]
     fn emulation_prevention_breaks_start_code_patterns() {
         let mut rbsp = BitWriter::new();
+
         rbsp.bits(0x0000_0100_0003, 48);
 
         let nal = nal_unit(&[0x67], rbsp);

@@ -69,6 +69,7 @@ fn every_transfer_matches_the_reference() {
         return;
     };
     let image = ramp();
+
     let source = testing::upload(gpu, &image);
 
     for transfer in TransferFunction::ALL {
@@ -162,6 +163,7 @@ fn channel_orders_pick_the_named_lanes() {
         let base = small(x + 3 * y) / 8.0;
         [base, base + 0.0625, base + 0.125, base + 0.1875]
     });
+
     let source = testing::upload(gpu, &image);
 
     for order in [
@@ -178,6 +180,7 @@ fn channel_orders_pick_the_named_lanes() {
             for (texel, lanes) in got.pixels.iter().zip(&image.pixels) {
                 let pick = order.lanes().map(|lane| lanes[lane as usize]);
                 let alpha = if opaque { 1.0 } else { pick[3] };
+
                 assert_eq!(*texel, [pick[0], pick[1], pick[2], alpha], "{order:?}");
             }
         }
@@ -234,6 +237,7 @@ fn packed_ten_bit_words_unpack_in_both_orders() {
         .iter()
         .map(|&(red, green, blue, alpha)| rgbx1010102(red, green, blue, alpha))
         .collect();
+
     let source = packed_texture(gpu, &words, 2);
     let ten = |code: u32| small(code) / 1023.0;
 
@@ -257,6 +261,7 @@ fn packed_ten_bit_words_unpack_in_both_orders() {
                 .zip(want)
                 .all(|(got, want)| (got - want).abs() <= RGBA16F_TOLERANCE / 2.0)
         };
+
         assert!(
             close(rgb, [ten(red), ten(green), ten(blue), two]),
             "{rgb:?}"
@@ -274,6 +279,7 @@ fn a_source_of_the_wrong_kind_is_refused() {
         return;
     };
     let pipelines = ScalePipelines::new(&gpu.device);
+
     let mut lineariser = Lineariser::new(
         &pipelines,
         &gpu.device,
@@ -286,6 +292,7 @@ fn a_source_of_the_wrong_kind_is_refused() {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     let result = lineariser.encode(
         &gpu.device,
         &mut encoder,
@@ -308,6 +315,7 @@ fn hdr_levels_are_validated_and_reconfiguring_reports_parameters() {
         return;
     };
     let pipelines = ScalePipelines::new(&gpu.device);
+
     let mut lineariser =
         Lineariser::new(&pipelines, &gpu.device, settings(TransferFunction::Srgb)).unwrap();
     let broken = LineariseSettings {

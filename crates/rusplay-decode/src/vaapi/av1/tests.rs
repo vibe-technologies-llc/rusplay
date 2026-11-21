@@ -122,6 +122,7 @@ fn monochrome_is_refused_by_name() {
         (true, true),
         (64, 64),
     );
+
     header.color_config.mono_chrome = true;
 
     let error = stream_format(&header).unwrap_err();
@@ -158,8 +159,10 @@ fn copying_a_prefix_stops_at_the_shorter_slice() {
     let mut target = [9; 4];
 
     copy_prefix(&mut target, &[1, 2]);
+
     assert_eq!(target, [1, 2, 9, 9]);
 
     copy_prefix(&mut target, &[5, 6, 7, 8, 9, 10]);
+
     assert_eq!(target, [5, 6, 7, 8]);
 }

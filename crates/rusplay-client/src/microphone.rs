@@ -93,6 +93,7 @@ impl MicrophoneEncoder {
         }
 
         let written = self.encoder.encode(&self.pcm, &mut self.packet)?;
+
         if written == 0 {
             return Ok(None);
         }
@@ -100,6 +101,7 @@ impl MicrophoneEncoder {
         let datagrams = self
             .packetizer
             .packetize(self.number, false, &self.packet[..written])?;
+
         self.number = self.number.wrapping_add(1);
 
         Ok(Some(datagrams))
@@ -113,6 +115,7 @@ pub(crate) fn run(
 ) -> Result<(), ClientError> {
     let stream = config.microphone_stream();
     let max_datagram = links.transport.max_datagram_len(&links.host);
+
     let mut encoder = match MicrophoneEncoder::new(&stream, max_datagram) {
         Ok(encoder) => {
             links.ready.send(Ok(())).ok();
@@ -125,6 +128,7 @@ pub(crate) fn run(
     };
 
     let result = serve(&mut encoder, source.as_mut(), links);
+
     links.stop.store(true, Ordering::Relaxed);
 
     result
@@ -137,11 +141,13 @@ fn serve(
 ) -> Result<(), ClientError> {
     while !links.stop.load(Ordering::Relaxed) {
         let datagrams = encoder.next_datagrams(source, READ_TIMEOUT)?;
+
         links.counters.microphone_overruns.set(source.overruns());
 
         let Some(datagrams) = datagrams else {
             continue;
         };
+
         for datagram in &datagrams {
             links.transport.send_to(datagram, links.host)?;
         }
@@ -256,6 +262,7 @@ mod tests {
             let mut decoder = OpusAudioDecoder::new(&stream).unwrap();
             let mut pcm = vec![0.0; stream.frame_samples()];
             let mut peak = 0.0f32;
+
             for packet in &packets {
                 decoder.decode(&packet.data, &mut pcm).unwrap();
                 peak = pcm.iter().fold(peak, |peak, sample| peak.max(sample.abs()));
@@ -288,7 +295,9 @@ mod tests {
                 .unwrap();
 
             assert!(starved.is_none());
+
             let (header, _) = rusplay_protocol::PacketHeader::parse(&fed[0]).unwrap();
+
             assert_eq!(header.stream, StreamKind::Microphone);
             assert_eq!(header.frame, 0);
         });

@@ -31,7 +31,7 @@ impl GamepadDevice for VirtualGamepad {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PersonalityFactory {
     personality: GamepadPersonality,
 }

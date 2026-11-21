@@ -16,6 +16,7 @@ fn required() -> bool {
 
 pub(crate) fn device_present(path: &Path) -> bool {
     let present = path.exists();
+
     if !present {
         missing(format_args!("the render node {}", path.display()));
     }

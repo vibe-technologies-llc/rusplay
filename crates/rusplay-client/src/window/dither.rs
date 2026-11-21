@@ -33,12 +33,15 @@ impl Field {
 
     fn toggle(&mut self, cell: usize) {
         let sign = if self.ones[cell] { -1.0 } else { 1.0 };
+
         self.ones[cell] = !self.ones[cell];
+
         let (cx, cy) = (cell % BLUE_NOISE_SIZE, cell / BLUE_NOISE_SIZE);
 
         for (index, energy) in self.energy.iter_mut().enumerate() {
             let dx = (index % BLUE_NOISE_SIZE + BLUE_NOISE_SIZE - cx) % BLUE_NOISE_SIZE;
             let dy = (index / BLUE_NOISE_SIZE + BLUE_NOISE_SIZE - cy) % BLUE_NOISE_SIZE;
+
             *energy += sign * self.kernel[dy * BLUE_NOISE_SIZE + dx];
         }
     }
@@ -81,8 +84,10 @@ fn shuffled_cells() -> Vec<usize> {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
+
         let bound = u64::try_from(index + 1).unwrap_or(u64::MAX);
         let pick = usize::try_from(state % bound).unwrap_or(0);
+
         cells.swap(index, pick);
     }
 
@@ -91,6 +96,7 @@ fn shuffled_cells() -> Vec<usize> {
 
 fn initial_pattern() -> Field {
     let mut field = Field::new();
+
     for cell in shuffled_cells()
         .into_iter()
         .take(CELLS / INITIAL_FILL_DIVISOR)
@@ -100,8 +106,11 @@ fn initial_pattern() -> Field {
 
     loop {
         let cluster = field.tightest_cluster();
+
         field.toggle(cluster);
+
         let void = field.largest_void();
+
         field.toggle(void);
         if void == cluster {
             return field;
@@ -119,15 +128,19 @@ pub(crate) fn blue_noise_ranks() -> Vec<usize> {
         energy: initial.energy.clone(),
         kernel: initial.kernel.clone(),
     };
+
     for rank in (0..placed).rev() {
         let cluster = removing.tightest_cluster();
+
         removing.toggle(cluster);
         ranks[cluster] = rank;
     }
 
     let mut adding = initial;
+
     for rank in placed..CELLS {
         let void = adding.largest_void();
+
         adding.toggle(void);
         ranks[void] = rank;
     }
@@ -172,6 +185,7 @@ mod tests {
         if size == 1 {
             return vec![0];
         }
+
         let half = size / 2;
         let inner = recursive_bayer(half);
         let corner = [[0, 2], [3, 1]];
@@ -206,10 +220,13 @@ mod tests {
         let blocks = BLUE_NOISE_SIZE / block;
 
         let mut sorted = ranks.clone();
+
         sorted.sort_unstable();
+
         let worst_block = (0..blocks * blocks)
             .map(|index| {
                 let (bx, by) = (index % blocks, index / blocks);
+
                 let sum: f64 = (0..block * block)
                     .map(|cell| {
                         let x = bx * block + cell % block;

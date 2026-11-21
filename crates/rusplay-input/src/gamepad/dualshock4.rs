@@ -73,11 +73,13 @@ pub(super) fn input_report(
     timestamp: u16,
 ) -> [u8; INPUT_REPORT_LEN] {
     let mut report = [0; INPUT_REPORT_LEN];
+
     report[0] = INPUT_REPORT_ID;
     report[OFFSET_STICKS..OFFSET_STICKS + 4].copy_from_slice(&state.sticks());
 
     let [face, shoulders, system] = state.button_bytes();
     let counter = (sequence & COUNTER_MASK) << COUNTER_SHIFT;
+
     report[OFFSET_BUTTONS..OFFSET_BUTTONS + 3].copy_from_slice(&[
         face,
         shoulders,
@@ -98,8 +100,10 @@ pub(super) fn input_report(
     report[OFFSET_TOUCH_REPORT] = sequence;
 
     let contacts = state.contacts();
+
     for (index, contact) in contacts.into_iter().enumerate() {
         let offset = OFFSET_TOUCH_REPORT + 1 + index * 4;
+
         report[offset..offset + 4].copy_from_slice(&touch_point(contact));
     }
 
@@ -149,6 +153,7 @@ pub(super) fn feature_report(id: u8, mac: [u8; 6]) -> Option<Vec<u8>> {
 
 fn firmware_report() -> Vec<u8> {
     let mut report = vec![0; FIRMWARE_REPORT_LEN];
+
     report[0] = FIRMWARE_REPORT_ID;
     report[OFFSET_FIRMWARE_HARDWARE..OFFSET_FIRMWARE_HARDWARE + 2]
         .copy_from_slice(&HARDWARE_VERSION.to_le_bytes());
@@ -224,6 +229,7 @@ mod tests {
     #[test]
     fn triggers_sit_after_the_buttons_and_raise_the_digital_bits() {
         let mut state = state();
+
         for (axis, value) in [
             (GamepadAxis::LEFT_TRIGGER, 1.0),
             (GamepadAxis::RIGHT_TRIGGER, 0.5),
@@ -240,6 +246,7 @@ mod tests {
     #[test]
     fn buttons_share_the_dualsense_bit_layout() {
         let mut state = state();
+
         for button in [
             GamepadButton::DPAD_RIGHT,
             GamepadButton::SOUTH,
@@ -266,6 +273,7 @@ mod tests {
     #[test]
     fn the_report_counter_takes_the_top_six_bits_of_the_last_button_byte() {
         let mut state = state();
+
         state
             .apply(GamepadEvent::Button {
                 button: GamepadButton::GUIDE,
@@ -286,6 +294,7 @@ mod tests {
     #[test]
     fn sensors_land_at_their_offsets_with_the_dualsense_scaling() {
         let mut state = state();
+
         state
             .apply(GamepadEvent::Sensor {
                 sensor: SensorKind::Gyro,
@@ -315,6 +324,7 @@ mod tests {
     #[test]
     fn touch_contacts_use_the_dualshock_four_pad_height() {
         let mut state = state();
+
         state
             .apply(GamepadEvent::TouchpadDown {
                 finger: 0,
@@ -337,6 +347,7 @@ mod tests {
             let y = u16::from(report[offset + 2] >> 4) | (u16::from(report[offset + 3]) << 4);
             (report[offset], x, y)
         };
+
         assert_eq!(report[33], 1);
         assert_eq!(report[34], 9);
         assert_eq!(point(35), (0, 1919, 941));
@@ -355,6 +366,7 @@ mod tests {
 
     fn output(valid0: u8, strong: u8, weak: u8, colour: [u8; 3]) -> Vec<u8> {
         let mut data = vec![0; OUTPUT_REPORT_LEN];
+
         data[0] = OUTPUT_REPORT_ID;
         data[1] = valid0;
         data[4] = weak;
@@ -417,6 +429,7 @@ mod tests {
     #[test]
     fn short_or_foreign_output_reports_are_ignored() {
         let mut other = output(0x03, 1, 1, [0; 3]);
+
         other[0] = 0x02;
 
         assert!(parse_output(&output(0x03, 1, 1, [0; 3])[..10]).is_none());

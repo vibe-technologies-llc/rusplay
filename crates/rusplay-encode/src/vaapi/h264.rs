@@ -91,7 +91,7 @@ pub(super) const LEVELS: [Level; 19] = [
     level(62, 139_264, 16_711_680, 800_000),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum H264Profile {
     ConstrainedBaseline,
     Main,
@@ -377,6 +377,7 @@ impl H264Stream {
         };
 
         let sequence = unsafe { &mut parameters.seq_fields.bits };
+
         sequence.set_chroma_format_idc(1);
         sequence.set_frame_mbs_only_flag(1);
         sequence.set_direct_8x8_inference_flag(1);
@@ -384,6 +385,7 @@ impl H264Stream {
         sequence.set_pic_order_cnt_type(2);
 
         let vui = unsafe { &mut parameters.vui_fields.bits };
+
         vui.set_aspect_ratio_info_present_flag(1);
         vui.set_timing_info_present_flag(1);
         vui.set_bitstream_restriction_flag(1);
@@ -461,11 +463,13 @@ impl H264Stream {
             plan.kept_long_term()
                 .map(|(slot, held)| Self::long_term_entry(slot, held)),
         );
+
         for (entry, reference) in parameters.ReferenceFrames.iter_mut().zip(held) {
             *entry = reference;
         }
 
         let fields = unsafe { &mut parameters.pic_fields.bits };
+
         fields.set_idr_pic_flag(u32::from(picture.keyframe));
         fields.set_reference_pic_flag(1);
         fields.set_entropy_coding_mode_flag(u32::from(self.profile.cabac()));
@@ -489,6 +493,7 @@ impl H264Stream {
             RefPicList1: [INVALID_PICTURE; 32],
             ..Default::default()
         };
+
         if let Some(reference) = self.reference_entry() {
             slice.RefPicList0[0] = reference;
         }
@@ -523,6 +528,7 @@ impl H264Stream {
                 (PackedKind::Slice, Some(self.slice_header(picture.keyframe))),
             ],
         )?;
+
         let buffers = codec_buffers(
             context,
             sequence,

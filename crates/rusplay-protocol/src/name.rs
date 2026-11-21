@@ -28,6 +28,7 @@ impl ClientName {
         }
 
         let text = std::str::from_utf8(bytes).map_err(|_| ProtocolError::InvalidClientName)?;
+
         if text.chars().any(char::is_control) {
             return Err(ProtocolError::ClientNameControlCharacter);
         }
@@ -66,6 +67,7 @@ impl ClientName {
 
     fn filled(text: &str) -> Self {
         let mut bytes = [0; Self::MAX_LEN];
+
         bytes[..text.len()].copy_from_slice(text.as_bytes());
 
         Self {

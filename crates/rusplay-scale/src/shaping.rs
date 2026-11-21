@@ -3,7 +3,7 @@ use crate::Sigmoid;
 const SIGMOIDIZE_INPUT: u32 = 1;
 const UNSIGMOIDIZE_OUTPUT: u32 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shaping {
     pub antiringing: f32,
     pub sigmoid: Option<Sigmoid>,

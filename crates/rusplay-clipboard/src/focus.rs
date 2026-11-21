@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use crate::{BackendKind, ClipboardBackend, ClipboardError, ClipboardPolicy};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Offer {
     Sent,
     SendDisabled,
@@ -173,6 +173,7 @@ mod tests {
         let (mut handle, mut backend) = pair(true, true);
 
         assert_eq!(handle.offer("mine".to_owned()), Offer::Sent);
+
         backend.set_text("theirs").unwrap();
         handle.take_incoming();
 
@@ -209,6 +210,7 @@ mod tests {
     fn through_a_link_the_echo_of_an_applied_text_is_suppressed() {
         let client_policy = policy(true, true);
         let (mut handle, backend) = FocusClipboard::pair(client_policy);
+
         let mut link = ClipboardLink::new(client_policy, Box::new(backend));
         let mut host = ClipboardSync::new(policy(true, true));
 
@@ -216,12 +218,14 @@ mod tests {
         while let Some(chunk) = host.pop_chunk() {
             link.receive(&chunk).unwrap();
         }
+
         let applied = handle.take_incoming();
 
         assert_eq!(applied.as_deref(), Some("from host"));
         assert_eq!(handle.offer("from host".to_owned()), Offer::Unchanged);
 
         let mut sent = 0;
+
         link.service(|_| {
             sent += 1;
             true
@@ -235,11 +239,13 @@ mod tests {
     fn a_copy_through_a_link_is_sent_in_chunks() {
         let client_policy = policy(true, false);
         let (mut handle, backend) = FocusClipboard::pair(client_policy);
+
         let mut link = ClipboardLink::new(client_policy, Box::new(backend));
 
         assert_eq!(handle.offer("copied".to_owned()), Offer::Sent);
 
         let mut sent = 0;
+
         link.service(|_| {
             sent += 1;
             true

@@ -11,25 +11,25 @@ const TRANSFER_SRGB: u32 = 13;
 const MATRIX_IDENTITY: u32 = 0;
 const UNSPECIFIED: u32 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DecoderModel {
     pub(super) buffer_removal_time_length: u32,
     pub(super) frame_presentation_time_length: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct OperatingPoint {
     pub(super) idc: u32,
     pub(super) decoder_model_present: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FrameIdLengths {
     pub(super) frame_id: u32,
     pub(super) delta: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct Sequence {
     pub(super) reduced_still_picture_header: bool,
@@ -72,10 +72,12 @@ pub(super) fn parse(payload: &[u8]) -> Result<Sequence, Av1SyntaxError> {
     let mut r = BitReader::new(payload, BitstreamUnit::SequenceHeader);
 
     let profile = r.bits(3)?;
+
     if profile > HIGHEST_PROFILE {
         return Err(Av1SyntaxError::ReservedProfile(profile));
     }
     r.bit()?;
+
     let reduced_still_picture_header = r.bit()?;
 
     let Operation {
@@ -101,6 +103,7 @@ pub(super) fn parse(payload: &[u8]) -> Result<Sequence, Av1SyntaxError> {
     };
 
     let use_128x128_superblock = r.bit()?;
+
     r.bit()?;
     r.bit()?;
 
@@ -187,6 +190,7 @@ fn operation(r: &mut BitReader<'_>, reduced: bool) -> Result<Operation, Av1Synta
         });
     } else {
         let mut buffer_delay_length = 0;
+
         if r.bit()? {
             r.bits(32)?;
             r.bits(32)?;
@@ -208,10 +212,13 @@ fn operation(r: &mut BitReader<'_>, reduced: bool) -> Result<Operation, Av1Synta
         let count = r.bits(5)? + 1;
         for _ in 0..count {
             let idc = r.bits(12)?;
+
             if r.bits(5)? > TIER_LEVEL_THRESHOLD {
                 r.bit()?;
             }
+
             let decoder_model_present = decoder_model.is_some() && r.bit()?;
+
             if decoder_model_present {
                 r.bits(buffer_delay_length)?;
                 r.bits(buffer_delay_length)?;
@@ -268,6 +275,7 @@ fn color_config(r: &mut BitReader<'_>, profile: u32) -> Result<ColorConfig, Av1S
             (false, false)
         } else {
             r.bit()?;
+
             let subsampling = match profile {
                 0 => (true, true),
                 PROFILE_HIGH => (false, false),
@@ -277,6 +285,7 @@ fn color_config(r: &mut BitReader<'_>, profile: u32) -> Result<ColorConfig, Av1S
                 }
                 _ => (true, false),
             };
+
             if subsampling == (true, true) {
                 r.bits(2)?;
             }

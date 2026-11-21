@@ -22,7 +22,9 @@ pub(crate) struct CursorLinks {
 
 pub(crate) fn run(image_repeat: Option<Duration>, links: &CursorLinks) -> Result<(), HostError> {
     let mut state = links.feed.take_cursor_state();
+
     let result = serve(image_repeat, &mut state, links);
+
     links.feed.keep_cursor_state(state);
     links.shared.stop();
 
@@ -51,6 +53,7 @@ fn serve(
 
     while !links.shared.stopped() {
         let current_epoch = links.shared.client.epoch();
+
         if current_epoch != epoch {
             epoch = current_epoch;
             changed = true;
@@ -79,11 +82,14 @@ fn serve(
         else {
             continue;
         };
+
         changed |= space_sent != Some(space);
+
         let now = Instant::now();
         let repeat_due = image_repeat
             .zip(image_sent_at)
             .is_some_and(|(interval, sent)| now.saturating_duration_since(sent) >= interval);
+
         if !changed && !repeat_due {
             continue;
         }
@@ -91,8 +97,11 @@ fn serve(
         let with_image = (image_pending || repeat_due) && current.bitmap.is_some();
         let message = message_for(current, space, with_image)?;
         let mut encoded = Vec::with_capacity(message.encoded_len());
+
         message.encode(&mut encoded)?;
+
         let datagrams = packetizer.packetize(number, false, &encoded)?;
+
         datagrams::send_all(&links.transport, links.shared.client.address(), &datagrams)?;
 
         number = number.wrapping_add(1);

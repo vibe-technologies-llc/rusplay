@@ -9,7 +9,7 @@ use crate::{
     surface::Surface,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ImageLayout {
     pub offsets: [usize; 3],
     pub pitches: [usize; 3],
@@ -32,6 +32,7 @@ impl Image {
             ..Default::default()
         };
         let mut raw = ffi::VAImage::default();
+
         check(VaCall::CreateImage, unsafe {
             ffi::vaCreateImage(
                 display.raw(),
@@ -58,6 +59,7 @@ impl Image {
 
     pub fn write(&mut self, fill: impl FnOnce(&mut [u8], ImageLayout)) -> Result<(), VaError> {
         let mut mapped = ptr::null_mut();
+
         check(VaCall::MapBuffer, unsafe {
             ffi::vaMapBuffer(self.display.raw(), self.raw.buf, &raw mut mapped)
         })?;
@@ -65,6 +67,7 @@ impl Image {
         let layout = self.layout();
         let data =
             unsafe { slice::from_raw_parts_mut(mapped.cast::<u8>(), usize_of(self.raw.data_size)) };
+
         fill(data, layout);
 
         check(VaCall::UnmapBuffer, unsafe {
@@ -94,6 +97,7 @@ impl Image {
 
     pub fn get(&mut self, surface: &Surface) -> Result<Vec<u8>, VaError> {
         let Resolution { width, height } = self.resolution;
+
         check(VaCall::GetImage, unsafe {
             ffi::vaGetImage(
                 self.display.raw(),
@@ -107,6 +111,7 @@ impl Image {
         })?;
 
         let mut copy = Vec::new();
+
         self.write(|data, _| copy.extend_from_slice(data))?;
 
         Ok(copy)

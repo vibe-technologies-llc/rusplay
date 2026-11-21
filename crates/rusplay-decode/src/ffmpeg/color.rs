@@ -75,6 +75,7 @@ fn rational_units(num: i32, den: i32, units_per_one: u32) -> Option<u32> {
     let numerator = u64::from(u32::try_from(num).ok()?);
     let denominator = u64::from(u32::try_from(den).ok()?);
     let units = u64::from(units_per_one);
+
     let scaled = numerator.checked_mul(units)?.checked_add(denominator / 2)? / denominator;
 
     u32::try_from(scaled).ok()

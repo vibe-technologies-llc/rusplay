@@ -57,6 +57,7 @@ impl ControlOutbox {
 
     pub(crate) fn resend_announcement(&self, now: Instant) -> Result<(), HostError> {
         let mut announcement = self.announcement.lock();
+
         announcement.unsent = announcement.latest.is_some();
         drop(announcement);
 
@@ -65,6 +66,7 @@ impl ControlOutbox {
 
     pub(crate) fn announce(&self, description: StreamDescription) -> Result<(), HostError> {
         let mut announcement = self.announcement.lock();
+
         announcement.latest = Some(description);
         announcement.unsent = true;
         drop(announcement);
@@ -81,11 +83,13 @@ impl ControlOutbox {
 
     pub(crate) fn send_announcement(&self, now: Instant) -> Result<(), HostError> {
         let mut announcement = self.announcement.lock();
+
         let Some(description) = announcement.latest.filter(|_| announcement.unsent) else {
             return Ok(());
         };
 
         let mut channel = self.channel.lock();
+
         match channel.send(ControlMessage::StreamFormat(description), now) {
             Ok(_) => announcement.unsent = false,
             Err(NetError::ControlWindowFull { .. }) => {}

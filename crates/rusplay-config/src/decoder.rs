@@ -6,7 +6,7 @@ use crate::ConfigError;
 
 const MAX_SOFTWARE_DECODER_THREADS: u32 = 256;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "backend", rename_all = "kebab-case")]
 pub enum VideoDecoderConfig {
     Auto(AutoDecoderConfig),
@@ -34,11 +34,11 @@ impl VideoDecoderConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AutoDecoderConfig {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VaapiDecoderConfig {
     pub device: PathBuf,
@@ -54,13 +54,13 @@ impl Default for VaapiDecoderConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NvdecDecoderConfig {
     pub gpu_index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SoftwareDecoderConfig {
     pub threads: Option<NonZeroU32>,

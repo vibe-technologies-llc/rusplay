@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Depth {
     Fixed(usize),
     Learned { ceiling: usize },
@@ -95,6 +95,7 @@ impl<T> Reorder<T> {
         };
 
         let (key, item) = self.held.remove(index);
+
         self.released = Some(key);
         self.ready.push_back(item);
     }
@@ -122,6 +123,7 @@ mod tests {
     #[test]
     fn zero_depth_passes_every_frame_straight_through() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(0));
 
         let outputs = feed(&mut reorder, &[0, 2, 4, 6]);
@@ -133,6 +135,7 @@ mod tests {
     #[test]
     fn fixed_depth_delays_by_exactly_that_many_frames() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(1));
 
         let outputs = feed(&mut reorder, &[0, 6, 2, 4, 12, 8, 10]);
@@ -147,32 +150,39 @@ mod tests {
     #[test]
     fn pyramid_reorders_with_depth_two() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(2));
 
         let mut outputs = feed(&mut reorder, &[0, 8, 4, 2, 6, 16, 12, 10, 14]);
+
         outputs.extend(reorder.drain().into_iter().map(Some));
 
         let order: Vec<i32> = outputs.into_iter().flatten().collect();
+
         assert_eq!(order, [0, 2, 4, 6, 8, 10, 12, 14, 16]);
     }
 
     #[test]
     fn flush_before_a_new_sequence_keeps_the_old_frames_first_without_growing_the_delay() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(2));
 
         let mut outputs = feed(&mut reorder, &[0, 8, 4]);
+
         reorder.flush();
         outputs.extend(feed(&mut reorder, &[0, 8, 4, 2, 6]));
         outputs.extend(reorder.drain().into_iter().map(Some));
 
         let order: Vec<i32> = outputs.into_iter().flatten().collect();
+
         assert_eq!(order, [0, 4, 8, 0, 2, 4, 6, 8]);
     }
 
     #[test]
     fn learned_depth_starts_at_zero_and_grows_on_a_late_frame() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Learned { ceiling: 4 });
 
         let first = feed(&mut reorder, &[0, 2, 6, 4]);
@@ -188,6 +198,7 @@ mod tests {
     #[test]
     fn learned_depth_never_exceeds_its_ceiling() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Learned { ceiling: 1 });
 
         feed(&mut reorder, &[10, 8, 6, 4, 2]);
@@ -198,6 +209,7 @@ mod tests {
     #[test]
     fn several_pictures_in_one_packet_keep_only_the_newest() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(0));
 
         reorder.push(0, 0);
@@ -210,6 +222,7 @@ mod tests {
     #[test]
     fn changing_the_policy_releases_what_was_held() {
         let mut reorder = Reorder::new();
+
         reorder.configure(Depth::Fixed(2));
         feed(&mut reorder, &[4, 2]);
 

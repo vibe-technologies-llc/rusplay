@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CursorMode {
     Hidden,
@@ -14,7 +14,7 @@ pub enum CursorMode {
     Metadata,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceKind {
     #[default]
@@ -24,7 +24,7 @@ pub enum SourceKind {
     Virtual,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CaptureConfig {
     pub source: SourceKind,

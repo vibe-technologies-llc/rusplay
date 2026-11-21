@@ -69,6 +69,7 @@ fn reference_pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, pad
                 for pair in 0..chroma_width {
                     let left = get(&luma, 2 * pair, y);
                     let right = get(&luma, 2 * pair + 1, y);
+
                     let quad = [left, get(&cb, pair, y), right, get(&cr, pair, y)];
                     for (index, value) in quad.into_iter().enumerate() {
                         if wide {
@@ -89,6 +90,7 @@ fn reference_pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, pad
                         BitDepth::Eight => {
                             let bytes = [v, u, luma, 0xff]
                                 .map(|value| u8::try_from(value).unwrap_or(u8::MAX));
+
                             data[row + 4 * x..row + 4 * x + 4].copy_from_slice(&bytes);
                         }
                         BitDepth::Ten => {
@@ -96,6 +98,7 @@ fn reference_pack(view: &YuvFrame<'_>, data: &mut [u8], layout: ImageLayout, pad
                                 | (u32::from(v) << 20)
                                 | (u32::from(luma) << 10)
                                 | u32::from(u);
+
                             data[row + 4 * x..row + 4 * x + 4].copy_from_slice(&word.to_le_bytes());
                         }
                         BitDepth::Twelve => {
@@ -133,12 +136,14 @@ impl Source {
         };
         let luma_width = resolution.width as usize;
         let luma_rows = resolution.height as usize;
+
         let chroma_width = luma_width.div_ceil(1 << shift_x);
         let chroma_rows = luma_rows.div_ceil(1 << shift_y);
         let widths = [luma_width, chroma_width, chroma_width];
         let rows = [luma_rows, chroma_rows, chroma_rows];
         let strides = widths.map(|width| width * sample + slack);
         let mut state = seed | 1;
+
         let buffers = [0, 1, 2].map(|plane| {
             (0..strides[plane] * rows[plane])
                 .map(|_| {
@@ -193,6 +198,7 @@ fn image_layout(format: PixelFormat, padded: Resolution, slack: usize) -> (Image
             let luma_pitch = width * sample + slack;
             let chroma_pitch = chroma_width * 2 * sample + slack;
             let second = base + luma_pitch * rows + 3;
+
             let layout = ImageLayout {
                 offsets: [base, second, 0],
                 pitches: [luma_pitch, chroma_pitch, 0],
@@ -283,16 +289,20 @@ fn unpacking_inverts_packing_for_every_format_extent_and_stride() {
             for slack in [0, 6] {
                 let maximum = (1_u16 << format.depth.bits()) - 1;
                 let mut source = Source::new(format, resolution, slack, 0x2545_f491_4f6c_dd1d);
+
                 if format.depth != BitDepth::Eight {
                     for buffer in &mut source.buffers {
                         for pair in buffer.as_chunks_mut::<2>().0 {
                             let value = u16::from_le_bytes(*pair) & maximum;
+
                             pair.copy_from_slice(&value.to_le_bytes());
                         }
                     }
                 }
+
                 let (layout, size) = image_layout(format, padded, slack);
                 let mut packed = vec![0; size];
+
                 pack(&source.view(), &mut packed, layout, padded);
 
                 let unpacked = unpack(format, &packed, layout, resolution).unwrap();
@@ -309,6 +319,7 @@ fn unpacking_inverts_packing_for_every_format_extent_and_stride() {
 
 fn constant_source(format: PixelFormat, resolution: Resolution, samples: [u16; 3]) -> Source {
     let mut source = Source::new(format, resolution, 0, 1);
+
     for (buffer, value) in source.buffers.iter_mut().zip(samples) {
         if format.depth == BitDepth::Eight {
             buffer.fill(u8::try_from(value).unwrap());
@@ -328,10 +339,13 @@ fn eight_bit_422_packs_yuyv() {
         depth: BitDepth::Eight,
     };
     let resolution = Resolution::new(2, 1);
+
     let mut source = constant_source(format, resolution, [0, 0, 0]);
+
     source.buffers[0] = vec![0x10, 0x20];
     source.buffers[1] = vec![0x30];
     source.buffers[2] = vec![0x40];
+
     let (layout, size) = image_layout(format, resolution, 0);
     let mut data = vec![0; size];
 
@@ -347,6 +361,7 @@ fn eight_bit_444_packs_ayuv() {
         depth: BitDepth::Eight,
     };
     let resolution = Resolution::new(1, 1);
+
     let source = constant_source(format, resolution, [0x11, 0x22, 0x33]);
     let (layout, size) = image_layout(format, resolution, 0);
     let mut data = vec![0; size];
@@ -367,6 +382,7 @@ fn ten_bit_444_packs_y410_and_twelve_bit_shifts_into_the_high_bits() {
         depth: BitDepth::Twelve,
     };
     let resolution = Resolution::new(1, 1);
+
     let (ten_layout, ten_size) = image_layout(ten, resolution, 0);
     let (twelve_layout, twelve_size) = image_layout(twelve, resolution, 0);
     let mut ten_data = vec![0; ten_size];
@@ -386,11 +402,14 @@ fn ten_bit_444_packs_y410_and_twelve_bit_shifts_into_the_high_bits() {
     );
 
     let word = (3_u32 << 30) | (0x3ff << 20) | (0x155 << 10) | 0x2aa;
+
     assert_eq!(&ten_data[ten_layout.offsets[0]..][..4], &word.to_le_bytes());
+
     let expected: Vec<u8> = [0x456_u16, 0x123, 0x789, 0x0fff]
         .into_iter()
         .flat_map(|value| (value << 4).to_le_bytes())
         .collect();
+
     assert_eq!(&twelve_data[twelve_layout.offsets[0]..][..8], &expected);
 }
 
@@ -415,10 +434,12 @@ fn pack_times() {
 
             for _ in 0..15 {
                 let started = Instant::now();
+
                 reference_pack(&source.view(), &mut data, layout, resolution);
                 reference.push(started.elapsed().as_secs_f64() * 1e3);
 
                 let started = Instant::now();
+
                 pack(&source.view(), &mut data, layout, resolution);
                 current.push(started.elapsed().as_secs_f64() * 1e3);
             }

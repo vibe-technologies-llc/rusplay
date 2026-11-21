@@ -72,14 +72,18 @@ fn stream(profile: H264Profile, resolution: Resolution) -> H264Stream {
 
 fn parse(stream: &H264Stream) -> Parsed {
     let mut data = stream.sps().bytes;
+
     data.extend(stream.pps().bytes);
+
     let mut parser = Parser::default();
     let mut cursor = Cursor::new(data.as_slice());
 
     let sps_nalu = Nalu::next(&mut cursor).unwrap();
     let pps_nalu = Nalu::next(&mut cursor).unwrap();
+
     assert_eq!(sps_nalu.header.type_, NaluType::Sps);
     assert_eq!(pps_nalu.header.type_, NaluType::Pps);
+
     parser.parse_sps(&sps_nalu).unwrap();
     parser.parse_pps(&pps_nalu).unwrap();
 
@@ -101,16 +105,24 @@ struct ParsedSlice {
 
 fn parse_slice(stream: &H264Stream, keyframe: bool) -> ParsedSlice {
     let mut data = stream.sps().bytes;
+
     data.extend(stream.pps().bytes);
+
     let packed = stream.slice_header(keyframe);
+
     data.extend(&packed.bytes);
+
     let mut parser = Parser::default();
     let mut cursor = Cursor::new(data.as_slice());
 
     let sps_nalu = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_sps(&sps_nalu).unwrap();
+
     let pps_nalu = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_pps(&pps_nalu).unwrap();
+
     let slice_nalu = Nalu::next(&mut cursor).unwrap();
     let nal_type = slice_nalu.header.type_;
     let ref_idc = slice_nalu.header.ref_idc;
@@ -201,8 +213,10 @@ fn vui_signals_colour_timing_and_restrictions() {
         for frame_rate in frame_rates() {
             for profile in PROFILES {
                 let mut info = stream_info(yuv420(), Resolution::new(1920, 1080));
+
                 info.color = case.color;
                 info.frame_rate = frame_rate;
+
                 let parsed = parse(&H264Stream::new(profile, info));
                 let vui = &parsed.sps.vui_parameters;
 
@@ -254,8 +268,10 @@ fn level_follows_resolution_rate_bitrate_and_profile() {
 
     for (profile, width, height, fps, kbps, level) in cases {
         let mut info = stream_info(yuv420(), Resolution::new(width, height));
+
         info.frame_rate = FrameRate::integer(fps);
         info.peak_kbps = kbps;
+
         let stream = H264Stream::new(profile, info);
 
         let parsed = parse(&stream);
@@ -275,7 +291,9 @@ fn pps_carries_profile_tools_and_the_initial_qp() {
     for profile in PROFILES {
         for (qp, delta) in [(None, 0), (Some(18), -8), (Some(26), 0), (Some(40), 14)] {
             let mut info = stream_info(yuv420(), Resolution::new(402, 226));
+
             info.qp = qp;
+
             let parsed = parse(&H264Stream::new(profile, info));
             let pps = &parsed.pps;
 
@@ -326,6 +344,7 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
         (0, true, 0, 2),
     ];
     let mut stream = stream(profile, Resolution::new(402, 226));
+
     let parsed = parse(&stream);
     let mut previous: Option<Picture> = None;
     let mut long_term: [Option<Picture>; 2] = [None; 2];
@@ -335,7 +354,9 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
             recon: 200 + u32::try_from(position).unwrap(),
             ..picture(index, keyframe)
         };
+
         stream.begin(&picture);
+
         let order = H264Stream::order(&picture);
 
         let step = Step {
@@ -346,6 +367,7 @@ fn drive(profile: H264Profile, mut check: impl FnMut(&H264Stream, &Parsed, &Step
             frame_num,
             idr_pic_id,
         };
+
         check(&stream, &parsed, &step);
 
         stream.commit(&picture, order);
@@ -385,6 +407,7 @@ fn slice_headers_follow_the_stream_state() {
             assert_eq!(header.slice_beta_offset_div2, 0);
             assert_eq!(header.cabac_init_idc, 0);
             assert_eq!(slice.ref_idc, 3);
+
             if keyframe {
                 assert_eq!(slice.nal_type, NaluType::SliceIdr);
                 assert_eq!(usize::from(header.idr_pic_id), step.idr_pic_id);
@@ -399,6 +422,7 @@ fn slice_headers_follow_the_stream_state() {
                     step.frame_num == 1
                 );
             }
+
             assert!(slice.packed_bits <= slice.packed_bytes * 8);
             assert!(slice.packed_bytes * 8 - slice.packed_bits < 8);
         });
@@ -582,12 +606,14 @@ fn candidates_carry_mmco_and_the_next_frame_references_them_long_term() {
                 .adaptive_ref_pic_marking_mode_flag,
             candidate.is_some()
         );
+
         if candidate.is_some() {
             assert_eq!(
                 header.dec_ref_pic_marking.inner[0].max_long_term_frame_idx,
                 MaxLongTermFrameIdx::Idx(1)
             );
         }
+
         assert_eq!(
             parameters.CurrPic.flags,
             if candidate.is_some() || index == 0 {
@@ -600,6 +626,7 @@ fn candidates_carry_mmco_and_the_next_frame_references_them_long_term() {
             parameters.CurrPic.frame_idx,
             candidate.unwrap_or_else(|| u32::try_from(index).unwrap())
         );
+
         if let Some(slot) = reference {
             assert_eq!(
                 slice.RefPicList0[0].flags,
@@ -631,10 +658,13 @@ fn a_recovery_frame_references_the_newest_acknowledged_long_term_frame_and_marks
     let mut stream = stream(H264Profile::High, Resolution::new(402, 226));
 
     long_term_walk(&mut stream, 13, |_, _, _| {});
+
     let reference = stream.recover(OutputIndex(10));
     let recovery = picture(13, false);
     let order = H264Stream::order(&recovery);
+
     stream.begin(&recovery);
+
     let header = parse_slice(&stream, false).header;
     let parameters = stream.picture_parameters(&recovery, order);
     let slice = stream.slice_parameters(&recovery);
@@ -661,10 +691,13 @@ fn a_recovery_while_the_newest_candidate_is_unacknowledged_uses_the_older_slot_a
     let mut stream = stream(H264Profile::High, Resolution::new(402, 226));
 
     long_term_walk(&mut stream, 13, |_, _, _| {});
+
     let reference = stream.recover(OutputIndex(5));
     let recovery = picture(13, false);
     let order = H264Stream::order(&recovery);
+
     stream.begin(&recovery);
+
     let header = parse_slice(&stream, false).header;
     let parameters = stream.picture_parameters(&recovery, order);
 
@@ -690,12 +723,14 @@ fn an_unverified_driver_keeps_one_short_term_reference() {
         ..stream_info(yuv420(), Resolution::new(402, 226))
     };
     let mut stream = H264Stream::new(H264Profile::High, info);
+
     let sps = parse(&stream).sps;
 
     assert_eq!(sps.max_num_ref_frames, 1);
     assert!(!sps.gaps_in_frame_num_value_allowed_flag);
     assert_eq!(sps.vui_parameters.max_dec_frame_buffering, 1);
     assert_eq!(stream.sequence_parameters(0).max_num_ref_frames, 1);
+
     long_term_walk(&mut stream, 20, |stream, index, picture| {
         let header = parse_slice(stream, index == 0).header;
         let parameters = stream.picture_parameters(picture, H264Stream::order(picture));
@@ -778,22 +813,29 @@ fn a_picture_level_one_point_one_cannot_hold_three_frames_of_steps_up_a_level() 
 fn frame_num_wraps_at_sixteen_bits() {
     let mut stream = stream(H264Profile::High, Resolution::new(400, 208));
     let key = picture(0, true);
+
     stream.begin(&key);
     stream.commit(&key, 0);
 
     for index in 1..65_535_u64 {
         let inter = picture(index, false);
+
         stream.begin(&inter);
         stream.commit(&inter, 0);
     }
 
     let before = picture(65_535, false);
+
     stream.begin(&before);
+
     let last = parse_slice(&stream, false).header.frame_num;
+
     stream.commit(&before, 0);
 
     let after = picture(65_536, false);
+
     stream.begin(&after);
+
     let wrapped = parse_slice(&stream, false).header.frame_num;
 
     assert_eq!(last, 65_535);
@@ -806,7 +848,9 @@ fn sequence_parameters_agree_with_the_sps() {
         for geometry in &GEOMETRIES {
             for frame_rate in frame_rates() {
                 let mut info = stream_info(yuv420(), geometry.resolution);
+
                 info.frame_rate = frame_rate;
+
                 let stream = H264Stream::new(profile, info);
                 let parsed = parse(&stream);
                 let sps = &parsed.sps;
@@ -908,6 +952,7 @@ fn packed_headers_are_escaped_and_whole_bytes() {
 
             for packed in [stream.sps(), stream.pps()] {
                 assert_no_start_code_emulation(&packed.bytes);
+
                 assert_eq!(packed.bits, packed.bytes.len() * 8);
                 assert_ne!(*packed.bytes.last().unwrap(), 0);
             }

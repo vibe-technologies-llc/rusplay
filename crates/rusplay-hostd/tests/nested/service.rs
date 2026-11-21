@@ -88,6 +88,7 @@ fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
         .paired_secret()
         .cloned()
         .expect("pairing gave no secret");
+
     wait_for(FIRST_FRAME_WAIT, || !seen.lock().is_empty());
 
     let status = stdout(&daemon.control(&["status"]));
@@ -114,7 +115,9 @@ fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
     assert!(wait_for(EVENT_WAIT, || {
         read_trimmed(&pin_path).is_some_and(|pin| pin != renewed)
     }));
+
     let status = stdout(&daemon.control(&["status"]));
+
     assert_eq!(field(&status, "state").as_deref(), Some("pairing"));
     assert_eq!(field(&status, "paired_clients").as_deref(), Some("1"));
 
@@ -135,16 +138,21 @@ fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
         sink,
     )
     .unwrap();
+
     wait_for(FIRST_FRAME_WAIT, || !seen_again.lock().is_empty());
 
     assert!(!seen_again.lock().is_empty());
     assert_eq!(daemon.count("paired and streaming to"), 1);
     assert_eq!(daemon.count("rusplay-hostd: streaming to"), 1);
+
     let status = stdout(&daemon.control(&["status"]));
+
     assert_eq!(field(&status, "paired_clients").as_deref(), Some("1"));
 
     stream.stop().unwrap();
+
     assert!(wait_for(EVENT_WAIT, || daemon.count(" left") == 2));
+
     thread::sleep(Duration::from_millis(300));
 
     let forgotten = daemon.control(&["forget", &id[..ID_PREFIX_LEN]]);
@@ -155,7 +163,9 @@ fn the_service_pairs_streams_disconnects_reconnects_and_forgets() {
         stdout(&daemon.control(&["peers", "list"])),
         "no paired clients"
     );
+
     let (_, sink) = recorder();
+
     assert!(connect(&live, gpu, &Credentials::Peer(record), DISPLAY, sink).is_err());
 }
 
@@ -165,7 +175,9 @@ fn a_restart_with_the_saved_token_skips_the_portal_dialog() {
     let Some(mut live) = Live::start(false, "") else {
         return;
     };
+
     live.daemon.stop();
+
     let token = read_trimmed(&live.stack.path("restore-token"));
 
     let restarted = Daemon::start(&live.stack, Daemon::config_path(&live.stack));

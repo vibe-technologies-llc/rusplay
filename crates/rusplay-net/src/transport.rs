@@ -32,7 +32,7 @@ pub fn max_datagram_len(mtu: u16, peer: &SocketAddr) -> usize {
     usize::from(mtu).saturating_sub(overhead)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransportOptions {
     pub mtu: u16,
     pub socket_buffer_bytes: u32,
@@ -53,7 +53,7 @@ impl From<&NetworkConfig> for TransportOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SocketBuffers {
     pub send_bytes: usize,
     pub receive_bytes: usize,
@@ -77,6 +77,7 @@ pub(crate) fn seal_with<'a>(
     };
 
     let header = PacketHeader::read(datagram)?;
+
     if !requires_sealing(header.stream) {
         return Ok(Cow::Borrowed(datagram));
     }
@@ -137,6 +138,7 @@ impl Transport {
 
     pub(crate) fn set_read_timeout_cached(&self, timeout: Duration) -> Result<(), NetError> {
         let mut applied = self.read_timeout.lock();
+
         if *applied == Some(timeout) {
             return Ok(());
         }
@@ -259,6 +261,7 @@ impl Transport {
 
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
+
             if remaining.is_zero() {
                 return Ok(None);
             }
@@ -383,12 +386,15 @@ mod tests {
     fn datagram_at_the_budget_travels_over_loopback() {
         let transport = Transport::bind(LOOPBACK_V4, options(576)).unwrap();
         let peer = transport.local_addr().unwrap();
+
         let datagram = vec![7; transport.max_datagram_len(&peer)];
 
         transport.send_to(&datagram, peer).unwrap();
 
         let mut buf = [0; 2048];
+
         let (len, from) = transport.recv_from(&mut buf).unwrap();
+
         assert_eq!(&buf[..len], datagram.as_slice());
         assert_eq!(from, peer);
     }

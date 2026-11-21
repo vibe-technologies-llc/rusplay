@@ -1,12 +1,12 @@
 use std::error::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
     Info(String),
     Failure(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoticeRaised(pub Notice);
 
 pub fn error_chain(error: &dyn Error) -> String {

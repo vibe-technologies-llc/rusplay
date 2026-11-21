@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HostStats {
     pub frames_captured: u64,
     pub frames_superseded: u64,
@@ -221,6 +221,7 @@ impl Counters {
         let nanos = rtt.map_or(0, |rtt| {
             u64::try_from(rtt.as_nanos()).unwrap_or(u64::MAX).max(1)
         });
+
         self.rtt_nanos.set(nanos);
     }
 }

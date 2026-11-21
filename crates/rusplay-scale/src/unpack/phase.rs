@@ -7,7 +7,7 @@ use crate::{
 
 const PHASE_COLUMNS: u32 = 2;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PhaseKernels {
     pub geometry: PolarGeometry,
     pub phase_rows: u32,
@@ -32,6 +32,7 @@ impl PhaseKernels {
             .map(|(x, y)| normalized_taps(&geometry, kernel, x, y))
             .collect();
         let width = phases.iter().map(Vec::len).max().unwrap_or(0);
+
         let padded: Vec<((i64, i64), f32)> = phases
             .iter()
             .flat_map(|taps| {

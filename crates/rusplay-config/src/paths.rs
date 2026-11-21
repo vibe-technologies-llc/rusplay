@@ -8,7 +8,7 @@ use crate::ConfigError;
 const CONFIG_DIRECTORY: &str = "rusplay";
 const HOME_CONFIG_DIRECTORY: &str = ".config";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigRole {
     Client,
     Host,
@@ -23,7 +23,7 @@ impl ConfigRole {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfigEnvironment {
     pub xdg_config_home: Option<PathBuf>,
     pub home: Option<PathBuf>,
@@ -54,6 +54,7 @@ impl ConfigEnvironment {
             .chain(home)
             .map(|base| base.join(CONFIG_DIRECTORY).join(role.file_name()))
             .collect();
+
         candidates.dedup();
 
         candidates

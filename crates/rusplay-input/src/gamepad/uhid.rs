@@ -72,7 +72,7 @@ pub(super) struct Identity<'a> {
     pub descriptor: &'a [u8],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum KernelEvent {
     Start,
     Stop,
@@ -97,6 +97,7 @@ pub(super) enum KernelEvent {
 
 fn blank(kind: u32) -> Vec<u8> {
     let mut event = vec![0; EVENT_SIZE];
+
     event[..4].copy_from_slice(&kind.to_ne_bytes());
 
     event
@@ -104,6 +105,7 @@ fn blank(kind: u32) -> Vec<u8> {
 
 fn put(event: &mut [u8], offset: usize, bytes: &[u8], limit: usize) {
     let length = bytes.len().min(limit);
+
     event[offset..offset + length].copy_from_slice(&bytes[..length]);
 }
 
@@ -173,6 +175,7 @@ pub(super) fn input2(report: &[u8]) -> Vec<u8> {
 
 pub(super) fn get_report_reply(id: u32, report: Option<&[u8]>) -> Vec<u8> {
     let mut event = blank(EVENT_GET_REPORT_REPLY);
+
     put(&mut event, REPORT_ID, &id.to_ne_bytes(), 4);
 
     match report {
@@ -192,6 +195,7 @@ pub(super) fn get_report_reply(id: u32, report: Option<&[u8]>) -> Vec<u8> {
 
 pub(super) fn set_report_reply(id: u32) -> Vec<u8> {
     let mut event = blank(EVENT_SET_REPORT_REPLY);
+
     put(&mut event, REPORT_ID, &id.to_ne_bytes(), 4);
     put(&mut event, REPLY_ERROR, &REPLY_OK.to_ne_bytes(), 2);
 
@@ -310,6 +314,7 @@ impl UhidDevice {
                     slot: self.slot,
                     len,
                 })?;
+
             self.answer(&event, model, mac)?;
             events.push(event);
         }
@@ -396,6 +401,7 @@ impl UhidGamepad {
         let report = self
             .model
             .input_report(&self.state, self.sequence, self.epoch.elapsed());
+
         self.sequence = self.sequence.wrapping_add(1);
 
         self.device.send(&input2(&report))
@@ -452,6 +458,7 @@ mod tests {
 
     fn pair() -> (UhidDevice, UnixDatagram) {
         let (ours, kernel) = UnixDatagram::pair().unwrap();
+
         ours.set_nonblocking(true).unwrap();
 
         (UhidDevice::from_fd(3, ours.into()), kernel)
@@ -463,6 +470,7 @@ mod tests {
 
     fn get_report(id: u32, number: u8) -> Vec<u8> {
         let mut event = kernel_event(EVENT_GET_REPORT);
+
         event[REPORT_ID..REPORT_ID + 4].copy_from_slice(&id.to_ne_bytes());
         event[REPORT_NUMBER] = number;
         event[REPORT_TYPE] = 0;
@@ -472,6 +480,7 @@ mod tests {
 
     fn output_event(report_type: u8, data: &[u8]) -> Vec<u8> {
         let mut event = kernel_event(EVENT_OUTPUT);
+
         event[OUTPUT_DATA..OUTPUT_DATA + data.len()].copy_from_slice(data);
         event[OUTPUT_SIZE..OUTPUT_SIZE + 2]
             .copy_from_slice(&u16::try_from(data.len()).unwrap().to_ne_bytes());
@@ -482,7 +491,9 @@ mod tests {
 
     fn receive(kernel: &UnixDatagram) -> Vec<u8> {
         let mut buffer = vec![0; EVENT_SIZE];
+
         let length = kernel.recv(&mut buffer).unwrap();
+
         buffer.truncate(length);
 
         buffer
@@ -626,6 +637,7 @@ mod tests {
     #[test]
     fn an_output_size_beyond_the_buffer_is_clamped() {
         let mut event = kernel_event(EVENT_OUTPUT);
+
         event[OUTPUT_SIZE..OUTPUT_SIZE + 2].copy_from_slice(&u16::MAX.to_ne_bytes());
 
         let KernelEvent::Output { data, .. } = decode(&event).unwrap() else {
@@ -644,12 +656,14 @@ mod tests {
         kernel.send(&get_report(12, CALIBRATION_REPORT_ID)).unwrap();
         kernel.send(&get_report(13, FIRMWARE_REPORT_ID)).unwrap();
         kernel.send(&get_report(14, 0x81)).unwrap();
+
         let events = device.service(PadModel::DualSense, mac).unwrap();
 
         let pairing = receive(&kernel);
         let calibration = receive(&kernel);
         let firmware = receive(&kernel);
         let unknown = receive(&kernel);
+
         assert_eq!(events.len(), 4);
         assert_eq!(u32_at(&pairing, 4), 11);
         assert_eq!(u16_at(&pairing, 10), 20);
@@ -665,12 +679,14 @@ mod tests {
     fn set_report_requests_are_acknowledged() {
         let (mut device, kernel) = pair();
         let mut request = kernel_event(EVENT_SET_REPORT);
+
         request[REPORT_ID..REPORT_ID + 4].copy_from_slice(&21u32.to_ne_bytes());
 
         kernel.send(&request).unwrap();
         device.service(PadModel::DualSense, [0; 6]).unwrap();
 
         let reply = receive(&kernel);
+
         assert_eq!(u32_at(&reply, 0), 14);
         assert_eq!(u32_at(&reply, 4), 21);
     }
@@ -689,6 +705,7 @@ mod tests {
         let (mut device, kernel) = pair();
 
         kernel.send(&[1, 2]).unwrap();
+
         let result = device.service(PadModel::DualSense, [0; 6]);
 
         assert!(matches!(
@@ -752,6 +769,7 @@ mod tests {
     #[test]
     fn a_dualshock_four_event_sends_its_own_input_report() {
         let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+
         receive(&kernel);
 
         gamepad
@@ -762,6 +780,7 @@ mod tests {
             .unwrap();
 
         let event = receive(&kernel);
+
         assert_eq!(u32_at(&event, 0), 12);
         assert_eq!(usize::from(u16_at(&event, 4)), dualshock4::INPUT_REPORT_LEN);
         assert_eq!(event[6], dualshock4::INPUT_REPORT_ID);
@@ -772,6 +791,7 @@ mod tests {
     #[test]
     fn a_dualshock_four_answers_its_three_feature_reports_and_nothing_else() {
         let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
+
         receive(&kernel);
 
         for (id, number) in [(1, 0x12), (2, 0x02), (3, 0xa3), (4, 0x05)] {
@@ -785,6 +805,7 @@ mod tests {
                 (u16_at(&reply, 8), u16_at(&reply, 10))
             })
             .collect();
+
         assert_eq!(sizes, vec![(0, 16), (0, 37), (0, 49), (5, 0)]);
     }
 
@@ -792,11 +813,13 @@ mod tests {
     fn dualshock_four_output_reports_become_feedback_for_the_slot() {
         let (mut gamepad, kernel) = gamepad_of(PadModel::DualShock4);
         let mut report = vec![0; dualshock4::OUTPUT_REPORT_LEN];
+
         report[0] = dualshock4::OUTPUT_REPORT_ID;
         report[1] = 0x03;
         report[4] = 0x80;
         report[5] = 0xff;
         report[6..9].copy_from_slice(&[9, 8, 7]);
+
         let mut out = Vec::new();
 
         kernel.send(&output_event(1, &report)).unwrap();
@@ -826,6 +849,7 @@ mod tests {
     #[test]
     fn a_pad_event_that_changes_the_report_sends_one_input_report() {
         let (mut gamepad, kernel) = gamepad();
+
         receive(&kernel);
 
         gamepad
@@ -843,11 +867,14 @@ mod tests {
         gamepad.handle(GamepadEvent::Connected).unwrap();
 
         let event = receive(&kernel);
+
         assert_eq!(u32_at(&event, 0), 12);
         assert_eq!(usize::from(u16_at(&event, 4)), INPUT_REPORT_LEN);
         assert_eq!(event[6], INPUT_REPORT_ID);
         assert_eq!(event[6 + 8] & 0xf0, 0x20);
+
         kernel.set_nonblocking(true).unwrap();
+
         assert!(kernel.recv(&mut [0; 16]).is_err());
     }
 
@@ -855,14 +882,18 @@ mod tests {
     fn output_reports_become_feedback_for_the_slot() {
         let (mut gamepad, kernel) = gamepad();
         let mut report = vec![0; OUTPUT_REPORT_LEN];
+
         report[0] = OUTPUT_REPORT_ID;
         report[1] = 0x03;
         report[3] = 0x80;
         report[4] = 0xff;
+
         let mut lightbar_only = vec![0; OUTPUT_REPORT_LEN];
+
         lightbar_only[0] = OUTPUT_REPORT_ID;
         lightbar_only[2] = 0x04;
         lightbar_only[45..48].copy_from_slice(&[0, 0, 128]);
+
         let mut out = Vec::new();
 
         kernel.send(&output_event(1, &report)).unwrap();
@@ -894,8 +925,10 @@ mod tests {
     fn zero_motors_make_a_stop_command() {
         let (mut gamepad, kernel) = gamepad();
         let mut report = vec![0; OUTPUT_REPORT_LEN];
+
         report[0] = OUTPUT_REPORT_ID;
         report[1] = 0x01;
+
         let mut out = Vec::new();
 
         kernel.send(&output_event(1, &report)).unwrap();
@@ -919,9 +952,11 @@ mod tests {
                 return;
             }
         };
+
         if !hardware::has_module("hid_playstation") {
             return;
         }
+
         let mut pad = UhidGamepad::with_device(0, model, device).unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut requested = Vec::new();

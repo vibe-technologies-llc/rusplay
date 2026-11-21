@@ -1,7 +1,7 @@
 use rusplay_core::Resolution;
 use rusplay_input::capture::StreamRegion;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LogicalArea {
     pub x: f32,
     pub y: f32,
@@ -9,7 +9,7 @@ pub struct LogicalArea {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowLayout {
     pub x: i32,
     pub y: i32,
@@ -30,6 +30,7 @@ impl WindowLayout {
             && available_width >= 1.0
             && available_height >= 1.0
             && source.pixel_count() > 0;
+
         if !usable {
             return None;
         }

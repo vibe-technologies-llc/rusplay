@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::color::{ColorError, ColorPrimaries};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(try_from = "f64", into = "f64")]
 pub struct Luminance(u32);
 
@@ -28,6 +28,7 @@ impl Luminance {
 
     pub fn from_nits(nits: f64) -> Result<Self, ColorError> {
         let units = (nits * f64::from(Self::UNITS_PER_NIT)).round();
+
         if !(0.0..=f64::from(Self::MAX.0)).contains(&units) {
             return Err(ColorError::LuminanceOutOfRange(nits));
         }
@@ -60,7 +61,7 @@ impl From<Luminance> for f64 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MasteringDisplay {
     pub primaries: ColorPrimaries,
@@ -84,14 +85,14 @@ impl Default for MasteringDisplay {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ContentLightLevel {
     pub max_cll_nits: u16,
     pub max_fall_nits: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HdrLevels {
     pub reference_white_nits: u32,
@@ -157,12 +158,14 @@ mod tests {
             max_nits: Luminance::from_whole_nits(4000).unwrap(),
             ..MasteringDisplay::default()
         });
+
         assert!((levels.content_peak_nits() - 4000.0).abs() < f64::EPSILON);
 
         levels.content_light = Some(ContentLightLevel {
             max_cll_nits: 1500,
             max_fall_nits: 400,
         });
+
         assert!((levels.content_peak_nits() - 1500.0).abs() < f64::EPSILON);
     }
 

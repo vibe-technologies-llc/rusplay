@@ -64,7 +64,9 @@ impl Pin {
 
         let value = loop {
             let mut bytes = [0; 8];
+
             fill_random(&mut bytes)?;
+
             let candidate = u64::from_be_bytes(bytes);
 
             if candidate < unbiased_limit {
@@ -95,7 +97,7 @@ impl fmt::Debug for Pin {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairingTiming {
     pub retransmit: Duration,
     pub timeout: Duration,
@@ -157,6 +159,7 @@ impl KeySchedule {
         let hkdf = Hkdf::<Sha256>::new(Some(&attempt.to_be_bytes()), shared_key);
         let expand = |label: &[u8]| -> Result<[u8; KEY_LEN], NetError> {
             let mut out = [0; KEY_LEN];
+
             hkdf.expand(label, &mut out)
                 .map_err(NetError::PairingKeyDerivation)?;
             Ok(out)
@@ -196,12 +199,14 @@ fn confirmation(
     host_spake: &SpakeBytes,
 ) -> Result<Confirmation, NetError> {
     let mut transcript = Vec::with_capacity(label.len() + 4 + 2 * PairingMessage::SPAKE_LEN);
+
     transcript.extend_from_slice(label);
     transcript.extend_from_slice(&attempt.to_be_bytes());
     transcript.extend_from_slice(client_spake);
     transcript.extend_from_slice(host_spake);
 
     let mut tag = [0; PairingMessage::MAC_LEN];
+
     Hkdf::<Sha256>::new(Some(key), &transcript)
         .expand(b"rusplay pairing confirmation", &mut tag)
         .map_err(NetError::PairingKeyDerivation)?;
@@ -253,7 +258,9 @@ impl fmt::Debug for PairingInitiator {
 impl PairingInitiator {
     pub fn new(pin: &Pin, name: ClientName) -> Result<Self, NetError> {
         let mut attempt_bytes = [0; 4];
+
         fill_random(&mut attempt_bytes)?;
+
         let attempt = u32::from_be_bytes(attempt_bytes);
 
         let (state, message) = Spake2::<Ed25519Group>::start_a(
@@ -292,6 +299,7 @@ impl PairingInitiator {
 
     pub fn handle(&mut self, datagram: &[u8]) -> Result<PairingStep, NetError> {
         let message = PairingMessage::from_datagram(datagram)?;
+
         if message.attempt() != self.attempt {
             return Ok(PairingStep::Pending);
         }
@@ -336,6 +344,7 @@ impl PairingInitiator {
             &self.client_spake,
             &host_spake,
         )?;
+
         if !is_equal(&expected, &host_confirm) {
             return Err(NetError::PairingAuthentication);
         }
@@ -494,6 +503,7 @@ impl PairingResponder {
             )?,
         }
         .to_datagram()?;
+
         self.active = Some(ActiveAttempt {
             attempt,
             origin: from,
@@ -539,6 +549,7 @@ impl PairingResponder {
 
         let paired = active.outcome.take();
         let done = PairingMessage::Done { attempt }.to_datagram()?;
+
         self.active = None;
         self.finished = Some(FinishedAttempt {
             attempt,
@@ -617,6 +628,7 @@ pub fn pair_as_host(
     loop {
         let now = Instant::now();
         let stop_at = linger_until.unwrap_or(deadline);
+
         if now >= stop_at {
             return paired.ok_or(NetError::PairingTimeout);
         }
@@ -677,6 +689,7 @@ mod tests {
             .unwrap()
             .reply
             .unwrap();
+
         assert!(matches!(initiator.handle(&reply), Ok(PairingStep::Pending)));
 
         let done = responder.handle(&start(initiator), ORIGIN).unwrap();
@@ -711,6 +724,7 @@ mod tests {
         let (client, host) = handshake(&mut initiator, &mut responder);
 
         assert_keys_interoperate(&client, &host);
+
         assert!(responder.is_finished());
         assert!(initiator.outgoing().is_none());
     }
@@ -754,6 +768,7 @@ mod tests {
         let keys = |_: u8| {
             let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
             let mut responder = PairingResponder::new(pin("123456"), 3);
+
             let (client, _) = handshake(&mut initiator, &mut responder);
             let cipher = SessionCipher::new(&client.keys);
             cipher
@@ -768,6 +783,7 @@ mod tests {
     fn wrong_pin_fails_authentication_on_the_client() {
         let mut initiator = PairingInitiator::new(&pin("111111"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("222222"), 3);
+
         let reply = responder
             .handle(&start(&initiator), ORIGIN)
             .unwrap()
@@ -785,11 +801,13 @@ mod tests {
     fn wrong_confirmation_is_rejected_but_the_attempt_survives() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 1);
+
         let reply = responder
             .handle(&start(&initiator), ORIGIN)
             .unwrap()
             .reply
             .unwrap();
+
         initiator.handle(&reply).unwrap();
 
         let forged = PairingMessage::Confirm {
@@ -802,6 +820,7 @@ mod tests {
         let genuine = responder.handle(&start(&initiator), ORIGIN).unwrap();
 
         let rejected = PairingMessage::from_datagram(&output.reply.unwrap()).unwrap();
+
         assert_eq!(
             rejected,
             PairingMessage::Rejected {
@@ -817,11 +836,13 @@ mod tests {
     fn a_confirmation_from_another_address_is_ignored() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 3);
+
         let reply = responder
             .handle(&start(&initiator), ORIGIN)
             .unwrap()
             .reply
             .unwrap();
+
         initiator.handle(&reply).unwrap();
 
         let confirm = start(&initiator);
@@ -839,6 +860,7 @@ mod tests {
         let mut responder = PairingResponder::new(pin("123456"), 3);
 
         responder.handle(&start(&initiator), ORIGIN).unwrap();
+
         let echoed = responder.handle(&start(&initiator), INTRUDER).unwrap();
 
         assert!(echoed.reply.is_none());
@@ -876,6 +898,7 @@ mod tests {
                 .unwrap()
                 .reply
                 .unwrap();
+
             assert!(matches!(
                 PairingMessage::from_datagram(&reply),
                 Ok(PairingMessage::Reply { .. })
@@ -903,6 +926,7 @@ mod tests {
     fn finished_responder_refuses_new_attempts_but_repeats_done() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 3);
+
         handshake(&mut initiator, &mut responder);
 
         let restart = PairingMessage::Start {
@@ -913,6 +937,7 @@ mod tests {
         .to_datagram()
         .unwrap();
         let repeat = responder.handle(&restart, ORIGIN).unwrap();
+
         assert!(matches!(
             PairingMessage::from_datagram(&repeat.reply.unwrap()),
             Ok(PairingMessage::Done { .. })
@@ -925,6 +950,7 @@ mod tests {
             .unwrap()
             .reply
             .unwrap();
+
         assert!(matches!(
             PairingMessage::from_datagram(&reply),
             Ok(PairingMessage::Rejected {
@@ -938,12 +964,15 @@ mod tests {
     fn duplicate_confirm_repeats_done_without_new_keys() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 3);
+
         let reply = responder
             .handle(&start(&initiator), ORIGIN)
             .unwrap()
             .reply
             .unwrap();
+
         initiator.handle(&reply).unwrap();
+
         let confirm = start(&initiator);
 
         let first = responder.handle(&confirm, ORIGIN).unwrap();
@@ -957,6 +986,7 @@ mod tests {
     #[test]
     fn client_ignores_messages_of_other_attempts() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
+
         let other = PairingMessage::Done {
             attempt: initiator.attempt().wrapping_add(1),
         }
@@ -970,6 +1000,7 @@ mod tests {
     #[test]
     fn client_surfaces_a_rejection() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
+
         let rejection = PairingMessage::Rejected {
             attempt: initiator.attempt(),
             reason: PairingRejection::Locked,
@@ -1007,12 +1038,15 @@ mod tests {
     fn tampered_host_confirmation_aborts_the_client() {
         let mut initiator = PairingInitiator::new(&pin("123456"), ClientName::EMPTY).unwrap();
         let mut responder = PairingResponder::new(pin("123456"), 3);
+
         let mut reply = responder
             .handle(&start(&initiator), ORIGIN)
             .unwrap()
             .reply
             .unwrap();
+
         let last = reply.len() - 1;
+
         reply[last] ^= 1;
 
         assert!(matches!(
@@ -1040,6 +1074,7 @@ mod tests {
             assert_eq!(generated.as_str().len(), usize::from(digits));
             assert!(generated.as_str().bytes().all(|byte| byte.is_ascii_digit()));
         }
+
         assert!(matches!(
             Pin::generate(MIN_PIN_DIGITS - 1),
             Err(NetError::InvalidPin { .. })
@@ -1083,7 +1118,9 @@ mod tests {
 
         let host = thread::spawn(move || {
             let mut responder = PairingResponder::new(pin("424242"), 3);
+
             let (peer, outcome) = pair_as_host(&host_transport, &mut responder, timing()).unwrap();
+
             host_transport.install_session(&outcome.keys);
             (host_transport, peer)
         });
@@ -1095,10 +1132,13 @@ mod tests {
             timing(),
         )
         .unwrap();
+
         client_transport.install_session(&outcome.keys);
+
         let (host_transport, peer) = host.join().unwrap();
 
         assert_eq!(peer, client_transport.local_addr().unwrap());
+
         let datagram = PairingMessage::Done { attempt: 9 }.to_datagram().unwrap();
         let media = {
             let mut tx = crate::Packetizer::new(
@@ -1109,13 +1149,18 @@ mod tests {
             .unwrap();
             tx.packetize(1, false, b"secret frame").unwrap().remove(0)
         };
+
         client_transport.send_to(&media, host_addr).unwrap();
         client_transport.send_to(&datagram, host_addr).unwrap();
 
         let mut buf = [0; 2048];
+
         let (len, _) = host_transport.recv_from(&mut buf).unwrap();
+
         assert_eq!(&buf[..len], media.as_slice());
+
         let (len, _) = host_transport.recv_from(&mut buf).unwrap();
+
         assert_eq!(&buf[..len], datagram.as_slice());
     }
 
@@ -1124,6 +1169,7 @@ mod tests {
         let host_transport = transport();
         let intruder = transport();
         let host_addr = host_transport.local_addr().unwrap();
+
         host_transport.install_session(&SessionKeys::new([1; KEY_LEN], [2; KEY_LEN]));
 
         let media = crate::Packetizer::new(
@@ -1135,8 +1181,11 @@ mod tests {
         .packetize(1, false, b"forged")
         .unwrap()
         .remove(0);
+
         intruder.send_to(&media, host_addr).unwrap();
+
         let foreign = SessionCipher::new(&SessionKeys::new([7; KEY_LEN], [7; KEY_LEN]));
+
         intruder
             .socket()
             .send_to(&foreign.seal(&media).unwrap(), host_addr)
@@ -1145,6 +1194,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
 
         let mut buf = [0; 2048];
+
         assert!(host_transport.try_recv_from(&mut buf).unwrap().is_none());
         assert_eq!(host_transport.rejected_datagrams(), 2);
     }

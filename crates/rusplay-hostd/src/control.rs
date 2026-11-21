@@ -57,7 +57,7 @@ pub enum ControlError {
     Refused(Refusal),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
     Empty,
     TooLong,
@@ -141,7 +141,7 @@ impl Display for Refusal {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Status,
     NewPin,
@@ -152,6 +152,7 @@ impl Request {
     pub fn parse(line: &[u8]) -> Result<Self, Refusal> {
         let text = std::str::from_utf8(line).map_err(|_| Refusal::Malformed)?;
         let text = text.trim_end_matches(['\r', '\n']);
+
         if text.chars().any(char::is_control) {
             return Err(Refusal::Malformed);
         }
@@ -193,6 +194,7 @@ pub fn render_reply(reply: &Result<String, Refusal>) -> String {
 
 pub fn parse_reply(text: &str) -> Option<Result<String, Refusal>> {
     let (first, body) = text.split_once('\n')?;
+
     if first == OK {
         return Some(Ok(body.to_owned()));
     }
@@ -205,6 +207,7 @@ pub fn parse_reply(text: &str) -> Option<Result<String, Refusal>> {
 pub fn read_request(reader: impl Read) -> io::Result<Result<Request, Refusal>> {
     let limit = u64::try_from(MAX_REQUEST_BYTES + 1).unwrap_or(u64::MAX);
     let mut line = Vec::new();
+
     BufReader::new(reader.take(limit)).read_until(b'\n', &mut line)?;
 
     if line.len() > MAX_REQUEST_BYTES {
@@ -237,6 +240,7 @@ pub fn send(path: &Path, request: &Request) -> Result<String, ControlError> {
         },
         _ => io_error(source),
     })?;
+
     stream
         .set_read_timeout(Some(CLIENT_TIMEOUT))
         .and_then(|()| stream.set_write_timeout(Some(CLIENT_TIMEOUT)))
@@ -245,6 +249,7 @@ pub fn send(path: &Path, request: &Request) -> Result<String, ControlError> {
         .map_err(io_error)?;
 
     let mut reply = Vec::new();
+
     (&stream)
         .take(MAX_REPLY_BYTES)
         .read_to_end(&mut reply)
@@ -274,6 +279,7 @@ pub fn remove_stale(path: &Path) -> Result<(), ControlError> {
             });
         }
     };
+
     if !metadata.file_type().is_socket() {
         return Err(ControlError::NotASocket {
             path: path.to_owned(),
@@ -411,6 +417,7 @@ mod tests {
         for reply in replies {
             assert_eq!(parse_reply(&render_reply(&reply)), Some(reply));
         }
+
         assert_eq!(parse_reply("garbage\n"), None);
         assert_eq!(parse_reply("err nonsense\n"), None);
         assert_eq!(parse_reply("ok"), None);
@@ -432,11 +439,15 @@ mod tests {
         let stale = directory.path().join("stale.sock");
         let live = directory.path().join("live.sock");
         let plain = directory.path().join("plain");
+
         drop(UnixListener::bind(&stale).unwrap());
+
         let _listener = UnixListener::bind(&live).unwrap();
+
         fs::write(&plain, "x").unwrap();
 
         assert!(stale.exists());
+
         remove_stale(&stale).unwrap();
 
         assert!(!stale.exists());

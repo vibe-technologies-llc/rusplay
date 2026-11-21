@@ -60,6 +60,7 @@ impl SampleSource {
 
     fn fill(&mut self, frame: &mut [f32]) -> Result<bool, AudioError> {
         let available = self.consumer.slots() / self.channels * self.channels;
+
         if available > 0 {
             self.raw.resize(available, 0.0);
             self.consumer
@@ -76,6 +77,7 @@ impl SampleSource {
         }
 
         let wanted = frame.len();
+
         for (slot, sample) in frame.iter_mut().zip(self.ready.drain(..wanted)) {
             *slot = sample;
         }
@@ -91,7 +93,7 @@ struct CaptureCallbacks {
     channels: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CaptureTarget {
     #[default]
     SinkMonitor,
@@ -131,6 +133,7 @@ fn run_capture(
             *keys::NODE_NAME => "rusplay-microphone-capture",
         },
     };
+
     props.insert(
         *keys::NODE_LATENCY,
         node_latency(settings.latency_frames, settings.rate),
@@ -178,12 +181,14 @@ fn run_capture(
             let Some(mapped) = data.data() else {
                 return;
             };
+
             let end = (offset + size).min(mapped.len());
             let Some(payload) = mapped.get(offset.min(end)..end) else {
                 return;
             };
 
             let dropped = state.writer.write_le_bytes(payload);
+
             if dropped > 0 {
                 state
                     .overruns
@@ -253,6 +258,7 @@ impl AudioCapture {
 
         let (thread, native) = PipewireThread::spawn(thread_name(target), move |quit, startup| {
             let mut callbacks = callbacks;
+
             callbacks.startup = Some(startup);
             run_capture(&settings, callbacks, quit)
         })?;
@@ -286,6 +292,7 @@ impl AudioCapture {
 
     pub fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError> {
         *self.waiter.lock() = Some(thread::current());
+
         let deadline = Instant::now() + timeout;
 
         loop {
@@ -297,6 +304,7 @@ impl AudioCapture {
             }
 
             let now = Instant::now();
+
             if now >= deadline {
                 return Ok(false);
             }
@@ -340,6 +348,7 @@ mod tests {
 
         let mut frame = vec![0.0; 240];
         let mut collected = Vec::new();
+
         while source.fill(&mut frame).unwrap() {
             collected.extend_from_slice(&frame);
         }
@@ -350,6 +359,7 @@ mod tests {
     #[test]
     fn short_data_does_not_produce_a_frame() {
         let (mut writer, mut source) = source_for(48_000, 48_000, 2);
+
         writer.write(&[0.5; 100]);
 
         let mut frame = vec![0.0; 480];
@@ -383,10 +393,12 @@ mod tests {
     fn other_rates_are_converted_to_the_target() {
         let (mut writer, mut source) = source_for(44_100, 48_000, 2);
         let input = vec![0.25; 44_100 / 5 * 2];
+
         writer.write(&input);
 
         let mut frame = vec![0.0; 480];
         let mut frames = 0;
+
         while source.fill(&mut frame).unwrap() {
             frames += 1;
         }
@@ -408,6 +420,7 @@ mod live_tests {
         let frame_samples = config.opus.frame_duration.samples_at(config.sample_rate) * 2;
         let mut frame = vec![0.0; frame_samples];
         let mut delivered = 0;
+
         for _ in 0..100 {
             if capture
                 .read_frame(&mut frame, Duration::from_secs(1))

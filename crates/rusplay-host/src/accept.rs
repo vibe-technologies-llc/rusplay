@@ -16,7 +16,7 @@ use crate::HostError;
 
 const CANCEL_POLL: Duration = Duration::from_millis(100);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Replay {
     pub request: Vec<u8>,
     pub reply: Vec<u8>,
@@ -28,7 +28,7 @@ impl Replay {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admission {
     Paired,
     Reconnected,
@@ -77,10 +77,13 @@ pub(crate) fn accept(
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Acquire)) {
             return Err(HostError::AcceptCancelled);
         }
+
         let remaining = deadline.saturating_duration_since(Instant::now());
+
         if remaining.is_zero() {
             return Err(HostError::AcceptTimeout(timeout));
         }
+
         let wait = if cancel.is_some() {
             remaining.min(CANCEL_POLL)
         } else {
@@ -91,6 +94,7 @@ pub(crate) fn accept(
             continue;
         };
         let datagram = &buf[..len];
+
         let admitted = match PacketHeader::read(datagram).map(|header| header.stream) {
             Ok(StreamKind::Pairing) => match pairing.as_mut() {
                 Some(responder) => {
@@ -150,10 +154,12 @@ fn answer_pairing(
         },
     )?;
     let peer = record.id();
+
     peers.write().remember(record)?;
     transport.install_session(&outcome.keys);
 
     let reply = output.reply.unwrap_or_default();
+
     transport.send_to(&reply, from)?;
 
     Ok(Some(Client {
@@ -188,7 +194,9 @@ fn answer_reconnect(
     };
 
     transport.install_session(&accepted.keys);
+
     let reply = output.reply.unwrap_or_default();
+
     transport.send_to(&reply, from)?;
 
     Ok(Some(Client {

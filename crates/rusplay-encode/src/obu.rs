@@ -35,6 +35,7 @@ impl AccessUnit {
         if self.data.is_empty() {
             let delimiter = self.delimit && !starts_with_temporal_delimiter(chunk);
             let room = chunk.len() + if delimiter { TEMPORAL_DELIMITER_LEN } else { 0 };
+
             self.data.reserve_exact(room);
             if delimiter {
                 self.data.extend_from_slice(&TEMPORAL_DELIMITER);
@@ -65,6 +66,7 @@ mod tests {
 
     fn access_unit(delimit: bool, chunks: &[&[u8]]) -> Vec<u8> {
         let mut unit = AccessUnit::new(delimit, Vec::new());
+
         for chunk in chunks {
             unit.push(chunk);
         }

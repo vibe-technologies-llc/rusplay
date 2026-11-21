@@ -219,6 +219,7 @@ impl HostSession {
             self.clipboard.as_ref(),
             ClipboardPolicy::host(&self.config.input),
         );
+
         stream.clipboard = state;
 
         link
@@ -233,6 +234,7 @@ impl HostSession {
     ) -> Result<HostStream, HostError> {
         let network = &self.config.network;
         let shared = Arc::new(Shared::new(client.address()));
+
         let mut stream = HostStream {
             stages: Vec::new(),
             shared: Arc::clone(&shared),
@@ -240,6 +242,7 @@ impl HostSession {
             clipboard: ClipboardState::Off,
             _busy: BusyGuard::raise(&self.busy),
         };
+
         shared
             .counters
             .thread_priority_failures
@@ -252,14 +255,17 @@ impl HostSession {
         ));
         let (input_sender, input_datagrams) = mpsc::sync_channel(INPUT_QUEUE_DATAGRAMS);
         let hints = HintPolicy::from_config(&self.config);
+
         if hints != HintPolicy::Ignore {
             shared
                 .counters
                 .set_bitrate_target(self.config.video.bitrate_kbps);
         }
+
         let microphone = self.microphone_factory()?;
         let (microphone_sender, microphone_datagrams) =
             mpsc::sync_channel(usize::from(self.config.audio.decode_queue_packets));
+
         let control = ControlStage::new(
             network,
             hints,
@@ -283,6 +289,7 @@ impl HostSession {
                 clipboard: self.open_clipboard(&mut stream),
             },
         )?;
+
         stream.spawn(Stage::Control, move || control.run())?;
 
         if let Some(feed) = &self.input {
@@ -292,6 +299,7 @@ impl HostSession {
                 datagrams: input_datagrams,
                 outbox: Arc::clone(&outbox),
             };
+
             stream.spawn(Stage::Input, move || input::run(&links))?;
         }
 
@@ -302,6 +310,7 @@ impl HostSession {
             transport: Arc::clone(&self.transport),
         };
         let options = send_options(&self.config);
+
         stream.spawn(Stage::Send, move || send::run(options, &send_links))?;
 
         let encode_links = EncodeLinks {
@@ -317,6 +326,7 @@ impl HostSession {
             output,
             outbox,
         };
+
         stream.spawn(Stage::Encode, move || encode::run(factory, &encode_links))?;
 
         if let Some(factory) = self.audio.clone() {
@@ -325,6 +335,7 @@ impl HostSession {
                 transport: Arc::clone(&self.transport),
             };
             let audio = self.config.audio;
+
             stream.spawn_on(Stage::Audio, Some(CODEC_THREAD_STACK_BYTES), move || {
                 audio::run(audio, &factory, &links)
             })?;
@@ -337,6 +348,7 @@ impl HostSession {
             };
             let audio = self.config.audio;
             let network = self.config.network;
+
             stream.spawn_on(
                 Stage::Microphone,
                 Some(CODEC_THREAD_STACK_BYTES),
@@ -352,11 +364,13 @@ impl HostSession {
                 transport: Arc::clone(&self.transport),
             };
             let repeat = image_repeat(&self.config);
+
             stream.spawn(Stage::Cursor, move || cursor::run(repeat, &links))?;
         }
 
         let feed = Arc::clone(feed);
         let frame_rate = self.config.video.stream_frame_rate();
+
         stream.spawn(Stage::Capture, move || {
             capture::run(&feed, &shared, frame_rate)
         })?;
@@ -466,6 +480,7 @@ impl HostStream {
             let result = handle
                 .join()
                 .unwrap_or(Err(HostError::StagePanicked { stage }));
+
             self.shared.stop();
             if let Err(error) = result {
                 first_error.get_or_insert(error);
@@ -490,16 +505,21 @@ impl HostStream {
         body: impl FnOnce() -> Result<(), HostError> + Send + 'static,
     ) -> Result<(), HostError> {
         let mut builder = thread::Builder::new().name(format!("rusplay-host-{stage}"));
+
         if let Some(bytes) = stack_bytes {
             builder = builder.stack_size(bytes);
         }
+
         let guard = StopOnDrop(Arc::clone(&self.shared));
         let tuning = self.tuning;
         let shared = Arc::clone(&self.shared);
+
         let spawned = builder.spawn(move || {
             let _guard = guard;
+
             if let Some(role) = thread_role(stage) {
                 let failures = tuning.apply(role);
+
                 shared
                     .counters
                     .thread_priority_failures

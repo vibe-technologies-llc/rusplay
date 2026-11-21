@@ -45,6 +45,7 @@ impl ClipboardChunk {
         } else {
             data.len() == Self::MAX_DATA
         };
+
         if !well_sized {
             return Err(ProtocolError::ClipboardChunkLength {
                 len: data.len(),
@@ -54,6 +55,7 @@ impl ClipboardChunk {
         }
 
         let mut bytes = [0; Self::MAX_DATA];
+
         bytes[..data.len()].copy_from_slice(data);
 
         Ok(Self {
@@ -67,6 +69,7 @@ impl ClipboardChunk {
 
     pub fn split(transfer: u32, text: &str) -> Result<Vec<Self>, ProtocolError> {
         let bytes = text.as_bytes();
+
         if bytes.is_empty() {
             return Err(ProtocolError::ClipboardTextEmpty);
         }
@@ -175,6 +178,7 @@ impl ClipboardReassembler {
 
     pub fn push(&mut self, chunk: &ClipboardChunk) -> Result<Option<String>, ProtocolError> {
         let minimum = (usize::from(chunk.count) - 1) * ClipboardChunk::MAX_DATA + 1;
+
         if minimum > self.max_bytes {
             return Err(ProtocolError::ClipboardTooLarge {
                 len: minimum,
@@ -199,6 +203,7 @@ impl ClipboardReassembler {
                 true
             }
         };
+
         if supersedes {
             self.pending = Some(Pending::start(chunk));
         }
@@ -206,16 +211,19 @@ impl ClipboardReassembler {
         let Some(pending) = self.pending.as_mut() else {
             return Ok(None);
         };
+
         if pending.count != chunk.count {
             return Err(ProtocolError::ClipboardChunkCount(chunk.count));
         }
 
         let slot = usize::from(chunk.index);
+
         if pending.received[slot] {
             return Ok(None);
         }
 
         let start = slot * ClipboardChunk::MAX_DATA;
+
         pending.bytes[start..start + chunk.data().len()].copy_from_slice(chunk.data());
         pending.received[slot] = true;
         pending.remaining -= 1;
@@ -229,9 +237,11 @@ impl ClipboardReassembler {
         let Some(mut done) = self.pending.take() else {
             return Ok(None);
         };
+
         self.finished = Some(done.transfer);
 
         let total = usize::from(done.count - 1) * ClipboardChunk::MAX_DATA + done.last_len;
+
         if total > self.max_bytes {
             return Err(ProtocolError::ClipboardTooLarge {
                 len: total,
@@ -283,6 +293,7 @@ mod tests {
         chunks: &[ClipboardChunk],
     ) -> Result<Option<String>, ProtocolError> {
         let mut result = Ok(None);
+
         for chunk in chunks {
             result = reassembler.push(chunk);
             if !matches!(result, Ok(None)) {
@@ -308,8 +319,10 @@ mod tests {
 
             let chunks = ClipboardChunk::split(7, &original).unwrap();
             let mut wire = Vec::new();
+
             for chunk in &chunks {
                 let mut buf = vec![0; chunk.encoded_len()];
+
                 chunk.write(&mut buf);
                 wire.push(ClipboardChunk::read(&buf).unwrap());
             }
@@ -326,7 +339,9 @@ mod tests {
     fn chunks_arriving_out_of_order_still_complete() {
         let original = text(ClipboardChunk::MAX_DATA * 3 + 5);
         let mut chunks = ClipboardChunk::split(1, &original).unwrap();
+
         chunks.reverse();
+
         let mut reassembler = ClipboardReassembler::new(1 << 20);
 
         let result = reassemble(&mut reassembler, &chunks).unwrap();
@@ -462,6 +477,7 @@ mod tests {
     fn a_body_whose_length_field_disagrees_with_its_bytes_is_refused() {
         let chunk = ClipboardChunk::split(1, "hello").unwrap()[0];
         let mut buf = vec![0; chunk.encoded_len() + 1];
+
         chunk.write(&mut buf);
 
         assert_eq!(

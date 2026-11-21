@@ -35,7 +35,7 @@ const MAX_KEYMAP_LEN: u32 = 4 * 1024 * 1024;
 
 pub const LOCK_SETTLE: Duration = Duration::from_millis(120);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockState {
     pub caps: bool,
     pub num: bool,
@@ -58,7 +58,7 @@ impl LockState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LockMasks {
     pub caps: u32,
     pub num: u32,
@@ -153,6 +153,7 @@ pub(crate) fn read_keymap(fd: &OwnedFd, size: u32) -> Option<String> {
 
     let file = File::from(fd.try_clone().ok()?);
     let mut bytes = vec![0; usize::try_from(size).ok()?];
+
     file.read_exact_at(&mut bytes, 0).ok()?;
     while bytes.last() == Some(&0) {
         bytes.pop();
@@ -161,7 +162,7 @@ pub(crate) fn read_keymap(fd: &OwnedFd, size: u32) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LockTaps {
     pub caps: bool,
     pub num: bool,
@@ -179,7 +180,7 @@ impl LockTaps {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LockSync {
     desired: Option<LockState>,
     reported: Option<LockState>,
@@ -329,13 +330,16 @@ xkb_symbols \"pc+us\" {
         let mut sync = LockSync::new();
 
         sync.desire(lock(true, false));
+
         assert!(sync.due(start).is_empty());
 
         sync.report(lock(false, false));
         sync.key_injected(KEY_CAPS_LOCK, start);
+
         assert!(sync.due(start + LOCK_SETTLE / 2).is_empty());
 
         let taps = sync.due(start + LOCK_SETTLE);
+
         assert_eq!(
             taps,
             LockTaps {
@@ -350,17 +354,22 @@ xkb_symbols \"pc+us\" {
     fn a_tap_is_not_repeated_before_the_server_reports() {
         let start = Instant::now();
         let mut sync = LockSync::new();
+
         sync.report(lock(false, true));
         sync.desire(lock(false, false));
 
         let taps = sync.due(start);
+
         sync.tapped(start);
 
         assert_eq!(taps.keycodes().collect::<Vec<_>>(), vec![KEY_NUM_LOCK]);
+
         sync.desire(lock(false, false));
+
         assert!(sync.due(start + LOCK_SETTLE * 4).is_empty());
 
         sync.report(lock(false, false));
+
         assert!(sync.due(start + LOCK_SETTLE * 4).is_empty());
     }
 
@@ -368,12 +377,14 @@ xkb_symbols \"pc+us\" {
     fn an_agreeing_report_consumes_the_desire() {
         let start = Instant::now();
         let mut sync = LockSync::new();
+
         sync.report(lock(true, true));
         sync.desire(lock(true, true));
 
         assert!(sync.due(start).is_empty());
 
         sync.report(lock(false, true));
+
         assert!(sync.due(start + LOCK_SETTLE * 2).is_empty());
     }
 
@@ -381,6 +392,7 @@ xkb_symbols \"pc+us\" {
     fn other_keys_do_not_open_a_settle_window() {
         let start = Instant::now();
         let mut sync = LockSync::new();
+
         sync.report(lock(false, false));
         sync.desire(lock(false, true));
 
@@ -395,8 +407,10 @@ xkb_symbols \"pc+us\" {
         use std::io::Write;
 
         let mut file = tempfile::tempfile().unwrap();
+
         file.write_all(US_KEYMAP.as_bytes()).unwrap();
         file.write_all(&[0]).unwrap();
+
         let fd = OwnedFd::from(file);
         let size = u32::try_from(US_KEYMAP.len() + 1).unwrap();
 

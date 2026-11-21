@@ -19,20 +19,20 @@ pub const INVALID_SURFACE: SurfaceId = ffi::VA_INVALID_SURFACE;
 const MAX_OBJECTS: usize = 4;
 const MAX_PLANES: usize = 4;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DmaBufObjectRef<'a> {
     pub fd: BorrowedFd<'a>,
     pub size: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DmaBufPlaneLayout {
     pub object: u32,
     pub offset: u32,
     pub pitch: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DmaBufImport<'a> {
     pub va_fourcc: u32,
     pub drm_fourcc: u32,
@@ -42,7 +42,7 @@ pub struct DmaBufImport<'a> {
     pub planes: &'a [DmaBufPlaneLayout],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportAccess {
     ReadOnly,
     ReadWrite,
@@ -65,7 +65,7 @@ pub struct ExportedObject {
     pub size: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ExportedPlane {
     pub object: u32,
     pub offset: u32,
@@ -100,6 +100,7 @@ impl Surface {
             ffi::VASurfaceAttribType_VASurfaceAttribUsageHint,
             usage_hint,
         )];
+
         if let Some(fourcc) = pixel_format {
             attributes.push(integer_attribute(
                 ffi::VASurfaceAttribType_VASurfaceAttribPixelFormat,
@@ -124,6 +125,7 @@ impl Surface {
             num_layers: 1,
             ..Default::default()
         };
+
         for (slot, object) in descriptor.objects.iter_mut().zip(import.objects) {
             slot.fd = object.fd.as_raw_fd();
             slot.size = object.size;
@@ -131,6 +133,7 @@ impl Surface {
         }
 
         let layer = &mut descriptor.layers[0];
+
         layer.drm_format = import.drm_fourcc;
         layer.num_planes = c_uint_of(import.planes.len().min(MAX_PLANES));
         for (index, plane) in import.planes.iter().enumerate().take(layer.offset.len()) {
@@ -149,6 +152,7 @@ impl Surface {
                 (&raw mut descriptor).cast::<c_void>(),
             ),
         ];
+
         if let Some(hint) = usage_hint {
             attributes.push(integer_attribute(
                 ffi::VASurfaceAttribType_VASurfaceAttribUsageHint,
@@ -166,6 +170,7 @@ impl Surface {
         attributes: &mut [ffi::VASurfaceAttrib],
     ) -> Result<Self, VaError> {
         let mut id = INVALID_SURFACE;
+
         check(VaCall::CreateSurfaces, unsafe {
             ffi::vaCreateSurfaces(
                 display.raw(),
@@ -191,6 +196,7 @@ impl Surface {
 
     pub fn export(&self, access: ExportAccess) -> Result<ExportedSurface, VaError> {
         let mut descriptor = ffi::VADRMPRIMESurfaceDescriptor::default();
+
         check(VaCall::ExportSurfaceHandle, unsafe {
             ffi::vaExportSurfaceHandle(
                 self.display.raw(),
@@ -243,6 +249,7 @@ fn integer_attribute(type_: ffi::VASurfaceAttribType, value: u32) -> ffi::VASurf
         flags: ffi::VA_SURFACE_ATTRIB_SETTABLE,
         ..Default::default()
     };
+
     attribute.value.type_ = ffi::VAGenericValueType_VAGenericValueTypeInteger;
     attribute.value.value.i = i32::from_ne_bytes(value.to_ne_bytes());
 
@@ -255,6 +262,7 @@ fn pointer_attribute(type_: ffi::VASurfaceAttribType, value: *mut c_void) -> ffi
         flags: ffi::VA_SURFACE_ATTRIB_SETTABLE,
         ..Default::default()
     };
+
     attribute.value.type_ = ffi::VAGenericValueType_VAGenericValueTypePointer;
     attribute.value.value.p = value;
 

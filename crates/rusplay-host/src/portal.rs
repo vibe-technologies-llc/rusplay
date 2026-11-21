@@ -142,6 +142,7 @@ mod shared {
                         ..LibeiOptions::default()
                     };
                     let mut injector = LibeiInjector::connect(eis, &input_config, options)?;
+
                     injector.attach_session(session);
                     match injector.wait_ready(READY_TIMEOUT) {
                         Ok(()) | Err(InputError::DevicesNotResumed) => {}
@@ -193,6 +194,7 @@ mod shared {
             Ok(opened) => opened.eis.is_none(),
             Err(error) => error.denies_input_permission(),
         };
+
         let opened =
             if super::restore_hid_the_prompt(used_token, wanted_input, restored_without_input) {
                 drop(first);
@@ -203,6 +205,7 @@ mod shared {
             } else {
                 first?
             };
+
         if let (Some(store), Some(token)) = (&store, &opened.restore_token) {
             store.store(token)?;
         }
@@ -228,11 +231,13 @@ mod shared {
         };
 
         session.select_devices(&options).await?;
+
         let started = session.start_selected().await?;
 
         let session = Arc::new(session);
         let clipboard = requested.map(|requested| portal_opener(&session, requested));
         let granted = started.keyboard || started.pointer || started.touch;
+
         let eis = if granted {
             match session.connect_to_eis().await {
                 Ok(eis) => Some(eis),

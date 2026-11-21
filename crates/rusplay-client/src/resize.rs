@@ -2,13 +2,13 @@ use std::time::{Duration, Instant};
 
 use rusplay_protocol::ClientDisplay;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Wanted {
     display: ClientDisplay,
     since: Instant,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct DisplayAnnouncer {
     debounce: Duration,
     sent: ClientDisplay,
@@ -70,7 +70,9 @@ impl DisplayAnnouncer {
     pub(crate) fn undeliverable(&mut self, id: u32, now: Instant) {
         if self.in_flight == Some(id) {
             self.in_flight = None;
+
             let lost = self.sent;
+
             self.sent = self.acknowledged;
             self.wanted.get_or_insert(Wanted {
                 display: lost,
@@ -122,9 +124,12 @@ mod tests {
 
         for step in 0..50u32 {
             let now = start + 10 * MS * step;
+
             announcer.request(display(1300 + step, 720), now);
+
             assert_eq!(announcer.ready(now), None);
         }
+
         let last = start + 490 * MS;
 
         assert_eq!(announcer.ready(last + 199 * MS), None);
@@ -173,10 +178,15 @@ mod tests {
         announcer.sent(display(1300, 720), 7);
         announcer.request(display(1400, 800), start + 10 * MS);
         announcer.request(display(1500, 900), start + 20 * MS);
+
         let blocked = announcer.ready(start + 10_000 * MS);
+
         announcer.acked(6);
+
         let still_blocked = announcer.ready(start + 10_000 * MS);
+
         announcer.acked(7);
+
         let next = announcer.ready(start + 10_000 * MS);
 
         assert_eq!(blocked, None);
@@ -188,6 +198,7 @@ mod tests {
     fn an_undeliverable_announcement_is_sent_again_unless_a_newer_one_waits() {
         let start = Instant::now();
         let mut announcer = announcer();
+
         announcer.request(display(1300, 720), start);
         announcer.sent(display(1300, 720), 3);
 
@@ -207,6 +218,7 @@ mod tests {
     fn the_connect_announcement_blocks_updates_until_it_is_acknowledged() {
         let start = Instant::now();
         let mut announcer = announcer();
+
         announcer.sent(display(1280, 720), 1);
 
         announcer.request(display(1300, 720), start);

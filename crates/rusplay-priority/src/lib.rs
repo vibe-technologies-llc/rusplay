@@ -10,13 +10,13 @@ use rustix::{io::Errno, process, thread::set_current_timer_slack};
 
 const NANOS_PER_MICRO: u64 = 1_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThreadRole {
     Frame,
     TimerDriven,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThreadTuning {
     nice: i8,
     rtkit_priority: Option<u8>,
@@ -167,7 +167,9 @@ mod tests {
     fn only_a_timer_driven_thread_lowers_its_timer_slack() {
         let (timer_driven, frame) = on_a_fresh_thread(|| {
             tuning(0, 1, 0).apply(ThreadRole::Frame);
+
             let frame = current_timer_slack().unwrap();
+
             tuning(0, 1, 0).apply(ThreadRole::TimerDriven);
             (current_timer_slack().unwrap(), frame)
         });

@@ -11,7 +11,7 @@ const KNEE_RANGE: Range<f32> = 0.0..1.0;
 const PERCENTILE_RANGE: RangeInclusive<f32> = f32::MIN_POSITIVE..=100.0;
 const LUT_SIZE_RANGE: RangeInclusive<u32> = 17..=129;
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ColorConfig {
     pub target: DisplayTargetConfig,
@@ -30,7 +30,7 @@ impl ColorConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorMethod {
     #[default]
@@ -38,7 +38,7 @@ pub enum ColorMethod {
     Lut,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ColorProcessingConfig {
     pub method: ColorMethod,
@@ -64,7 +64,7 @@ impl Default for ColorProcessingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DisplayTargetConfig {
     pub primaries: Option<ColorPrimaries>,
@@ -97,7 +97,7 @@ impl DisplayTargetConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputColorSpace {
     #[default]
@@ -108,7 +108,7 @@ pub enum OutputColorSpace {
     Pq,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OutputFormat {
     #[default]
@@ -118,7 +118,7 @@ pub enum OutputFormat {
     Rgba16Float,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DitherMode {
     #[default]
@@ -127,7 +127,7 @@ pub enum DitherMode {
     Off,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DisplayOutputConfig {
     pub color_space: OutputColorSpace,
@@ -147,7 +147,7 @@ impl Default for DisplayOutputConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ToneMappingConfig {
     pub operator: ToneMapOperator,
@@ -187,7 +187,7 @@ impl Default for ToneMappingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GamutMappingConfig {
     pub mode: GamutMapMode,

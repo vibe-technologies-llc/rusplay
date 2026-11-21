@@ -10,7 +10,7 @@ use rusplay_config::InputConfig;
 
 use crate::InputError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortalStep {
     Connect,
     CreateSession,
@@ -19,7 +19,7 @@ pub enum PortalStep {
     ConnectToEis,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct PortalInputOptions {
     pub keyboard: bool,
@@ -42,6 +42,7 @@ impl PortalInputOptions {
 
     fn device_types(&self) -> DeviceType {
         let mut types = DeviceType::empty();
+
         if self.keyboard {
             types |= DeviceType::KEYBOARD;
         }
@@ -63,14 +64,14 @@ impl PortalInputOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortalStream {
     pub node_id: u32,
     pub size: Option<(i32, i32)>,
     pub mapping_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartedPortal {
     pub keyboard: bool,
     pub pointer: bool,
@@ -107,6 +108,7 @@ impl RemoteDesktopSession {
             .set_devices(options.device_types())
             .set_persist_mode(options.persist_mode())
             .set_restore_token(options.restore_token.as_deref());
+
         self.proxy
             .select_devices(&self.session, select)
             .await

@@ -10,7 +10,7 @@ use crate::{
 pub(crate) const RADIAL_LUT_SIZE: u32 = 1024;
 const IDENTITY_AXIS_EXTENT: f32 = 0.5;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PolarGeometry {
     pub source: (u32, u32),
     pub target: (u32, u32),
@@ -24,6 +24,7 @@ impl PolarGeometry {
     pub(crate) fn new(settings: &ScaleSettings) -> Self {
         let source = resolution_pair(settings.source);
         let target = resolution_pair(settings.target);
+
         let ratio = (
             axis_ratio(source.0, target.0),
             axis_ratio(source.1, target.1),
@@ -60,7 +61,7 @@ impl PolarGeometry {
     }
 }
 
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn axis_ratio(source: u32, target: u32) -> f32 {
     (f64::from(source) / f64::from(target)) as f32
 }
@@ -370,6 +371,7 @@ mod tests {
         let pipelines = ScalePipelines::new(&gpu.device);
         let separable = settings(ScaleFilter::Lanczos3, (20, 16), (48, 40));
         let polar = settings(ScaleFilter::EwaLanczos, (20, 16), (48, 40));
+
         let mut scaler = Scaler::new(&pipelines, &gpu.device, separable).unwrap();
 
         let reconfigured = scaler.configure(&gpu.device, polar).unwrap();

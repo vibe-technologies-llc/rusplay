@@ -60,6 +60,7 @@ pub(crate) fn run(
     links: &AudioLinks,
 ) -> Result<(), HostError> {
     let result = serve(&config, factory, links);
+
     links.shared.stop();
 
     result
@@ -108,11 +109,13 @@ fn serve(
         }
 
         let written = encoder.encode(&pcm, &mut packet)?;
+
         if written == 0 {
             continue;
         }
 
         let datagrams = packetizer.packetize(number, false, &packet[..written])?;
+
         datagrams::send_all(&links.transport, links.shared.client.address(), &datagrams)?;
         number = number.wrapping_add(1);
         counters.audio_packets_sent.increment();

@@ -18,13 +18,13 @@ const MISSING_PTS: i64 = i64::MIN;
 const PLANES: usize = 3;
 
 #[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
     non_camel_case_types,
     non_snake_case,
     non_upper_case_globals,
-    dead_code,
-    unsafe_op_in_unsafe_fn,
-    clippy::all,
-    clippy::pedantic
+    unsafe_op_in_unsafe_fn
 )]
 mod sys {
     include!(concat!(env!("OUT_DIR"), "/ffmpeg.rs"));
@@ -55,13 +55,16 @@ impl FfmpegDecoder {
             codec,
         })?;
         let found = unsafe { sys::avcodec_find_decoder(id) };
+
         if found.is_null() {
             return Err(DecodeError::FfmpegDecoderMissing { codec });
         }
 
         let context = Context::alloc(found)?;
+
         unsafe {
             let context = &mut *context.0;
+
             context.thread_count = thread_count(config);
             context.thread_type = sys::FF_THREAD_SLICE;
             context.err_recognition = sys::RUSPLAY_AV_EF_EXPLODE;
@@ -70,7 +73,9 @@ impl FfmpegDecoder {
                 den: 1_000_000,
             };
         }
+
         let status = unsafe { sys::avcodec_open2(context.0, found, ptr::null_mut()) };
+
         if status < 0 {
             return Err(DecodeError::Ffmpeg {
                 call: FfmpegCall::Open,
@@ -108,9 +113,12 @@ impl FfmpegDecoder {
         self.scratch.resize(padded, 0);
 
         let pts = i64::try_from(timestamp.as_micros()).unwrap_or(MISSING_PTS);
+
         unsafe {
             sys::av_packet_unref(self.packet.0);
+
             let packet = &mut *self.packet.0;
+
             packet.data = self.scratch.as_mut_ptr();
             packet.size = size;
             packet.pts = pts;
@@ -121,6 +129,7 @@ impl FfmpegDecoder {
     fn send_loaded(&mut self) -> Result<(), DecodeError> {
         loop {
             let status = unsafe { sys::avcodec_send_packet(self.context.0, self.packet.0) };
+
             if status == 0 {
                 return Ok(());
             }
@@ -137,6 +146,7 @@ impl FfmpegDecoder {
 
     fn keep_available(&mut self) -> Result<(), DecodeError> {
         let fallback = self.last_timestamp;
+
         while let Some(picture) = self.receive(fallback)? {
             self.pending = Some(picture);
         }
@@ -146,6 +156,7 @@ impl FfmpegDecoder {
 
     fn take_newest(&mut self, fallback: Timestamp) -> Result<Option<DecodedFrame>, DecodeError> {
         let mut latest = self.pending.take();
+
         while let Some(picture) = self.receive(fallback)? {
             latest = Some(picture);
         }
@@ -156,6 +167,7 @@ impl FfmpegDecoder {
     fn receive(&mut self, fallback: Timestamp) -> Result<Option<DecodedFrame>, DecodeError> {
         let frame = OwnedFrame::alloc()?;
         let status = unsafe { sys::avcodec_receive_frame(self.context.0, frame.0) };
+
         if status == 0 {
             return picture(frame, self.codec, fallback).map(Some);
         }
@@ -199,12 +211,14 @@ impl VideoDecoder for FfmpegDecoder {
 
     fn flush(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
         let mut frames = Vec::new();
+
         if let Some(pending) = self.pending.take() {
             frames.push(pending);
         }
 
         loop {
             let status = unsafe { sys::avcodec_send_packet(self.context.0, ptr::null()) };
+
             if status == 0 || status == sys::RUSPLAY_AVERROR_EOF {
                 break;
             }
@@ -404,12 +418,14 @@ fn picture(
     fallback: Timestamp,
 ) -> Result<DecodedFrame, DecodeError> {
     let source = frame.frame();
+
     if source.flags & sys::AV_FRAME_FLAG_CORRUPT != 0 {
         return Err(DecodeError::FfmpegCorruptPicture { codec });
     }
 
     let width = u32::try_from(source.width).unwrap_or(0);
     let height = u32::try_from(source.height).unwrap_or(0);
+
     if !(1..=MAX_DIMENSION).contains(&width) || !(1..=MAX_DIMENSION).contains(&height) {
         return Err(DecodeError::ResolutionUnsupported {
             backend: Backend::Software,
@@ -454,9 +470,11 @@ fn picture(
         2
     };
     let resolution = Resolution::new(width, height);
+
     for index in 0..PLANES {
         let (plane_width, plane_height) = plane_size(samples.chroma, resolution, index);
         let linesize = source.linesize[index];
+
         let laid_out = plane_rows(source.data[index], linesize, plane_height)
             .is_some_and(|(_, stride)| row_fits(plane_width, bytes_per_sample, stride));
         if !laid_out {
@@ -496,6 +514,7 @@ fn signalled_color(frame: &sys::AVFrame, jpeg_range: bool) -> SignalledColor {
         color::h273_code(frame.color_trc),
         color::h273_code(frame.colorspace),
     );
+
     color = color::with_range(color, full_range(frame.color_range, jpeg_range));
     color = color::with_location(color, frame.chroma_location);
     color.mastering = mastering_metadata(frame);
@@ -521,6 +540,7 @@ fn mastering_metadata(frame: &sys::AVFrame) -> Option<rusplay_core::MasteringDis
         frame,
         sys::AV_FRAME_DATA_MASTERING_DISPLAY_METADATA,
     )?;
+
     if metadata.has_primaries == 0 || metadata.has_luminance == 0 {
         return None;
     }
@@ -553,11 +573,13 @@ fn content_metadata(frame: &sys::AVFrame) -> Option<rusplay_core::ContentLightLe
 
 fn side_data<T>(frame: &sys::AVFrame, kind: sys::AVFrameSideDataType) -> Option<&T> {
     let side = unsafe { sys::av_frame_get_side_data(frame, kind) };
+
     if side.is_null() {
         return None;
     }
 
     let side = unsafe { &*side };
+
     if side.data.is_null() || side.size < size_of::<T>() {
         return None;
     }
@@ -604,6 +626,7 @@ fn plane_rows(data: *mut u8, linesize: i32, height: u32) -> Option<(*const u8, u
     let stride = usize::try_from(linesize.unsigned_abs()).ok()?;
     let row = stride;
     let rows = usize::try_from(height).ok()?;
+
     if row == 0 || stride.checked_mul(rows).is_none() {
         return None;
     }
@@ -639,8 +662,10 @@ impl PlaneStorage for PictureStorage {
 
         let source = self.frame.frame();
         let (width, height) = plane_size(self.chroma, self.resolution, index);
+
         let (origin, stride) = plane_rows(source.data[index], source.linesize[index], height)?;
         let rows = usize::try_from(height).ok()?;
+
         let length = stride.checked_mul(rows)?;
         let data = unsafe { slice::from_raw_parts(origin, length) };
 

@@ -11,7 +11,7 @@ const MARGIN_STEP_DIVISOR: u32 = 4;
 const MARGIN_RELAX_DIVISOR: u32 = 16;
 pub(crate) const PACED_FRAMES: usize = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PacingOptions {
     pub(crate) mode: PresentPacing,
     pub(crate) margin: Duration,
@@ -28,7 +28,7 @@ impl From<&VideoConfig> for PacingOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PresentationFlags(u32);
 
 impl PresentationFlags {
@@ -63,14 +63,14 @@ impl PresentationFlags {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Submission {
     pub(crate) submitted_at: Instant,
     pub(crate) captured_at: Option<Instant>,
     pub(crate) target: Option<Instant>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Presented {
     pub(crate) submission: Submission,
     pub(crate) shown_at: Instant,
@@ -91,7 +91,7 @@ impl Presented {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Feedback {
     Presented(Presented),
     Discarded(Submission),
@@ -104,13 +104,13 @@ pub(crate) fn instant_of(stamp: Duration, clock_now: Duration, now: Instant) -> 
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Phase {
     vblank: Instant,
     period: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct VblankModel {
     phase: Option<Phase>,
 }
@@ -163,7 +163,7 @@ fn nanos(value: u128) -> Duration {
     Duration::from_nanos(u64::try_from(value).unwrap_or(u64::MAX))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Slot {
     pub(crate) due: Instant,
     pub(crate) target: Option<Instant>,
@@ -222,11 +222,13 @@ impl Pacer {
         let (Some(target), Some(period)) = (presented.submission.target, presented.refresh) else {
             return;
         };
+
         let missed = presented.shown_at > target + period / 2;
         if missed {
             self.margin = (self.margin + period / MARGIN_STEP_DIVISOR).min(period);
         } else if self.margin > self.options.margin {
             let excess = self.margin.saturating_sub(self.options.margin);
+
             self.margin -= excess / MARGIN_RELAX_DIVISOR + Duration::from_nanos(1).min(excess);
         }
     }
@@ -288,7 +290,9 @@ impl<T> PacedQueue<T> {
 
     pub(crate) fn push(&mut self, slot: Slot, item: T) -> u64 {
         let before = self.entries.len();
+
         self.entries.retain(|(queued, _)| queued.due < slot.due);
+
         let mut dropped = before - self.entries.len();
 
         self.entries.push_back((slot, item));
@@ -366,6 +370,7 @@ mod tests {
 
     fn fixed(base: Instant) -> Pacer {
         let mut pacer = Pacer::new(options(PresentPacing::Latency));
+
         pacer.observe(&presented(base, Some(REFRESH), true));
         pacer
     }
@@ -387,6 +392,7 @@ mod tests {
     fn the_next_vblank_is_found_on_either_side_of_the_observed_one() {
         let base = Instant::now() + ms(100);
         let mut model = VblankModel::default();
+
         model.observe(&presented(base, Some(REFRESH), true));
 
         let after = model.next_at_or_after(base + ms(20), base);
@@ -402,6 +408,7 @@ mod tests {
     fn an_unsynchronised_presentation_keeps_the_previous_phase() {
         let base = Instant::now();
         let mut model = VblankModel::default();
+
         model.observe(&presented(base, Some(REFRESH), true));
 
         model.observe(&presented(base + ms(5), Some(REFRESH), false));
@@ -416,11 +423,13 @@ mod tests {
     fn a_zero_refresh_means_variable_and_a_stale_phase_means_unknown() {
         let base = Instant::now();
         let mut model = VblankModel::default();
+
         model.observe(&presented(base, None, true));
 
         let variable = model.period(base);
 
         model.observe(&presented(base, Some(REFRESH), true));
+
         let stale = model.period(base + STALE_AFTER + ms(1));
 
         assert_eq!(variable, None);
@@ -435,6 +444,7 @@ mod tests {
     fn off_submits_on_arrival_whatever_the_model() {
         let base = Instant::now();
         let mut pacer = Pacer::new(options(PresentPacing::Off));
+
         pacer.observe(&presented(base, Some(REFRESH), true));
 
         let slot = pacer.schedule(base + ms(2), Some(base));
@@ -462,7 +472,9 @@ mod tests {
         let mut pacer = Pacer::new(options(PresentPacing::Latency));
 
         let unknown = pacer.schedule(base, None);
+
         pacer.observe(&presented(base, None, true));
+
         let variable = pacer.schedule(base + ms(1), None);
 
         assert_eq!(unknown, Slot::now(base));
@@ -475,14 +487,17 @@ mod tests {
         let mut pacer = fixed(base);
         let target = base + REFRESH;
         let mut late = presented(target + REFRESH, Some(REFRESH), true);
+
         late.submission.target = Some(target);
 
         pacer.observe(&late);
+
         let widened = pacer.margin();
 
         for step in 2..400_u32 {
             let vblank = base + REFRESH * step;
             let mut hit = presented(vblank, Some(REFRESH), true);
+
             hit.submission.target = Some(vblank);
             pacer.observe(&hit);
         }
@@ -498,6 +513,7 @@ mod tests {
 
         for step in 1..20_u32 {
             let mut late = presented(base + REFRESH * (step + 1), Some(REFRESH), true);
+
             late.submission.target = Some(base + REFRESH * step);
             pacer.observe(&late);
         }
@@ -509,7 +525,9 @@ mod tests {
     fn smooth_on_a_variable_display_holds_a_constant_capture_to_submit_delay() {
         let base = Instant::now();
         let mut pacer = Pacer::new(options(PresentPacing::Smooth));
+
         pacer.observe(&presented(base, None, true));
+
         let interval = ms(8);
         let network = [ms(10), ms(14), ms(10), ms(17), ms(11)];
 
@@ -534,6 +552,7 @@ mod tests {
     fn smooth_presents_late_frames_at_once() {
         let base = Instant::now();
         let mut pacer = Pacer::new(options(PresentPacing::Smooth));
+
         pacer.schedule(base + ms(10), Some(base));
 
         let late = pacer.schedule(base + ms(40), Some(base + ms(8)));
@@ -545,13 +564,16 @@ mod tests {
     fn smooth_on_a_fixed_display_targets_the_vblank_nearest_the_ideal_time() {
         let base = Instant::now();
         let mut pacer = Pacer::new(options(PresentPacing::Smooth));
+
         pacer.observe(&presented(base, Some(REFRESH), true));
+
         let captured = base + ms(1);
 
         let slot = pacer.schedule(captured + ms(5), Some(captured));
 
         let ideal = captured + ms(5) + JITTER;
         let target = slot.target.unwrap();
+
         assert_eq!(target, base + REFRESH);
         assert!(target.max(ideal) - target.min(ideal) <= REFRESH / 2);
         assert_eq!(slot.due, earlier(target, MARGIN));
@@ -564,7 +586,9 @@ mod tests {
             jitter: Duration::ZERO,
             ..options(PresentPacing::Smooth)
         });
+
         pacer.observe(&presented(base, Some(REFRESH), true));
+
         let arrival = earlier(base + REFRESH, ms(1));
 
         let slot = pacer.schedule(arrival, Some(earlier(arrival, ms(4))));
@@ -610,6 +634,7 @@ mod tests {
 
         queue.push(slot(base + ms(10)), 1);
         queue.push(slot(base + ms(20)), 2);
+
         let dropped = queue.push(slot(base + ms(30)), 3);
 
         assert_eq!(dropped, 1);
@@ -620,6 +645,7 @@ mod tests {
     fn taking_draws_the_newest_due_frame_and_counts_the_ones_it_skips() {
         let base = Instant::now();
         let mut queue = PacedQueue::new(3);
+
         queue.push(slot(base + ms(10)), 1);
         queue.push(slot(base + ms(20)), 2);
         queue.push(slot(base + ms(30)), 3);
@@ -633,6 +659,7 @@ mod tests {
         assert_eq!(queue.next_due(), Some(base + ms(30)));
 
         queue.clear();
+
         assert_eq!(queue.next_due(), None);
     }
 }

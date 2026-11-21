@@ -48,6 +48,7 @@ impl SharedTarget {
 
     fn wait_for(&self, count: usize) -> bool {
         let deadline = Instant::now() + WAIT;
+
         while self.events.lock().len() < count {
             if Instant::now() >= deadline {
                 return false;
@@ -82,6 +83,7 @@ fn key(keycode: u32, pressed: bool) -> InputEvent {
 fn section(records: &[InputRecord]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut encoded = Vec::new();
+
     for record in records {
         encoded.clear();
         record.encode_into(&mut encoded);
@@ -94,6 +96,7 @@ fn input_datagram(sequence: u32, current: &[InputRecord], previous: &[InputRecor
     let current = section(current);
     let previous = section(previous);
     let mut out = Vec::new();
+
     InputPacket {
         sequence,
         current: &current,
@@ -110,10 +113,13 @@ fn events(events: &[InputEvent]) -> Vec<InputRecord> {
 
 fn snapshot_after(applied: &[InputEvent]) -> Vec<InputRecord> {
     let mut held = HeldInput::new();
+
     for event in applied {
         held.observe(event);
     }
+
     let mut records = Vec::new();
+
     held.snapshot(&mut records);
 
     records.into_iter().map(InputRecord::State).collect()
@@ -132,12 +138,17 @@ fn input_datagrams_after_the_hello_reach_the_target_in_order() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(
         0,
         &events(&[key(30, true), key(31, true)]),
@@ -151,6 +162,7 @@ fn input_datagrams_after_the_hello_reach_the_target_in_order() {
         vec![key(30, true), key(31, true), key(30, false)]
     );
     assert_eq!(stream.stats().input_packets, 2);
+
     stream.stop().unwrap();
 }
 
@@ -159,20 +171,27 @@ fn input_before_the_hello_is_ignored() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.send_datagram(&input_datagram(0, &events(&[key(30, true)]), &[]));
     client.pump(Duration::from_millis(200), |_| false);
+
     let early = target.events();
+
     client.hello();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(1, &events(&[key(31, true)]), &[]));
 
     assert!(target.wait_for(1));
     assert_eq!(early, Vec::new());
     assert_eq!(target.events(), vec![key(31, true)]);
+
     stream.stop().unwrap();
 }
 
@@ -181,19 +200,27 @@ fn a_snapshot_repairs_a_key_whose_release_and_repeat_never_arrived() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(0, &events(&[key(30, true)]), &[]));
+
     assert!(target.wait_for(1));
+
     client.send_datagram(&input_datagram(4, &snapshot_after(&[]), &[]));
 
     assert!(target.wait_for(2));
     assert_eq!(target.events(), vec![key(30, true), key(30, false)]);
     assert!(stream.stats().input_events_repaired >= 1);
+
     stream.stop().unwrap();
 }
 
@@ -202,12 +229,17 @@ fn rumble_from_the_target_reaches_the_client_on_the_control_channel() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     let command = RumbleCommand {
         slot: 2,
         strong: 0xC000,
@@ -215,6 +247,7 @@ fn rumble_from_the_target_reaches_the_client_on_the_control_channel() {
         delay_ms: 5,
         duration_ms: 300,
     };
+
     target.rumble.lock().extend([
         PadFeedback::Rumble(command),
         PadFeedback::Rumble(RumbleCommand::stop(2)),
@@ -239,6 +272,7 @@ fn rumble_from_the_target_reaches_the_client_on_the_control_channel() {
     assert!(both);
     assert_eq!(stream.stats().rumble_sent, 2);
     assert_eq!(stream.stats().feedback_sent, 0);
+
     stream.stop().unwrap();
 }
 
@@ -247,12 +281,17 @@ fn lightbar_leds_and_trigger_effects_reach_the_client_on_the_control_channel() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     target.rumble.lock().extend([
         PadFeedback::Lightbar {
             slot: 1,
@@ -285,6 +324,7 @@ fn lightbar_leds_and_trigger_effects_reach_the_client_on_the_control_channel() {
     assert!(all);
     assert_eq!(stream.stats().feedback_sent, 3);
     assert_eq!(stream.stats().rumble_sent, 0);
+
     stream.stop().unwrap();
 }
 
@@ -293,13 +333,18 @@ fn ending_the_session_releases_whatever_the_client_still_held() {
     let target = SharedTarget::default();
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
     let pad = |event| InputEvent::Gamepad { slot: 0, event };
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(
         0,
         &events(&[
@@ -312,7 +357,9 @@ fn ending_the_session_releases_whatever_the_client_still_held() {
         ]),
         &[],
     ));
+
     assert!(target.wait_for(3));
+
     client.send(ControlMessage::Goodbye);
 
     wait_for_end(stream).unwrap();
@@ -326,19 +373,27 @@ fn ending_the_session_releases_whatever_the_client_still_held() {
 #[test]
 fn a_target_that_rejects_events_is_counted_and_the_stream_goes_on() {
     let target = SharedTarget::default();
+
     *target.failing.lock() = true;
+
     let fixture = fixture(&target);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(5), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(0, &events(&[key(30, true)]), &[]));
 
     let flowing = client.pump_until(|client| client.frames.len() >= 4);
     let deadline = Instant::now() + WAIT;
+
     while stream.stats().input_failures == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(2));
     }
@@ -346,6 +401,7 @@ fn a_target_that_rejects_events_is_counted_and_the_stream_goes_on() {
     assert!(flowing);
     assert_eq!(stream.stats().input_failures, 1);
     assert!(!stream.is_finished());
+
     stream.stop().unwrap();
 }
 
@@ -353,17 +409,23 @@ fn a_target_that_rejects_events_is_counted_and_the_stream_goes_on() {
 fn a_host_without_an_input_feed_ignores_input_datagrams() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     client.send_datagram(&input_datagram(0, &events(&[key(30, true)]), &[]));
     client.pump(Duration::from_millis(150), |_| false);
 
     assert_eq!(stream.stats().input_packets, 0);
     assert!(!stream.is_finished());
+
     stream.stop().unwrap();
 }
 
@@ -377,12 +439,17 @@ fn input_that_the_target_cannot_keep_up_with_is_dropped_instead_of_queued() {
         session.without_audio().with_input(InputFeed::new(gated))
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     for sequence in 0..600 {
         client.send_datagram(&input_datagram(
             sequence,
@@ -392,9 +459,11 @@ fn input_that_the_target_cannot_keep_up_with_is_dropped_instead_of_queued() {
     }
 
     let dropped = client.pump_until(|_| stream.stats().input_packets_dropped > 0);
+
     open.store(true, Ordering::Release);
 
     assert!(dropped);
     assert!(!stream.is_finished());
+
     stream.stop().unwrap();
 }

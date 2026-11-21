@@ -39,6 +39,7 @@ pub fn query_outputs() -> Result<Vec<OutputDisplay>, ClientError> {
     let (globals, mut queue) =
         registry_queue_init::<Probe>(&connection).map_err(ClientError::WaylandRegistry)?;
     let handle = queue.handle();
+
     let manager: WpColorManagerV1 = globals
         .bind(&handle, MANAGER_VERSIONS, ())
         .map_err(|_| ClientError::ColorManagementUnsupported)?;
@@ -46,6 +47,7 @@ pub fn query_outputs() -> Result<Vec<OutputDisplay>, ClientError> {
     let mut probe = Probe {
         outputs: bind_outputs(&globals, &handle),
     };
+
     probe.request_descriptions(&manager, &handle);
     roundtrip(&mut queue, &mut probe)?;
 
@@ -53,7 +55,9 @@ pub fn query_outputs() -> Result<Vec<OutputDisplay>, ClientError> {
     roundtrip(&mut queue, &mut probe)?;
 
     let outputs = probe.finish();
+
     manager.destroy();
+
     let _ = connection.flush();
 
     Ok(outputs)
@@ -61,6 +65,7 @@ pub fn query_outputs() -> Result<Vec<OutputDisplay>, ClientError> {
 
 pub fn query_display(output: Option<&str>) -> Result<DisplayImage, ClientError> {
     let mut outputs = query_outputs()?;
+
     let index = match output {
         Some(name) => outputs
             .iter()
@@ -165,6 +170,7 @@ impl Probe {
     fn request_descriptions(&mut self, manager: &WpColorManagerV1, handle: &QueueHandle<Self>) {
         for (index, probe) in self.outputs.iter_mut().enumerate() {
             let color_output = manager.get_output(&probe.output, handle, index);
+
             probe.description = Some(color_output.get_image_description(handle, index));
             probe.color_output = Some(color_output);
         }

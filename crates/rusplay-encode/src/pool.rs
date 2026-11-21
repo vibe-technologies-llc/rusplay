@@ -5,7 +5,7 @@ use rusplay_core::FrameBytes;
 
 const RETAINED_BUFFERS: usize = 4;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct FramePool {
     idle: Arc<Mutex<Vec<Vec<u8>>>>,
 }
@@ -13,6 +13,7 @@ pub(crate) struct FramePool {
 impl FramePool {
     pub(crate) fn take(&self) -> Vec<u8> {
         let mut bytes = self.idle.lock().pop().unwrap_or_default();
+
         bytes.clear();
 
         bytes
@@ -48,6 +49,7 @@ mod tests {
 
     fn encode(pool: &FramePool, chunks: &[&[u8]]) -> FrameBytes {
         let mut unit = AccessUnit::new(true, pool.take());
+
         for chunk in chunks {
             unit.push(chunk);
         }
@@ -61,7 +63,9 @@ mod tests {
 
         let first = encode(&pool, &[&[0x32, 1, 2, 3]]);
         let address = first.as_ptr();
+
         drop(first);
+
         let second = encode(&pool, &[&[0x32, 9, 8]]);
 
         assert_eq!(second.as_ptr(), address);
@@ -76,10 +80,12 @@ mod tests {
 
         let warm = encode(&pool, &[&payload]);
         let address = warm.as_ptr();
+
         drop(warm);
 
         for _ in 0..16 {
             let frame = encode(&pool, &[&payload[..1000], &payload[..2000]]);
+
             assert_eq!(frame.as_ptr(), address);
             assert_eq!(frame.len(), 3002);
         }
@@ -104,6 +110,7 @@ mod tests {
         let held: Vec<_> = (0..RETAINED_BUFFERS + 3)
             .map(|_| encode(&pool, &[&[0x32]]))
             .collect();
+
         drop(held);
 
         assert_eq!(pool.idle_count(), RETAINED_BUFFERS);
@@ -126,6 +133,7 @@ mod tests {
         let address = bytes.as_ptr();
 
         pool.give_back(bytes);
+
         let reused = pool.take();
 
         assert_eq!(reused.len(), 0);

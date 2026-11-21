@@ -33,6 +33,7 @@ pub(super) fn pixel(chroma: ChromaSubsampling, depth: BitDepth) -> PixelFormat {
 
 pub(super) fn every_format() -> Vec<PixelFormat> {
     let mut formats = Vec::new();
+
     for chroma in [
         ChromaSubsampling::Yuv420,
         ChromaSubsampling::Yuv422,
@@ -204,9 +205,11 @@ pub(super) fn assert_no_start_code_emulation(bytes: &[u8]) {
 
 pub(super) fn bits_at(bytes: &[u8], offset: u32, count: u32) -> u32 {
     let mut value = 0;
+
     for position in offset..offset + count {
         let byte = bytes[position as usize / 8];
         let bit = (byte >> (7 - position % 8)) & 1;
+
         value = (value << 1) | u32::from(bit);
     }
     value

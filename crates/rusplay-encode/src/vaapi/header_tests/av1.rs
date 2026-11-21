@@ -99,6 +99,7 @@ fn feed(
         let ObuAction::Process(obu) = parser.read_obu(rest).unwrap() else {
             panic!("dropped an obu");
         };
+
         rest = &rest[obu.bytes_used..];
         match parser.parse_obu(obu).unwrap() {
             ParsedObu::SequenceHeader(header) => sequence = Some(header),
@@ -124,8 +125,11 @@ fn parse(stream: &Av1Stream, frames: &[(bool, u8)]) -> Parsed {
         } else {
             temporal_delimiter()
         };
+
         data.extend(stream.frame_header(keyframe, order_hint).0);
+
         let (parsed_sequence, frame) = feed(&mut parser, &data);
+
         sequence = sequence.or(parsed_sequence);
         headers.push(frame.unwrap());
     }
@@ -225,7 +229,9 @@ fn colour_config_signals_the_colour_description() {
     for case in supported() {
         for colour in color_cases() {
             let mut info = stream_info(case.format, Resolution::new(1920, 1080));
+
             info.color = colour.color;
+
             let stream = Av1Stream::new(case.profile, info);
             let config = parse(&stream, &[(true, 0)]).sequence.color_config.clone();
 
@@ -239,11 +245,13 @@ fn colour_config_signals_the_colour_description() {
             assert_eq!(config.color_range, colour.full_range);
             assert_eq!(config.subsampling_x, case.subsampled);
             assert_eq!(config.subsampling_y, case.subsampled);
+
             let position = if case.subsampled {
                 ChromaSamplePosition::Vertical
             } else {
                 ChromaSamplePosition::Unknown
             };
+
             assert_eq!(config.chroma_sample_position, position);
             assert!(!config.separate_uv_delta_q);
         }
@@ -268,8 +276,10 @@ fn level_and_tier_follow_resolution_rate_bitrate_and_profile() {
             Av1Profile::High => pixel(ChromaSubsampling::Yuv444, BitDepth::Eight),
         };
         let mut info = stream_info(format, Resolution::new(width, height));
+
         info.frame_rate = FrameRate::integer(fps);
         info.peak_kbps = kbps;
+
         let stream = Av1Stream::new(profile, info);
 
         let sequence = parse(&stream, &[(true, 0)]).sequence;
@@ -293,7 +303,9 @@ fn key_frame_header_carries_every_field_the_writer_sets() {
         for resolution in RESOLUTIONS {
             for qp in [None, Some(0), Some(10), Some(30), Some(51), Some(80)] {
                 let mut info = stream_info(case.format, resolution);
+
                 info.qp = qp;
+
                 let stream = Av1Stream::new(case.profile, info);
                 let parsed = parse(&stream, &[(true, 0)]);
                 let header = &parsed.frames[0];
@@ -405,7 +417,9 @@ fn frame_header_obu_framing_and_bit_offsets_point_at_the_fields() {
         for resolution in RESOLUTIONS {
             for qp in [None, Some(7), Some(30), Some(51)] {
                 let mut info = stream_info(case.format, resolution);
+
                 info.qp = qp;
+
                 let stream = Av1Stream::new(case.profile, info);
 
                 for keyframe in [true, false] {
@@ -450,10 +464,13 @@ fn tiles_split_wide_frames_consistently_with_the_header() {
 
     for resolution in resolutions {
         let mut stream = stream(case, resolution);
+
         let parsed = parse(&stream, &[(true, 0)]);
         let tiles = &parsed.frames[0].tile_info;
         let key = picture(0, true);
+
         stream.begin(&key);
+
         let (_, offsets) = stream.frame_header(true, 0);
         let parameters = stream.picture_parameters(&key, 0, offsets);
         let mi_cols = 2 * resolution.width.div_ceil(8);
@@ -467,12 +484,15 @@ fn tiles_split_wide_frames_consistently_with_the_header() {
         assert_eq!(u32::from(parameters.tile_rows), tiles.tile_rows);
         assert_eq!(tiles.mi_col_starts[tiles.tile_cols as usize], mi_cols);
         assert_eq!(tiles.mi_row_starts[tiles.tile_rows as usize], mi_rows);
+
         for column in 0..tiles.tile_cols as usize {
             let sbs = (tiles.mi_col_starts[column + 1] - tiles.mi_col_starts[column]).div_ceil(16);
+
             assert_eq!(u32::from(parameters.width_in_sbs_minus_1[column]) + 1, sbs);
         }
         for row in 0..tiles.tile_rows as usize {
             let sbs = (tiles.mi_row_starts[row + 1] - tiles.mi_row_starts[row]).div_ceil(16);
+
             assert_eq!(u32::from(parameters.height_in_sbs_minus_1[row]) + 1, sbs);
         }
         if tiles.tile_cols * tiles.tile_rows > 1 {
@@ -490,7 +510,9 @@ fn sequence_parameters_agree_with_the_sequence_header() {
         for resolution in RESOLUTIONS {
             for frame_rate in frame_rates() {
                 let mut info = stream_info(case.format, resolution);
+
                 info.frame_rate = frame_rate;
+
                 let stream = Av1Stream::new(case.profile, info);
                 let sequence = parse(&stream, &[(true, 0)]).sequence;
 
@@ -551,7 +573,9 @@ fn picture_parameters_follow_the_stream_state() {
         for resolution in RESOLUTIONS {
             for qp in [None, Some(30)] {
                 let mut info = stream_info(case.format, resolution);
+
                 info.qp = qp;
+
                 let mut stream = Av1Stream::new(case.profile, info);
                 let mut previous: Option<Picture> = None;
                 let mut last_key: Option<Picture> = None;
@@ -561,9 +585,12 @@ fn picture_parameters_follow_the_stream_state() {
                         recon: 200 + u32::try_from(position).unwrap(),
                         ..picture(index, keyframe)
                     };
+
                     stream.begin(&picture);
+
                     let order_hint = Av1Stream::order_hint(&picture);
                     let (bytes, offsets) = stream.frame_header(keyframe, order_hint);
+
                     let parameters = stream.picture_parameters(&picture, order_hint, offsets);
                     let flags = unsafe { parameters.picture_flags.bits };
                     let modes = unsafe { parameters.mode_control_flags.bits };
@@ -645,14 +672,18 @@ fn encode_headers(
     picture: &Picture,
 ) -> FrameHeaderObu {
     stream.begin(picture);
+
     let order_hint = Av1Stream::order_hint(picture);
     let mut data = if picture.keyframe {
         stream.sequence_header()
     } else {
         temporal_delimiter()
     };
+
     data.extend(stream.frame_header(picture.keyframe, order_hint).0);
+
     let header = feed(parser, &data).1.unwrap();
+
     stream.commit(picture);
 
     header
@@ -672,18 +703,27 @@ fn a_recovery_frame_references_only_a_long_term_slot_at_or_before_the_last_good_
 
     for index in 0..20 {
         let header = encode_headers(&mut stream, &mut parser, &picture(index, index == 0));
+
         refreshes.push(header.refresh_frame_flags);
     }
+
     let reference = stream.recover(OutputIndex(14));
     let recovery = picture(20, false);
+
     stream.begin(&recovery);
+
     let order_hint = Av1Stream::order_hint(&recovery);
     let (bytes, offsets) = stream.frame_header(false, order_hint);
+
     let parameters = stream.picture_parameters(&recovery, order_hint, offsets);
     let mut data = temporal_delimiter();
+
     data.extend(bytes);
+
     let header = feed(&mut parser, &data).1.unwrap();
+
     stream.commit(&recovery);
+
     let after = encode_headers(&mut stream, &mut parser, &picture(21, false));
 
     assert_eq!(refreshes[0], 0xff);
@@ -715,9 +755,11 @@ fn recovery_needs_a_held_frame_no_newer_than_the_last_good_one() {
     let mut parser = Parser::default();
 
     let before = stream.recover(OutputIndex(0));
+
     for index in 0..200 {
         encode_headers(&mut stream, &mut parser, &picture(index, index == 0));
     }
+
     let stale = stream.recover(OutputIndex(10));
     let newest = stream.recover(OutputIndex(199));
 
@@ -744,8 +786,10 @@ fn an_acknowledged_long_term_frame_is_kept_while_the_other_slot_waits_for_its_ac
     stream.acknowledge(OutputIndex(8));
     for index in 10..40 {
         let header = encode_headers(&mut stream, &mut parser, &picture(index, false));
+
         refreshes.push((index, header.refresh_frame_flags));
     }
+
     let long_term: Vec<_> = refreshes
         .iter()
         .filter(|(_, flags)| *flags != 1)

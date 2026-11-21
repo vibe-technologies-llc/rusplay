@@ -5,7 +5,7 @@ pub const DRM_FORMAT_MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 
 pub const DEFAULT_MODIFIERS: [u64; 2] = [DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FormatModifiers {
     pub format: DrmFourcc,
     pub modifiers: Vec<u64>,

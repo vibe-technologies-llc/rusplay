@@ -11,7 +11,7 @@ use crate::{
 
 const SIGNAL_WORDS: usize = 12;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorChainSettings {
     pub transfer: TransferFunction,
     pub hdr: HdrLevels,
@@ -57,6 +57,7 @@ impl ColorChainSettings {
         self.linearise().validate()?;
 
         let plan = ColorPlan::new(&self.map.unwrap_or_default())?;
+
         if plan.tone.is_some_and(|stage| stage.dynamic_peak.is_some()) {
             return Err(ScaleError::ChainDynamicPeak);
         }

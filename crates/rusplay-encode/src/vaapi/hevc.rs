@@ -89,7 +89,7 @@ const LEVELS: [Level; 13] = [
     level(186, 35_651_584, 4_278_190_080, 240_000, Some(800_000)),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HevcProfile {
     Main,
     Main10,
@@ -351,7 +351,9 @@ impl HevcStream {
         rbsp.flag(true);
         rbsp.flag(true);
         rbsp.flag(false);
+
         let long_term = self.references.enabled();
+
         rbsp.ue(if long_term { 2 } else { 1 });
         rbsp.ue(1);
         rbsp.ue(0);
@@ -448,6 +450,7 @@ impl HevcStream {
     fn long_term_set(&self, rbsp: &mut BitWriter) {
         let plan = self.references.plan();
         let referenced = plan.referenced_slot();
+
         let pictures: Vec<(Held, bool)> = plan
             .long_term
             .iter()
@@ -491,6 +494,7 @@ impl HevcStream {
                 } else {
                     SHORT_TERM_SET_EMPTY
                 };
+
                 rbsp.bits(set, SHORT_TERM_SET_BITS);
                 self.long_term_set(&mut rbsp);
             }
@@ -515,6 +519,7 @@ impl HevcStream {
 
     pub(super) fn sequence_header(&self) -> PackedHeader {
         let mut bytes = self.vps();
+
         bytes.extend(self.sps());
 
         packed(bytes)
@@ -548,6 +553,7 @@ impl HevcStream {
         };
 
         let sequence = unsafe { &mut parameters.seq_fields.bits };
+
         sequence.set_chroma_format_idc(chroma_format_idc(self.info.format.chroma));
         sequence.set_bit_depth_luma_minus8(self.depth_minus8());
         sequence.set_bit_depth_chroma_minus8(self.depth_minus8());
@@ -556,6 +562,7 @@ impl HevcStream {
         sequence.set_low_delay_seq(1);
 
         let vui = unsafe { &mut parameters.vui_fields.bits };
+
         vui.set_aspect_ratio_info_present_flag(1);
         vui.set_vui_timing_info_present_flag(1);
         vui.set_bitstream_restriction_flag(1);
@@ -621,11 +628,13 @@ impl HevcStream {
             .kept_long_term()
             .map(|(_, held)| Self::entry(held, ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE));
         let held = self.reference_entry().into_iter().chain(kept);
+
         for (entry, reference) in parameters.reference_frames.iter_mut().zip(held) {
             *entry = reference;
         }
 
         let fields = unsafe { &mut parameters.pic_fields.bits };
+
         fields.set_idr_pic_flag(u32::from(picture.keyframe));
         fields.set_coding_type(if picture.keyframe {
             CODING_TYPE_I
@@ -652,11 +661,13 @@ impl HevcStream {
             max_num_merge_cand: MAX_MERGE_CANDIDATES,
             ..Default::default()
         };
+
         if let Some(reference) = self.reference_entry() {
             slice.ref_pic_list0[0] = reference;
         }
 
         let fields = unsafe { &mut slice.slice_fields.bits };
+
         fields.set_last_slice_of_pic_flag(1);
         fields.set_slice_sao_luma_flag(1);
         fields.set_slice_sao_chroma_flag(1);
@@ -701,6 +712,7 @@ impl HevcStream {
                 ),
             ],
         )?;
+
         let buffers = codec_buffers(
             context,
             sequence,

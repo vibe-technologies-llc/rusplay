@@ -57,9 +57,12 @@ fn a_unit_error_everywhere_is_the_peak_ratio() {
     let score = measure(&source, &reconstruction, &[], TemporalOrder::First).unwrap();
 
     let expected = 10.0 * (255.0_f32 * 255.0).log10();
+
     assert!((score.psnr.luma.value() - expected).abs() < 0.001);
     assert!(score.psnr.cb.is_identical());
+
     let overall = 10.0 * (255.0_f32 * 255.0 * 3.0).log10();
+
     assert!((score.psnr_overall.value() - overall).abs() < 0.001);
 }
 
@@ -75,6 +78,7 @@ fn ten_bit_peak_is_used() {
     let score = measure(&source, &reconstruction, &[], TemporalOrder::First).unwrap();
 
     let expected = 10.0 * (1023.0_f32 * 1023.0 / 4.0).log10();
+
     assert!((score.psnr.luma.value() - expected).abs() < 0.001);
 }
 

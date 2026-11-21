@@ -37,11 +37,13 @@ impl<T> Slot<T> {
 
     pub(crate) fn put(&self, value: T) -> Result<Option<T>, Closed> {
         let mut state = self.state.lock();
+
         if state.closed {
             return Err(Closed);
         }
 
         let replaced = state.value.replace(value);
+
         drop(state);
         self.filled.notify_one();
 
@@ -79,6 +81,7 @@ impl<T> Slot<T> {
 
     pub(crate) fn nudge(&self) {
         let mut state = self.state.lock();
+
         state.nudged = true;
         drop(state);
         self.filled.notify_one();
@@ -86,8 +89,11 @@ impl<T> Slot<T> {
 
     pub(crate) fn close(&self) -> Option<T> {
         let mut state = self.state.lock();
+
         state.closed = true;
+
         let pending = state.value.take();
+
         drop(state);
         self.filled.notify_all();
 
@@ -122,14 +128,17 @@ mod tests {
         };
 
         slot.nudge();
+
         assert!(reader.join().unwrap());
 
         slot.nudge();
         slot.put(7).unwrap();
+
         assert!(matches!(slot.take_or_nudge(), Taken::Value(7)));
         assert!(matches!(slot.take_or_nudge(), Taken::Nudged));
 
         slot.close();
+
         assert!(matches!(slot.take_or_nudge(), Taken::Closed));
     }
 

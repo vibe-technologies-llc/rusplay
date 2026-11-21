@@ -74,6 +74,7 @@ impl Dispatch<WlRegistry, ()> for Painting {
             "wl_compositor" => state.compositor = Some(registry.bind(name, 4, queue, ())),
             "wl_output" => {
                 let output = registry.bind(name, version.min(4), queue, name);
+
                 state.outputs.push((name, output));
             }
             "wl_shm" => state.shm = Some(registry.bind(name, 1, queue, ())),
@@ -154,12 +155,15 @@ delegate_noop!(Painting: ignore XdgToplevel);
 impl Painting {
     fn paint(&mut self, queue: &QueueHandle<Self>) {
         let count = self.painted;
+
         self.painted += 1;
+
         let shade = u8::try_from(count % 200).unwrap() + 40;
         let pixel = u32::from_le_bytes([shade, 255 - shade, shade / 2, 0xff]);
         let row: Vec<u8> = std::iter::repeat_n(pixel.to_le_bytes(), EDGE as usize)
             .flatten()
             .collect();
+
         for line in 0..EDGE {
             self.file
                 .write_all_at(&row, u64::from(line * EDGE * BYTES_PER_PIXEL))
@@ -167,6 +171,7 @@ impl Painting {
         }
 
         let surface = self.surface.as_ref().unwrap();
+
         surface.attach(self.buffer.as_ref(), 0, 0);
         surface.damage_buffer(
             0,
@@ -217,12 +222,15 @@ impl Drop for Painter {
 fn run(stream: std::os::unix::net::UnixStream, animate: bool, stop: &AtomicBool) {
     let connection = Connection::from_socket(stream).unwrap();
     let mut queue = connection.new_event_queue();
+
     let handle = queue.handle();
     let _registry = connection.display().get_registry(&handle, ());
 
     let file = tempfile::tempfile().unwrap();
+
     file.set_len(u64::from(EDGE * EDGE * BYTES_PER_PIXEL))
         .unwrap();
+
     let mut state = Painting {
         compositor: None,
         shm: None,
@@ -236,6 +244,7 @@ fn run(stream: std::os::unix::net::UnixStream, animate: bool, stop: &AtomicBool)
         callback_pending: false,
         painted: 0,
     };
+
     queue.roundtrip(&mut state).unwrap();
 
     let compositor = state.compositor.clone().unwrap();
@@ -249,6 +258,7 @@ fn run(stream: std::os::unix::net::UnixStream, animate: bool, stop: &AtomicBool)
         &handle,
         (),
     );
+
     state.buffer = Some(pool.create_buffer(
         0,
         edge,
@@ -262,8 +272,10 @@ fn run(stream: std::os::unix::net::UnixStream, animate: bool, stop: &AtomicBool)
     let surface = compositor.create_surface(&handle, ());
     let shell = base.get_xdg_surface(&surface, &handle, ());
     let toplevel = shell.get_toplevel(&handle, ());
+
     toplevel.set_title(TITLE.into());
     queue.roundtrip(&mut state).unwrap();
+
     let target = state
         .outputs
         .iter()
@@ -274,6 +286,7 @@ fn run(stream: std::os::unix::net::UnixStream, animate: bool, stop: &AtomicBool)
                 .is_some_and(|name| name != PRIMARY_OUTPUT)
         })
         .map(|(_, output)| output.clone());
+
     eprintln!(
         "nested outputs: {:?}",
         state.names.values().collect::<Vec<_>>()

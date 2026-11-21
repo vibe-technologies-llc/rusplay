@@ -22,13 +22,13 @@ use crate::{
 };
 
 #[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
     non_camel_case_types,
     non_snake_case,
     non_upper_case_globals,
-    dead_code,
-    unsafe_op_in_unsafe_fn,
-    clippy::all,
-    clippy::pedantic
+    unsafe_op_in_unsafe_fn
 )]
 mod sys {
     include!(concat!(env!("OUT_DIR"), "/x264.rs"));
@@ -85,6 +85,7 @@ fn recovery_frames(param: &sys::x264_param_t, resolution: Resolution) -> Option<
         * u64::from(resolution.height.div_ceil(MACROBLOCK_SIZE));
     let level_frames = level_dpb_macroblocks(param.i_level_idc) / macroblocks.max(1);
     let references = u64::try_from(param.i_frame_reference).unwrap_or(1);
+
     let frames = RECOVERY_DPB_FRAMES.min(level_frames).max(references);
 
     (frames > 1).then_some(frames)
@@ -210,6 +211,7 @@ impl Settings {
             backend: BACKEND,
             tune: tune.clone(),
         })?;
+
         let tune_ptr = if tune.is_empty() {
             ptr::null()
         } else {
@@ -223,6 +225,7 @@ impl Settings {
                 tune_ptr,
             )
         };
+
         if status != 0 {
             return Err(EncodeError::TuneRejected {
                 backend: BACKEND,
@@ -236,9 +239,11 @@ impl Settings {
         for (key, value) in LOW_LATENCY_DEFAULTS {
             parse(&mut param, key, value)?;
         }
+
         let bitrate = self.bitrate_kbps.to_string();
         let buffer =
             vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate, self.vbv_frames).to_string();
+
         parse(&mut param, "bitrate", &bitrate)?;
         parse(&mut param, "vbv-maxrate", &bitrate)?;
         parse(&mut param, "vbv-bufsize", &buffer)?;
@@ -301,6 +306,7 @@ fn apply_hdr(param: &mut sys::x264_param_t, hdr: &HdrLevels) {
     if let Some(display) = &hdr.mastering {
         let units = St2086::of(display);
         let target = &mut param.mastering_display;
+
         target.b_mastering_display = 1;
         (target.i_green_x, target.i_green_y) = point(units.green);
         (target.i_blue_x, target.i_blue_y) = point(units.blue);
@@ -311,6 +317,7 @@ fn apply_hdr(param: &mut sys::x264_param_t, hdr: &HdrLevels) {
     }
     if let Some(light) = &hdr.content_light {
         let target = &mut param.content_light_level;
+
         target.b_cll = 1;
         target.i_max_cll = c_int::from(light.max_cll_nits);
         target.i_max_fall = c_int::from(light.max_fall_nits);
@@ -326,6 +333,7 @@ struct TimestampLedger {
 impl TimestampLedger {
     fn issue(&mut self, timestamp: Timestamp) -> i64 {
         let pts = self.next_pts;
+
         self.next_pts += 1;
         self.issued.push_back((pts, timestamp));
 
@@ -351,7 +359,7 @@ struct ReferenceWindow {
     pts: VecDeque<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Forget {
     Nothing,
     From(i64),
@@ -419,6 +427,7 @@ impl Drop for Session {
 impl Session {
     fn open(settings: &Settings, resolution: Resolution) -> Result<Self, EncodeError> {
         let mut param = settings.param(resolution)?;
+
         param.b_full_recon = 1;
 
         let handle = NonNull::new(unsafe { sys::x264_encoder_open(&raw mut param) }).ok_or(
@@ -455,6 +464,7 @@ impl Session {
         reconstruction: &mut ReconstructionSlot,
     ) -> Result<Option<EncodedFrame>, EncodeError> {
         let mut input = sys::x264_picture_t::default();
+
         unsafe { sys::x264_picture_init(&raw mut input) };
 
         input.i_type = if keyframe {
@@ -520,6 +530,7 @@ impl Session {
         let sample = if high_depth { 2 } else { 1 };
         let width = self.resolution.width as usize;
         let height = self.resolution.height as usize;
+
         let (chroma_width, chroma_height) = chroma_size((width, height), self.format.chroma);
         let raw = |index: usize, row_bytes: usize, rows: usize| RawPlane {
             data: image.plane[index],
@@ -586,6 +597,7 @@ impl Session {
         }
 
         let mut param = sys::x264_param_t::default();
+
         unsafe { sys::x264_encoder_parameters(self.handle.as_ptr(), &raw mut param) };
 
         let previous = i64::from(param.rc.i_bitrate).max(1);
@@ -668,6 +680,7 @@ impl VideoEncoder for X264Encoder {
             self.keyframe_pending,
             &mut self.reconstruction,
         )?;
+
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -800,6 +813,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
@@ -837,15 +851,18 @@ mod tests {
         assert_eq!(recovery_frames(&param, testing::TEST_RESOLUTION), Some(8));
 
         param.rc.i_lookahead = 10;
+
         assert_eq!(recovery_frames(&param, testing::TEST_RESOLUTION), None);
 
         param.rc.i_lookahead = 0;
         param.i_bframe = 2;
+
         assert_eq!(recovery_frames(&param, testing::TEST_RESOLUTION), None);
 
         param.i_bframe = 0;
         param.b_sliced_threads = 0;
         param.i_threads = 4;
+
         assert_eq!(recovery_frames(&param, testing::TEST_RESOLUTION), None);
     }
 
@@ -857,6 +874,7 @@ mod tests {
         for index in 0..20 {
             encoder.encode(&testing::frame(format, index)).unwrap();
         }
+
         let stale = encoder.recover(OutputIndex(5));
         let recovered = encoder
             .encode(&testing::frame(format, 20))
@@ -892,6 +910,7 @@ mod tests {
         for index in 0..10 {
             encoder.encode(&testing::frame(format, index)).unwrap();
         }
+
         let recovery = encoder.recover(OutputIndex(6));
         let recovered = encoder
             .encode(&testing::frame(format, 10))
@@ -913,6 +932,7 @@ mod tests {
 
         let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
         let resolution = Resolution::new(400, 216);
+
         let video = VideoConfig {
             resolution: Some(resolution),
             bitrate_kbps: 20_000,
@@ -945,6 +965,7 @@ mod tests {
                     .iter()
                     .all(|packet| !contains_idr(&packet.data))
             );
+
             run.check_decoded(&pictures, format, resolution);
         }
     }
@@ -961,6 +982,7 @@ mod tests {
 
         let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
         let resolution = Resolution::new(400, 216);
+
         let video = VideoConfig {
             resolution: Some(resolution),
             bitrate_kbps: 20_000,
@@ -978,6 +1000,7 @@ mod tests {
             let Some(pictures) = decode_vaapi(Codec::H264, &run.kept()) else {
                 return;
             };
+
             run.check_decoded(&pictures, format, resolution);
         }));
 
@@ -987,6 +1010,7 @@ mod tests {
     #[test]
     fn the_window_forgets_from_the_first_lost_output() {
         let mut window = ReferenceWindow::new(4);
+
         for pts in 0..6 {
             window.record(10 + pts, pts == 0);
         }
@@ -1001,6 +1025,7 @@ mod tests {
     #[test]
     fn the_window_starts_at_the_last_keyframe() {
         let mut window = ReferenceWindow::new(8);
+
         for pts in 0..6 {
             window.record(pts, pts == 0 || pts == 3);
         }
@@ -1054,6 +1079,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
@@ -1097,6 +1123,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
@@ -1128,6 +1155,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
@@ -1142,6 +1170,7 @@ mod tests {
         let VideoEncoderConfig::X264(x264) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x264, ChromaSiting::default()).unwrap();
 
         let param = settings.param(testing::TEST_RESOLUTION).unwrap();
@@ -1180,6 +1209,7 @@ mod tests {
     #[test]
     fn ledger_resolves_issued_timestamps_in_order() {
         let mut ledger = TimestampLedger::default();
+
         let first = ledger.issue(Timestamp::from_micros(10));
         let second = ledger.issue(Timestamp::from_micros(20));
 

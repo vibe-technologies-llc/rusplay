@@ -22,13 +22,13 @@ use crate::{
 };
 
 #[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
     non_camel_case_types,
     non_snake_case,
     non_upper_case_globals,
-    dead_code,
-    unsafe_op_in_unsafe_fn,
-    clippy::all,
-    clippy::pedantic
+    unsafe_op_in_unsafe_fn
 )]
 mod sys {
     include!(concat!(env!("OUT_DIR"), "/svt_av1.rs"));
@@ -158,12 +158,14 @@ impl Handle {
         };
 
         let status = unsafe { sys::svt_av1_enc_send_picture(self.raw.as_ptr(), &raw mut header) };
+
         if status != sys::EbErrorType_EB_ErrorNone {
             return;
         }
 
         loop {
             let mut packet: *mut sys::EbBufferHeaderType = ptr::null_mut();
+
             let status =
                 unsafe { sys::svt_av1_enc_get_packet(self.raw.as_ptr(), &raw mut packet, 1) };
 
@@ -176,6 +178,7 @@ impl Handle {
             let last = unsafe { header.as_ref() }.flags
                 & u32::try_from(sys::EB_BUFFERFLAG_EOS).unwrap_or(0)
                 != 0;
+
             unsafe { sys::svt_av1_enc_release_out_buffer(&raw mut packet) };
 
             if last {
@@ -218,11 +221,13 @@ impl Handle {
         };
 
         let status = unsafe { sys::svt_av1_enc_set_parameter(self.raw.as_ptr(), config) };
+
         if status != sys::EbErrorType_EB_ErrorNone {
             return Err(failed);
         }
 
         let status = unsafe { sys::svt_av1_enc_init(self.raw.as_ptr()) };
+
         if status != sys::EbErrorType_EB_ErrorNone {
             return Err(failed);
         }
@@ -279,6 +284,7 @@ impl Settings {
         };
 
         let (_handle, mut library_config) = Handle::create(VALIDATION_RESOLUTION)?;
+
         settings.apply(&mut library_config, VALIDATION_RESOLUTION)?;
 
         Ok(settings)
@@ -305,7 +311,9 @@ impl Settings {
         if self.config.low_latency {
             config.pred_structure = sys::PredStructure_LOW_DELAY;
             config.rtc = true;
+
             let (maximum, level) = buffer_levels_ms(self.frame_rate, self.vbv_frames);
+
             config.maximum_buffer_size_ms = maximum;
             config.optimal_buffer_level_ms = level;
             config.starting_buffer_level_ms = level;
@@ -333,6 +341,7 @@ impl Settings {
         config.chroma_sample_position = self.siting.av1_chroma_position();
 
         let hdr = &self.color.hdr;
+
         if let Some(display) = &hdr.mastering {
             parse(
                 config,
@@ -366,6 +375,7 @@ impl ReconBuffer {
     fn new(format: PixelFormat, resolution: Resolution) -> Self {
         let luma = (resolution.width as usize, resolution.height as usize);
         let (chroma_width, chroma_height) = chroma_size(luma, format.chroma);
+
         let samples = luma.0 * luma.1 + 2 * chroma_width * chroma_height;
 
         Self {
@@ -383,6 +393,7 @@ impl ReconBuffer {
         };
 
         let status = unsafe { sys::svt_av1_get_recon(handle.raw.as_ptr(), &raw mut header) };
+
         if !header.metadata.is_null() {
             unsafe { sys::svt_metadata_array_free((&raw mut header.metadata).cast::<c_void>()) };
         }
@@ -401,6 +412,7 @@ impl ReconBuffer {
         let sample = bytes_per_sample(self.format.depth);
         let luma = (resolution.width as usize, resolution.height as usize);
         let (chroma_width, chroma_height) = chroma_size(luma, self.format.chroma);
+
         let luma_bytes = luma.0 * luma.1 * sample;
         let chroma_bytes = chroma_width * chroma_height * sample;
         let filled = &self.bytes[..filled.min(self.bytes.len())];
@@ -410,6 +422,7 @@ impl ReconBuffer {
             bytes_per_sample: sample,
             shift: 0,
         };
+
         let planes = ReconPlanes::Planar([
             plane(0, luma_bytes, luma.0),
             plane(luma_bytes, chroma_bytes, chroma_width),
@@ -439,6 +452,7 @@ struct Session {
 impl Session {
     fn open(settings: &Settings, resolution: Resolution) -> Result<Self, EncodeError> {
         let (mut handle, mut config) = Handle::create(resolution)?;
+
         settings.apply(&mut config, resolution)?;
         handle.start(&mut config, resolution)?;
 
@@ -505,6 +519,7 @@ impl Session {
 
         let status =
             unsafe { sys::svt_av1_enc_send_picture(self.handle.raw.as_ptr(), &raw mut header) };
+
         if status != sys::EbErrorType_EB_ErrorNone {
             return Err(EncodeError::EncodeFailed {
                 backend: BACKEND,
@@ -515,6 +530,7 @@ impl Session {
 
         let encoded = self.receive()?;
         let latest = self.drain_reconstructions();
+
         if encoded.is_some() {
             reconstruction.fill(|| {
                 let filled =
@@ -535,6 +551,7 @@ impl Session {
         };
 
         let mut latest = None;
+
         while let Some(filled) = recon.read(&self.handle)? {
             latest = Some(filled);
         }
@@ -575,6 +592,7 @@ impl Session {
         let (data, pts, picture_type) = {
             let header = unsafe { header.as_ref() };
             let length = header.n_filled_len as usize;
+
             let data = if header.p_buffer.is_null() {
                 Vec::new()
             } else {
@@ -609,6 +627,7 @@ impl SvtAv1Encoder {
         siting: ChromaSiting,
     ) -> Result<Self, EncodeError> {
         log::install(config.log_level);
+
         let settings = Settings::new(video, config, siting)?;
 
         let session = video
@@ -648,6 +667,7 @@ impl VideoEncoder for SvtAv1Encoder {
             self.keyframe_pending,
             &mut self.reconstruction,
         )?;
+
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -716,6 +736,7 @@ mod tests {
 
             let mut size = 0_usize;
             let mut shift = 0;
+
             while let Some(&byte) = data.get(cursor) {
                 cursor += 1;
                 size |= usize::from(byte & 0x7f) << shift;
@@ -844,12 +865,14 @@ mod tests {
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 
         settings
             .apply(&mut library, testing::TEST_RESOLUTION)
             .unwrap();
+
         let display = &library.mastering_display;
         let light = &library.content_light_level;
 
@@ -913,14 +936,17 @@ mod tests {
                 if index == ARMED {
                     assert!(encoder.capture_reconstruction());
                 }
+
                 let packet = encoder
                     .encode(&testing::frame((format).or_unnegotiated(), index))
                     .unwrap()
                     .unwrap();
                 let decoded = rav1d.decode(&packet).unwrap().unwrap();
                 let reconstruction = encoder.take_reconstruction().unwrap();
+
                 if index != ARMED {
                     assert!(reconstruction.is_none());
+
                     continue;
                 }
 
@@ -928,6 +954,7 @@ mod tests {
                 let rusplay_decode::DecodedBuffer::Cpu(cpu) = decoded.buffer else {
                     unreachable!("rav1d decodes to memory");
                 };
+
                 assert_eq!(reconstruction.resolution(), testing::TEST_RESOLUTION);
                 for (plane, (ours, theirs)) in
                     reconstruction.planes().iter().zip(cpu.planes()).enumerate()
@@ -1010,6 +1037,7 @@ mod tests {
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 
@@ -1027,6 +1055,7 @@ mod tests {
         let VideoEncoderConfig::SvtAv1(svt) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, svt, ChromaSiting::default()).unwrap();
         let (_handle, mut library) = Handle::create(testing::TEST_RESOLUTION).unwrap();
 

@@ -13,7 +13,7 @@ const MIN_RATIO: f64 = 0.000_01;
 const UNMEASURED_ACTIVITY: f64 = 1.0;
 const NARROWEST_DOWNSAMPLED_SPAN: usize = 12;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Block {
     columns: Range<usize>,
     rows: Range<usize>,
@@ -29,6 +29,7 @@ impl Grid {
     fn new(width: usize, height: usize, size: usize) -> Self {
         let columns = width.div_ceil(size);
         let mut blocks = Vec::with_capacity(columns * height.div_ceil(size));
+
         for top in (0..height).step_by(size) {
             for left in (0..width).step_by(size) {
                 blocks.push(Block {
@@ -72,6 +73,7 @@ impl Activity<'_> {
         } else {
             block.rows.end.saturating_sub(edge)
         };
+
         if right <= left || bottom <= top {
             return UNMEASURED_ACTIVITY;
         }
@@ -103,6 +105,7 @@ impl Activity<'_> {
     fn highpass(&self, columns: Range<usize>, rows: Range<usize>) -> u64 {
         let plane = self.source;
         let mut total = 0;
+
         for y in rows {
             let above = plane.row(y - 1);
             let row = plane.row(y);
@@ -118,6 +121,7 @@ impl Activity<'_> {
                     + i32::from(above[x + 1])
                     + i32::from(below[x - 1])
                     + i32::from(below[x + 1]);
+
                 total += u64::from((centre - cross - corners).unsigned_abs());
             }
         }
@@ -129,9 +133,11 @@ impl Activity<'_> {
         let plane = self.source;
         let at = |x: isize, y: isize| clamped(plane, x, y);
         let mut total = 0;
+
         for y in rows.step_by(2) {
             for x in columns.clone().step_by(2) {
                 let (x, y) = (signed(x), signed(y));
+
                 let centre = at(x, y) + at(x + 1, y) + at(x, y + 1) + at(x + 1, y + 1);
                 let vertical = at(x, y - 1) + at(x + 1, y - 1) + at(x, y + 2) + at(x + 1, y + 2);
                 let horizontal = at(x - 1, y) + at(x + 2, y) + at(x - 1, y + 1) + at(x + 2, y + 1);
@@ -153,7 +159,9 @@ impl Activity<'_> {
                     + at(x + 3, y)
                     + at(x + 3, y + 1)
                     + at(x + 3, y + 2);
+
                 let filtered = 12 * centre - 3 * vertical - 3 * horizontal - 2 * corners - rim;
+
                 total += u64::from(filtered.unsigned_abs());
             }
         }
@@ -186,6 +194,7 @@ impl Activity<'_> {
     ) -> u64 {
         let step = if self.downsample { 2 } else { 1 };
         let mut total = 0;
+
         for y in block.rows.clone().step_by(step) {
             for x in block.columns.clone().step_by(step) {
                 total += u64::from(difference(self.source, signed(x), signed(y)).unsigned_abs());
@@ -237,6 +246,7 @@ fn smooth_minimum(weights: &mut [f64], grid: &Grid) {
         } else {
             weights[index]
         };
+
         if index > columns {
             neighbour = neighbour.max(weights[index - 1 - columns]);
         }
@@ -254,11 +264,13 @@ fn smooth_minimum(weights: &mut [f64], grid: &Grid) {
 
 fn block_error(source: &SamplePlane, reconstruction: &SamplePlane, block: &Block) -> f64 {
     let mut total = 0_u64;
+
     for y in block.rows.clone() {
         let source_row = &source.row(y)[block.columns.clone()];
         let reconstruction_row = &reconstruction.row(y)[block.columns.clone()];
         for (&a, &b) in source_row.iter().zip(reconstruction_row) {
             let difference = u64::from(a.abs_diff(b));
+
             total += difference * difference;
         }
     }
@@ -304,6 +316,7 @@ pub(super) fn weighted_errors(
     #[expect(clippy::cast_precision_loss)]
     let ratio = samples as f64 / UHD_SAMPLES;
     let size = block_size(ratio);
+
     if size < BLOCK_MULTIPLE {
         return std::array::from_fn(|plane| {
             super::squared_error(&source.planes[plane], &reconstruction.planes[plane])
@@ -329,6 +342,7 @@ pub(super) fn weighted_errors(
         .iter()
         .map(|block| 1.0 / activity.of(block))
         .collect();
+
     if samples <= SMOOTHING_UP_TO_SAMPLES {
         smooth_minimum(&mut weights, &grid);
     }
@@ -338,6 +352,7 @@ pub(super) fn weighted_errors(
         let source_plane = &source.planes[plane];
         let reconstruction_plane = &reconstruction.planes[plane];
         let size = (source_plane.width(), source_plane.height());
+
         let weighted: f64 = grid
             .blocks
             .iter()

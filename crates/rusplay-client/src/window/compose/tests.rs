@@ -243,6 +243,7 @@ fn the_srgb_signal_matches_the_cpu_transfer_function() {
     for (texel, found) in texels.iter().zip(bytes.as_chunks::<4>().0) {
         for channel in 0..3 {
             let expected = code(srgb_oetf(f64::from(texel[channel])), 255.0);
+
             assert!(
                 u32::from(found[channel]).abs_diff(expected) <= 1,
                 "{texel:?}: {found:?}"
@@ -287,6 +288,7 @@ fn the_pq_signal_encodes_bt2020_light_at_its_reference_white() {
                 pq_from_nits(light[channel].max(0.0) * PQ_SIGNAL_REFERENCE_NITS),
                 1023.0,
             );
+
             assert!(
                 found[channel].abs_diff(expected) <= 1,
                 "{texel:?}: {found:?}"
@@ -341,9 +343,11 @@ fn extended_linear_keeps_wide_gamut_colours_as_negative_bt709_values() {
         let expected = to_bt709.apply([texel[0], texel[1], texel[2]].map(f64::from));
         for channel in 0..3 {
             let found = f64::from(found[channel]);
+
             assert!((found - expected[channel]).abs() < 4e-3 * expected[channel].abs().max(1.0));
         }
     }
+
     assert!(output[0][1] < -0.03);
     assert!(output[1][1] > 3.0);
     for (found, expected) in output[2].iter().zip([0.0, 1.0, 0.0]) {
@@ -382,6 +386,7 @@ fn dithering_spreads_a_level_between_codes_by_the_pattern_threshold() {
     let noise = blue_noise_thresholds();
 
     let plain = dithered(&gpu, None, value);
+
     for pattern in [DitherPattern::Ordered, DitherPattern::BlueNoise] {
         let codes = dithered(&gpu, Some(pattern), value);
         let mut mismatched = 0;
@@ -389,6 +394,7 @@ fn dithering_spreads_a_level_between_codes_by_the_pattern_threshold() {
         for (index, found) in codes.iter().enumerate() {
             let cell = u32::try_from(index).unwrap();
             let (x, y) = (cell % DITHER_SIZE, cell / DITHER_SIZE);
+
             let threshold = match pattern {
                 DitherPattern::Ordered => (f64::from(bayer_rank(x, y)) + 0.5) / bayer_cells,
                 DitherPattern::BlueNoise => f64::from(noise[index]),
@@ -399,6 +405,7 @@ fn dithering_spreads_a_level_between_codes_by_the_pattern_threshold() {
                 mismatched += 1;
             }
         }
+
         let mean = codes.iter().map(|code| f64::from(*code)).sum::<f64>()
             / f64::from(u32::try_from(codes.len()).unwrap());
 
@@ -409,6 +416,7 @@ fn dithering_spreads_a_level_between_codes_by_the_pattern_threshold() {
             "{pattern:?}: {mean} against {scaled}"
         );
     }
+
     assert!(plain.iter().all(|code| *code == 100));
 }
 
@@ -457,6 +465,7 @@ fn an_identity_chain_reproduces_the_source_codes() {
     let input = testing::upload(&gpu, 64, 1, &encoded);
     let linear = testing::storage(&gpu, 64, 1);
     let linear_view = linear.create_view(&wgpu::TextureViewDescriptor::default());
+
     testing::submit(&gpu, |encoder| {
         stage
             .linearise(
@@ -467,6 +476,7 @@ fn an_identity_chain_reproduces_the_source_codes() {
             )
             .unwrap();
     });
+
     let hdr = testing::read_rgb10a2(
         &gpu,
         &render_view(&gpu, &pq_encoding(), &linear_view, (64, 1), None, TEN_BIT),
@@ -480,12 +490,14 @@ fn an_identity_chain_reproduces_the_source_codes() {
         signal: Signal::Srgb,
         ..linear_encoding()
     };
+
     let sdr = testing::read_bytes(
         &gpu,
         &render(&gpu, &sdr_encoding, &srgb_picture, None, EIGHT_BIT),
     );
 
     assert!(route.map.is_none());
+
     for (expected, found) in pq_codes.iter().zip(&hdr) {
         assert!(
             found.iter().all(|code| code.abs_diff(*expected) <= 1),

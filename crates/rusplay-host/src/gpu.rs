@@ -3,7 +3,7 @@ use rusplay_scale::{GpuFaults, check_extent};
 
 use crate::HostError;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,

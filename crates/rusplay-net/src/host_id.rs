@@ -21,7 +21,9 @@ pub fn load_or_create_host_id(path: &Path) -> Result<HostId, NetError> {
 
 fn create(path: &Path) -> Result<HostId, NetError> {
     let mut bytes = [0; HostId::LEN];
+
     fill_random(&mut bytes)?;
+
     let id = HostId(bytes);
 
     write_owner_only(path, &format!("{id}\n")).map_err(|source| NetError::HostIdWrite {
@@ -68,6 +70,7 @@ mod tests {
     fn a_damaged_file_is_an_error_and_not_a_new_id() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("host-id");
+
         fs::write(&path, "not an id").unwrap();
 
         assert!(matches!(
@@ -81,6 +84,7 @@ mod tests {
     fn an_all_zero_id_is_refused() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("host-id");
+
         fs::write(&path, format!("{}\n", HostId::NONE)).unwrap();
 
         assert!(matches!(

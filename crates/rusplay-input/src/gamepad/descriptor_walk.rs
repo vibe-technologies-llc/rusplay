@@ -23,6 +23,7 @@ pub(super) fn walk(descriptor: &[u8]) -> Walk {
             .iter()
             .rev()
             .fold(0usize, |value, byte| (value << 8) | usize::from(*byte));
+
         position += 1 + length;
 
         match (prefix >> 2 & 3, prefix >> 4) {

@@ -19,6 +19,7 @@ fn feed(parser: &mut ObuParser, mut data: &[u8]) -> Result<(), DecodeError> {
             }
         };
         let length = obu.bytes_used;
+
         match parser.parse(obu)? {
             ParsedObu::FrameHeader(header) => parser.ref_frame_update(&header)?,
             ParsedObu::Frame(frame) => parser.ref_frame_update(&frame.header)?,
@@ -54,11 +55,13 @@ fn an_inter_frame_before_any_key_frame_is_malformed() {
 
     let mut data = frames[0].data.as_slice();
     let mut sequence_parsed = false;
+
     while !sequence_parsed {
         let ObuAction::Process(obu) = parser.read_obu(data).unwrap() else {
             panic!("an obu was dropped");
         };
         let length = obu.bytes_used;
+
         sequence_parsed = obu.header.obu_type == ObuType::SequenceHeader;
         parser.parse(obu).unwrap();
         data = &data[length..];
@@ -119,7 +122,9 @@ fn an_oversized_tile_never_reaches_cros_codecs() {
     let mut parser = ObuParser::new();
 
     let mut tiles = tile_group(whole_frame, &[]);
+
     tiles.extend([0xff, 1, 2, 3]);
+
     let data = packet(&[
         (SEQUENCE_HEADER, sequence_header(shape)),
         (FRAME_HEADER, key_frame_header(shape, two_columns)),
@@ -158,6 +163,7 @@ fn an_obu_outside_the_operating_point_is_skipped_whole() {
     let mut parser = ObuParser::new();
 
     let mut data = packet(&[(SEQUENCE_HEADER, sequence_header(shape))]);
+
     data.extend([0x2e, 0x20, 0x02, 0x00, 0x00]);
 
     feed(&mut parser, &data).unwrap();

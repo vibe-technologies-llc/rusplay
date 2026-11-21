@@ -14,7 +14,7 @@ pub(crate) const REFERENCE_SLOTS: usize = 8;
 const SEGMENTS: usize = 8;
 const ALL_SLOTS: u8 = 0xff;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SlotFrame {
     pub(crate) key: bool,
     pub(crate) upscaled_width: u32,
@@ -22,20 +22,20 @@ pub(crate) struct SlotFrame {
     pub(crate) alt_q: [Option<i32>; SEGMENTS],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Slot {
     order_hint: u32,
     frame: Option<SlotFrame>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Refresh {
     pub(crate) flags: u8,
     pub(crate) order_hint: u32,
     pub(crate) frame: SlotFrame,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Progress {
     Nothing,
     SequenceChanged,
@@ -45,18 +45,18 @@ pub(crate) enum Progress {
 }
 
 #[cfg(any(test, feature = "software"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PacketSummary {
     pub(crate) sequence_header: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct KnownSequence {
     payload: Vec<u8>,
     header: Sequence,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct FrameInProgress {
     header_payload: Option<Vec<u8>>,
     layout: TileLayout,
@@ -64,7 +64,7 @@ struct FrameInProgress {
     refresh: Refresh,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Av1Syntax {
     sequence: Option<KnownSequence>,
     slots: [Slot; REFERENCE_SLOTS],
@@ -110,6 +110,7 @@ impl Av1Syntax {
         }
 
         let header = sequence::parse(payload)?;
+
         *self = Self {
             sequence: Some(KnownSequence {
                 payload: payload.to_vec(),
@@ -153,7 +154,9 @@ impl Av1Syntax {
         let complete = if unit.kind == ObuKind::Frame {
             r.byte_align();
             r.set_unit(BitstreamUnit::TileGroup);
+
             let end = tiles::tile_group(&mut r, &frame.layout, 0)?;
+
             frame.next_tile = end + 1;
             frame.next_tile == frame.layout.tiles()
         } else {
@@ -193,7 +196,9 @@ impl Av1Syntax {
             .ok_or(Av1SyntaxError::TileGroupWithoutFrameHeader)?;
 
         let mut r = BitReader::new(payload, BitstreamUnit::TileGroup);
+
         let end = tiles::tile_group(&mut r, &frame.layout, frame.next_tile)?;
+
         frame.next_tile = end + 1;
 
         if frame.next_tile < frame.layout.tiles() {
@@ -201,6 +206,7 @@ impl Av1Syntax {
         }
 
         let refresh = frame.refresh;
+
         self.frame = None;
         Ok(Progress::FrameComplete(refresh))
     }

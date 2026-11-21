@@ -31,17 +31,20 @@ pub(crate) fn resample_separable(
         let taps = table.taps_per_pixel as usize;
         let first = i64::from(table.firsts[output_index]);
         let anchor = i64::from(table.anchors[output_index]);
+
         let weights = &table.weights[output_index * taps..(output_index + 1) * taps];
 
         let mut sum = [0.0_f32; 4];
         let mut nearest_low = [f32::MAX; 4];
         let mut nearest_high = [f32::MIN; 4];
+
         for (offset, weight) in (0_i64..).zip(weights) {
             let position = first + offset;
             let texel = shaping.input(match axis {
                 Axis::Horizontal => source.texel(position, i64::from(y)),
                 Axis::Vertical => source.texel(i64::from(x), position),
             });
+
             for (total, value) in sum.iter_mut().zip(texel) {
                 *total += weight * value;
             }
@@ -69,8 +72,10 @@ pub(crate) fn resample_polar(source: &Image, settings: &ScaleSettings) -> Image 
         let mut total = 0.0_f64;
         let mut nearest_low = [f32::MAX; 4];
         let mut nearest_high = [f32::MIN; 4];
+
         for &(column, row, weight) in &footprint.taps {
             let texel = shaping.input(source.texel(column, row));
+
             for (accumulated, value) in sum.iter_mut().zip(texel) {
                 *accumulated += weight * f64::from(value);
             }
@@ -118,6 +123,7 @@ fn hlg_oetf(scene: f64) -> f64 {
 
 fn hlg_scene_light(settings: &ConvertSettings, display: [f64; 3]) -> [f64; 3] {
     let luminance = dot(settings.matrix.rows()[0], display);
+
     if luminance <= 0.0 {
         return [0.0; 3];
     }
@@ -164,9 +170,11 @@ pub(crate) fn linearise_texel(settings: &LineariseSettings, rgb: [f64; 3]) -> [f
         (OutputLight::Linear, TransferFunction::Hlg) => {
             let scene = code.map(hlg_inverse_oetf);
             let luminance = dot(settings.matrix.rows()[0], scene);
+
             if luminance <= 0.0 {
                 return [0.0; 3];
             }
+
             let gain = luminance.powf(settings.hlg_exponent());
             scene.map(|value| value * gain * scale)
         }
@@ -396,6 +404,7 @@ pub(crate) fn unpack_rgb(bytes: &[u8], settings: &RgbConvertSettings) -> Image {
     let rows = settings.matrix.inverse_rows();
     let (horizontal, vertical) = settings.chroma_tables();
     let (chroma_width, chroma_height) = settings.chroma_size();
+
     let (luma_plane, chroma_plane) = dequantized_planes(&planes, &layout, settings);
     let chroma_at = |x: i64, y: i64| -> [f64; 2] {
         let x = usize::try_from(x.clamp(0, i64::from(chroma_width) - 1)).unwrap_or_default();
@@ -464,6 +473,7 @@ fn dequantized_planes(
     let (chroma_width, chroma_height) = settings.chroma_size();
     let interleaved = layout.planes[1].content == PlaneContent::CbCr;
     let dequantize = |code: u32, (scale, offset): (f64, f64)| (f64::from(code) - offset) / scale;
+
     let luma_plane: Vec<Vec<[f64; 1]>> = planes[0]
         .iter()
         .map(|row| {
@@ -530,8 +540,10 @@ fn filter_antiringed(
     let mut sum = [0.0; 2];
     let mut nearest_low = [f64::MAX; 2];
     let mut nearest_high = [f64::MIN; 2];
+
     for (position, weight) in taps(table, index) {
         let value = sample(position);
+
         for (total, component) in sum.iter_mut().zip(value) {
             *total += f64::from(weight) * component;
         }
@@ -574,8 +586,10 @@ fn polar_upsampled_chroma(
                     let mut sum = [0.0; 2];
                     let mut nearest_low = [f64::MAX; 2];
                     let mut nearest_high = [f64::MIN; 2];
+
                     for &(column, row, weight) in &footprint.taps {
                         let value = chroma_at(column, row);
+
                         for (accumulated, component) in sum.iter_mut().zip(value) {
                             *accumulated += weight * component / total;
                         }
@@ -605,6 +619,7 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
     let PlaneTolerance { threshold, limit } = tolerance;
     let height = i64::try_from(plane.len()).unwrap_or(i64::MAX);
     let width = i64::try_from(plane.first().map_or(0, Vec::len)).unwrap_or(i64::MAX);
+
     let at = |x: i64, y: i64| {
         let column = usize::try_from(x.clamp(0, width - 1)).unwrap_or_default();
         let row = usize::try_from(y.clamp(0, height - 1)).unwrap_or_default();
@@ -626,6 +641,7 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
             (0..width)
                 .map(|x| {
                     let centre = at(x, y);
+
                     if threshold <= 0.0 {
                         return centre;
                     }
@@ -634,6 +650,7 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
                         .into_iter()
                         .map(|step| weigh(x, y, step).0)
                         .fold(1.0, f64::min);
+
                     if flatness <= 0.0 {
                         return centre;
                     }
@@ -644,9 +661,11 @@ pub(crate) fn deband_plane<const CHANNELS: usize>(
                     );
                     let mut sum = centre;
                     let mut total = 1.0;
+
                     for iteration in 1..=settings.iterations {
                         for offset in settings.pair_offsets(pixel, kind, iteration, shift) {
                             let (weight, ahead, behind) = weigh(x, y, offset);
+
                             for channel in 0..CHANNELS {
                                 sum[channel] += weight * (ahead[channel] + behind[channel]);
                             }

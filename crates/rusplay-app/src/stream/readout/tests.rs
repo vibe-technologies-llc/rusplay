@@ -114,6 +114,7 @@ fn every_section_and_row_is_in_place_before_the_stream_reports_anything() {
     let fixture = Fixture::new();
     let waiting = fixture.sources(None, None).readout();
     let rates = rates();
+
     let streaming = fixture.sources(Some(native()), Some(&rates)).readout();
 
     let shape = |readout: &super::Readout| {
@@ -214,6 +215,7 @@ fn the_latency_figure_prefers_the_display_then_the_present_then_the_client() {
 fn a_rate_above_zero_is_marked_and_missing_feedback_is_said_once_rates_exist() {
     let fixture = Fixture::new();
     let rates = rates();
+
     let readout = fixture.sources(None, Some(&rates)).readout();
 
     let row = |label: &str| {
@@ -251,8 +253,10 @@ fn the_shortcuts_list_every_way_out_that_is_turned_on() {
     };
 
     let on = labels(&fixture);
+
     fixture.input.hotkeys = false;
     fixture.input.escape_hold_ms = 0;
+
     let bare = labels(&fixture);
 
     assert_eq!(

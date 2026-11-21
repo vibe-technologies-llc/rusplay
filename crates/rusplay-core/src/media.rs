@@ -2,7 +2,7 @@ use std::{fmt, mem, ops::Deref};
 
 use crate::{Codec, Timestamp};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedFrame {
     pub codec: Codec,
     pub timestamp: Timestamp,
@@ -50,7 +50,9 @@ impl FrameBytes {
 
     pub fn into_vec(mut self) -> Vec<u8> {
         self.recycle = None;
+
         let mut bytes = mem::take(&mut self.bytes);
+
         bytes.drain(..self.start);
 
         bytes
@@ -168,7 +170,9 @@ mod tests {
         let bytes = FrameBytes::recycled(vec![1, 2, 3], move |bytes| returned.send(bytes).unwrap());
         let address = bytes.as_ptr();
         let before = idle.try_recv();
+
         drop(bytes);
+
         let back = idle.try_recv().unwrap();
 
         assert!(before.is_err());
@@ -188,9 +192,12 @@ mod tests {
         let original = make(vec![4, 5]);
 
         let cloned = original.clone();
+
         drop(cloned);
+
         let taken = make(vec![6]).into_vec();
         let detached = idle.try_recv();
+
         drop(original);
 
         assert!(detached.is_err());

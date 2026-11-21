@@ -51,7 +51,7 @@ pub use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub video: VideoConfig,
@@ -79,6 +79,7 @@ impl Config {
         })?;
 
         let config = Self::parse(&text, path)?;
+
         config.validate()?;
         Ok(config)
     }
@@ -90,6 +91,7 @@ impl Config {
         };
 
         let mut table: toml::Table = toml::from_str(text).map_err(parse_error)?;
+
         let version = match table.remove(VERSION_KEY) {
             None => FIRST_CONFIG_VERSION,
             Some(toml::Value::Integer(version)) => version,
@@ -99,6 +101,7 @@ impl Config {
                 });
             }
         };
+
         if !(FIRST_CONFIG_VERSION..=CONFIG_VERSION).contains(&version) {
             return Err(ConfigError::VersionUnsupported {
                 path: path.to_owned(),
@@ -111,6 +114,7 @@ impl Config {
         }
 
         let mut config: Self = table.try_into().map_err(parse_error)?;
+
         if version < AUTO_DEFAULTS_VERSION {
             migrate::unpin_legacy_defaults(&mut config);
         }
@@ -142,6 +146,7 @@ impl Config {
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
         self.validate()?;
+
         let text = self.to_toml_string()?;
 
         rusplay_core::write_owner_only(path, &text).map_err(|source| ConfigError::Write {
@@ -184,6 +189,7 @@ mod tests {
         let path = directory.join("nested").join("client.toml");
 
         let mut config = Config::default();
+
         config.video.bitrate_kbps = 42_000;
         config.scaling.upscale.antiringing = 0.35;
         config.video.encoder = VideoEncoderConfig::X264(X264Config {
@@ -194,7 +200,9 @@ mod tests {
         });
 
         config.save(&path).unwrap();
+
         let loaded = Config::load(&path).unwrap();
+
         fs::remove_dir_all(&directory).unwrap();
 
         assert_eq!(loaded, config);
@@ -206,6 +214,7 @@ mod tests {
         let path = directory.join("client.toml");
 
         let mut config = Config::default();
+
         config.network.mtu = 100;
 
         let result = config.save(&path);
@@ -224,11 +233,15 @@ mod tests {
     #[test]
     fn malformed_file_is_still_an_error() {
         let directory = scratch("malformed");
+
         fs::create_dir_all(&directory).unwrap();
+
         let path = directory.join("client.toml");
+
         fs::write(&path, "video = [").unwrap();
 
         let result = Config::load_or_default(&path);
+
         fs::remove_dir_all(&directory).unwrap();
 
         assert!(matches!(result, Err(ConfigError::Parse { .. })));
@@ -257,12 +270,14 @@ mod tests {
         assert_eq!(config.video.vbv_frames, 2);
 
         config.video.vbv_frames = 0;
+
         assert!(matches!(config.validate(), Err(ConfigError::ZeroVbvFrames)));
     }
 
     #[test]
     fn empty_decode_queue_is_rejected() {
         let mut config = Config::default();
+
         config.video.decode_queue_frames = 0;
 
         assert!(matches!(
@@ -399,6 +414,7 @@ mod tests {
         .unwrap();
 
         let mastering = parsed.video.color.hdr.mastering.unwrap();
+
         assert_eq!(mastering.primaries, ColorPrimaries::Bt2020);
         assert_eq!(mastering.min_nits.units(), 50);
         assert!((parsed.video.color.hdr.content_peak_nits() - 1200.0).abs() < f64::EPSILON);
@@ -472,7 +488,9 @@ mod tests {
     #[test]
     fn empty_virtual_limits_are_rejected() {
         let mut config = Config::default();
+
         config.capture.virtual_max_resolution = rusplay_core::Resolution::new(0, 1080);
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::EmptyVirtualMaxResolution { width: 0, .. })
@@ -480,7 +498,9 @@ mod tests {
 
         for hz in [0, 1001] {
             let mut config = Config::default();
+
             config.capture.virtual_max_refresh_hz = hz;
+
             assert!(matches!(
                 config.validate(),
                 Err(ConfigError::VirtualMaxRefreshOutOfRange(rejected)) if rejected == hz
@@ -501,7 +521,9 @@ mod tests {
 
         for (width, height) in [(0, 200), (200, 0), (8000, 200), (200, 4400)] {
             let mut config = Config::default();
+
             config.capture.virtual_min_resolution = rusplay_core::Resolution::new(width, height);
+
             assert!(matches!(
                 config.validate(),
                 Err(ConfigError::VirtualMinResolutionOutOfRange { .. })
@@ -510,7 +532,9 @@ mod tests {
 
         for ms in [0, 9, 60_001] {
             let mut config = Config::default();
+
             config.capture.virtual_resize_min_interval_ms = ms;
+
             assert!(matches!(
                 config.validate(),
                 Err(ConfigError::VirtualResizeIntervalOutOfRange(rejected)) if rejected == ms
@@ -518,13 +542,16 @@ mod tests {
         }
 
         let mut config = Config::default();
+
         config.capture.virtual_first_frame_timeout_ms = 10_001;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::VirtualFirstFrameTimeoutOutOfRange(10_001))
         ));
 
         config.capture.virtual_first_frame_timeout_ms = 0;
+
         assert!(config.validate().is_ok());
     }
 

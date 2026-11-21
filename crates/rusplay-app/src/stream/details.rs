@@ -22,6 +22,7 @@ impl StreamView {
             .stream
             .as_ref()
             .is_some_and(ClientStream::quality_metrics);
+
         let readout = Sources {
             host: &self.host.name,
             address: self.host.address,
@@ -33,6 +34,7 @@ impl StreamView {
             rates: self.rates.as_ref(),
         }
         .readout();
+
         drop(live);
 
         let sections: Vec<AnyElement> = readout

@@ -17,7 +17,7 @@ pub fn push_input_record(out: &mut Vec<u8>, record: &[u8]) -> Result<(), Protoco
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputRecords<'a> {
     rest: &'a [u8],
 }
@@ -49,7 +49,7 @@ impl<'a> Iterator for InputRecords<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputPacket<'a> {
     pub sequence: u32,
     pub current: &'a [u8],
@@ -88,6 +88,7 @@ impl<'a> InputPacket<'a> {
             fragment_count: 1,
         };
         let start = out.len();
+
         out.resize(start + PacketHeader::SIZE, 0);
         header.write(&mut out[start..])?;
 
@@ -131,14 +132,14 @@ impl<'a> InputPacket<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputAdmission {
     Stale,
     Current,
     PreviousAndCurrent,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct InputSequence {
     last: Option<u32>,
 }
@@ -175,6 +176,7 @@ mod tests {
 
     fn section(records: &[&[u8]]) -> Vec<u8> {
         let mut out = Vec::new();
+
         for record in records {
             push_input_record(&mut out, record).unwrap();
         }
@@ -185,6 +187,7 @@ mod tests {
     fn packet_round_trips_with_both_sections() {
         let current = section(&[&[1, 2, 3], &[4]]);
         let previous = section(&[&[9, 9]]);
+
         let packet = InputPacket {
             sequence: u32::MAX,
             current: &current,
@@ -192,6 +195,7 @@ mod tests {
         };
 
         let mut datagram = Vec::new();
+
         packet.write(&mut datagram).unwrap();
 
         assert_eq!(datagram.len(), packet.encoded_len());
@@ -252,6 +256,7 @@ mod tests {
     #[test]
     fn short_or_foreign_datagrams_are_rejected() {
         let mut datagram = Vec::new();
+
         InputPacket {
             sequence: 1,
             current: &[1, 7],
@@ -270,6 +275,7 @@ mod tests {
         ));
 
         datagram[2] = StreamKind::Video as u8;
+
         assert_eq!(
             InputPacket::read(&datagram),
             Err(ProtocolError::UnexpectedStream {
@@ -291,6 +297,7 @@ mod tests {
     #[test]
     fn a_gap_recovers_the_previous_section() {
         let mut sequence = InputSequence::new();
+
         sequence.admit(10);
 
         assert_eq!(sequence.admit(12), InputAdmission::PreviousAndCurrent);
@@ -300,6 +307,7 @@ mod tests {
     #[test]
     fn duplicates_and_reordered_packets_are_stale() {
         let mut sequence = InputSequence::new();
+
         sequence.admit(10);
         sequence.admit(12);
 
@@ -320,6 +328,7 @@ mod tests {
     #[test]
     fn wraparound_counts_as_consecutive() {
         let mut sequence = InputSequence::new();
+
         sequence.admit(u32::MAX);
 
         assert_eq!(sequence.admit(0), InputAdmission::Current);
@@ -329,6 +338,7 @@ mod tests {
     #[test]
     fn reset_forgets_the_history() {
         let mut sequence = InputSequence::new();
+
         sequence.admit(40);
 
         sequence.reset();
@@ -341,6 +351,7 @@ mod tests {
         let current = section(&[&[1, 2, 3], &[4]]);
         let previous = section(&[&[9, 9]]);
         let mut datagram = Vec::new();
+
         InputPacket {
             sequence: 9,
             current: &current,

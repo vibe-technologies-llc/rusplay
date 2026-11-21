@@ -24,7 +24,9 @@ pub fn ivf_frames(codec: Codec, file: &[u8]) -> Vec<EncodedFrame> {
     while cursor + IVF_FRAME_HEADER_LEN <= file.len() {
         let size = u32::from_le_bytes(file[cursor..cursor + 4].try_into().unwrap());
         let start = cursor + IVF_FRAME_HEADER_LEN;
+
         let end = start + usize::try_from(size).unwrap();
+
         frames.push(encoded(codec, frames.len(), file[start..end].to_vec()));
         cursor = end;
     }

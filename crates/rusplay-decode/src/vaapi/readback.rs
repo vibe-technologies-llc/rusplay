@@ -50,11 +50,13 @@ pub(super) fn copy(
         BitDepth::Ten => u32::from_le_bytes(*b"P010"),
         BitDepth::Twelve => u32::from_le_bytes(*b"P012"),
     };
+
     if frame.format.chroma != ChromaSubsampling::Yuv420 || exported.fourcc.as_u32() != fourcc {
         return Err(DecodeError::ReadbackFormat {
             fourcc: exported.fourcc.as_u32(),
         });
     }
+
     let objects = exported
         .objects
         .iter()
@@ -94,6 +96,7 @@ pub(super) fn copy(
             })
         })
         .collect::<Result<Vec<_>, DecodeError>>()?;
+
     let surface = Surface::import(
         display,
         rt_format(frame.format),
@@ -108,8 +111,10 @@ pub(super) fn copy(
         None,
     )?;
     let mut image = Image::new(display, fourcc, frame.resolution)?;
+
     let bytes = image.get(&surface)?;
     let layout = image.layout();
+
     let planes = [0, 1, 2]
         .map(|plane| split_plane(&bytes, layout, frame.resolution, frame.format.depth, plane));
     let [y, u, v] = planes;
@@ -135,6 +140,7 @@ fn split_plane(
     let step = if plane == 0 { sample } else { sample * 2 };
     let source = usize::from(plane > 0);
     let component = usize::from(plane == 2) * sample;
+
     let row_bytes = resolution.width as usize * step;
     let mut data =
         Vec::with_capacity(resolution.width as usize * resolution.height as usize * sample);
@@ -148,9 +154,11 @@ fn split_plane(
             bytes: row_bytes,
             size: bytes.len(),
         };
+
         if layout.pitches[source] < row_bytes {
             return Err(invalid());
         }
+
         let row = bytes
             .get(offset..offset.saturating_add(row_bytes))
             .ok_or_else(invalid)?;
@@ -160,6 +168,7 @@ fn split_plane(
             } else {
                 let value = u16::from_le_bytes([pixel[component], pixel[component + 1]])
                     >> (16 - depth.bits());
+
                 data.extend_from_slice(&value.to_le_bytes());
             }
         }

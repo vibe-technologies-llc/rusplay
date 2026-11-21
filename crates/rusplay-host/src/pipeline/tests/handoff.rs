@@ -24,6 +24,7 @@ const BENCH_SOURCES: u32 = 3;
 
 fn vaapi_config(codec: Codec, depth: BitDepth, handoff: bool) -> Config {
     let mut config = Config::default();
+
     config.video.codec = rusplay_config::CodecChoice::pinned(codec);
     config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
         chroma: ChromaSubsampling::Yuv420,
@@ -83,6 +84,7 @@ fn shm_frame(resolution: Resolution, index: u32) -> Frame {
 
 fn encode_stream(config: Config, resolution: Resolution) -> Option<(Vec<EncodedFrame>, bool)> {
     let mut pipeline = pipeline(config)?;
+
     let handed_off = pipeline.hands_off();
 
     let encoded = (0..FRAMES)
@@ -125,9 +127,11 @@ fn decode_stream(encoded: &[EncodedFrame]) -> Vec<Vec<Vec<u8>>> {
 fn assert_handoff_matches_readback(resolution: Resolution) {
     for depth in [BitDepth::Eight, BitDepth::Ten] {
         let config = vaapi_config(Codec::Av1, depth, true);
+
         if !supported(&config) {
             continue;
         }
+
         let Some((handed_off, used_handoff)) = encode_stream(config, resolution) else {
             return;
         };
@@ -162,12 +166,15 @@ fn handed_off_frames_of_an_odd_size_decode_like_read_back_frames() {
 #[test]
 fn a_refused_handoff_falls_back_to_the_readback() {
     let config = vaapi_config(Codec::Av1, BitDepth::Eight, true);
+
     if !supported(&config) {
         return;
     }
+
     let Some(mut pipeline) = pipeline(config) else {
         return;
     };
+
     if !pipeline.hands_off() {
         return;
     }
@@ -179,9 +186,11 @@ fn a_refused_handoff_falls_back_to_the_readback() {
         epoch: 0,
         next_output: OutputIndex(0),
     });
+
     let encoded = pipeline
         .encode(&shm_frame(Resolution::new(640, 360), 0), true)
         .unwrap();
+
     assert!(encoded.is_some());
     assert!(!pipeline.hands_off());
     assert_eq!(pipeline.take_notices().handoff_disabled, 1);
@@ -240,9 +249,11 @@ fn handoff_frame_times() {
         (Codec::Hevc, BitDepth::Ten),
     ] {
         let config = vaapi_config(codec, depth, true);
+
         if !supported(&config) {
             continue;
         }
+
         let (Some(mut handoff), Some(mut readback)) = (
             dmabuf_pipeline(config),
             dmabuf_pipeline(vaapi_config(codec, depth, false)),
@@ -261,12 +272,14 @@ fn handoff_frame_times() {
                 (&mut handoff, &mut handoff_times),
                 (&mut readback, &mut readback_times),
             ];
+
             if index % 2 == 1 {
                 order.reverse();
             }
             for (pipeline, times) in order {
                 let frame = dmabuf_capture(fd, BENCH_RESOLUTION, index);
                 let started = Instant::now();
+
                 pipeline.encode(&frame, index == 0).unwrap();
                 if index >= BENCH_WARMUP_FRAMES {
                     times.push(started.elapsed());
@@ -276,6 +289,7 @@ fn handoff_frame_times() {
 
         assert!(handoff.hands_off());
         assert!(!readback.hands_off());
+
         println!(
             "{codec:?} {depth:?} {BENCH_RESOLUTION}: handoff {:.2} ms, readback {:.2} ms per frame (median of {BENCH_FRAMES})",
             median(&mut handoff_times).as_secs_f64() * 1000.0,

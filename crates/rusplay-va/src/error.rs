@@ -12,7 +12,7 @@ pub enum VaError {
     Call { call: VaCall, status: VaStatus },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VaCall {
     Initialize,
     QueryConfigProfiles,
@@ -61,7 +61,7 @@ impl fmt::Display for VaCall {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VaStatus(pub i32);
 
 impl VaStatus {

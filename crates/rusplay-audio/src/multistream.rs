@@ -50,6 +50,7 @@ fn push_length(length: usize, out: &mut Vec<u8>) -> Option<()> {
     }
 
     let first = TWO_BYTE_LENGTH_FLOOR + (length - TWO_BYTE_LENGTH_FLOOR) % 4;
+
     out.push(u8::try_from(first).ok()?);
     out.push(u8::try_from((length - first) / 4).ok()?);
     Some(())
@@ -57,6 +58,7 @@ fn push_length(length: usize, out: &mut Vec<u8>) -> Option<()> {
 
 fn read_length(data: &[u8]) -> Option<(usize, usize)> {
     let first = usize::from(*data.first()?);
+
     if first < TWO_BYTE_LENGTH_FLOOR {
         return Some((first, 1));
     }
@@ -67,6 +69,7 @@ fn read_length(data: &[u8]) -> Option<(usize, usize)> {
 
 fn self_delimit(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
     let toc = *packet.first()?;
+
     out.push(toc);
 
     match toc & 0x03 {
@@ -76,6 +79,7 @@ fn self_delimit(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
         }
         1 => {
             let frames = &packet[1..];
+
             if !frames.len().is_multiple_of(2) {
                 return None;
             }
@@ -85,7 +89,9 @@ fn self_delimit(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
         2 => {
             let (first, length_bytes) = read_length(&packet[1..])?;
             let frames = &packet[1 + length_bytes..];
+
             let second = frames.len().checked_sub(first)?;
+
             out.extend_from_slice(&packet[1..=length_bytes]);
             push_length(second, out)?;
             out.extend_from_slice(frames);
@@ -99,6 +105,7 @@ fn self_delimit(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
 fn self_delimit_counted(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
     let flags = *packet.get(1)?;
     let frame_count = usize::from(flags & CODE_THREE_FRAME_COUNT);
+
     if frame_count == 0 {
         return None;
     }
@@ -106,9 +113,11 @@ fn self_delimit_counted(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
 
     let mut cursor = 2;
     let mut padding = 0;
+
     if flags & CODE_THREE_PADDING != 0 {
         loop {
             let byte = *packet.get(cursor)?;
+
             out.push(byte);
             cursor += 1;
             if byte == PADDING_CONTINUATION {
@@ -121,19 +130,24 @@ fn self_delimit_counted(packet: &[u8], out: &mut Vec<u8>) -> Option<()> {
     }
 
     let mut explicit_total = 0;
+
     if flags & CODE_THREE_VBR != 0 {
         for _ in 1..frame_count {
             let (length, length_bytes) = read_length(packet.get(cursor..)?)?;
+
             out.extend_from_slice(&packet[cursor..cursor + length_bytes]);
             cursor += length_bytes;
             explicit_total += length;
         }
+
         let remaining = packet
             .len()
             .checked_sub(cursor + padding + explicit_total)?;
+
         push_length(remaining, out)?;
     } else {
         let frames = packet.len().checked_sub(cursor + padding)?;
+
         if !frames.is_multiple_of(frame_count) {
             return None;
         }
@@ -171,6 +185,7 @@ impl MultistreamEncoder {
         let bitrate_per_channel = bitrate_bps / i32::from(table.channels);
 
         let mut encoders = Vec::with_capacity(stream_channels.len());
+
         for &stream_channel_count in &stream_channels {
             let mut encoder = OpusEncoder::new(
                 SAMPLE_RATE,
@@ -178,6 +193,7 @@ impl MultistreamEncoder {
                 Application::RestrictedLowDelay,
             )
             .map_err(AudioError::OpusEncoderInit)?;
+
             encoder.bitrate_bps = bitrate_per_channel
                 .saturating_mul(i32::try_from(stream_channel_count).unwrap_or(i32::MAX));
             encoder.use_inband_fec = inband_fec;
@@ -185,6 +201,7 @@ impl MultistreamEncoder {
         }
 
         let mut sources = vec![0; channels];
+
         for (output_channel, &decoded) in table.mapping.iter().enumerate() {
             sources[usize::from(decoded)] = output_channel;
         }
@@ -206,6 +223,7 @@ impl MultistreamEncoder {
 
         let last = self.encoders.len() - 1;
         let mut decoded_offset = 0;
+
         for (stream, encoder) in self.encoders.iter_mut().enumerate() {
             let stream_channels = self.stream_channels[stream];
             let sources = &self.sources[decoded_offset..decoded_offset + stream_channels];
@@ -241,6 +259,7 @@ impl MultistreamEncoder {
                     needed: self.assembled.len(),
                     capacity,
                 })?;
+
         destination.copy_from_slice(&self.assembled);
 
         Ok(self.assembled.len())
@@ -255,9 +274,11 @@ mod tests {
 
     fn delimited_then_split(packet: &[u8]) -> Vec<u8> {
         let mut delimited = Vec::new();
+
         self_delimit(packet, &mut delimited).unwrap();
 
         let mut scratch = Vec::new();
+
         let (restored, consumed) = split_self_delimited(&delimited, &mut scratch).unwrap();
 
         assert_eq!(consumed, delimited.len());
@@ -266,6 +287,7 @@ mod tests {
 
     fn packet_with(toc: u8, body: &[u8]) -> Vec<u8> {
         let mut packet = vec![toc];
+
         packet.extend_from_slice(body);
         packet
     }
@@ -335,9 +357,11 @@ mod tests {
         for layout in [ChannelLayout::Surround51, ChannelLayout::Surround71] {
             let table = mapping_table(layout).unwrap();
             let mut seen = table.mapping.clone();
+
             seen.sort_unstable();
 
             let expected: Vec<u8> = (0..table.channels).collect();
+
             assert_eq!(seen, expected);
         }
     }

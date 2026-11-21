@@ -138,7 +138,7 @@ pub enum DecodeError {
     Av1Syntax(#[from] Av1SyntaxError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum Av1SyntaxError {
     #[error("the av1 {unit} ends before its last syntax element")]
     Truncated { unit: BitstreamUnit },
@@ -191,7 +191,7 @@ pub enum Av1SyntaxError {
     DecoderModelUnsupported,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BitstreamUnit {
     NalUnit,
     VideoParameterSet,
@@ -221,7 +221,7 @@ impl fmt::Display for BitstreamUnit {
 }
 
 #[cfg(feature = "ffmpeg")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FfmpegCall {
     AllocContext,
     Open,
@@ -246,7 +246,7 @@ impl fmt::Display for FfmpegCall {
 }
 
 #[cfg(feature = "nvdec")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CuvidCall {
     GetDecoderCaps,
     CreateDecoder,

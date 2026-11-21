@@ -85,6 +85,7 @@ fn read_h264(
     data: &[u8],
 ) -> Result<Picture, DecodeError> {
     const CODEC: Codec = Codec::H264;
+
     let mut cursor = Cursor::new(data);
     let mut picture = None;
 
@@ -116,6 +117,7 @@ fn read_h264(
                     unit: BitstreamUnit::PictureParameterSet,
                     id,
                 })?;
+
                 picture = Some((signal::h264_color(&pps.sps), idr));
             }
             _ => {}
@@ -132,6 +134,7 @@ fn read_hevc(
     data: &[u8],
 ) -> Result<Picture, DecodeError> {
     const CODEC: Codec = Codec::Hevc;
+
     let mut cursor = Cursor::new(data);
     let mut picture = None;
 
@@ -146,6 +149,7 @@ fn read_hevc(
             }
             HevcNaluType::SpsNut => {
                 let checked = hevc::check_sequence_parameter_set(nalu.as_ref())?;
+
                 parser
                     .parse_sps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::SequenceParameterSet))?;
@@ -153,6 +157,7 @@ fn read_hevc(
             }
             HevcNaluType::PpsNut => {
                 let checked = checks.check_picture_parameter_set(nalu.as_ref())?;
+
                 parser
                     .parse_pps(&nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::PictureParameterSet))?;
@@ -165,6 +170,7 @@ fn read_hevc(
             }
             _ if picture.is_none() && is_first_slice_segment(kind, nalu.as_ref()) => {
                 checks.check_slice_header(nalu.as_ref(), kind)?;
+
                 let slice = parser
                     .parse_slice_header(nalu)
                     .map_err(malformed(CODEC, BitstreamUnit::SliceHeader))?;
@@ -174,6 +180,7 @@ fn read_hevc(
                     unit: BitstreamUnit::PictureParameterSet,
                     id,
                 })?;
+
                 picture = Some((signal::hevc_color(&pps.sps), kind.is_irap()));
             }
             _ => {}
@@ -217,6 +224,7 @@ fn read_av1(
     mut data: &[u8],
 ) -> Result<Picture, DecodeError> {
     const CODEC: Codec = Codec::Av1;
+
     av1::check_framing(data)?;
 
     let mut picture: Picture = None;
@@ -232,6 +240,7 @@ fn read_av1(
             }
         };
         let length = obu.bytes_used;
+
         if obu.header.obu_type == ObuType::Metadata {
             hdr.read_av1_metadata(obu.as_ref());
         }
@@ -254,6 +263,7 @@ fn read_av1(
                     id: 0,
                 })?;
                 let key = header.frame_type == FrameType::KeyFrame;
+
                 picture = Some(match picture {
                     Some((_, earlier_key)) => (signal::av1_color(current), earlier_key || key),
                     None => (signal::av1_color(current), key),

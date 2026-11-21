@@ -57,7 +57,7 @@ use crate::{
 const STREAM_NAME: &str = "rusplay-capture";
 const THREAD_NAME: &str = "rusplay-pipewire";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamOptions {
     pub formats: Vec<DrmFourcc>,
     pub prefer_dmabuf: bool,
@@ -263,6 +263,7 @@ impl PipeWireCapture {
 
         OutputOffer::new(move |request| {
             *slot.lock() = Some(request);
+
             let _ = control.send(Command::Offer);
         })
     }
@@ -381,6 +382,7 @@ impl Worker {
             return;
         }
         self.format = None;
+
         let Some(param) = param else {
             return;
         };
@@ -398,8 +400,11 @@ impl Worker {
 
     fn negotiate(&mut self, stream: &Stream, param: &Pod) -> Result<(), CaptureError> {
         self.adopt_offer();
+
         let parsed = parse_format(param.as_bytes())?;
+
         self.refresh.set(parsed.refresh);
+
         let table = self.options.dmabuf_table().unwrap_or_default();
 
         let color = describe_color(&parsed.colorimetry, self.options.hdr)?;
@@ -407,7 +412,9 @@ impl Worker {
         let params = match decide(&parsed, table, color) {
             FormatDecision::Accept(format) => {
                 self.format = Some(format);
+
                 let mut params = vec![buffers_param(format.memory())?, header_meta_param()?];
+
                 if self.options.cursor_metadata {
                     params.push(cursor_meta_param()?);
                 }
@@ -440,7 +447,9 @@ impl Worker {
 
         self.adopt_offer();
         self.options.prefer_dmabuf = false;
+
         let params = self.options.enum_formats()?;
+
         stream.update_params(&mut as_pods(&params)?)?;
         Ok(())
     }
@@ -461,10 +470,12 @@ impl Worker {
         }
 
         let mut newest = None;
+
         while let Some(buffer) = DequeuedBuffer::dequeue(stream) {
             self.observe_cursor(&buffer);
             newest = Some(buffer);
         }
+
         let Some(mut buffer) = newest else {
             return;
         };
@@ -514,11 +525,13 @@ impl Worker {
         };
 
         let chunk = first.chunk();
+
         if chunk.size() == 0 || chunk.flags().contains(ChunkFlags::CORRUPTED) {
             return Ok(None);
         }
 
         let data_type = first.type_();
+
         if data_type == DataType::DmaBuf {
             let planes = datas
                 .iter()
@@ -531,6 +544,7 @@ impl Worker {
                 })
                 .collect::<Option<Vec<_>>>()
                 .ok_or(CaptureError::NoPlanes)?;
+
             return dmabuf_frame(format, &planes, timestamp).map(Some);
         }
         if data_type != DataType::MemPtr && data_type != DataType::MemFd {
@@ -564,6 +578,7 @@ fn drops_unmatched_properties(version: &str) -> bool {
     let mut parts = version
         .split('.')
         .map(|part| part.trim().parse::<u32>().unwrap_or(0));
+
     let parsed = (
         parts.next().unwrap_or(0),
         parts.next().unwrap_or(0),
@@ -582,6 +597,7 @@ fn as_pods(params: &[Vec<u8>]) -> Result<Vec<&Pod>, CaptureError> {
 
 fn offer_params(stream: &Stream, options: &StreamOptions) -> Result<(), CaptureError> {
     let params = options.enum_formats()?;
+
     stream.update_params(&mut as_pods(&params)?)?;
     Ok(())
 }
@@ -606,9 +622,11 @@ fn run_worker(
     )?;
 
     let mut options = setup.options;
+
     if !drops_unmatched_properties(&library_version()) {
         options.color_preference = None;
     }
+
     let params = options.enum_formats()?;
     let held = Rc::new(RefCell::new(HeldBuffers::default()));
     let offered_options = options.clone();
@@ -658,6 +676,7 @@ fn run_worker(
                     return;
                 };
                 let mut options = base.offering(request);
+
                 options.prefer_dmabuf &= !fallback.is_requested();
                 if let Err(error) = offer_params(&stream, &options) {
                     failure.lock().get_or_insert(error);
@@ -675,6 +694,7 @@ fn run_worker(
     });
 
     let _ = started.send(Ok(()));
+
     mainloop.run();
     Ok(())
 }
@@ -700,14 +720,17 @@ mod tests {
         let worker = spawn_worker(
             move || {
                 let thread = thread::current().name().map(str::to_owned);
+
                 hook_steps.send(("hook", thread)).unwrap();
             },
             move || {
                 let thread = thread::current().name().map(str::to_owned);
+
                 steps.send(("work", thread)).unwrap();
             },
         )
         .unwrap();
+
         worker.join().unwrap();
 
         assert_eq!(
@@ -778,7 +801,9 @@ mod tests {
     #[test]
     fn an_offered_output_leaves_the_rest_of_the_options_alone() {
         let mut options = StreamOptions::new(&CaptureConfig::default(), &VideoConfig::default());
+
         options.prefer_dmabuf = false;
+
         let request = OutputRequest {
             resolution: Resolution::new(1280, 720),
             frame_rate: FrameRate::integer(30),
@@ -810,6 +835,7 @@ mod tests {
             color_mode: StreamColorMode::Configured,
             ..VideoConfig::default()
         };
+
         video.color.transfer = rusplay_core::TransferFunction::Pq;
 
         let options = StreamOptions::new(&CaptureConfig::default(), &video);

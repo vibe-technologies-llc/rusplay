@@ -12,7 +12,7 @@ use crate::{NetError, Transport};
 pub const CONTROL_WINDOW: u32 = 64;
 const MAX_BACKOFF_SHIFT: u32 = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlConfig {
     pub retransmit_timeout: Duration,
     pub max_retransmits: u8,
@@ -33,7 +33,7 @@ impl From<&NetworkConfig> for ControlConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlEvent {
     Received(ControlMessage),
     Acked { id: u32 },
@@ -50,7 +50,7 @@ struct InFlight {
     retransmits: u8,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RttEstimator {
     smoothed: Option<Duration>,
     variation: Duration,
@@ -86,20 +86,24 @@ impl ReceiveWindow {
         };
 
         let ahead = id.wrapping_sub(highest).cast_signed();
+
         if ahead > 0 {
             let shift = ahead.unsigned_abs();
+
             self.seen = self.seen.checked_shl(shift).unwrap_or(0) | 1;
             self.highest = Some(id);
             return true;
         }
 
         let behind = highest.wrapping_sub(id);
+
         if behind >= CONTROL_WINDOW {
             return false;
         }
 
         let bit = 1u64 << behind;
         let is_new = self.seen & bit == 0;
+
         self.seen |= bit;
         is_new
     }
@@ -160,6 +164,7 @@ impl ControlChannel {
             .in_flight
             .front()
             .is_some_and(|oldest| self.next_id.wrapping_sub(oldest.id) >= CONTROL_WINDOW);
+
         if window_full {
             return Err(NetError::ControlWindowFull {
                 window: CONTROL_WINDOW,
@@ -236,7 +241,9 @@ impl ControlChannel {
             }
 
             entry.retransmits += 1;
+
             let backoff = u32::from(entry.retransmits).min(MAX_BACKOFF_SHIFT);
+
             entry.deadline = now + self.config.retransmit_timeout * (1 << backoff);
             self.outbox.push_back(entry.datagram.clone());
             index += 1;
@@ -283,6 +290,7 @@ mod tests {
 
     fn drain(channel: &mut ControlChannel) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
+
         channel.take_transmits(&mut out);
         out
     }
@@ -307,6 +315,7 @@ mod tests {
         let mut events_b = Vec::new();
 
         let id = a.send(keyframe(9), now).unwrap();
+
         deliver(&mut b, &drain(&mut a), &mut events_b);
         deliver(&mut a, &drain(&mut b), &mut events_a);
 
@@ -327,10 +336,13 @@ mod tests {
         drain(&mut a);
 
         a.poll(start + RTO / 2, &mut events);
+
         assert!(!a.has_pending_transmit());
 
         a.poll(start + RTO, &mut events);
+
         assert!(a.has_pending_transmit());
+
         deliver(&mut b, &drain(&mut a), &mut events);
 
         assert_eq!(events, [ControlEvent::Received(keyframe(1))]);
@@ -341,12 +353,15 @@ mod tests {
         let mut a = channel(8);
         let start = Instant::now();
         let mut events = Vec::new();
+
         a.send(ControlMessage::Goodbye, start).unwrap();
 
         let mut now = start;
         let mut gaps = Vec::new();
+
         for _ in 0..6 {
             let deadline = a.next_deadline().unwrap();
+
             gaps.push(deadline - now);
             now = deadline;
             a.poll(now, &mut events);
@@ -364,6 +379,7 @@ mod tests {
         let mut events_b = Vec::new();
 
         let id = a.send(keyframe(5), start).unwrap();
+
         deliver(&mut b, &drain(&mut a), &mut events_b);
         drain(&mut b);
 
@@ -380,6 +396,7 @@ mod tests {
         let mut a = channel(2);
         let start = Instant::now();
         let mut events = Vec::new();
+
         let id = a.send(keyframe(4), start).unwrap();
 
         while let Some(deadline) = a.next_deadline() {
@@ -401,6 +418,7 @@ mod tests {
         let mut a = channel(0);
         let start = Instant::now();
         let mut events = Vec::new();
+
         a.send(ControlMessage::Goodbye, start).unwrap();
 
         a.poll(start + RTO, &mut events);
@@ -418,9 +436,13 @@ mod tests {
         for frame in 0..5 {
             a.send(keyframe(frame), now).unwrap();
         }
+
         let mut datagrams = drain(&mut a);
+
         datagrams.reverse();
+
         let duplicate = datagrams[1].clone();
+
         datagrams.push(duplicate);
         deliver(&mut b, &datagrams, &mut events);
 
@@ -431,7 +453,9 @@ mod tests {
                 other => panic!("unexpected event {other:?}"),
             })
             .collect();
+
         frames.sort_unstable();
+
         assert_eq!(frames, [0, 1, 2, 3, 4]);
         assert_eq!(drain(&mut b).len(), 6);
     }
@@ -477,7 +501,9 @@ mod tests {
         let mut events = Vec::new();
 
         a.send(keyframe(0), now).unwrap();
+
         let lost = drain(&mut a);
+
         for frame in 1..CONTROL_WINDOW {
             a.send(keyframe(frame), now).unwrap();
         }
@@ -491,6 +517,7 @@ mod tests {
 
         events.clear();
         deliver(&mut b, &lost, &mut events);
+
         assert_eq!(events, [ControlEvent::Received(keyframe(0))]);
     }
 
@@ -500,6 +527,7 @@ mod tests {
         let mut b = channel(3);
         let now = Instant::now();
         let mut events = Vec::new();
+
         a.next_id = u32::MAX - 2;
 
         for frame in 0..8 {
@@ -512,6 +540,7 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, ControlEvent::Received(_)))
             .count();
+
         assert_eq!(received, 8);
         assert_eq!(a.in_flight(), 0);
     }
@@ -541,6 +570,7 @@ mod tests {
     #[test]
     fn reset_forgets_everything() {
         let mut a = channel(3);
+
         a.send(
             ControlMessage::Hello {
                 version: ProtocolVersion::CURRENT,
@@ -559,6 +589,7 @@ mod tests {
 
     fn round_trip(a: &mut ControlChannel, b: &mut ControlChannel, sent: Instant, rtt: Duration) {
         let mut events = Vec::new();
+
         a.send(ControlMessage::Keepalive, sent).unwrap();
         for datagram in drain(a) {
             b.handle_datagram(&datagram, sent, &mut events).unwrap();
@@ -572,6 +603,7 @@ mod tests {
     #[test]
     fn rtt_is_unknown_before_any_ack() {
         let mut a = channel(3);
+
         a.send(ControlMessage::Keepalive, Instant::now()).unwrap();
 
         assert_eq!(a.rtt(), None);
@@ -636,7 +668,9 @@ mod tests {
         for datagram in drain(&mut a) {
             b.handle_datagram(&datagram, start, &mut events).unwrap();
         }
+
         let acks = drain(&mut b);
+
         a.handle_datagram(&acks[0], start + Duration::from_millis(5), &mut events)
             .unwrap();
         a.handle_datagram(&acks[0], start + Duration::from_millis(50), &mut events)

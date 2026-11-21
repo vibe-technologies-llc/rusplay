@@ -100,13 +100,13 @@ pub(super) const REPORT_DESCRIPTOR: [u8; 134] = [
     0x26, 0x95, 0x3f, 0xb1, 0x02, 0xc0,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Rumble {
     pub strong: u8,
     pub weak: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct OutputReport {
     pub rumble: Option<Rumble>,
     pub lightbar: Option<[u8; 3]>,
@@ -208,9 +208,11 @@ fn calibration_report() -> Vec<u8> {
 
 pub(super) fn calibration_report_for(id: u8, len: usize) -> Vec<u8> {
     let mut report = vec![0; len];
+
     report[0] = id;
 
     let gyro_bias = [0i16; 3];
+
     for (axis, bias) in gyro_bias.into_iter().enumerate() {
         put_i16(&mut report, 1 + axis * 2, bias);
         put_i16(&mut report, 7 + axis * 4, GYRO_RAW_HALF_RANGE);
@@ -234,6 +236,7 @@ fn pairing_report(mac: [u8; 6]) -> Vec<u8> {
 
 pub(super) fn pairing_report_for(id: u8, len: usize, mac: [u8; 6]) -> Vec<u8> {
     let mut report = vec![0; len];
+
     report[0] = id;
     report[1..7].copy_from_slice(&mac);
 
@@ -242,6 +245,7 @@ pub(super) fn pairing_report_for(id: u8, len: usize, mac: [u8; 6]) -> Vec<u8> {
 
 fn firmware_report() -> Vec<u8> {
     let mut report = vec![0; FIRMWARE_REPORT_LEN];
+
     report[0] = FIRMWARE_REPORT_ID;
     report[24..28].copy_from_slice(&HARDWARE_VERSION.to_le_bytes());
     report[28..32].copy_from_slice(&FIRMWARE_VERSION.to_le_bytes());
@@ -254,14 +258,14 @@ pub(super) fn put_i16(report: &mut [u8], offset: usize, value: i16) {
     report[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Contact {
     id: u8,
     x: u16,
     y: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct PadReportState {
     sticks: [u8; 4],
     triggers: [u8; 2],
@@ -332,6 +336,7 @@ impl PadReportState {
 
         let bit = 1u16 << button.0;
         let before = self.held;
+
         if pressed {
             self.held |= bit;
         } else {
@@ -355,7 +360,9 @@ impl PadReportState {
             GamepadAxis::RIGHT_TRIGGER => (&mut self.triggers[1], trigger_byte(value)),
             GamepadAxis(unknown) => return Err(InputError::GamepadAxisUnknown(unknown)),
         };
+
         let changed = *target != byte;
+
         *target = byte;
 
         Ok(changed)
@@ -370,6 +377,7 @@ impl PadReportState {
             SensorKind::Gyro => (&mut self.gyro, values.map(gyro_raw)),
             SensorKind::Accel => (&mut self.accel, values.map(accel_raw)),
         };
+
         *target = raw;
 
         Ok(true)
@@ -387,9 +395,11 @@ impl PadReportState {
             contact.id
         } else {
             let id = self.next_contact_id;
+
             self.next_contact_id = (id + 1) & TOUCH_ID_MASK;
             id
         };
+
         *slot = Some(Contact {
             id,
             x: touch_coordinate(x, TOUCHPAD_WIDTH),
@@ -457,6 +467,7 @@ impl PadReportState {
         };
 
         let mut buttons1 = collect(&middle);
+
         for (trigger, bit) in [(0, BUTTONS1_L2), (1, BUTTONS1_R2)] {
             if self.triggers[trigger] >= TRIGGER_BUTTON_THRESHOLD {
                 buttons1 |= bit;
@@ -468,6 +479,7 @@ impl PadReportState {
 
     pub fn input_report(&self, sequence: u8, timestamp: u32) -> [u8; INPUT_REPORT_LEN] {
         let mut report = [0; INPUT_REPORT_LEN];
+
         report[0] = INPUT_REPORT_ID;
         report[OFFSET_STICKS..OFFSET_STICKS + 4].copy_from_slice(&self.sticks);
         report[OFFSET_TRIGGERS..OFFSET_TRIGGERS + 2].copy_from_slice(&self.triggers);
@@ -484,6 +496,7 @@ impl PadReportState {
 
         for (index, contact) in self.contacts.iter().enumerate() {
             let offset = OFFSET_TOUCH + index * 4;
+
             report[offset..offset + 4].copy_from_slice(&touch_point(*contact));
         }
 
@@ -616,6 +629,7 @@ mod tests {
     #[test]
     fn sticks_span_the_full_byte_range_with_positive_down() {
         let mut state = PadReportState::default();
+
         let mut set = |axis, value| {
             state.apply(GamepadEvent::Axis { axis, value }).unwrap();
         };
@@ -637,9 +651,11 @@ mod tests {
 
         set(&mut state, GamepadAxis::LEFT_TRIGGER, 1.0);
         set(&mut state, GamepadAxis::RIGHT_TRIGGER, 0.05);
+
         let report_one = report(&state);
 
         set(&mut state, GamepadAxis::RIGHT_TRIGGER, 0.5);
+
         let report_two = report(&state);
 
         assert_eq!(&report_one[5..7], &[255, 13]);
@@ -709,11 +725,15 @@ mod tests {
 
         for (button, byte, bit) in cases {
             press(&mut state, button, true);
+
             let held = report(&state);
+
             press(&mut state, button, false);
+
             let released = report(&state);
 
             let hat = if byte == 8 { HAT_NEUTRAL } else { 0 };
+
             assert_eq!(held[byte], hat | bit, "{button:?}");
             assert_eq!(released[byte], hat, "{button:?}");
         }
@@ -784,6 +804,7 @@ mod tests {
                 z: 100.0,
             })
             .unwrap();
+
         let report = report(&state);
 
         assert_eq!(le16(&report, 22), 8192);
@@ -803,6 +824,7 @@ mod tests {
                 z: -1000.0,
             })
             .unwrap();
+
         let report = report(&state);
 
         assert_eq!(le16(&report, 16), 1440);
@@ -820,6 +842,7 @@ mod tests {
             let plus = field(7 + axis * 4);
             let minus = field(9 + axis * 4);
             let speed_numerator = (field(19) + field(21)) * 1024;
+
             let denominator = (plus - bias).abs() + (minus - bias).abs();
 
             assert_ne!(denominator, 0);
@@ -829,6 +852,7 @@ mod tests {
         for axis in 0..3 {
             let plus = field(23 + axis * 4);
             let minus = field(25 + axis * 4);
+
             let range = plus - minus;
             let bias = plus - range / 2;
 
@@ -856,12 +880,15 @@ mod tests {
                 y: 0.25,
             })
             .unwrap();
+
         let both = report(&state);
 
         assert_eq!(&both[33..37], &[0, 0x7f, 0x77, 0x43]);
         assert_eq!(both[37], 1);
+
         let x = u16::from(both[38]) | (u16::from(both[39] & 0x0f) << 8);
         let y = u16::from(both[39] >> 4) | (u16::from(both[40]) << 4);
+
         assert_eq!((x, y), (960, 270));
     }
 
@@ -881,10 +908,13 @@ mod tests {
 
         state.apply(down).unwrap();
         state.apply(motion).unwrap();
+
         let held = report(&state);
         let lifted = state.apply(GamepadEvent::TouchpadUp { finger: 0 }).unwrap();
         let second_lift = state.apply(GamepadEvent::TouchpadUp { finger: 0 }).unwrap();
+
         state.apply(down).unwrap();
+
         let again = report(&state);
 
         assert_eq!(held[33], 0);
@@ -924,9 +954,12 @@ mod tests {
         };
 
         state.apply(down).unwrap();
+
         let first = report(&state)[33];
+
         state.apply(GamepadEvent::TouchpadUp { finger: 0 }).unwrap();
         state.apply(down).unwrap();
+
         let second = report(&state)[33];
 
         assert_eq!((first, second), (127, 0));
@@ -983,6 +1016,7 @@ mod tests {
 
     fn output(valid0: u8, valid2: u8, strong: u8, weak: u8) -> Vec<u8> {
         let mut data = vec![0; OUTPUT_REPORT_LEN];
+
         data[0] = OUTPUT_REPORT_ID;
         data[1] = valid0;
         data[39] = valid2;
@@ -1026,6 +1060,7 @@ mod tests {
     #[test]
     fn short_or_foreign_output_reports_are_ignored() {
         let mut other = output(0x03, 0, 1, 1);
+
         other[0] = 0x31;
 
         assert!(parse_output(&output(0x03, 0, 1, 1)[..47]).is_none());
@@ -1036,6 +1071,7 @@ mod tests {
     #[test]
     fn lightbar_and_player_leds_are_read_when_their_flags_are_set() {
         let mut data = output(0, 0, 0, 0);
+
         data[2] = 0x04 | 0x10;
         data[44] = 0xff;
         data[45..48].copy_from_slice(&[10, 20, 30]);
@@ -1046,21 +1082,29 @@ mod tests {
         assert_eq!(parsed.player_leds, Some(0x1f));
 
         data[2] = 0x10;
+
         let leds_only = parse_output(&data).unwrap();
+
         assert_eq!(leds_only.lightbar, None);
+
         data[2] = 0x04;
+
         let bar_only = parse_output(&data).unwrap();
+
         assert_eq!(bar_only.player_leds, None);
     }
 
     #[test]
     fn trigger_effects_are_read_from_their_own_offsets_and_flags() {
         let mut data = output(0x04, 0, 0, 0);
+
         data[11..22].copy_from_slice(&[1; 11]);
         data[22..33].copy_from_slice(&[2; 11]);
 
         let right_only = parse_output(&data).unwrap();
+
         data[1] = 0x08;
+
         let left_only = parse_output(&data).unwrap();
 
         assert_eq!(right_only.right_trigger, Some([1; 11]));
@@ -1072,11 +1116,13 @@ mod tests {
     #[test]
     fn feedback_lists_every_present_field_for_the_slot() {
         let mut data = output(0x01 | 0x04 | 0x08, 0, 255, 128);
+
         data[2] = 0x04 | 0x10;
         data[44] = 3;
         data[45..48].copy_from_slice(&[1, 2, 3]);
         data[11] = 9;
         data[22] = 8;
+
         let mut out = Vec::new();
 
         parse_output(&data).unwrap().feedback(6, &mut out);

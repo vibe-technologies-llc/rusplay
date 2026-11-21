@@ -62,6 +62,7 @@ impl VaapiDecoder {
         };
 
         let mut supported = false;
+
         for &profile in base_profiles {
             supported |= display.has_decoder(profile)?;
         }
@@ -73,6 +74,7 @@ impl VaapiDecoder {
         }
 
         let mut decoder = Self::with_display(codec, display);
+
         decoder.copy_output = config.copy_output;
 
         Ok(decoder)
@@ -146,7 +148,7 @@ impl VideoDecoder for VaapiDecoder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StreamFormat {
     profile: Profile,
     profile_idc: u8,

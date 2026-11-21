@@ -33,7 +33,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
     Hosts,
     Hosting,
@@ -108,6 +108,7 @@ impl RusplayApp {
                 cx,
             )
         });
+
         hosts.update(cx, HostsView::refresh);
         subscriptions.push(cx.subscribe(&hosts, |this, _, event: &NoticeRaised, cx| {
             this.notice = Some(event.0.clone());
@@ -122,9 +123,11 @@ impl RusplayApp {
         ));
 
         let hosting = cx.new(|cx| HostPageView::new(environment.clone(), cx));
+
         subscriptions.extend(host_subscriptions(&hosting, cx));
 
         let app = cx.weak_entity();
+
         window.on_window_should_close(cx, move |_, cx| {
             app.update(cx, |this, cx| {
                 this.end_stream(cx);
@@ -138,6 +141,7 @@ impl RusplayApp {
             Ok(form) => {
                 let settings =
                     cx.new(|cx| SettingsView::new(config, form, environment.clone(), cx));
+
                 subscriptions.push(
                     cx.subscribe(&settings, |this, _, event: &NoticeRaised, cx| {
                         this.notice = Some(event.0.clone());
@@ -208,6 +212,7 @@ impl RusplayApp {
             Ok(attached) => attached,
             Err(error) => {
                 let message = format!("Could not open the stream view: {}", error_chain(&error));
+
                 if self.exit_on_disconnect {
                     eprintln!("rusplay: {message}");
                     cx.quit();
@@ -236,6 +241,7 @@ impl RusplayApp {
                 this.stream_event(source, event, window, cx);
             },
         );
+
         window.focus(&stream.focus_handle(cx), cx);
 
         self.stream = Some(ActiveStream {
@@ -261,6 +267,7 @@ impl RusplayApp {
         match event {
             StreamEvent::Paired { host, name, peer } => {
                 let (host, peer) = (*host, peer.clone());
+
                 let remembered = self
                     .hosts
                     .update(cx, |hosts, cx| hosts.remember_peer(host, peer, cx));
@@ -314,6 +321,7 @@ impl RusplayApp {
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> Div {
         let mut tabs = Vec::with_capacity(Page::ALL.len());
+
         for (position, page) in Page::ALL.into_iter().enumerate() {
             tabs.push(
                 tab(("page", position), page.title(), self.page == page).on_click(cx.listener(

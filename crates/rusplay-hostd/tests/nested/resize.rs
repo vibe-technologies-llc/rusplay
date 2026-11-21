@@ -28,6 +28,7 @@ fn reached(seen: &Recording, size: Resolution) -> bool {
 
 fn sizes(seen: &Recording) -> Vec<Resolution> {
     let mut sizes: Vec<Resolution> = Vec::new();
+
     for entry in seen.lock().iter() {
         if sizes.last() != Some(&entry.source) {
             sizes.push(entry.source);
@@ -57,14 +58,17 @@ fn a_live_resize_takes_the_stream_to_each_new_size_on_kwin() {
 
     let (seen, sink) = recorder();
     let stream = connect(&live, gpu, &Credentials::Pin(live.pin()), DISPLAY, sink).unwrap();
+
     assert!(wait_for(FIRST_FRAME_WAIT, || reached(
         &seen,
         Resolution::new(1280, 720)
     )));
 
     let steps = [(1000, 700), (1600, 900), (800, 600)];
+
     for (width, height) in steps {
         announce(&stream, width, height);
+
         assert!(
             wait_for(RESIZE_WAIT, || reached(
                 &seen,
@@ -74,14 +78,17 @@ fn a_live_resize_takes_the_stream_to_each_new_size_on_kwin() {
             sizes(&seen)
         );
     }
+
     let client = stream.stats();
     let format = stream.stream_format().unwrap();
+
     stream.stop().unwrap();
 
     let summary = live
         .daemon
         .wait_for_line("session summary", SUMMARY_WAIT)
         .expect("no session summary");
+
     eprintln!("REPORT sizes {:?}", sizes(&seen));
     eprintln!("REPORT {summary}");
 
@@ -102,18 +109,22 @@ fn a_window_below_the_compositor_minimum_streams_at_the_minimum_on_kwin() {
 
     let (seen, sink) = recorder();
     let stream = connect(&live, gpu, &Credentials::Pin(live.pin()), DISPLAY, sink).unwrap();
+
     assert!(wait_for(FIRST_FRAME_WAIT, || reached(
         &seen,
         Resolution::new(1280, 720)
     )));
 
     announce(&stream, 120, 90);
+
     let grown = Resolution::new(267, KWIN_MINIMUM);
     let arrived = wait_for(RESIZE_WAIT, || reached(&seen, grown));
+
     thread::sleep(Duration::from_millis(500));
     stream.stop().unwrap();
 
     eprintln!("REPORT sizes {:?}", sizes(&seen));
+
     assert!(arrived, "saw {:?}", sizes(&seen));
     assert!(
         sizes(&seen)
@@ -134,6 +145,7 @@ fn what_kwin_does_with_an_offer_below_its_minimum() {
 
     let (seen, sink) = recorder();
     let stream = connect(&live, gpu, &Credentials::Pin(live.pin()), DISPLAY, sink).unwrap();
+
     assert!(wait_for(FIRST_FRAME_WAIT, || reached(
         &seen,
         Resolution::new(1280, 720)
@@ -141,6 +153,7 @@ fn what_kwin_does_with_an_offer_below_its_minimum() {
 
     announce(&stream, 120, 90);
     thread::sleep(Duration::from_secs(4));
+
     let finished = stream.is_finished();
     let client = stream.stats();
     let result = stream.stop();
@@ -168,6 +181,7 @@ fn a_flood_of_resizes_reaches_the_last_size_with_few_offers_on_kwin() {
 
     let (seen, sink) = recorder();
     let stream = connect(&live, gpu, &Credentials::Pin(live.pin()), DISPLAY, sink).unwrap();
+
     assert!(wait_for(FIRST_FRAME_WAIT, || reached(
         &seen,
         Resolution::new(1280, 720)
@@ -177,15 +191,18 @@ fn a_flood_of_resizes_reaches_the_last_size_with_few_offers_on_kwin() {
         announce(&stream, 900 + step * 4, 600 + step * 2);
         thread::sleep(Duration::from_millis(10));
     }
+
     let last = Resolution::new(900 + (FLOOD_STEPS - 1) * 4, 600 + (FLOOD_STEPS - 1) * 2);
     let arrived = wait_for(RESIZE_WAIT, || reached(&seen, last));
     let sent = stream.stats().display_updates_sent;
+
     stream.stop().unwrap();
 
     let summary = live
         .daemon
         .wait_for_line("session summary", SUMMARY_WAIT)
         .expect("no session summary");
+
     eprintln!("REPORT sizes {:?}", sizes(&seen));
     eprintln!("REPORT {summary}");
 
@@ -214,6 +231,7 @@ fn a_takeover_resizes_the_output_to_the_new_clients_display_on_kwin() {
     )
     .unwrap();
     let secret = first.paired_secret().cloned().expect("no pairing secret");
+
     assert!(wait_for(FIRST_FRAME_WAIT, || reached(
         &first_seen,
         Resolution::new(1280, 720)
@@ -221,6 +239,7 @@ fn a_takeover_resizes_the_output_to_the_new_clients_display_on_kwin() {
 
     let (second_seen, sink) = recorder();
     let record = PeerRecord::new("nested takeover", secret).unwrap();
+
     let second = connect(
         &live,
         gpu,
@@ -233,10 +252,12 @@ fn a_takeover_resizes_the_output_to_the_new_clients_display_on_kwin() {
         reached(&second_seen, Resolution::new(1000, 700))
     });
     let format = second.stream_format();
+
     second.stop().unwrap();
     first.stop().ok();
 
     eprintln!("REPORT takeover sizes {:?}", sizes(&second_seen));
+
     assert!(arrived, "saw {:?}", sizes(&second_seen));
     assert_eq!(
         format.map(|format| format.resolution),

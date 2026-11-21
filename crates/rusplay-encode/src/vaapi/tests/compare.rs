@@ -48,8 +48,10 @@ fn software_reference(format: PixelFormat, packets: &[EncodedFrame]) -> Option<V
         .flat_map(|packet| packet.data.iter().copied())
         .collect();
     let mut input = child.stdin.take().unwrap();
+
     let writer = thread::spawn(move || input.write_all(&bytes));
     let result = child.wait_with_output().unwrap();
+
     writer.join().unwrap().unwrap();
 
     assert!(
@@ -98,11 +100,13 @@ fn motion_frames(depth: BitDepth) -> Option<Vec<Frame>> {
             return None;
         }
     };
+
     assert!(
         output.status.success(),
         "ffmpeg source: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+
     let format = yuv420(depth);
     let sample = bytes_per_sample(depth);
     let frame_bytes = usize::try_from(MOTION_RESOLUTION.pixel_count()).unwrap() * sample * 3 / 2;
@@ -140,10 +144,13 @@ fn moving_hevc_luma_and_chroma_match_software_decoding() {
         let Some(frames) = motion_frames(depth) else {
             return;
         };
+
         let packets = encode_all(encoder.as_mut(), &frames);
+
         drop(frames);
 
         assert_eq!(packets.len(), usize::try_from(MOTION_FRAMES).unwrap());
+
         assert_software_reference("motion", depth, &packets);
     }
 }
@@ -153,7 +160,9 @@ fn assert_software_reference(name: &str, depth: BitDepth, packets: &[EncodedFram
     let Some(expected) = software_reference(format, packets) else {
         return;
     };
+
     write_fixture(name, depth, packets, &expected);
+
     let mut decoder = VaapiDecoder::new(
         Codec::Hevc,
         &VaapiDecoderConfig {
@@ -177,6 +186,7 @@ fn assert_software_reference(name: &str, depth: BitDepth, packets: &[EncodedFram
             panic!("expected CPU output")
         };
         let mut offset = 0;
+
         for (plane, data) in cpu.planes().enumerate() {
             let row_bytes = data.width as usize * sample;
             let actual: Vec<u8> = data
@@ -186,6 +196,7 @@ fn assert_software_reference(name: &str, depth: BitDepth, packets: &[EncodedFram
                 .flat_map(|row| row[..row_bytes].iter().copied())
                 .collect();
             let reference = &expected[offset..offset + actual.len()];
+
             let differences = actual
                 .iter()
                 .zip(reference)
@@ -198,8 +209,10 @@ fn assert_software_reference(name: &str, depth: BitDepth, packets: &[EncodedFram
                 "{depth:?} frame {index} plane {plane}: {differences} different bytes of {}",
                 actual.len()
             );
+
             offset += actual.len();
         }
+
         assert_eq!(offset, frame_bytes);
     }
 }
@@ -209,13 +222,17 @@ fn write_fixture(name: &str, depth: BitDepth, packets: &[EncodedFrame], raw: &[u
         return;
     };
     let root = std::path::PathBuf::from(root);
+
     std::fs::create_dir_all(&root).unwrap();
+
     let stem = format!("hevc-rusplay-{name}-{}bit", depth.bits());
     let encoded: Vec<_> = packets
         .iter()
         .flat_map(|packet| packet.data.iter().copied())
         .collect();
+
     std::fs::write(root.join(format!("{stem}.hevc")), encoded).unwrap();
+
     let mut index = File::create(root.join(format!("{stem}.index"))).unwrap();
     let luma = usize::try_from(MOTION_RESOLUTION.pixel_count()).unwrap() * bytes_per_sample(depth);
     let frame_bytes = luma * 3 / 2;
@@ -243,6 +260,7 @@ fn recovered_hevc_luma_and_chroma_match_software_decoding() {
     if !device_present() || !long_term_verified() {
         return;
     }
+
     let depth = BitDepth::Ten;
     let format = yuv420(depth);
     let config = with_vaapi(video(Codec::Hevc, format, MOTION_RESOLUTION), |vaapi| {
@@ -255,15 +273,19 @@ fn recovered_hevc_luma_and_chroma_match_software_decoding() {
     let Some(frames) = motion_frames(depth) else {
         return;
     };
+
     let mut packets = encode_all(encoder.as_mut(), &frames[..32]);
     let recovery = encoder.recover(OutputIndex(20));
+
     packets.extend(encode_all(encoder.as_mut(), &frames[32..]));
     drop(frames);
+
     let received = pick(
         &packets,
         &(0..=20).chain(32..MOTION_FRAMES).collect::<Vec<_>>(),
     );
 
     assert!(matches!(recovery, Recovery::Reference(_)));
+
     assert_software_reference("recovery", depth, &received);
 }

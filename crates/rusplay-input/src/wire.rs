@@ -162,6 +162,7 @@ fn encode_touch(slot: u8, event: TouchEvent, out: &mut Vec<u8>) {
 
 fn decode_touch(tag: u8, reader: &mut Reader) -> Result<InputEvent, InputError> {
     let slot = reader.u8()?;
+
     if usize::from(slot) >= MAX_TOUCHES {
         return Err(InputError::TouchSlotOutOfRange(slot));
     }
@@ -262,6 +263,7 @@ fn finite_f32(reader: &mut Reader) -> Result<f32, InputError> {
 
 fn finger(reader: &mut Reader) -> Result<u8, InputError> {
     let finger = reader.u8()?;
+
     if usize::from(finger) >= MAX_PAD_FINGERS {
         return Err(InputError::PadFingerOutOfRange(finger));
     }
@@ -370,6 +372,7 @@ mod tests {
 
     fn round_trip(event: InputEvent) -> Vec<u8> {
         let mut bytes = Vec::new();
+
         event.encode_into(&mut bytes);
 
         assert_eq!(bytes.len(), event.encoded_len());
@@ -500,6 +503,7 @@ mod tests {
     #[test]
     fn non_finite_floats_survive_the_wire_bit_for_bit() {
         let mut bytes = Vec::new();
+
         InputEvent::PointerMotion {
             dx: f64::NAN,
             dy: f64::NEG_INFINITY,
@@ -511,6 +515,7 @@ mod tests {
         let InputEvent::PointerMotion { dx, dy } = decoded else {
             panic!("decoded {decoded:?}");
         };
+
         assert!(dx.is_nan());
         assert_eq!(dy, f64::NEG_INFINITY);
     }
@@ -519,6 +524,7 @@ mod tests {
     fn every_strict_prefix_is_truncated() {
         for event in samples() {
             let mut bytes = Vec::new();
+
             event.encode_into(&mut bytes);
 
             for length in 0..bytes.len() {
@@ -545,6 +551,7 @@ mod tests {
     #[test]
     fn trailing_bytes_are_rejected() {
         let mut bytes = round_trip(InputEvent::Scroll { dx: 1.0, dy: 2.0 });
+
         bytes.extend_from_slice(&[0, 0, 0]);
 
         let result = InputEvent::decode(&bytes);
@@ -605,21 +612,28 @@ mod tests {
         });
 
         let mut expected = vec![TAG_GAMEPAD, 2, PAD_SENSOR, SENSOR_ACCEL];
+
         for value in [1.0f32, 0.0, -1.0] {
             expected.extend_from_slice(&value.to_le_bytes());
         }
+
         assert_eq!(bytes, expected);
     }
 
     #[test]
     fn hostile_sensor_and_touchpad_events_are_rejected() {
         let mut nan_gyro = vec![TAG_GAMEPAD, 0, PAD_SENSOR, SENSOR_GYRO];
+
         nan_gyro.extend_from_slice(&f32::NAN.to_le_bytes());
         nan_gyro.extend_from_slice(&[0; 8]);
+
         let mut infinite_touch = vec![TAG_GAMEPAD, 0, PAD_TOUCHPAD_DOWN, 0];
+
         infinite_touch.extend_from_slice(&0.5f32.to_le_bytes());
         infinite_touch.extend_from_slice(&f32::INFINITY.to_le_bytes());
+
         let mut far_finger = vec![TAG_GAMEPAD, 0, PAD_TOUCHPAD_MOTION, 4];
+
         far_finger.extend_from_slice(&[0; 8]);
 
         assert!(matches!(

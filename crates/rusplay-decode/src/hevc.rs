@@ -55,6 +55,7 @@ fn conclude<T>(scan: Result<T, Stop>, unit: BitstreamUnit) -> Result<Option<T>, 
 pub(crate) fn check_video_parameter_set(nalu: &[u8]) -> Result<(), DecodeError> {
     let scan = (|| {
         let mut bits = after_header(nalu);
+
         bits.skip(4 + 1 + 1 + VPS_LAYER_BITS)?;
         sub_layer_count(&mut bits).map(drop)
     })();
@@ -100,6 +101,7 @@ impl ParameterSets {
         nalu_type: NaluType,
     ) -> Result<(), DecodeError> {
         let mut bits = after_header(nalu);
+
         let scan = picture_parameter_set_id(&mut bits, nalu_type.is_irap()).and_then(
             |(first_slice_segment_in_picture, id)| {
                 let pictures = self

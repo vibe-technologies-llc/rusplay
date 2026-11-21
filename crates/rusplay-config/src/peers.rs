@@ -7,7 +7,7 @@ use crate::ConfigError;
 const MAX_HOST_NAME_BYTES: usize = 64;
 const MAX_CLIENT_NAME_BYTES: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PeersConfig {
     pub host_file: Option<PathBuf>,

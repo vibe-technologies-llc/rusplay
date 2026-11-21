@@ -136,6 +136,7 @@ mod tests {
             for cut in 0..datagram.len() {
                 assert_eq!(busy_reply(&datagram[..cut]), None);
             }
+
             assert!(busy_reply(&datagram).is_some());
         }
     }

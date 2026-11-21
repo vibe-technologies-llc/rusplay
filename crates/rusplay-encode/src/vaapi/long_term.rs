@@ -31,21 +31,21 @@ pub(super) fn driver_honours_long_term(vendor: &str) -> bool {
         && mesa_version(vendor).is_some_and(|version| version >= VERIFIED_MESA)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Held {
     pub(super) surface: u32,
     pub(super) order: i32,
     pub(super) output: OutputIndex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Reference {
     Intra,
     Previous(Held),
     LongTerm { slot: usize, held: Held },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FramePlan {
     pub(super) reference: Reference,
     pub(super) long_term: [Option<Held>; LONG_TERM_SLOTS],
@@ -164,6 +164,7 @@ impl LongTermReferences {
             .filter(|held| held.output <= last_good && self.age(**held) <= MAX_RECOVERY_DISTANCE)
             .map(|held| held.output)
             .max()?;
+
         self.previous = None;
         for slot in 0..LONG_TERM_SLOTS {
             let keep = self.long_term[slot].is_some_and(|held| held.output == reference);
@@ -333,7 +334,9 @@ mod tests {
 
         run(&mut references, 10);
         references.acknowledge(OutputIndex(0));
+
         let mut marked = Vec::new();
+
         for index in 10..80_u64 {
             references.begin(false);
             if references.plan().mark_long_term.is_some() {
@@ -352,7 +355,9 @@ mod tests {
         run(&mut references, 10);
         references.acknowledge(OutputIndex(9));
         references.begin(false);
+
         assert_eq!(references.plan().mark_long_term, None);
+
         references.commit(1, 10);
         run(&mut references, 6);
         references.begin(false);
@@ -365,8 +370,11 @@ mod tests {
         let mut references = LongTermReferences::new(true);
 
         run(&mut references, 12);
+
         let reference = references.recover(OutputIndex(9));
+
         references.begin(false);
+
         let plan = references.plan();
 
         assert_eq!(reference, Some(OutputIndex(9)));
@@ -391,8 +399,11 @@ mod tests {
 
         run(&mut references, 12);
         references.acknowledge(OutputIndex(5));
+
         let reference = references.recover(OutputIndex(7));
+
         references.begin(false);
+
         let plan = references.plan();
 
         assert_eq!(reference, Some(OutputIndex(1)));
@@ -470,7 +481,9 @@ mod tests {
         let mut references = LongTermReferences::new(true);
 
         run(&mut references, 12);
+
         let reference = references.recover(OutputIndex(11));
+
         references.begin(false);
 
         assert_eq!(reference, Some(OutputIndex(11)));
@@ -506,16 +519,19 @@ mod tests {
     #[test]
     fn a_keeper_past_the_recovery_distance_is_replaced() {
         const ACKNOWLEDGED: u64 = 9;
+
         let mut references = LongTermReferences::new(true);
 
         run(&mut references, 10);
         references.acknowledge(OutputIndex(ACKNOWLEDGED));
+
         let keeper = references
             .long_term
             .iter()
             .position(|held| held.is_some_and(|held| held.output == OutputIndex(ACKNOWLEDGED)))
             .unwrap();
         let mut marked = Vec::new();
+
         for index in 10..300_u64 {
             references.begin(false);
             if let Some(slot) = references.plan().mark_long_term {
@@ -523,6 +539,7 @@ mod tests {
             }
             references.commit(1, i32::try_from(index).unwrap());
         }
+
         let replaced = marked
             .iter()
             .find(|&&(_, slot)| slot == keeper)
@@ -539,6 +556,7 @@ mod tests {
     fn nothing_held_is_older_than_the_held_distance() {
         let mut references = LongTermReferences::new(true);
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+
         let mut next = move || {
             state ^= state << 13;
             state ^= state >> 7;
@@ -550,6 +568,7 @@ mod tests {
         for index in 0..100_000_u64 {
             let roll = next() % 1000;
             let acknowledging = (index / 2000) % 2 == 0;
+
             if acknowledging && roll < 100 {
                 references.acknowledge(OutputIndex(index.saturating_sub(1 + next() % 8)));
             }
@@ -558,11 +577,13 @@ mod tests {
             }
 
             references.begin(index == 0 || roll == 999);
+
             let plan = references.plan();
             let held = references
                 .previous
                 .iter()
                 .chain(plan.long_term.iter().flatten());
+
             for held in held {
                 oldest = oldest.max(references.age(*held));
             }
@@ -598,9 +619,11 @@ mod tests {
 
         for index in 0..20_u64 {
             references.begin(index == 0);
+
             assert_eq!(references.plan().mark_long_term, None);
             assert_eq!(references.plan().kept_long_term().count(), 0);
             assert_eq!(index == 0, references.plan().reference == Reference::Intra);
+
             if index > 0 {
                 assert!(matches!(
                     references.plan().reference,

@@ -59,11 +59,14 @@ fn scan_tile_sizes(
     overflow: Stop,
 ) -> Result<(), Stop> {
     let mut remaining = total - 1;
+
     for _ in 0..divisions_minus1 {
         if remaining == 0 {
             return Err(overflow);
         }
+
         let size_minus1 = bits.unsigned_max(remaining - 1)?;
+
         remaining -= size_minus1 + 1;
     }
 
@@ -73,6 +76,7 @@ fn scan_tile_sizes(
 fn scan_tiles(bits: &mut Bits, sequence: &SequenceParameters) -> Result<Tiles, Stop> {
     let columns_minus1 = bits.unsigned_max(sequence.width_in_ctbs - 1)?;
     let rows_minus1 = bits.unsigned_max(sequence.height_in_ctbs - 1)?;
+
     if columns_minus1 > MAX_STORED_TILE_COUNT_MINUS1 || rows_minus1 > MAX_STORED_TILE_COUNT_MINUS1 {
         return Err(Stop::ParserRejects);
     }
@@ -84,6 +88,7 @@ fn scan_tiles(bits: &mut Bits, sequence: &SequenceParameters) -> Result<Tiles, S
     }
 
     let uniform_spacing = bits.bit()?;
+
     if !uniform_spacing {
         scan_tile_sizes(
             bits,
@@ -113,8 +118,10 @@ fn scan_range_extension(bits: &mut Bits, transform_skip_enabled: bool) -> Result
     bits.skip(1)?;
 
     let chroma_qp_offset_list_enabled = bits.bit()?;
+
     if chroma_qp_offset_list_enabled {
         bits.unsigned()?;
+
         let entries = bits.unsigned_max(MAX_CHROMA_QP_OFFSETS_MINUS1)? + 1;
         for _ in 0..entries {
             bits.signed()?;
@@ -134,6 +141,7 @@ fn scan_screen_content_extension(
 ) -> Result<ScreenContentExtension, Stop> {
     let current_picture_reference_enabled = bits.bit()?;
     let mut slice_act_qp_offsets_present = false;
+
     if bits.bit()? {
         slice_act_qp_offsets_present = bits.bit()?;
         for _ in 0..3 {
@@ -146,12 +154,16 @@ fn scan_screen_content_extension(
         if initializers > 0 {
             let monochrome = bits.bit()?;
             let luma = bits.unsigned()?;
+
             if luma != sequence.bit_depth_luma_minus8 {
                 return Err(Stop::ParserRejects);
             }
+
             let mut depths = vec![luma];
+
             if !monochrome {
                 let chroma = bits.unsigned()?;
+
                 if chroma != sequence.bit_depth_chroma_minus8 {
                     return Err(Stop::ParserRejects);
                 }
@@ -185,14 +197,19 @@ pub(super) fn scan_picture_parameter_set(
     let dependent_slice_segments_enabled = bits.bit()?;
     let output_flag_present = bits.bit()?;
     let extra_slice_header_bits = count(bits.bits(3)?);
+
     bits.skip(1)?;
+
     let cabac_init_present = bits.bit()?;
 
     let default_l0_references_minus1 = bits.unsigned_max(MAX_DEFAULT_REFERENCES_MINUS1)?;
     let default_l1_references_minus1 = bits.unsigned_max(MAX_DEFAULT_REFERENCES_MINUS1)?;
+
     bits.signed()?;
     bits.skip(1)?;
+
     let transform_skip_enabled = bits.bit()?;
+
     if bits.bit()? {
         bits.unsigned()?;
     }
@@ -202,7 +219,9 @@ pub(super) fn scan_picture_parameter_set(
     let slice_chroma_qp_offsets_present = bits.bit()?;
     let weighted_prediction = bits.bit()?;
     let weighted_bi_prediction = bits.bit()?;
+
     bits.skip(1)?;
+
     let tiles_enabled = bits.bit()?;
     let entropy_coding_sync_enabled = bits.bit()?;
 
@@ -210,6 +229,7 @@ pub(super) fn scan_picture_parameter_set(
         columns_minus1: 0,
         rows_minus1: 0,
     };
+
     if tiles_enabled {
         tiles = scan_tiles(bits, &sequence)?;
     }
@@ -217,6 +237,7 @@ pub(super) fn scan_picture_parameter_set(
     let loop_filter_across_slices_enabled = bits.bit()?;
     let mut deblocking_filter_override_enabled = false;
     let mut deblocking_filter_disabled = false;
+
     if bits.bit()? {
         deblocking_filter_override_enabled = bits.bit()?;
         deblocking_filter_disabled = bits.bit()?;
@@ -231,6 +252,7 @@ pub(super) fn scan_picture_parameter_set(
     }
 
     let lists_modification_present = bits.bit()?;
+
     bits.unsigned()?;
     bits.skip(1)?;
 
@@ -239,6 +261,7 @@ pub(super) fn scan_picture_parameter_set(
         current_picture_reference_enabled: false,
         slice_act_qp_offsets_present: false,
     };
+
     if bits.bit()? {
         if bits.bit()? {
             chroma_qp_offset_list_enabled = scan_range_extension(bits, transform_skip_enabled)?;

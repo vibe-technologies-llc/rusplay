@@ -46,6 +46,7 @@ impl EncoderContext for Context {
         )?;
 
         let mapped = buffer.map()?;
+
         unsafe {
             mapped
                 .cast::<ffi::VAEncMiscParameterType>()
@@ -91,7 +92,7 @@ impl EncoderContext for Context {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct PackedHeader {
     pub(super) bytes: Vec<u8>,
     pub(super) bits: usize,
@@ -114,6 +115,7 @@ impl CodedBuffer {
 
         while !segment.is_null() {
             let current = unsafe { segment.read() };
+
             overflow |= current.status & ffi::VA_CODED_BUF_STATUS_SLICE_OVERFLOW_MASK != 0;
             if !current.buf.is_null() {
                 unit.push(unsafe {
@@ -135,20 +137,20 @@ impl CodedBuffer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SurfaceFormat {
     pub(super) rt_format: u32,
     pub(super) va_fourcc: u32,
     pub(super) drm_fourcc: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct DmaBufPlaneLayout {
     pub(super) offset: u32,
     pub(super) pitch: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct DmaBufImport<'a> {
     pub(super) fd: BorrowedFd<'a>,
     pub(super) size: u32,

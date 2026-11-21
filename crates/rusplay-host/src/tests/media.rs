@@ -42,6 +42,7 @@ impl ToneSource {
 impl AudioSource for ToneSource {
     fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError> {
         let wait = self.next.saturating_duration_since(Instant::now());
+
         if wait > timeout {
             thread::sleep(timeout);
             return Ok(false);
@@ -49,8 +50,10 @@ impl AudioSource for ToneSource {
         thread::sleep(wait);
 
         let channels = 2;
+
         for samples in frame.chunks_exact_mut(channels) {
             let value = (self.phase * TONE_STEP).sin() * AMPLITUDE;
+
             samples.fill(value);
             self.phase += 1.0;
         }
@@ -117,6 +120,7 @@ fn final_peak(packets: &[ReassembledFrame]) -> f32 {
         .spawn(move || {
             let mut decoder = OpusAudioDecoder::new(&AudioConfig::default()).unwrap();
             let mut pcm = vec![0.0; 480];
+
             for packet in &packets {
                 decoder.decode(packet, &mut pcm).unwrap();
             }
@@ -134,6 +138,7 @@ fn audio_waits_for_the_hello_then_counts_up_from_zero() {
         session.with_audio_source(audio_factory(ToneSource::new))
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
@@ -141,7 +146,9 @@ fn audio_waits_for_the_hello_then_counts_up_from_zero() {
     let early = client.pump(Duration::from_millis(300), |client| {
         !client.audio_packets.is_empty()
     });
+
     client.hello();
+
     let streamed = client.pump_until(|client| {
         client.audio_packets.len() >= 12 && stream.stats().audio_packets_sent >= 12
     });
@@ -158,6 +165,7 @@ fn audio_waits_for_the_hello_then_counts_up_from_zero() {
     );
     assert!(final_peak(&client.audio_packets[..12]) > AMPLITUDE / 2.0);
     assert!(stats.audio_packets_sent >= 12);
+
     stream.stop().unwrap();
 }
 
@@ -167,16 +175,20 @@ fn video_keeps_flowing_while_the_audio_source_delivers_nothing() {
         session.with_audio_source(audio_factory(|_| StarvedSource))
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(5), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
     let flowing = client.pump_until(|client| client.frames.len() >= 4);
 
     assert!(flowing);
     assert!(matches!(client.audio_packets.as_slice(), []));
     assert_eq!(stream.stats().audio_packets_sent, 0);
+
     stream.stop().unwrap();
 }
 
@@ -186,6 +198,7 @@ fn a_failing_audio_source_ends_the_session() {
         session.with_audio_source(audio_factory(|_| BrokenSource))
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (_client, _) = TestClient::pair(fixture.address);
@@ -200,10 +213,14 @@ fn a_failing_audio_source_ends_the_session() {
 #[test]
 fn the_first_cursor_message_carries_the_image_and_later_ones_only_the_position() {
     let mut config = host_config();
+
     config.network.cursor_image_repeat_ms = 0;
+
     let fixture = Fixture::new(config);
     let (publisher, subscriber) = latest();
+
     publish(&publisher, update(1, Some(bitmap(9))));
+
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(
         Some(pin()),
@@ -216,17 +233,22 @@ fn the_first_cursor_message_carries_the_image_and_later_ones_only_the_position()
     let early = client.pump(Duration::from_millis(200), |client| {
         !client.cursor_messages.is_empty()
     });
+
     client.hello();
     client.pump_until(|client| !client.cursor_messages.is_empty());
     publish(&publisher, update(5, None));
+
     let moved = client.pump_until(|client| client.cursor_messages.len() >= 2);
+
     publish(&publisher, update(8, None));
     client.pump_until(|client| {
         client.cursor_messages.len() >= 3 && stream.stats().cursor_messages_sent >= 3
     });
+
     let stats = stream.stats();
 
     let image = client.cursor_messages[0].image.as_ref().unwrap();
+
     assert!(!early);
     assert!(moved);
     assert_eq!((image.width, image.height), (2, 2));
@@ -238,16 +260,20 @@ fn the_first_cursor_message_carries_the_image_and_later_ones_only_the_position()
     assert_eq!(client.cursor_messages[2].image, None);
     assert_eq!(stats.cursor_images_sent, 1);
     assert_eq!(stats.cursor_messages_sent, 3);
+
     stream.stop().unwrap();
 }
 
 #[test]
 fn a_burst_of_cursor_updates_ends_on_the_newest_position() {
     let mut config = host_config();
+
     config.network.cursor_image_repeat_ms = 0;
+
     let fixture = Fixture::new(config);
     let (publisher, subscriber) = latest();
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(
         Some(pin()),
         feed_with_cursor(1, subscriber),
@@ -255,11 +281,15 @@ fn a_burst_of_cursor_updates_ends_on_the_newest_position() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     for x in 1..=200 {
         publish(&publisher, update(x, (x == 1).then(|| bitmap(4))));
     }
+
     let arrived = client.pump_until(|client| {
         client
             .cursor_messages
@@ -270,16 +300,21 @@ fn a_burst_of_cursor_updates_ends_on_the_newest_position() {
     assert!(arrived);
     assert!(client.cursor_messages.len() <= 200);
     assert!(client.cursor_messages[0].image.is_some());
+
     stream.stop().unwrap();
 }
 
 #[test]
 fn the_cursor_image_is_repeated_on_the_configured_interval() {
     let mut config = host_config();
+
     config.network.cursor_image_repeat_ms = 60;
+
     let fixture = Fixture::new(config);
     let (publisher, subscriber) = latest();
+
     publish(&publisher, update(1, Some(bitmap(3))));
+
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(
         Some(pin()),
@@ -288,7 +323,9 @@ fn the_cursor_image_is_repeated_on_the_configured_interval() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
     let repeated = client.pump_until(|client| {
         client
@@ -307,22 +344,29 @@ fn the_cursor_image_is_repeated_on_the_configured_interval() {
             .all(|message| message.x == 1
                 && message.image.as_ref().is_none_or(|i| i.rgba == [3; 16]))
     );
+
     stream.stop().unwrap();
 }
 
 #[test]
 fn a_returning_client_gets_the_image_the_previous_session_already_saw() {
     let mut config = host_config();
+
     config.network.cursor_image_repeat_ms = 0;
+
     let fixture = Fixture::new(config);
     let (publisher, subscriber) = latest();
     let feed = feed_with_cursor(1, subscriber);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), Arc::clone(&feed), fake_factory(&bitrate));
 
     let (mut client, record) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     publish(&publisher, update(1, Some(bitmap(6))));
     client.pump_until(|client| !client.cursor_messages.is_empty());
     publish(&publisher, update(2, None));
@@ -331,13 +375,18 @@ fn a_returning_client_gets_the_image_the_previous_session_already_saw() {
 
     let serving = fixture.serve(None, feed, fake_factory(&bitrate));
     let mut returning = TestClient::reconnect(fixture.address, &record);
+
     returning.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     returning.pump_until(|client| !client.cursor_messages.is_empty());
 
     let first = &returning.cursor_messages[0];
+
     assert_eq!(first.x, 2);
     assert_eq!(first.image.as_ref().unwrap().rgba, vec![6; 16]);
+
     stream.stop().unwrap();
 }
 
@@ -345,16 +394,21 @@ fn a_returning_client_gets_the_image_the_previous_session_already_saw() {
 fn a_feed_without_a_cursor_stream_starts_no_cursor_stage() {
     let fixture = Fixture::new(host_config());
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(2), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.pump_until(|client| client.frames.len() >= 2);
 
     assert!(matches!(client.cursor_messages.as_slice(), []));
     assert!(!client.has(ControlMessage::Goodbye));
     assert_eq!(stream.stats().cursor_messages_sent, 0);
+
     stream.stop().unwrap();
 }
 
@@ -363,7 +417,9 @@ fn cursor_messages_name_the_capture_size_whatever_the_stream_resolution() {
     let stream_size = Resolution::new(32, 16);
     let fixture = Fixture::new(host_config());
     let (publisher, subscriber) = latest();
+
     publish(&publisher, update(40, Some(bitmap(3))));
+
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(
         Some(pin()),
@@ -372,24 +428,33 @@ fn cursor_messages_name_the_capture_size_whatever_the_stream_resolution() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.pump_until(|client| !client.cursor_messages.is_empty() && !client.formats.is_empty());
 
     let message = &client.cursor_messages[0];
+
     assert_eq!(client.formats[0].1.resolution, stream_size);
     assert_eq!(message.space, FRAME_SIZE);
     assert_eq!((message.x, message.y), (40, 80));
+
     stream.stop().unwrap();
 }
 
 #[test]
 fn a_capture_resize_reaches_the_client_without_the_cursor_moving() {
     let mut config = host_config();
+
     config.network.cursor_image_repeat_ms = 0;
+
     let fixture = Fixture::new(config);
     let (publisher, subscriber) = latest();
+
     publish(&publisher, update(1, Some(bitmap(3))));
+
     let bitrate = Arc::new(AtomicU32::new(0));
     let serving = fixture.serve(
         Some(pin()),
@@ -398,7 +463,9 @@ fn a_capture_resize_reaches_the_client_without_the_cursor_moving() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
     let resized = client.pump_until(|client| {
         client
@@ -414,5 +481,6 @@ fn a_capture_resize_reaches_the_client_without_the_cursor_moving() {
             .iter()
             .all(|message| message.x == 1 && [FRAME_SIZE, RESIZED].contains(&message.space))
     );
+
     stream.stop().unwrap();
 }

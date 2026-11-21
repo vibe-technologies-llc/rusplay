@@ -10,7 +10,7 @@ pub const UNNEGOTIATED_PIXEL_FORMAT: PixelFormat = PixelFormat {
 };
 pub const UNDETECTED_FRAME_RATE: FrameRate = FrameRate::integer(60);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodecChoice {
     #[default]
@@ -39,7 +39,7 @@ impl CodecChoice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChromaChoice {
     #[default]
@@ -71,7 +71,7 @@ impl ChromaChoice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DepthChoice {
     #[default]
@@ -100,7 +100,7 @@ impl DepthChoice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PixelFormatChoice {
     pub chroma: ChromaChoice,
@@ -152,7 +152,7 @@ pub const fn format_preference(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum FrameRateChoice {
     #[default]
     Auto,
@@ -206,7 +206,7 @@ impl<'de> Deserialize<'de> for FrameRateChoice {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StreamColorMode {
     #[default]
@@ -218,7 +218,7 @@ pub enum StreamColorMode {
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Deserialize, Serialize)]
     struct Holder {
         rate: FrameRateChoice,
         codec: CodecChoice,

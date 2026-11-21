@@ -22,7 +22,7 @@ const PQ_FORMATS: [wgpu::TextureFormat; 2] = [
     wgpu::TextureFormat::Rgba16Float,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Display {
     Managed(ColorVolume),
     Unmanaged(ColorVolume),
@@ -36,7 +36,7 @@ impl Display {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Signal {
     Linear,
     Srgb,
@@ -65,19 +65,19 @@ impl Signal {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DitherPattern {
     Ordered,
     BlueNoise,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Dither {
     pub pattern: DitherPattern,
     pub bits: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DisplayEncoding {
     pub target: ColorVolume,
     pub primaries: ColorPrimaries,
@@ -96,14 +96,14 @@ impl DisplayEncoding {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SurfaceOutput {
     pub format: wgpu::TextureFormat,
     pub color_space: wgpu::SurfaceColorSpace,
     pub encoding: DisplayEncoding,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Space {
     Srgb,
     DisplayP3,

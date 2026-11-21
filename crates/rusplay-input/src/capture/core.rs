@@ -21,7 +21,7 @@ const CTRL: [u32; 2] = [KEY_LEFT_CTRL, KEY_RIGHT_CTRL];
 const SHIFT: [u32; 2] = [KEY_LEFT_SHIFT, KEY_RIGHT_SHIFT];
 const ALT: [u32; 2] = [KEY_LEFT_ALT, KEY_RIGHT_ALT];
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StreamRegion {
     pub x: f64,
     pub y: f64,
@@ -51,7 +51,7 @@ impl StreamRegion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hotkeys {
     pub chord: ChordModifiers,
     pub fullscreen: u32,
@@ -72,7 +72,7 @@ impl From<&InputConfig> for Hotkeys {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientAction {
     ToggleFullscreen,
     ExitFullscreen,
@@ -80,7 +80,7 @@ pub enum ClientAction {
     Disconnect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hotkey {
     Client(ClientAction),
     CyclePointerMode,
@@ -129,7 +129,7 @@ const fn keycode(key: HotkeyKey) -> u32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct CaptureOptions {
     pub keyboard: bool,
@@ -170,32 +170,32 @@ fn touch_event(slot: u8, event: TouchEvent) -> InputEvent {
     InputEvent::Touch { slot, event }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transition {
     Unchanged,
     Engaged,
     Released,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Advance {
     pub switched: bool,
     pub transition: Transition,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActivePointer {
     Absolute,
     Relative,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct PendingSwitch {
     target: ActivePointer,
     since: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EscapeState {
     Free,
     Withheld,
@@ -203,7 +203,7 @@ enum EscapeState {
     Spent,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct CaptureCore {
     options: CaptureOptions,
     mode: PointerMode,
@@ -344,6 +344,7 @@ impl CaptureCore {
         let Some(pending) = self.pending else {
             return false;
         };
+
         if now.saturating_duration_since(pending.since) < self.options.auto_delay {
             return false;
         }
@@ -367,12 +368,14 @@ impl CaptureCore {
         let Some(hold) = self.options.escape_hold else {
             return Transition::Unchanged;
         };
+
         if !self.counts_escape_hold() {
             self.escape_since = None;
             return Transition::Unchanged;
         }
 
         let since = *self.escape_since.get_or_insert(now);
+
         if now.saturating_duration_since(since) < hold {
             return Transition::Unchanged;
         }
@@ -731,6 +734,7 @@ impl CaptureCore {
 
     fn hotkey_for(&self, keycode: u32) -> Option<Hotkey> {
         let hotkeys = self.options.hotkeys?;
+
         if !self.holds(hotkeys.chord) {
             return None;
         }
@@ -814,6 +818,7 @@ mod tests {
 
     fn engaged(options: CaptureOptions) -> CaptureCore {
         let mut core = CaptureCore::new(options);
+
         core.engage();
         core
     }
@@ -841,6 +846,7 @@ mod tests {
 
         let press = core.pointer_button(BTN_LEFT, true, &mut out);
         let release = core.pointer_button(BTN_LEFT, false, &mut out);
+
         core.pointer_motion(1.0, -1.0, &mut out);
 
         assert_eq!(press, Transition::Engaged);
@@ -882,6 +888,7 @@ mod tests {
     fn the_chord_releases_and_lets_go_of_everything_held() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.key(KEY_A, true, &mut out);
         core.key(KEY_LEFT_CTRL, true, &mut out);
         core.pointer_button(BTN_LEFT, true, &mut out);
@@ -908,6 +915,7 @@ mod tests {
     fn keys_released_while_unfocused_do_not_linger_in_the_down_set() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.key(KEY_LEFT_ALT, true, &mut out);
         core.focus_lost(&mut out);
         out.clear();
@@ -923,6 +931,7 @@ mod tests {
     fn losing_focus_releases_everything_held_and_forgets_the_down_keys() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.key(KEY_A, true, &mut out);
         out.clear();
 
@@ -943,6 +952,7 @@ mod tests {
         let mut out = Vec::new();
 
         core.set_locks(locked(true, false), &mut out);
+
         assert_eq!(out, Vec::new());
 
         core.engage();
@@ -964,6 +974,7 @@ mod tests {
     fn lock_state_is_published_again_after_a_release_and_re_engage() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.set_locks(locked(false, true), &mut out);
         core.release(&mut out);
         out.clear();
@@ -977,6 +988,7 @@ mod tests {
     #[test]
     fn lock_state_stays_home_when_syncing_or_the_keyboard_is_off() {
         let mut out = Vec::new();
+
         for options in [
             CaptureOptions {
                 sync_locks: false,
@@ -997,6 +1009,7 @@ mod tests {
 
     fn with_region(options: CaptureOptions) -> CaptureCore {
         let mut core = CaptureCore::new(options);
+
         core.set_region(Some(StreamRegion {
             x: 100.0,
             y: 50.0,
@@ -1027,7 +1040,9 @@ mod tests {
     #[test]
     fn touches_map_to_the_lowest_free_slot_and_normalise_through_the_region() {
         let mut core = with_region(options());
+
         core.engage();
+
         let mut out = Vec::new();
 
         core.touch_down(40, 200.0, 100.0, &mut out);
@@ -1052,6 +1067,7 @@ mod tests {
     fn touches_that_began_before_engaging_or_outside_the_picture_stay_swallowed() {
         let mut core = with_region(options());
         let mut out = Vec::new();
+
         core.touch_down(1, 150.0, 100.0, &mut out);
         core.engage();
 
@@ -1068,8 +1084,11 @@ mod tests {
     #[test]
     fn releasing_lifts_held_touches_after_keys_and_buttons() {
         let mut core = with_region(options());
+
         core.engage();
+
         let mut out = Vec::new();
+
         core.key(KEY_A, true, &mut out);
         core.touch_down(7, 150.0, 100.0, &mut out);
         out.clear();
@@ -1082,8 +1101,11 @@ mod tests {
     #[test]
     fn a_cancel_cancels_every_held_touch() {
         let mut core = with_region(options());
+
         core.engage();
+
         let mut out = Vec::new();
+
         core.touch_down(7, 150.0, 100.0, &mut out);
         core.touch_down(8, 160.0, 100.0, &mut out);
         out.clear();
@@ -1103,17 +1125,23 @@ mod tests {
             touch: false,
             ..options()
         });
+
         off.engage();
+
         let mut crowded = with_region(options());
+
         crowded.engage();
+
         let mut out = Vec::new();
 
         off.touch_down(1, 150.0, 100.0, &mut out);
+
         assert_eq!(out, Vec::new());
 
         for id in 0..20 {
             crowded.touch_down(id, 150.0, 100.0, &mut out);
         }
+
         assert_eq!(out.len(), MAX_TOUCHES);
     }
 
@@ -1123,6 +1151,7 @@ mod tests {
         let mut out = Vec::new();
 
         core.key(KEY_RIGHT_ALT, true, &mut out);
+
         let transition = core.key(KEY_RIGHT_CTRL, true, &mut out);
 
         assert_eq!(transition, Transition::Released);
@@ -1137,6 +1166,7 @@ mod tests {
         let mut out = Vec::new();
 
         core.key(KEY_LEFT_CTRL, true, &mut out);
+
         let transition = core.key(KEY_LEFT_ALT, true, &mut out);
 
         assert_eq!(transition, Transition::Unchanged);
@@ -1147,6 +1177,7 @@ mod tests {
     fn a_non_modifier_key_never_completes_the_chord() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.key(KEY_LEFT_CTRL, true, &mut out);
         core.key(KEY_LEFT_ALT, true, &mut out);
         core.release(&mut out);
@@ -1162,6 +1193,7 @@ mod tests {
     fn the_chord_engages_again_and_swallows_the_keys_still_held() {
         let mut core = engaged(options());
         let mut out = Vec::new();
+
         core.key(KEY_LEFT_CTRL, true, &mut out);
         core.key(KEY_LEFT_ALT, true, &mut out);
         core.key(KEY_LEFT_CTRL, false, &mut out);
@@ -1169,7 +1201,9 @@ mod tests {
         out.clear();
 
         core.key(KEY_LEFT_CTRL, true, &mut out);
+
         let transition = core.key(KEY_LEFT_ALT, true, &mut out);
+
         core.key(KEY_LEFT_ALT, false, &mut out);
         core.key(KEY_LEFT_CTRL, false, &mut out);
         core.key(KEY_A, true, &mut out);
@@ -1184,12 +1218,14 @@ mod tests {
             pointer_mode: PointerMode::Absolute,
             ..options()
         });
+
         core.set_region(Some(StreamRegion {
             x: 100.0,
             y: 50.0,
             width: 200.0,
             height: 100.0,
         }));
+
         let mut out = Vec::new();
 
         core.pointer_position(200.0, 100.0, &mut out);
@@ -1320,6 +1356,7 @@ mod tests {
     fn a_hotkey_queues_its_action_and_never_reaches_the_host() {
         let mut core = hotkey_core();
         let mut out = Vec::new();
+
         core.key(KEY_LEFT_CTRL, true, &mut out);
         core.key(KEY_LEFT_ALT, true, &mut out);
         out.clear();
@@ -1346,6 +1383,7 @@ mod tests {
     fn the_pointer_hotkey_cycles_the_mode_inside_the_core() {
         let mut core = hotkey_core();
         let mut out = Vec::new();
+
         core.key(KEY_RIGHT_CTRL, true, &mut out);
         core.key(KEY_RIGHT_ALT, true, &mut out);
 
@@ -1410,6 +1448,7 @@ mod tests {
     fn unanswered_actions_stop_queueing_at_the_limit() {
         let mut core = hotkey_core();
         let mut out = Vec::new();
+
         core.key(KEY_LEFT_CTRL, true, &mut out);
         core.key(KEY_LEFT_ALT, true, &mut out);
 
@@ -1430,6 +1469,7 @@ mod tests {
 
     fn forwarded_after_motion_and_position(core: &mut CaptureCore) -> Vec<InputEvent> {
         let mut out = Vec::new();
+
         core.pointer_motion(1.0, 1.0, &mut out);
         core.pointer_position(10.0, 10.0, &mut out);
 
@@ -1439,15 +1479,18 @@ mod tests {
     #[test]
     fn auto_starts_absolute_and_waits_out_the_delay_before_switching() {
         let mut core = auto_core();
+
         core.set_region(Some(StreamRegion {
             x: 0.0,
             y: 0.0,
             width: 100.0,
             height: 100.0,
         }));
+
         let start = Instant::now();
 
         core.observe_host_cursor(false, start);
+
         let early = core.tick(start + Duration::from_millis(99));
         let early_pointer = core.active_pointer();
         let switched = core.tick(start + Duration::from_millis(100));
@@ -1470,6 +1513,7 @@ mod tests {
 
         core.observe_host_cursor(false, start);
         core.observe_host_cursor(true, start + Duration::from_millis(40));
+
         let switched = core.tick(start + Duration::from_millis(500));
 
         assert!(!switched);
@@ -1483,6 +1527,7 @@ mod tests {
 
         core.observe_host_cursor(false, start);
         core.observe_host_cursor(false, start + Duration::from_millis(80));
+
         let switched = core.tick(start + Duration::from_millis(100));
 
         assert!(switched);
@@ -1496,6 +1541,7 @@ mod tests {
 
         core.set_mode(PointerMode::Absolute);
         core.observe_host_cursor(false, start);
+
         let switched = core.tick(start + Duration::from_secs(5));
 
         assert!(!switched);
@@ -1506,6 +1552,7 @@ mod tests {
     #[test]
     fn returning_to_auto_adopts_the_last_host_cursor_at_once() {
         let mut core = engaged(options());
+
         core.observe_host_cursor(true, Instant::now());
 
         core.set_mode(PointerMode::Auto);
@@ -1543,7 +1590,9 @@ mod tests {
             pointer_mode: PointerMode::Absolute,
             ..options()
         });
+
         core.set_relative_available(false);
+
         let mut seen = Vec::new();
 
         for _ in 0..3 {
@@ -1560,11 +1609,15 @@ mod tests {
     #[test]
     fn without_relative_globals_relative_is_refused_and_auto_stays_absolute() {
         let mut core = auto_core();
+
         core.set_relative_available(false);
+
         let start = Instant::now();
 
         let accepted = core.set_mode(PointerMode::Relative);
+
         core.observe_host_cursor(false, start);
+
         let switched = core.tick(start + Duration::from_secs(5));
 
         assert!(!accepted);
@@ -1579,11 +1632,16 @@ mod tests {
         let idle = core.wants_pointer_lock();
 
         core.engage();
+
         let relative = core.wants_pointer_lock();
+
         core.set_mode(PointerMode::Absolute);
+
         let absolute = core.wants_pointer_lock();
+
         core.set_mode(PointerMode::Relative);
         core.release(&mut out);
+
         let released = core.wants_pointer_lock();
 
         assert!(!idle);
@@ -1599,13 +1657,19 @@ mod tests {
         let start = Instant::now();
 
         core.key(KEY_ESC, true, &mut out);
+
         let early = core.hold_escape(start, &mut out);
+
         core.key(KEY_ESC, false, &mut out);
+
         let on_release = out.clone();
+
         core.hold_escape(start + Duration::from_millis(100), &mut out);
         core.hold_escape(start + Duration::from_millis(149), &mut out);
+
         let within_tap = out.clone();
         let after = core.hold_escape(start + Duration::from_millis(150), &mut out);
+
         core.hold_escape(start + Duration::from_secs(5), &mut out);
 
         assert_eq!(
@@ -1643,7 +1707,9 @@ mod tests {
         core.key(KEY_ESC, false, &mut out);
         core.hold_escape(start, &mut out);
         core.key(KEY_ESC, true, &mut out);
+
         let second_press = out.clone();
+
         core.key(KEY_ESC, false, &mut out);
         core.hold_escape(start + Duration::from_millis(10), &mut out);
         core.hold_escape(start + Duration::from_millis(60), &mut out);
@@ -1669,7 +1735,9 @@ mod tests {
         core.key(KEY_ESC, true, &mut out);
         core.key(KEY_ESC, false, &mut out);
         core.hold_escape(start, &mut out);
+
         let transition = core.focus_lost(&mut out);
+
         core.hold_escape(start + Duration::from_secs(1), &mut out);
 
         assert_eq!(transition, Transition::Released);
@@ -1684,9 +1752,11 @@ mod tests {
 
         core.key(KEY_ESC, true, &mut out);
         core.hold_escape(start, &mut out);
+
         let short = core.hold_escape(start + Duration::from_millis(999), &mut out);
         let held = core.hold_escape(start + Duration::from_millis(1000), &mut out);
         let again = core.hold_escape(start + Duration::from_millis(3000), &mut out);
+
         core.key(KEY_ESC, false, &mut out);
 
         assert_eq!(short, Transition::Unchanged);
@@ -1704,6 +1774,7 @@ mod tests {
         let start = Instant::now();
 
         core.key(KEY_ESC, true, &mut out);
+
         let first = core.advance(start, &mut out);
         let short = core.advance(start + Duration::from_millis(999), &mut out);
         let held = core.advance(start + Duration::from_millis(1000), &mut out);
@@ -1726,6 +1797,7 @@ mod tests {
 
         core.key(KEY_ESC, true, &mut out);
         core.advance(start, &mut out);
+
         let held = core.advance(start + Duration::from_millis(1000), &mut out);
 
         assert_eq!(held.transition, Transition::Unchanged);
@@ -1741,6 +1813,7 @@ mod tests {
 
         core.key(KEY_ESC, true, &mut out);
         core.hold_escape(start, &mut out);
+
         let held = core.hold_escape(start + Duration::from_millis(1000), &mut out);
 
         assert_eq!(held, Transition::Unchanged);
@@ -1757,7 +1830,9 @@ mod tests {
         core.key(KEY_ESC, true, &mut out);
         core.hold_escape(start, &mut out);
         core.key(KEY_LEFT_SHIFT, true, &mut out);
+
         let held = core.hold_escape(start + Duration::from_secs(5), &mut out);
+
         core.key(KEY_ESC, false, &mut out);
 
         assert_eq!(held, Transition::Unchanged);
@@ -1784,6 +1859,7 @@ mod tests {
         core.key(KEY_ESC, false, &mut out);
         core.key(KEY_ESC, true, &mut out);
         core.hold_escape(start + Duration::from_millis(600), &mut out);
+
         let restarted = core.hold_escape(start + Duration::from_millis(1200), &mut out);
         let held = core.hold_escape(start + Duration::from_millis(1600), &mut out);
 
@@ -1804,9 +1880,12 @@ mod tests {
         early.key(KEY_ESC, true, &mut out);
         early.engage();
         early.hold_escape(start, &mut out);
+
         let held_early = early.hold_escape(start + Duration::from_secs(5), &mut out);
+
         off.key(KEY_ESC, true, &mut out);
         off.hold_escape(start, &mut out);
+
         let held_off = off.hold_escape(start + Duration::from_secs(5), &mut out);
 
         assert_eq!(held_early, Transition::Unchanged);

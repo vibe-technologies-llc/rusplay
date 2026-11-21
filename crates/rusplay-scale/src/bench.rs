@@ -36,6 +36,7 @@ fn best_frame_time(gpu: &Gpu, mut encode_frame: impl FnMut(&mut wgpu::CommandEnc
     (0..BATCHES)
         .map(|_| {
             let start = Instant::now();
+
             run(BATCH_FRAMES);
             start.elapsed() / BATCH_FRAMES
         })
@@ -164,6 +165,7 @@ fn hdr_frame(
         chroma: ChromaSubsampling::Yuv420,
         depth: BitDepth::Ten,
     };
+
     let encode = ConvertSettings {
         resolution,
         format,
@@ -179,6 +181,7 @@ fn hdr_frame(
         extent_alignment: 1,
     };
     let mut converter = ColorConverter::new(pipelines, &gpu.device, encode).unwrap();
+
     let frame = converter.create_frame(&gpu.device);
     let source = testing::view(&testing::upload(gpu, &Image::pattern(size.0, size.1, 1)));
 
@@ -259,6 +262,7 @@ const DEFAULT_DEBAND: DebandSettings = DebandSettings {
 fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     let pipelines = ScalePipelines::new(&gpu.device);
     let (unpack, frame) = hdr_frame(gpu, &pipelines, size);
+
     let mut converter = RgbConverter::new(&pipelines, &gpu.device, unpack).unwrap();
     let views = [(); 3].map(|()| testing::view(&testing::storage_target(gpu, size.0, size.1)));
     let linearise = LineariseSettings {
@@ -271,6 +275,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
     let mut lineariser = Lineariser::new(&pipelines, &gpu.device, linearise).unwrap();
 
     let deband = DEFAULT_DEBAND;
+
     for (chroma_filter, chroma_antiringing, deband) in [
         (ScaleFilter::Lanczos3, 0.0, None),
         (ScaleFilter::Lanczos3, 1.0, None),
@@ -294,6 +299,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
             deband,
             ..unpack
         };
+
         converter.configure(&gpu.device, chroma).unwrap();
 
         let unpack_only = best_frame_time(gpu, |encoder| {
@@ -302,6 +308,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
                 .unwrap();
         });
         let deband = deband.map(|deband| (deband.iterations, deband.radius));
+
         println!(
             "present unpack only {chroma_filter} antiringing {chroma_antiringing} deband {deband:?} {size:?}: {unpack_only:?}"
         );
@@ -310,6 +317,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
 
     for (name, settings) in present_color_cases() {
         let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();
+
         let analytic = best_frame_time(gpu, |encoder| {
             converter
                 .encode(&gpu.device, encoder, &frame, &views[0])
@@ -319,6 +327,7 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
                 .unwrap();
             mapper.encode(&gpu.device, encoder, &views[1], &views[2]);
         });
+
         println!("present {name} analytic {size:?}: {analytic:?}");
 
         let mut chain = ColorChain::new(
@@ -332,11 +341,13 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
             },
         )
         .unwrap();
+
         let fused = best_frame_time(gpu, |encoder| {
             converter
                 .encode_with_chain(&gpu.device, encoder, &frame, &mut chain, &views[0])
                 .unwrap();
         });
+
         println!("present {name} fused analytic {size:?}: {fused:?}");
 
         for lut_size in LUT_SIZES {
@@ -348,12 +359,14 @@ fn present_frame_times(gpu: &Gpu, size: (u32, u32)) {
                 size: lut_size,
             };
             let mut lut = ColorLut::new(&pipelines, &gpu.device, lut_settings).unwrap();
+
             let fused = best_frame_time(gpu, |encoder| {
                 converter
                     .encode_with_lut(&gpu.device, encoder, &frame, &mut lut, &views[0])
                     .unwrap();
             });
             let bake = bake_time(gpu, &pipelines, lut_settings);
+
             println!("present {name} lut {lut_size} {size:?}: {fused:?}, bake {bake:?}");
         }
     }
@@ -365,6 +378,7 @@ fn bake_time(gpu: &Gpu, pipelines: &ScalePipelines, settings: ColorLutSettings) 
             .map(|_| ColorLut::new(pipelines, &gpu.device, settings).unwrap())
             .collect();
         let start = Instant::now();
+
         testing::submit(gpu, |encoder| {
             for lut in &mut luts {
                 lut.encode_bake(encoder);

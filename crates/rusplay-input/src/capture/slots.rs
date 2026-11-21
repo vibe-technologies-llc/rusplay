@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PadSlots<K> {
     slots: Vec<Option<K>>,
 }
@@ -23,6 +23,7 @@ impl<K: PartialEq> PadSlots<K> {
         }
 
         let index = self.slots.iter().position(Option::is_none)?;
+
         self.slots[index] = Some(key);
 
         u8::try_from(index).ok()
@@ -30,6 +31,7 @@ impl<K: PartialEq> PadSlots<K> {
 
     pub fn release(&mut self, key: &K) -> Option<u8> {
         let slot = self.slot_of(key)?;
+
         self.slots[usize::from(slot)] = None;
 
         Some(slot)
@@ -53,6 +55,7 @@ mod tests {
     #[test]
     fn a_known_device_keeps_its_slot() {
         let mut slots = PadSlots::new(2);
+
         slots.assign("a");
         slots.assign("b");
 
@@ -63,6 +66,7 @@ mod tests {
     #[test]
     fn a_full_table_refuses_new_devices() {
         let mut slots = PadSlots::new(1);
+
         slots.assign("a");
 
         assert_eq!(slots.assign("b"), None);

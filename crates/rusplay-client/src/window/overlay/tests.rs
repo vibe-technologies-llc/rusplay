@@ -49,6 +49,7 @@ fn composed(gpu: &Gpu, text: Option<&OverlayText>) -> (Vec<u8>, Option<Placement
     let mut layer = OverlayLayer::default();
 
     let overlay = layer.prepare(&gpu.device, &gpu.queue, text, target());
+
     testing::submit(gpu, |encoder| {
         composer.encode(
             &gpu.device,
@@ -138,6 +139,7 @@ fn the_overlay_is_drawn_inside_its_rectangle_only() {
     let (bytes, placement) = composed(&gpu, Some(&text));
 
     let placement = placement.unwrap();
+
     assert_eq!(placement.origin, [4, 4]);
     assert_eq!(placement.size, [10, 12]);
     assert!(near(red(&bytes, 8, 6), WHITE));

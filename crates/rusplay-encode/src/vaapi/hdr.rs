@@ -17,7 +17,7 @@ const AV1_METADATA_CONTENT_LIGHT: usize = 1;
 const AV1_METADATA_MASTERING_DISPLAY: usize = 2;
 const AV1_TRAILING_BITS: u8 = 0x80;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SeiNal {
     H264,
     Hevc,
@@ -38,6 +38,7 @@ pub(super) fn sei(nal: SeiNal, hdr: &HdrLevels) -> Option<PackedHeader> {
     }
 
     let mut rbsp = BitWriter::new();
+
     if let Some(display) = &hdr.mastering {
         sei_message(
             &mut rbsp,
@@ -66,10 +67,12 @@ pub(super) fn metadata_obus(hdr: &HdrLevels) -> Option<PackedHeader> {
 
     if let Some(display) = &hdr.mastering {
         let body = St2086::of(display).av1_payload();
+
         push_metadata_obu(&mut obus, AV1_METADATA_MASTERING_DISPLAY, &body);
     }
     if let Some(light) = &hdr.content_light {
         let body = content_light_payload(*light);
+
         push_metadata_obu(&mut obus, AV1_METADATA_CONTENT_LIGHT, &body);
     }
 

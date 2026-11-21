@@ -225,6 +225,7 @@ backend = "nvdec"
         let config = parse(&stored);
 
         let deband = config.scaling.deband;
+
         assert_eq!(config.video.codec, CodecChoice::Hevc);
         assert!(matches!(config.video.encoder, VideoEncoderConfig::Vaapi(_)));
         assert_eq!(deband.iterations, 3);
@@ -239,6 +240,7 @@ backend = "nvdec"
         let config = parse("[scaling.deband]\nthreshold = 4.0\nchroma_threshold = 0.0\n");
 
         let deband = config.scaling.deband;
+
         assert_eq!((deband.threshold, deband.chroma_threshold), (4.0, 0.0));
     }
 
@@ -285,6 +287,7 @@ backend = "nvdec"
     #[test]
     fn a_saved_config_names_its_version_and_loads_back_unchanged() {
         let mut config = Config::default();
+
         config.video.codec = CodecChoice::Hevc;
         config.video.frame_rate = FrameRateChoice::Fixed(LEGACY_FRAME_RATE);
 

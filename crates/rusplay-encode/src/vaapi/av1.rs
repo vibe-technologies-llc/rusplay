@@ -76,7 +76,7 @@ const LEVELS: [Level; 14] = [
     level(19, 35_651_584, 4_278_190_080, 160_000, Some(800_000)),
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Av1Profile {
     Main,
     High,
@@ -115,6 +115,7 @@ impl Av1Profile {
 
 fn tile_log2(block: u32, target: u32) -> u32 {
     let mut k = 0;
+
     while (block << k) < target {
         k += 1;
     }
@@ -125,7 +126,7 @@ fn bit_length(value: u32) -> u32 {
     value.bit_width().max(1)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TileLayout {
     sb_cols: u32,
     sb_rows: u32,
@@ -194,7 +195,7 @@ impl TileLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct FrameHeaderOffsets {
     pub(super) qindex: u32,
     pub(super) segmentation: u32,
@@ -206,18 +207,19 @@ pub(super) struct FrameHeaderOffsets {
 
 pub(super) fn obu(kind: u8, payload: Vec<u8>, size_field_bytes: usize) -> Vec<u8> {
     let mut bytes = vec![(kind << 3) | 0b010];
+
     bytes.extend(leb128(payload.len(), size_field_bytes));
     bytes.extend(payload);
     bytes
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Slot {
     surface: u32,
     output: OutputIndex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct FramePlan {
     reference: usize,
     refresh: u8,
@@ -276,6 +278,7 @@ impl Av1Stream {
 
     pub(super) fn recover(&mut self, last_good: OutputIndex) -> Option<OutputIndex> {
         self.acknowledge(last_good);
+
         let next = self.next_output.0;
 
         let (slot, reference) = self
@@ -287,6 +290,7 @@ impl Av1Stream {
                 output <= last_good && next.saturating_sub(output.0) <= MAX_RECOVERY_DISTANCE
             })
             .max_by_key(|&(_, output)| output)?;
+
         self.recovering_from = Some(slot);
 
         Some(reference)
@@ -523,6 +527,7 @@ impl Av1Stream {
             header.into_bytes(),
             FRAME_HEADER_SIZE_FIELD_BYTES,
         );
+
         offsets.total_bits = u32::try_from(bytes.len() * 8).unwrap_or(0);
 
         (bytes, offsets)
@@ -545,6 +550,7 @@ impl Av1Stream {
 
         let subsampled = u32::from(self.info.format.chroma == ChromaSubsampling::Yuv420);
         let fields = unsafe { &mut parameters.seq_fields.bits };
+
         fields.set_enable_order_hint(1);
         fields.set_enable_cdef(1);
         fields.set_bit_depth_minus8(u32::from(self.info.format.depth.bits()) - 8);
@@ -561,6 +567,7 @@ impl Av1Stream {
         offsets: FrameHeaderOffsets,
     ) -> ffi::VAEncPictureParameterBufferAV1 {
         let Resolution { width, height } = self.info.resolution;
+
         let mut parameters = ffi::VAEncPictureParameterBufferAV1 {
             frame_width_minus_1: u16::try_from(width - 1).unwrap_or(u16::MAX),
             frame_height_minus_1: u16::try_from(height - 1).unwrap_or(u16::MAX),
@@ -592,6 +599,7 @@ impl Av1Stream {
             size_in_bits_frame_hdr_obu: offsets.total_bits,
             ..Default::default()
         };
+
         if !picture.keyframe && self.slots[self.plan.reference].is_some() {
             for (entry, slot) in parameters.reference_frames.iter_mut().zip(&self.slots) {
                 if let Some(slot) = slot {
@@ -617,15 +625,20 @@ impl Av1Stream {
         }
 
         let flags = unsafe { &mut parameters.picture_flags.bits };
+
         flags.set_frame_type(u32::from(if picture.keyframe {
             FRAME_TYPE_KEY
         } else {
             FRAME_TYPE_INTER
         }));
         flags.set_error_resilient_mode(u32::from(picture.keyframe));
+
         let modes = unsafe { &mut parameters.mode_control_flags.bits };
+
         modes.set_tx_mode(TX_MODE_SELECT);
+
         let tile_group_header = unsafe { &mut parameters.tile_group_obu_hdr_info.bits };
+
         tile_group_header.set_obu_has_size_field(1);
 
         parameters
@@ -667,6 +680,7 @@ impl Av1Stream {
                 (PackedKind::Picture, Some(packed(frame_header))),
             ],
         )?;
+
         let buffers = codec_buffers(
             context,
             sequence,
@@ -702,6 +716,7 @@ impl Av1Stream {
 
         if self.plan.recovery {
             let reference = self.slots[self.plan.reference].map(|slot| slot.output);
+
             for slot in &mut self.slots {
                 if slot
                     .zip(reference)

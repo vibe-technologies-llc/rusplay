@@ -11,7 +11,7 @@ use crate::{
 
 const SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Stopped,
     Starting,
@@ -19,21 +19,21 @@ pub enum Phase {
     Stopping,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pairing {
     pub pin: Pin,
     expires_at: Instant,
     window: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Client {
     pub address: SocketAddr,
     pub name: String,
     pub admission: Admission,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HostRates {
     pub sent_fps: f64,
     pub encoded_fps: f64,
@@ -50,6 +50,7 @@ impl HostRates {
             .at
             .saturating_duration_since(previous.at)
             .as_secs_f64();
+
         if seconds <= 0.0 {
             return None;
         }
@@ -80,6 +81,7 @@ impl HostRates {
             ("Packets lost", rate_text(self.lost)),
             ("Keyframes", self.keyframes.to_string()),
         ];
+
         if let Some(kbps) = self.bitrate_target_kbps {
             rows.push(("Bitrate target", bitrate_text(kbps)));
         }
@@ -88,7 +90,7 @@ impl HostRates {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Reading {
     at: Instant,
     stats: HostStats,
@@ -206,6 +208,7 @@ impl HostModel {
 
     pub fn remaining_fraction(&self, now: Instant) -> Option<f32> {
         let pairing = self.pairing.as_ref()?;
+
         if pairing.window.is_zero() {
             return Some(0.0);
         }
@@ -290,17 +293,20 @@ impl HostModel {
         let Some(stream) = stream else {
             return false;
         };
+
         if self.client.as_ref().map(|client| client.address) != Some(stream.client) {
             return false;
         }
 
         let mut changed = self.format != stream.format;
+
         self.format = stream.format;
 
         let current = Reading {
             at: now,
             stats: stream.stats,
         };
+
         match self.last {
             None => self.last = Some(current),
             Some(previous) if now.saturating_duration_since(previous.at) >= SAMPLE_WINDOW => {
@@ -386,6 +392,7 @@ mod tests {
 
     fn running() -> HostModel {
         let mut model = HostModel::default();
+
         model.begin_start();
         model.started(listening());
 
@@ -428,6 +435,7 @@ mod tests {
         );
         let chosen = rusplay_core::CodecFormat::new(rusplay_core::Codec::Av1, configured.format);
         let mut model = running();
+
         model.format = Some(NegotiatedFormat { configured, chosen });
 
         assert_eq!(
@@ -505,6 +513,7 @@ mod tests {
     #[test]
     fn a_failed_start_returns_to_stopped_and_may_be_retried() {
         let mut model = HostModel::default();
+
         model.begin_start();
 
         model.start_failed();
@@ -517,10 +526,12 @@ mod tests {
     fn stopping_clears_the_pairing_and_the_client() {
         let mut model = running();
         let now = Instant::now();
+
         model.apply(&pairing_event(60), now);
         model.apply(&admitted(Admission::Paired), now);
 
         assert!(model.begin_stop());
+
         model.stopped();
 
         assert_eq!(model.phase(), Phase::Stopped);
@@ -550,6 +561,7 @@ mod tests {
     fn a_new_window_replaces_the_previous_pin() {
         let mut model = running();
         let now = Instant::now();
+
         model.apply(&pairing_event(60), now);
 
         model.apply(
@@ -570,6 +582,7 @@ mod tests {
         let now = Instant::now();
 
         let closed = model.remaining_fraction(now);
+
         model.apply(&pairing_event(60), now);
 
         assert_eq!(closed, None);
@@ -588,6 +601,7 @@ mod tests {
     fn a_pairing_client_closes_the_window_and_is_announced() {
         let mut model = running();
         let now = Instant::now();
+
         model.apply(&pairing_event(60), now);
 
         let notice = model.apply(&admitted(Admission::Paired), now);
@@ -637,6 +651,7 @@ mod tests {
     fn a_client_leaving_clears_the_client_and_its_measurements() {
         let mut model = running();
         let start = Instant::now();
+
         model.apply(&admitted(Admission::Paired), start);
         model.observe(Some(&stream(0, 0)), start);
         model.observe(Some(&stream(60, 60)), start + Duration::from_secs(1));
@@ -652,6 +667,7 @@ mod tests {
     fn locked_pairing_and_failures_are_reported_as_failures() {
         let mut model = running();
         let now = Instant::now();
+
         model.apply(&pairing_event(60), now);
 
         let locked = model.apply(&HostEvent::PairingLocked, now);
@@ -695,12 +711,14 @@ mod tests {
     fn rates_come_from_the_difference_between_two_samples() {
         let mut model = running();
         let start = Instant::now();
+
         model.apply(&admitted(Admission::Paired), start);
 
         let first = model.observe(Some(&stream(100, 100)), start);
         let second = model.observe(Some(&stream(160, 158)), start + Duration::from_secs(1));
 
         let rates = model.rates().unwrap();
+
         assert!(!first);
         assert!(second);
         assert!((rates.sent_fps - 60.0).abs() < 1e-9);
@@ -711,6 +729,7 @@ mod tests {
     fn samples_closer_than_the_window_do_not_produce_rates() {
         let mut model = running();
         let start = Instant::now();
+
         model.apply(&admitted(Admission::Paired), start);
         model.observe(Some(&stream(0, 0)), start);
 
@@ -724,8 +743,11 @@ mod tests {
     fn a_stream_of_another_client_is_not_measured() {
         let mut model = running();
         let start = Instant::now();
+
         model.apply(&admitted(Admission::Paired), start);
+
         let mut other = stream(1, 1);
+
         other.client = "10.0.0.2:1".parse().unwrap();
 
         assert!(!model.observe(Some(&other), start));

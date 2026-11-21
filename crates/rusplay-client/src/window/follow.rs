@@ -44,6 +44,7 @@ impl DisplayFollower {
     ) -> Result<Self, ClientError> {
         let (globals, queue) = registry_queue_init::<Follow>(surface.connection())
             .map_err(ClientError::WaylandRegistry)?;
+
         let manager: WpColorManagerV1 = globals
             .bind(&queue.handle(), MANAGER_VERSIONS, ())
             .map_err(|_| ClientError::ColorManagementUnsupported)?;
@@ -173,6 +174,7 @@ impl Follow {
 
         let color_generation = self.generation;
         let color_output = self.manager.get_output(&output, handle, color_generation);
+
         self.followed = Some(Followed {
             output,
             color_output,
@@ -339,6 +341,7 @@ mod tests {
         let connection = Connection::connect_to_env().unwrap();
         let (globals, mut queue) = registry_queue_init::<Follow>(&connection).unwrap();
         let handle = queue.handle();
+
         let manager: WpColorManagerV1 = match globals.bind(&handle, MANAGER_VERSIONS, ()) {
             Ok(manager) => manager,
             Err(_) => return,
@@ -358,8 +361,11 @@ mod tests {
         }
 
         let images = published.lock().clone();
+
         eprintln!("{images:?}");
+
         let first = images.first().unwrap();
+
         assert!(first.primaries.is_some() || first.transfer.is_some());
 
         state.release();

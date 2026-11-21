@@ -46,7 +46,7 @@ pub enum HostEvent {
     Stopped(Option<HostError>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamSnapshot {
     pub client: SocketAddr,
     pub stats: HostStats,
@@ -93,6 +93,7 @@ impl Control {
 
     fn begin_window(&self) -> Option<Pin> {
         let mut requests = self.requests.lock();
+
         self.cancel.store(self.stopping(), Ordering::Release);
 
         requests.pin.take()
@@ -100,6 +101,7 @@ impl Control {
 
     fn request_pin(&self, pin: Pin) -> Result<(), HostError> {
         let mut requests = self.requests.lock();
+
         if requests.streaming {
             return Err(HostError::StreamActive);
         }
@@ -124,7 +126,7 @@ struct Worker<S> {
     _responder: Option<Responder>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PinRenewer {
     control: Arc<Control>,
 }
@@ -151,6 +153,7 @@ impl HostService {
     ) -> Result<Self, HostError> {
         let remembered = RememberedDisplay::forget(&mut config)?;
         let started = Self::start(config, peers);
+
         if let (Err(_), Some(remembered)) = (&started, remembered) {
             remembered.restore().ok();
         }
@@ -161,12 +164,15 @@ impl HostService {
     pub fn start(mut config: Config, peers: &Arc<RwLock<PeerStore>>) -> Result<Self, HostError> {
         let host_id = load_or_create_host_id(&peers.read().path().with_file_name(HOST_ID_FILE))?;
         let gpu = Gpu::open()?;
+
         config.video.encoder =
             rusplay_encode::resolve(&config.video.encoder, gpu.pci_bus_id.as_deref());
+
         let portal = open_portal(&config, &gpu)?;
         let feed = portal.feed;
         let keepalive = portal.keepalive;
         let mut host = HostSession::bind_shared(config, Arc::clone(peers))?;
+
         if let Some(input) = portal.input {
             host = host.with_input(input);
         }
@@ -203,6 +209,7 @@ impl HostService {
         let peers = Arc::clone(host.peers());
         let control = Arc::new(Control::default());
         let (events, receiver) = mpsc::channel();
+
         let worker = Worker {
             host,
             serve,
@@ -266,6 +273,7 @@ impl HostService {
     pub fn stop(mut self) -> Vec<HostEvent> {
         let panicked = self.shut_down();
         let mut events: Vec<HostEvent> = self.events.try_iter().collect();
+
         if panicked {
             events.push(HostEvent::Stopped(Some(HostError::ServicePanicked)));
         }
@@ -275,11 +283,13 @@ impl HostService {
 
     fn shut_down(&mut self) -> bool {
         self.control.request_stop();
+
         let Some(thread) = self.thread.take() else {
             return false;
         };
 
         let panicked = thread.join().is_err();
+
         self.control.snapshot.lock().take();
 
         panicked
@@ -357,6 +367,7 @@ where
             .read()
             .get(&client.peer())
             .map_or_default(|record| record.name().to_owned());
+
         self.emit(HostEvent::ClientAdmitted {
             address,
             peer: client.peer(),
@@ -366,7 +377,9 @@ where
 
         self.control.ended.lock().take();
         self.control.set_streaming(true);
+
         let finished = self.stream(&client);
+
         self.control.set_streaming(false);
 
         finished
@@ -374,10 +387,13 @@ where
 
     fn stream(&self, client: &Client) -> Result<(), HostError> {
         let stream = (self.serve)(&self.host, client)?;
+
         if let ClipboardState::Unavailable(error) = stream.clipboard() {
             self.emit(HostEvent::ClipboardUnavailable(Arc::clone(error)));
         }
+
         let finished = self.watch(stream);
+
         self.emit(HostEvent::ClientLeft {
             address: client.address(),
         });
@@ -444,6 +460,7 @@ mod tests {
             ..Config::default()
         };
         let peers = PeerStore::open(directory.path().join("paired-clients")).unwrap();
+
         let host = HostSession::bind(config, peers).unwrap();
         let service = HostService::spawn(host, refuse, None, false).unwrap();
 
@@ -457,7 +474,9 @@ mod tests {
             if let Ok(event) = service.events.try_recv() {
                 return event;
             }
+
             assert!(Instant::now() < deadline, "no event within {WAIT:?}");
+
             thread::sleep(POLL);
         }
     }
@@ -480,6 +499,7 @@ mod tests {
             pin.as_str().len(),
             usize::from(NetworkConfig::default().pairing_pin_digits)
         );
+
         service.stop();
     }
 
@@ -491,6 +511,7 @@ mod tests {
         let (second, _) = pin_of(next_event(&service));
 
         assert_ne!(first, second);
+
         service.stop();
     }
 
@@ -499,16 +520,20 @@ mod tests {
         let (_directory, service) = service(60_000);
 
         let (first, _) = pin_of(next_event(&service));
+
         service.renew_pin();
+
         let (second, _) = pin_of(next_event(&service));
 
         assert_ne!(first, second);
+
         service.stop();
     }
 
     #[test]
     fn stopping_ends_the_loop_cleanly_and_says_so() {
         let (_directory, service) = service(60_000);
+
         pin_of(next_event(&service));
 
         let events = service.stop();
@@ -523,6 +548,7 @@ mod tests {
         assert!(!service.is_finished());
         assert!(service.snapshot().is_none());
         assert_eq!(service.address().ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+
         service.stop();
     }
 
@@ -552,6 +578,7 @@ mod tests {
         let requested = Pin::parse("123456").unwrap();
 
         control.request_pin(requested.clone()).unwrap();
+
         let cancelled = control.cancel.load(Ordering::Acquire);
         let taken = control.begin_window();
         let again = control.begin_window();
@@ -565,9 +592,11 @@ mod tests {
     #[test]
     fn a_requested_pin_is_refused_while_a_client_streams() {
         let control = Control::default();
+
         control.set_streaming(true);
 
         let refused = control.request_pin(Pin::parse("123456").unwrap());
+
         control.set_streaming(false);
 
         assert!(matches!(refused, Err(HostError::StreamActive)));

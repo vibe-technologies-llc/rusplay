@@ -47,6 +47,7 @@ pub(crate) fn run(
     links: &MicrophoneLinks,
 ) -> Result<(), HostError> {
     let result = serve(&config.microphone_stream(), network, factory, links);
+
     links.shared.stop();
 
     result
@@ -60,15 +61,18 @@ fn serve(
 ) -> Result<(), HostError> {
     let decoder = Box::new(OpusAudioDecoder::new(stream)?);
     let output = factory(stream)?;
+
     let mut player = ConcealingPlayer::new(decoder, output, stream);
     let mut reassembler = Reassembler::new(StreamKind::Microphone, ReassemblyLimits::from(network));
     let mut events = Vec::new();
     let counters = &links.shared.counters;
     let mut epoch = links.shared.client.epoch();
+
     let mut follow = |reassembler: &mut Reassembler,
                       player: &mut ConcealingPlayer,
                       events: &mut Vec<ReassemblyEvent>| {
         let current = links.shared.client.epoch();
+
         if current != epoch {
             epoch = current;
             *reassembler =
@@ -101,7 +105,9 @@ fn serve(
         }
 
         reassembler.poll_timeouts(Instant::now(), &mut events);
+
         let outcome = play(&mut player, &mut events, counters);
+
         publish(&player, counters);
         outcome?;
     }

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct StreamClock {
     origin: Instant,
 }

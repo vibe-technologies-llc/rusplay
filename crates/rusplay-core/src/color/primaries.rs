@@ -7,7 +7,7 @@ use crate::color::{
     matrix::{Matrix3, bradford_adaptation},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "[f64; 2]", into = "[f64; 2]")]
 pub struct Chromaticity {
     x: u16,
@@ -82,7 +82,7 @@ impl From<Chromaticity> for [f64; 2] {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(try_from = "ChromaticityFields", into = "ChromaticityFields")]
 pub struct Chromaticities {
     red: Chromaticity,
@@ -91,7 +91,7 @@ pub struct Chromaticities {
     white: Chromaticity,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChromaticityFields {
     red: Chromaticity,
@@ -259,13 +259,13 @@ impl From<Chromaticities> for ChromaticityFields {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum WhiteAdaptation {
     Bradford,
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorPrimaries {
     #[default]
@@ -464,6 +464,7 @@ mod tests {
                 primaries
             );
         }
+
         assert_eq!(
             ColorPrimaries::from_chromaticities(custom),
             ColorPrimaries::Custom(custom)

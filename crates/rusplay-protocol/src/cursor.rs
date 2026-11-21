@@ -10,7 +10,7 @@ const VISIBLE: u8 = 1;
 const HAS_IMAGE: u8 = 1 << 1;
 const KNOWN_FLAGS: u8 = VISIBLE | HAS_IMAGE;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorImage {
     pub width: u16,
     pub height: u16,
@@ -25,7 +25,7 @@ impl CursorImage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorMessage {
     pub x: i32,
     pub y: i32,
@@ -55,6 +55,7 @@ impl CursorMessage {
         }
 
         let mut flags = 0;
+
         if self.visible {
             flags |= VISIBLE;
         }
@@ -92,6 +93,7 @@ impl CursorMessage {
             u32::from_be_bytes([position[12], position[13], position[14], position[15]]),
         );
         let flags = position[FLAGS_AT];
+
         if flags & !KNOWN_FLAGS != 0 {
             return Err(ProtocolError::UnknownCursorFlags(flags));
         }
@@ -125,7 +127,9 @@ fn decode_image(rest: &[u8], total: usize) -> Result<CursorImage, ProtocolError>
 
     let field = |at: usize| u16::from_be_bytes([header[at], header[at + 1]]);
     let (width, height) = (field(0), field(2));
+
     let expected = CursorImage::pixel_bytes(width, height);
+
     if rgba.len() != expected {
         return Err(ProtocolError::CursorImageSizeMismatch {
             expected,
@@ -164,7 +168,9 @@ mod tests {
 
     fn round_trip(message: &CursorMessage) -> CursorMessage {
         let mut buf = Vec::new();
+
         message.encode(&mut buf).unwrap();
+
         assert_eq!(buf.len(), message.encoded_len());
         CursorMessage::decode(&buf).unwrap()
     }
@@ -193,6 +199,7 @@ mod tests {
     #[test]
     fn image_with_wrong_pixel_count_is_not_encoded() {
         let mut message = with_image();
+
         if let Some(image) = &mut message.image {
             image.rgba.pop();
         }
@@ -209,6 +216,7 @@ mod tests {
     #[test]
     fn truncated_image_is_rejected() {
         let mut buf = Vec::new();
+
         with_image().encode(&mut buf).unwrap();
 
         buf.pop();
@@ -225,6 +233,7 @@ mod tests {
     #[test]
     fn short_and_malformed_buffers_are_rejected() {
         let mut position_only = Vec::new();
+
         CursorMessage {
             x: 0,
             y: 0,
@@ -236,8 +245,11 @@ mod tests {
         .unwrap();
 
         let mut unknown_flags = position_only.clone();
+
         unknown_flags[FLAGS_AT] = 0x80;
+
         let mut trailing = position_only.clone();
+
         trailing.push(0);
 
         assert!(matches!(
@@ -266,6 +278,7 @@ mod tests {
 
         for message in [position_only, with_image()] {
             let mut buf = Vec::new();
+
             message.encode(&mut buf).unwrap();
 
             for cut in 0..buf.len() {

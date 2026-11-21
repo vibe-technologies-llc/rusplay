@@ -12,7 +12,7 @@ const PRESET: &str = "preset";
 const PRE_ENCODE: &str = "pre-encode";
 const VBAQ: &str = "vbaq";
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct VaapiParams {
     pub(super) intra_refresh_frames: Option<u32>,
     pub(super) quality_level: Option<u32>,
@@ -53,6 +53,7 @@ impl VaapiParams {
                 QUALITY_LEVEL => parsed.quality_level = Some(number()?),
                 PRESET => {
                     let preset = Preset::parse(value).ok_or_else(|| invalid(key, value))?;
+
                     parsed.radeonsi.preset = Some(preset);
                 }
                 PRE_ENCODE => parsed.radeonsi.pre_encode = Some(flag(key, value)?),
@@ -106,6 +107,7 @@ impl VaapiParams {
                 Ok(Some(level))
             };
         }
+
         let Some(key) = self.radeonsi_key() else {
             return Ok(None);
         };

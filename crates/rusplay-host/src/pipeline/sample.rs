@@ -25,6 +25,7 @@ pub(super) fn read_source(
 ) -> CapturedSource {
     let shift = layout.sample_shift();
     let bytes_per_sample = layout.bytes_per_sample as usize;
+
     let plane_bytes = |plane: &Plane| PlaneBytes {
         data: usize::try_from(plane.offset)
             .ok()
@@ -47,6 +48,7 @@ pub(super) fn read_source(
         return Err(HostError::QualitySourceLayout { planes: 0 });
     };
     let luma = read(luma)?;
+
     if kind == SampleKind::Luma {
         return Ok(SourceSample::Luma(luma));
     }
@@ -83,6 +85,7 @@ pub(super) fn read_exported(
     let frame = exported.frame();
     let size = frame.layout().size;
     let device = &gpu.device;
+
     let copy = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("rusplay-host-quality-source"),
         size,
@@ -92,10 +95,12 @@ pub(super) fn read_exported(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("rusplay-host-quality-copy"),
     });
+
     encoder.copy_buffer_to_buffer(frame.buffer(), 0, &copy, 0, size);
     gpu.queue.submit([encoder.finish()]);
 
     let (done, mapped) = mpsc::channel();
+
     copy.map_async(wgpu::MapMode::Read, .., move |result| {
         done.send(result).ok();
     });
@@ -113,6 +118,7 @@ pub(super) fn read_exported(
         .get_mapped_range(..)
         .map_err(HostError::GpuMappedRange)
         .and_then(|view| read_source(frame.layout(), &view, format, kind));
+
     copy.unmap();
 
     read

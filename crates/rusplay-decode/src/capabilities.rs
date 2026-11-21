@@ -3,7 +3,7 @@ use rusplay_core::{Codec, CodecFormat, FormatSet};
 
 use crate::{Backend, DecodeError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capabilities {
     backend: Backend,
     formats: FormatSet,
@@ -119,6 +119,7 @@ mod tests {
                     backend: Backend::Software
                 })
             ));
+
             return;
         }
 
@@ -134,6 +135,7 @@ mod tests {
             count(Codec::Av1),
             if cfg!(feature = "software") { 9 } else { 0 }
         );
+
         if cfg!(feature = "software") {
             assert!(formats.iter().any(|format| {
                 format
@@ -162,6 +164,7 @@ mod tests {
         if !cfg!(any(feature = "software", feature = "ffmpeg")) {
             return;
         }
+
         let config = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
         let formats = capabilities(&config).unwrap().formats();
 

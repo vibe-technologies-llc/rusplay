@@ -12,7 +12,7 @@ use crate::CaptureError;
 const APP_DIR: &str = "rusplay";
 const TOKEN_FILE: &str = "restore-token";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RestoreTokenStore {
     path: PathBuf,
 }
@@ -154,7 +154,9 @@ mod tests {
         let store = RestoreTokenStore::new(dir.path().join("rusplay").join("restore-token"));
 
         let before = store.load().unwrap();
+
         store.store("abc-123").unwrap();
+
         let after = store.load().unwrap();
         let mode = fs::metadata(store.path()).unwrap().permissions().mode();
 
@@ -189,6 +191,7 @@ mod tests {
     fn clearing_removes_the_token() {
         let dir = tempfile::tempdir().unwrap();
         let store = RestoreTokenStore::new(dir.path().join("restore-token"));
+
         store.store("token").unwrap();
 
         store.clear().unwrap();

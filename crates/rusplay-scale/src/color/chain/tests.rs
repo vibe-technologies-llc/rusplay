@@ -57,7 +57,9 @@ fn the_fused_chain_matches_the_analytic_passes() {
 
     for case in cases() {
         let mut codes = random_codes(RANDOM_CODES);
+
         codes.extend(saturated_codes(case.transfer));
+
         let all = measure_against_analytic(gpu, &case, &lit(codes), |converter, frame| {
             fused(gpu, &case, converter, frame)
         });
@@ -69,6 +71,7 @@ fn the_fused_chain_matches_the_analytic_passes() {
             "{}: delta e itp mean {:.3}, p99 {:.3}, max {:.3} at {:?}, greys max {:.3}",
             case.name, all.mean, all.p99, all.max, all.worst, greys.max
         );
+
         assert!(
             greys.max <= GREY_DELTA_E,
             "{}: greys {}",
@@ -77,9 +80,11 @@ fn the_fused_chain_matches_the_analytic_passes() {
         );
         assert!(all.mean <= MEAN_DELTA_E, "{}: mean {}", case.name, all.mean);
         assert!(all.p99 <= P99_DELTA_E, "{}: p99 {}", case.name, all.p99);
+
         let well_conditioned = case
             .map
             .is_none_or(|map| map.gamut.mode != GamutMapMode::Desaturate);
+
         assert!(
             !well_conditioned || all.max <= MAX_DELTA_E,
             "{}: max {} at {:?}",
@@ -135,6 +140,7 @@ fn a_chain_is_rebuilt_only_when_its_settings_change_and_must_match_the_frame() {
         matrix: MATRIX,
         map: None,
     };
+
     let mut chain = ColorChain::new(&pipelines, &gpu.device, settings).unwrap();
     let mut hlg = RgbConverter::new(
         &pipelines,
@@ -207,11 +213,13 @@ fn the_fused_chain_follows_the_reference_where_an_intermediate_would_not() {
         .unwrap();
     let plan = ColorPlan::new(&case.map.unwrap()).unwrap();
     let light = DESATURATED_NEAR_PEAK.map(|code| pq_to_nits(code) / plan.source_white_nits);
+
     let expected = reference::map(&plan, light);
     let mut found = None;
 
     measure_against_analytic(gpu, &case, &[DESATURATED_NEAR_PEAK], |converter, frame| {
         let image = fused(gpu, &case, converter, frame);
+
         found = Some(image.pixels[0]);
         image
     });

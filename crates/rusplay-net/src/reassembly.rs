@@ -9,7 +9,7 @@ use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, StreamKind};
 
 use crate::{FecBlock, NetError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReassemblyLimits {
     pub max_pending_frames: usize,
     pub max_fragments: u16,
@@ -39,7 +39,7 @@ impl From<&NetworkConfig> for ReassemblyLimits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReassembledFrame {
     pub frame: u32,
     pub keyframe: bool,
@@ -47,14 +47,14 @@ pub struct ReassembledFrame {
     pub recovered_fragments: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReassemblyEvent {
     Frame(ReassembledFrame),
     FrameLost { frame: u32 },
     PacketsMissing { first_sequence: u32, count: u16 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReassemblyStats {
     pub frames_completed: u64,
     pub frames_recovered: u64,
@@ -129,6 +129,7 @@ impl Reassembler {
         events: &mut Vec<ReassemblyEvent>,
     ) -> Result<(), NetError> {
         let (header, payload) = PacketHeader::parse(datagram)?;
+
         let packet = self.classify(header.stream, payload)?;
         let ends_frame = self.ends_frame(&header, &packet);
 
@@ -144,6 +145,7 @@ impl Reassembler {
         let is_new = existing.is_none();
         let mut pending = existing.unwrap_or_else(|| {
             let mut pending = PendingFrame::new(header.frame, now);
+
             pending.buffer = self.returned.try_recv().unwrap_or_default();
             self.spare.lend(&mut pending);
             pending
@@ -171,6 +173,7 @@ impl Reassembler {
                 return Err(error);
             }
         };
+
         self.track_sender(&mut pending, ends_frame, now);
 
         match inserted {
@@ -280,12 +283,14 @@ impl Reassembler {
         };
 
         let ahead = i64::from(sequence.wrapping_sub(expected).cast_signed());
+
         if ahead < 0 {
             return;
         }
 
         if ahead > 0 {
             let count = u16::try_from(ahead).unwrap_or(u16::MAX);
+
             self.stats.packets_missing += u64::from(count);
             events.push(ReassemblyEvent::PacketsMissing {
                 first_sequence: expected,
@@ -311,12 +316,14 @@ impl Reassembler {
         let position = self
             .pending
             .partition_point(|other| is_newer(pending.frame, other.frame));
+
         self.pending.insert(position, pending);
     }
 
     fn enforce_window(&mut self, events: &mut Vec<ReassemblyEvent>) {
         while self.pending.len() > self.limits.max_pending_frames {
             let oldest = self.pending[0].frame;
+
             self.drop_lost_through(oldest, events);
         }
     }
@@ -342,12 +349,14 @@ impl Reassembler {
         events: &mut Vec<ReassemblyEvent>,
     ) -> Result<(), NetError> {
         let frame = pending.frame;
+
         self.drop_lost_through(frame, events);
         self.spare.take_back(&mut pending, &self.limits);
 
         match pending.assemble() {
             Ok(mut assembled) => {
                 let recycle = self.recycle.clone();
+
                 assembled.data = FrameBytes::recycled(assembled.data.into_vec(), move |bytes| {
                     let _ = recycle.try_send(bytes);
                 });
@@ -372,7 +381,7 @@ enum Packet<'a> {
     Parity(FecHeader, &'a [u8]),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Inserted {
     New,
     Duplicate,
@@ -421,6 +430,7 @@ impl SpareStorage {
         let max_blocks = usize::from(limits.max_fragments);
 
         let room = max_blocks.saturating_sub(self.blocks.len());
+
         self.blocks.extend(pending.blocks.drain(..).take(room));
         pending.blocks.clear();
 
@@ -429,6 +439,7 @@ impl SpareStorage {
         }
         if self.flags.len() < max_lists {
             let mut have = std::mem::take(&mut pending.have);
+
             have.clear();
             self.flags.push(have);
         }
@@ -491,6 +502,7 @@ impl PendingFrame {
 
     fn deadline(&self, limits: &ReassemblyLimits) -> Instant {
         let timeout = self.first_seen + limits.frame_timeout;
+
         if limits.reorder_grace.is_zero() {
             return timeout;
         }
@@ -532,11 +544,13 @@ impl PendingFrame {
 
         let is_last = index + 1 == count;
         let learned_shard_len = (!is_last && self.shard_len.is_none()).then_some(payload.len());
+
         if let Some(len) = learned_shard_len
             && (len == 0 || !len.is_multiple_of(2))
         {
             return Err(NetError::InvalidShardLength(len));
         }
+
         let shard_len = self.shard_len.or(learned_shard_len);
 
         let length_error = || NetError::FragmentLengthMismatch {
@@ -544,6 +558,7 @@ impl PendingFrame {
             index,
             len: payload.len(),
         };
+
         if !fragment_fits(index, payload.len(), count, shard_len, self.frame_bytes) {
             return Err(length_error());
         }
@@ -581,11 +596,14 @@ impl PendingFrame {
 
         if !self.prepared {
             self.buffer.resize(usize::from(count) * shard_len, 0);
+
             let tail_start = (usize::from(count) - 1) * shard_len;
+
             self.buffer[tail_start..].fill(0);
             self.prepared = true;
             if let Some(tail) = self.tail.take() {
                 let start = (usize::from(count) - 1) * shard_len;
+
                 self.buffer[start..start + tail.len()].copy_from_slice(&tail);
             }
         }
@@ -598,6 +616,7 @@ impl PendingFrame {
         };
 
         let start = usize::from(index) * shard_len;
+
         self.buffer[start..start + payload.len()].copy_from_slice(payload);
     }
 
@@ -610,6 +629,7 @@ impl PendingFrame {
         spare: &mut SpareStorage,
     ) -> Result<Inserted, NetError> {
         let shard_len = parity.len();
+
         if shard_len == 0 || !shard_len.is_multiple_of(2) {
             return Err(NetError::InvalidShardLength(shard_len));
         }
@@ -678,6 +698,7 @@ impl PendingFrame {
 
         let block = &mut self.blocks[position];
         let slot = &mut block.shards[usize::from(fec.parity_index)];
+
         if slot.is_some() {
             return Ok(Inserted::Duplicate);
         }
@@ -691,6 +712,7 @@ impl PendingFrame {
     fn locate_block(&self, fec: &FecHeader, count: u16) -> Result<Option<usize>, NetError> {
         let start = usize::from(fec.first_fragment);
         let end = start + usize::from(fec.data_shards);
+
         if end > usize::from(count) {
             return Err(NetError::FecBlockOutOfRange {
                 first_fragment: fec.first_fragment,
@@ -706,10 +728,12 @@ impl PendingFrame {
             .blocks
             .iter()
             .position(|known| known.block.first_fragment == fec.first_fragment);
+
         if let Some(position) = same_start {
             let known = &self.blocks[position].block;
             let same_shape =
                 known.data_shards == fec.data_shards && known.parity_shards == fec.parity_shards;
+
             return if same_shape {
                 Ok(Some(position))
             } else {
@@ -755,10 +779,12 @@ impl PendingFrame {
         for position in 0..self.blocks.len() {
             let block = self.blocks[position].block;
             let first = usize::from(block.first_fragment);
+
             let range = first..first + usize::from(block.data_shards);
 
             let missing = range.clone().filter(|index| !self.have[*index]).count();
             let received = self.blocks[position].received;
+
             if missing == 0 || received < missing || self.blocks[position].decoded_with == received
             {
                 continue;
@@ -783,11 +809,13 @@ impl PendingFrame {
                             &self.blocks[position].slab[(*shard)?..(*shard)? + shard_len],
                         ))
                     });
+
             let restored = block.recover(present, parity)?;
 
             for (relative, shard) in restored {
                 let index = first + relative;
                 let start = index * shard_len;
+
                 self.buffer[start..start + shard_len].copy_from_slice(&shard);
                 self.have[index] = true;
                 self.present += 1;
@@ -806,6 +834,7 @@ impl PendingFrame {
                     (None, Some(bytes)) => bytes as usize,
                     (None, None) => self.buffer.len(),
                 };
+
                 self.buffer.truncate(total);
                 self.buffer
             }
@@ -851,6 +880,7 @@ fn fragment_fits(
 
         if is_last && let Some(frame_bytes) = frame_bytes {
             let tail = frame_bytes as usize - (usize::from(count) - 1) * shard_len;
+
             return len == tail;
         }
     }
@@ -895,6 +925,7 @@ mod tests {
 
     fn poll(reassembler: &mut Reassembler, now: Instant) -> Vec<ReassemblyEvent> {
         let mut events = Vec::new();
+
         reassembler.poll_timeouts(now, &mut events);
         events
     }
@@ -905,6 +936,7 @@ mod tests {
         datagrams: impl IntoIterator<Item = &'a Vec<u8>>,
     ) -> Vec<ReassemblyEvent> {
         let mut events = Vec::new();
+
         for datagram in datagrams {
             reassembler.push(datagram, now, &mut events).unwrap();
         }
@@ -940,11 +972,16 @@ mod tests {
         let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
         let mut rx = reassembler(StreamKind::Video);
         let first = frame_data(SHARD_LEN * 4, 91);
+
         let packets = tx.packetize(0, false, &first).unwrap();
+
         drop(feed(&mut rx, Instant::now(), &packets));
+
         let mut buffer = rx.returned.try_recv().unwrap();
+
         buffer.fill(255);
         rx.recycle.try_send(buffer).unwrap();
+
         let data = frame_data(SHARD_LEN * 2 + 7, 3);
         let packets = tx.packetize(1, false, &data).unwrap();
         let surviving = packets
@@ -953,6 +990,7 @@ mod tests {
             .filter(|(index, _)| *index != 0)
             .map(|(_, packet)| packet);
         let events = feed(&mut rx, Instant::now(), surviving);
+
         assert_eq!(frames(&events)[0].data, data);
     }
 
@@ -1000,6 +1038,7 @@ mod tests {
             .iter()
             .filter(|datagram| parity_of(datagram))
             .take(1);
+
         drop(feed(&mut rx, now, parity));
         rx.poll_timeouts(now + Duration::from_secs(60), &mut Vec::new());
 
@@ -1018,6 +1057,7 @@ mod tests {
         let events = feed(&mut rx, Instant::now(), &datagrams);
 
         let received = frames(&events);
+
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].data, data);
         assert!(received[0].keyframe);
@@ -1044,7 +1084,9 @@ mod tests {
         let data = frame_data(SHARD_LEN * 5, 2);
 
         let mut datagrams = tx.packetize(0, false, &data).unwrap();
+
         datagrams.reverse();
+
         let events = feed(&mut rx, Instant::now(), &datagrams);
 
         assert_eq!(frames(&events)[0].data, data);
@@ -1059,7 +1101,9 @@ mod tests {
             let mut rx = reassembler(StreamKind::Video);
 
             let mut datagrams = tx.packetize(0, false, &data).unwrap();
+
             datagrams.reverse();
+
             let events = feed(&mut rx, Instant::now(), &datagrams);
 
             assert_eq!(frames(&events)[0].data, data);
@@ -1092,7 +1136,9 @@ mod tests {
 
         let datagrams = tx.packetize(10, false, &data).unwrap();
         let mut events = feed(&mut rx, start, [&datagrams[0], &datagrams[2]]);
+
         rx.poll_timeouts(start + Duration::from_millis(99), &mut events);
+
         assert!(
             events
                 .iter()
@@ -1117,6 +1163,7 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 2, 0))
             .unwrap();
+
         feed(&mut rx, start, [&datagrams[0]]);
 
         assert_eq!(rx.next_timeout(), Some(start + Duration::from_millis(100)));
@@ -1168,6 +1215,7 @@ mod tests {
 
             let now = start + Duration::from_millis(u64::from(step) * 9);
             let _ = rx.push(&first_fragment(&mut tx, state), now, &mut events);
+
             rx.poll_timeouts(now, &mut events);
             events.clear();
 
@@ -1191,6 +1239,7 @@ mod tests {
         let events = feed(&mut rx, Instant::now(), surviving);
 
         let received = frames(&events);
+
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].data, data);
         assert_eq!(received[0].recovered_fragments, 3);
@@ -1228,6 +1277,7 @@ mod tests {
         let events = feed(&mut rx, Instant::now(), parity);
 
         let received = frames(&events);
+
         assert_eq!(received[0].data, data);
         assert!(received[0].keyframe);
         assert_eq!(received[0].recovered_fragments, 4);
@@ -1240,7 +1290,9 @@ mod tests {
         let data = frame_data(SHARD_LEN * 4, 8);
 
         let mut datagrams = tx.packetize(0, false, &data).unwrap();
+
         datagrams.rotate_left(4);
+
         let events = feed(&mut rx, Instant::now(), &datagrams);
 
         assert_eq!(frames(&events).len(), 1);
@@ -1283,6 +1335,7 @@ mod tests {
         assert_eq!(frames(&events).len(), 0);
 
         rx.poll_timeouts(start + Duration::from_secs(1), &mut events);
+
         assert_eq!(lost(&events), [0]);
     }
 
@@ -1301,7 +1354,9 @@ mod tests {
             .unwrap();
         let mut events = feed(&mut rx, start, [&datagrams[2], &datagrams[3]]);
         let waiting = rx.next_timeout();
+
         events.extend(feed(&mut rx, finished, [&datagrams[4]]));
+
         let early = poll(&mut rx, finished + BEFORE_GRACE);
         let due = poll(&mut rx, finished + GRACE);
 
@@ -1325,6 +1380,7 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
             .unwrap();
+
         feed(&mut rx, start, [&datagrams[3]]);
         feed(&mut rx, finished, [&datagrams[4]]);
 
@@ -1344,7 +1400,9 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 4, 10))
             .unwrap();
+
         feed(&mut rx, start, [&datagrams[3], &datagrams[4]]);
+
         let deadline = rx.next_timeout();
         let due = poll(&mut rx, start + Duration::from_millis(100));
 
@@ -1367,7 +1425,9 @@ mod tests {
             .unwrap();
         let mut events = feed(&mut rx, start, [&first[0], &first[1]]);
         let waiting = rx.next_timeout();
+
         events.extend(feed(&mut rx, next_started, [&second[0]]));
+
         let deadline = rx.next_timeout();
         let early = poll(&mut rx, next_started + BEFORE_GRACE);
         let due = poll(&mut rx, next_started + GRACE);
@@ -1396,8 +1456,10 @@ mod tests {
         let second = tx
             .packetize(1, false, &frame_data(SHARD_LEN * 4, 11))
             .unwrap();
+
         feed(&mut rx, start, [&first[0]]);
         feed(&mut rx, start, [&second[4]]);
+
         let due = poll(&mut rx, start + GRACE);
 
         assert!(parity_of(&second[4]));
@@ -1418,6 +1480,7 @@ mod tests {
             start,
             [&datagrams[2], &datagrams[3], &datagrams[4]],
         );
+
         events.extend(poll(&mut rx, start + BEFORE_GRACE));
         events.extend(feed(&mut rx, start + BEFORE_GRACE, [&datagrams[0]]));
         events.extend(poll(&mut rx, start + Duration::from_secs(1)));
@@ -1441,6 +1504,7 @@ mod tests {
             .packetize(1, false, &frame_data(SHARD_LEN * 2, 14))
             .unwrap();
         let mut events = feed(&mut rx, start, [&first[0], &first[1]]);
+
         events.extend(feed(&mut rx, start, [&second[0]]));
         events.extend(feed(&mut rx, start + BEFORE_GRACE, [&first[2]]));
         events.extend(poll(&mut rx, start + GRACE));
@@ -1464,6 +1528,7 @@ mod tests {
             start,
             [&datagrams[2], &datagrams[3], &datagrams[5]],
         );
+
         events.extend(poll(&mut rx, start + BEFORE_GRACE));
         events.extend(feed(&mut rx, start + BEFORE_GRACE, [&datagrams[4]]));
         events.extend(poll(&mut rx, start + Duration::from_secs(1)));
@@ -1489,6 +1554,7 @@ mod tests {
             start,
             [&datagrams[2], &datagrams[3], &datagrams[4]],
         );
+
         events.extend(poll(&mut rx, start + GRACE));
         events.extend(feed(&mut rx, start + GRACE, [&datagrams[0], &datagrams[1]]));
 
@@ -1512,10 +1578,14 @@ mod tests {
             .iter()
             .filter(|datagram| parity_of(datagram))
             .collect();
+
         feed(&mut rx, start, [&datagrams[7], parity[0]]);
+
         let after_first_block = poll(&mut rx, start + GRACE);
         let waiting = rx.next_timeout();
+
         feed(&mut rx, last_block_done, [parity[1]]);
+
         let due = poll(&mut rx, last_block_done + GRACE);
 
         assert_eq!(parity.len(), 2);
@@ -1565,6 +1635,7 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 3, 20))
             .unwrap();
+
         feed(&mut rx, start, [&datagrams[0], &datagrams[2]]);
 
         assert_eq!(rx.next_timeout(), Some(start + Duration::from_millis(100)));
@@ -1584,12 +1655,17 @@ mod tests {
             .packetize(0, false, &frame_data(SHARD_LEN * 2, 22))
             .unwrap();
         let second = coded.packetize(1, false, &data).unwrap();
+
         feed(&mut rx, start, &first);
         feed(&mut rx, second_at, [&second[2], &second[3]]);
+
         let verdict = rx.next_timeout();
+
         feed(&mut rx, second_at, [&second[4]]);
+
         let withdrawn = rx.next_timeout();
         let mut events = poll(&mut rx, late);
+
         events.extend(feed(&mut rx, late, [&second[5]]));
 
         assert_eq!(verdict, Some(second_at + GRACE));
@@ -1611,9 +1687,13 @@ mod tests {
             .packetize(1, false, &frame_data(SHARD_LEN * 4, 24))
             .unwrap();
         let mut events = feed(&mut rx, start, [&first[2], &first[3], &first[4]]);
+
         events.extend(feed(&mut rx, start, [&second[0]]));
+
         let deadline = rx.next_timeout();
+
         events.extend(poll(&mut rx, start + Duration::from_millis(99)));
+
         let due = poll(&mut rx, start + Duration::from_millis(100));
 
         assert_eq!(deadline, Some(start + Duration::from_millis(100)));
@@ -1637,6 +1717,7 @@ mod tests {
         let second = plain
             .packetize(1, false, &frame_data(SHARD_LEN * 3, 27))
             .unwrap();
+
         feed(&mut rx, start, &before);
         rx.reset();
         feed(&mut rx, start, &first);
@@ -1658,6 +1739,7 @@ mod tests {
         let third = tx.packetize(3, false, &frame_data(SHARD_LEN, 2)).unwrap();
 
         let mut events = feed(&mut rx, now, [&first[0]]);
+
         events.extend(feed(&mut rx, now, &third));
         events.extend(feed(&mut rx, now, &second));
 
@@ -1677,7 +1759,9 @@ mod tests {
         let datagrams = tx
             .packetize(5, false, &frame_data(SHARD_LEN * 2, 0))
             .unwrap();
+
         feed(&mut rx, now, &datagrams);
+
         let events = feed(&mut rx, now, &datagrams);
 
         assert_eq!(events.len(), 0);
@@ -1695,10 +1779,12 @@ mod tests {
         let now = Instant::now();
 
         let mut events = Vec::new();
+
         for frame in 0..4 {
             let datagrams = tx
                 .packetize(frame, false, &frame_data(SHARD_LEN * 2, 0))
                 .unwrap();
+
             events.extend(feed(&mut rx, now, [&datagrams[0]]));
         }
 
@@ -1713,14 +1799,17 @@ mod tests {
         let now = Instant::now();
 
         let mut events = Vec::new();
+
         for frame in [u32::MAX - 1, u32::MAX, 0, 1] {
             let datagrams = tx
                 .packetize(frame, false, &frame_data(SHARD_LEN + 1, 0))
                 .unwrap();
+
             events.extend(feed(&mut rx, now, &datagrams));
         }
 
         let numbers: Vec<u32> = frames(&events).iter().map(|frame| frame.frame).collect();
+
         assert_eq!(numbers, [u32::MAX - 1, u32::MAX, 0, 1]);
         assert_eq!(lost(&events).len(), 0);
         assert_eq!(rx.stats().stale_packets, 0);
@@ -1734,12 +1823,15 @@ mod tests {
 
         let sequence_start = u32::MAX - 1;
         let mut datagrams = Vec::new();
+
         for frame in 0..4 {
             let mut header_bytes = tx.packetize(frame, false, &[1, 2, 3]).unwrap();
+
             datagrams.append(&mut header_bytes);
         }
         for (offset, datagram) in datagrams.iter_mut().enumerate() {
             let mut header = PacketHeader::read(datagram).unwrap();
+
             header.sequence = sequence_start.wrapping_add(u32::try_from(offset).unwrap());
             header.write(datagram).unwrap();
         }
@@ -1763,10 +1855,13 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 3, 0))
             .unwrap();
+
         rx.push(&datagrams[0], now, &mut events).unwrap();
 
         let mut forged = datagrams[1].clone();
+
         let mut header = PacketHeader::read(&forged).unwrap();
+
         header.fragment_count = 4;
         header.write(&mut forged).unwrap();
 
@@ -1781,6 +1876,7 @@ mod tests {
 
         rx.push(&datagrams[1], now, &mut events).unwrap();
         rx.push(&datagrams[2], now, &mut events).unwrap();
+
         assert_eq!(frames(&events).len(), 1);
     }
 
@@ -1794,6 +1890,7 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 3, 0))
             .unwrap();
+
         rx.push(&datagrams[0], now, &mut events).unwrap();
 
         let truncated = &datagrams[1][..datagrams[1].len() - 2];
@@ -1814,6 +1911,7 @@ mod tests {
             .packetize(0, false, &frame_data(SHARD_LEN * 2, 0))
             .unwrap()
             .remove(0);
+
         datagram.pop();
 
         assert!(rx.push(&datagram, Instant::now(), &mut events).is_err());
@@ -1868,11 +1966,14 @@ mod tests {
             .iter()
             .filter(|datagram| parity_of(datagram))
             .collect();
+
         rx.push(parity[0], now, &mut events).unwrap();
 
         let mut forged = parity[1].clone();
+
         let (_, payload) = PacketHeader::parse(&forged).unwrap();
         let (mut fec, _) = FecHeader::parse(payload).unwrap();
+
         fec.data_shards = 3;
         fec.write(&mut forged[PacketHeader::SIZE..]).unwrap();
 
@@ -1892,6 +1993,7 @@ mod tests {
         let datagrams = tx
             .packetize(0, false, &frame_data(SHARD_LEN * 4, 0))
             .unwrap();
+
         rx.push(&datagrams[0], now, &mut events).unwrap();
 
         let mut forged = datagrams
@@ -1899,8 +2001,10 @@ mod tests {
             .find(|datagram| parity_of(datagram))
             .unwrap()
             .clone();
+
         let (_, payload) = PacketHeader::parse(&forged).unwrap();
         let (mut fec, _) = FecHeader::parse(payload).unwrap();
+
         fec.frame_bytes = u32::try_from(SHARD_LEN * 8).unwrap();
         fec.write(&mut forged[PacketHeader::SIZE..]).unwrap();
 
@@ -1917,6 +2021,7 @@ mod tests {
         let now = Instant::now();
 
         let datagrams = tx.packetize(100, false, &frame_data(SHARD_LEN, 0)).unwrap();
+
         feed(&mut rx, now, &datagrams);
         rx.reset();
 
@@ -1967,6 +2072,7 @@ mod tests {
     #[test]
     fn every_prefix_of_a_data_or_parity_datagram_is_handled_without_panicking() {
         let mut tx = packetizer(StreamKind::Video, FecScheme::for_overhead(4, 50));
+
         let datagrams = tx
             .packetize(0, true, &frame_data(SHARD_LEN * 4 + 20, 3))
             .unwrap();
@@ -1984,6 +2090,7 @@ mod tests {
                     assert!(pushed.is_err());
                 }
                 rx.poll_timeouts(Instant::now() + Duration::from_secs(1), &mut events);
+
                 assert_eq!(rx.pending_frames(), 0);
             }
         }

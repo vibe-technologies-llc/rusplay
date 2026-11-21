@@ -60,20 +60,24 @@ impl FakeInput {
     pub fn connect(stack: &Stack) -> Self {
         let connection = Connection::from_socket(stack.connect_wayland()).unwrap();
         let mut queue = connection.new_event_queue();
+
         let handle = queue.handle();
         let _registry = connection.display().get_registry(&handle, ());
         let mut globals = Globals { input: None };
+
         queue.roundtrip(&mut globals).unwrap();
 
         let input = globals
             .input
             .expect("the nested compositor has no fake input");
+
         input.authenticate(APPLICATION.into(), REASON.into());
 
         let this = Self {
             input,
             queue: parking_lot::Mutex::new(queue),
         };
+
         this.flush();
         this
     }

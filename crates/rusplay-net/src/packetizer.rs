@@ -2,7 +2,7 @@ use rusplay_protocol::{FecHeader, PacketFlags, PacketHeader, ProtocolVersion, St
 
 use crate::{DatagramArena, FecEncoder, FecScheme, NetError};
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Packetizer {
     stream: StreamKind,
     shard_len: usize,
@@ -24,6 +24,7 @@ impl Packetizer {
         }
 
         let shard_len = shard_len_for(max_datagram);
+
         if shard_len == 0 {
             return Err(NetError::DatagramBudgetTooSmall { max_datagram });
         }
@@ -74,6 +75,7 @@ impl Packetizer {
         body: &[u8],
     ) -> Result<Vec<Vec<u8>>, NetError> {
         let mut arena = DatagramArena::new();
+
         self.packetize_into(&mut arena, frame, keyframe, prefix, body)?;
 
         Ok(arena.to_vecs())
@@ -88,7 +90,9 @@ impl Packetizer {
         body: &[u8],
     ) -> Result<(), NetError> {
         arena.clear();
+
         let data = Payload { prefix, body };
+
         if data.is_empty() {
             return Err(NetError::EmptyFrame);
         }
@@ -143,9 +147,11 @@ impl Packetizer {
         for block in &blocks {
             let first = usize::from(block.first_fragment);
             let mut encoding = self.encoder.begin(block, shard_len)?;
+
             for index in first..first + usize::from(block.data_shards) {
                 encoding.add(data.shard(index, shard_len, &mut self.scratch))?;
             }
+
             let result = encoding.finish()?;
 
             for (parity_index, shard) in result.recovery_iter().enumerate() {
@@ -201,6 +207,7 @@ fn header(
     (index, count): (usize, u16),
 ) -> PacketHeader {
     let sequence = *next_sequence;
+
     *next_sequence = sequence.wrapping_add(1);
 
     PacketHeader {
@@ -214,7 +221,7 @@ fn header(
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Payload<'a> {
     prefix: &'a [u8],
     body: &'a [u8],
@@ -240,10 +247,12 @@ impl<'a> Payload<'a> {
 
         if start < split {
             let prefix_end = end.min(split);
+
             out[..prefix_end - start].copy_from_slice(&self.prefix[start..prefix_end]);
         }
         if end > split {
             let body_start = start.max(split);
+
             out[body_start - start..].copy_from_slice(&self.body[body_start - split..end - split]);
         }
     }
@@ -330,6 +339,7 @@ mod tests {
     #[test]
     fn the_configured_fragment_cap_bounds_the_frame_size() {
         let mut packetizer = video(FecScheme::None).with_max_fragments(4);
+
         let shard_len = packetizer.shard_len();
 
         assert_eq!(packetizer.max_frame_bytes(), shard_len * 4);
@@ -347,6 +357,7 @@ mod tests {
     #[test]
     fn oversized_frame_is_rejected() {
         let mut packetizer = video(FecScheme::None);
+
         let data = vec![0; packetizer.max_frame_bytes() + 1];
 
         assert!(matches!(
@@ -358,6 +369,7 @@ mod tests {
     #[test]
     fn frame_splits_into_full_fragments_and_a_short_tail() {
         let mut packetizer = video(FecScheme::None);
+
         let shard_len = packetizer.shard_len();
         let data = vec![7u8; shard_len * 2 + 5];
 
@@ -397,6 +409,7 @@ mod tests {
     #[test]
     fn parity_packets_describe_their_block() {
         let mut packetizer = video(FecScheme::for_overhead(4, 50));
+
         let shard_len = packetizer.shard_len();
         let data = vec![3u8; shard_len * 6];
 
@@ -412,6 +425,7 @@ mod tests {
 
         assert_eq!(datagrams.len(), 6 + 2 + 2);
         assert_eq!(fec.len(), 4);
+
         for (index, (header, (fec_header, parity))) in fec.iter().enumerate() {
             assert_eq!(usize::from(header.fragment_index), index);
             assert_eq!(header.fragment_count, 4);
@@ -421,6 +435,7 @@ mod tests {
             assert_eq!(fec_header.frame_bytes as usize, data.len());
             assert_eq!(parity.len(), shard_len);
         }
+
         assert_eq!(fec[0].1.0.first_fragment, 0);
         assert_eq!(fec[2].1.0.first_fragment, 3);
     }
@@ -428,6 +443,7 @@ mod tests {
     #[test]
     fn sequence_wraps_across_frames() {
         let mut packetizer = video(FecScheme::None);
+
         packetizer.next_sequence = u32::MAX;
 
         let datagrams = packetizer.packetize(0, false, &[1, 2, 3]).unwrap();
@@ -452,6 +468,7 @@ mod tests {
             let body: Vec<u8> = (0..body_len)
                 .map(|byte| u8::try_from(byte * 7 % 251).unwrap())
                 .collect();
+
             let joined = [prefix.clone(), body.clone()].concat();
             let mut split = video(scheme);
             let mut whole = video(scheme);
@@ -483,6 +500,7 @@ mod tests {
             .cycle()
             .take(shard_len * 3 + 11)
             .collect();
+
         let joined = [prefix.as_slice(), body.as_slice()].concat();
 
         for scheme in [FecScheme::None, FecScheme::for_overhead(4, 50)] {
@@ -502,6 +520,7 @@ mod tests {
     #[test]
     fn packetizing_again_replaces_the_arena_contents() {
         let mut packetizer = video(FecScheme::None);
+
         let shard_len = packetizer.shard_len();
         let mut arena = DatagramArena::new();
 
@@ -513,6 +532,7 @@ mod tests {
             .unwrap();
 
         let datagrams = arena.to_vecs();
+
         assert_eq!(datagrams.len(), 1);
         assert_eq!(headers(&datagrams)[0].frame, 1);
         assert_eq!(headers(&datagrams)[0].sequence, 4);
@@ -531,6 +551,7 @@ mod tests {
                     .map(|index| {
                         let start = index * shard_len;
                         let mut shard = frame[start..(start + shard_len).min(frame.len())].to_vec();
+
                         shard.resize(shard_len, 0);
                         shard
                     })
@@ -574,6 +595,7 @@ mod tests {
             let body: Vec<u8> = (0..body_len)
                 .map(|byte| u8::try_from(byte * 5 % 251).unwrap())
                 .collect();
+
             let joined = [prefix.as_slice(), body.as_slice()].concat();
 
             let datagrams = video(scheme)
@@ -592,6 +614,7 @@ mod tests {
     fn consecutive_frames_reuse_the_encoder_and_the_arena() {
         let scheme = FecScheme::for_overhead(4, 50);
         let mut packetizer = video(scheme);
+
         let shard_len = packetizer.shard_len();
         let mut arena = DatagramArena::new();
         let frame: Vec<u8> = (0..shard_len * 7 + 3)
@@ -601,6 +624,7 @@ mod tests {
         packetizer
             .packetize_into(&mut arena, 0, false, &[1; 8], &frame)
             .unwrap();
+
         let scratch = packetizer.scratch.as_ptr();
         let storage = arena.to_vecs();
         for number in 1..4 {

@@ -44,6 +44,7 @@ mod tests {
         let link = ClientLink::new(first);
 
         let before = (link.address(), link.epoch());
+
         link.switch(second);
 
         assert_eq!(before, (first, 0));

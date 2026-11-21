@@ -32,13 +32,13 @@ use crate::{
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const THREAD_NAME: &str = "rusplay-wayland-input";
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct WaylandTarget {
     pub display: NonNull<c_void>,
     pub surface: NonNull<c_void>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct HostCursorObserver {
     commands: Sender<Command>,
 }
@@ -80,6 +80,7 @@ impl WaylandCapture {
                 .map_err(|_| InputError::WaylandObjectInvalid {
                 object: "wl_surface",
             })?;
+
         let surface = WlSurface::from_id(&connection, surface_id).map_err(|_| {
             InputError::WaylandObjectInvalid {
                 object: "wl_surface",
@@ -89,6 +90,7 @@ impl WaylandCapture {
         let (globals, mut queue) = registry_queue_init::<State>(&connection)
             .map_err(|error| InputError::WaylandGlobals(Box::new(error)))?;
         let core = Arc::new(Mutex::new(CaptureCore::new(options)));
+
         let mut state = State::bind(
             &globals,
             &queue.handle(),
@@ -107,6 +109,7 @@ impl WaylandCapture {
         let (commands, queued) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+
         let thread = spawn_capture(on_thread_start, move || {
             serve(&connection, queue, state, &queued, &worker_stop)
         })?;
@@ -312,8 +315,10 @@ mod tests {
         fn attach(mode: PointerMode) -> Self {
             let connection = Connection::connect_to_env().unwrap();
             let (globals, mut queue) = registry_queue_init::<Probe>(&connection).unwrap();
+
             let compositor: WlCompositor = globals.bind(&queue.handle(), 1..=4, ()).unwrap();
             let surface = compositor.create_surface(&queue.handle(), ());
+
             queue.roundtrip(&mut Probe).unwrap();
 
             let display = NonNull::new(connection.backend().display_ptr().cast()).unwrap();
@@ -323,6 +328,7 @@ mod tests {
                 ..InputConfig::default()
             });
             let (sender, _events) = channel();
+
             let capture = unsafe {
                 WaylandCapture::attach(
                     WaylandTarget {
@@ -362,15 +368,18 @@ mod tests {
         let capture = spawn_capture(
             move || {
                 let thread = thread::current().name().map(str::to_owned);
+
                 hook_steps.send(("hook", thread)).unwrap();
             },
             move || {
                 let thread = thread::current().name().map(str::to_owned);
+
                 steps.send(("work", thread)).unwrap();
                 Ok(())
             },
         )
         .unwrap();
+
         capture.join().unwrap().unwrap();
 
         assert_eq!(
@@ -389,12 +398,15 @@ mod tests {
 
         live.capture().engage();
         thread::sleep(Duration::from_millis(100));
+
         assert!(!live.capture().is_finished());
         assert!(live.capture().is_engaged());
 
         live.capture().release();
         thread::sleep(Duration::from_millis(100));
+
         assert!(!live.capture().is_engaged());
+
         live.stop().unwrap();
     }
 
@@ -408,6 +420,7 @@ mod tests {
         live.capture().set_pointer_mode(PointerMode::Relative);
         live.capture().cycle_pointer_mode();
         thread::sleep(Duration::from_millis(100));
+
         assert!(!live.capture().is_finished());
         assert_eq!(live.capture().pointer_mode(), PointerMode::Auto);
 
@@ -427,7 +440,9 @@ mod tests {
             height: 360.0,
         }));
         thread::sleep(Duration::from_millis(100));
+
         assert!(!live.capture().is_finished());
+
         live.stop().unwrap();
     }
 }

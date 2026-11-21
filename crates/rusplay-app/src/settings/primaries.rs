@@ -53,6 +53,7 @@ fn custom_text(points: &Table) -> Option<String> {
         let [x, y] = points.get(name)?.as_array()?.as_slice() else {
             return None;
         };
+
         words.push(format!("{},{}", coordinate(x)?, coordinate(y)?));
     }
 
@@ -70,6 +71,7 @@ fn coordinate(value: &Toml) -> Option<f64> {
 
 pub fn value(text: &str) -> Result<Toml, FieldError> {
     let mut words = text.split_whitespace();
+
     let name = words.next().ok_or(FieldError::Required)?;
 
     if name != CUSTOM {
@@ -83,11 +85,13 @@ pub fn value(text: &str) -> Result<Toml, FieldError> {
     }
 
     let points: Vec<&str> = words.collect();
+
     if points.len() != POINT_NAMES.len() {
         return Err(FieldError::NotPrimaries);
     }
 
     let mut table = Table::new();
+
     for (name, point) in POINT_NAMES.into_iter().zip(points) {
         let (x, y) = point.split_once(',').ok_or(FieldError::NotPrimaries)?;
         let parse = |text: &str| {
@@ -98,10 +102,12 @@ pub fn value(text: &str) -> Result<Toml, FieldError> {
                 .map(Toml::Float)
                 .ok_or(FieldError::NotPrimaries)
         };
+
         table.insert(name.to_owned(), Toml::Array(vec![parse(x)?, parse(y)?]));
     }
 
     let custom = Toml::Table(Table::from_iter([(CUSTOM.to_owned(), Toml::Table(table))]));
+
     custom
         .clone()
         .try_into::<ColorPrimaries>()
@@ -148,6 +154,7 @@ mod tests {
         for primaries in ColorPrimaries::NAMED {
             assert_eq!(round_trip(primaries), primaries);
         }
+
         assert_eq!(round_trip(custom), custom);
     }
 

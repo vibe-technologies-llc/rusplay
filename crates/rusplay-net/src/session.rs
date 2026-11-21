@@ -81,6 +81,7 @@ impl ReplayWindow {
             Some(highest) if counter <= highest => self.seen |= 1 << (highest - counter),
             Some(highest) => {
                 let shift = counter - highest;
+
                 self.seen = u32::try_from(shift)
                     .ok()
                     .and_then(|shift| self.seen.checked_shl(shift))
@@ -131,6 +132,7 @@ impl SessionCipher {
                 })?;
 
         let mut sealed = Vec::with_capacity(datagram.len() + SEALED_OVERHEAD);
+
         sealed.extend_from_slice(header);
         sealed.resize(PacketHeader::SIZE + COUNTER_LEN, 0);
         sealed.extend_from_slice(&datagram[PacketHeader::SIZE..]);
@@ -142,6 +144,7 @@ impl SessionCipher {
 
     pub fn seal_in_place(&self, slot: &mut [u8]) -> Result<(), NetError> {
         let min = PacketHeader::SIZE + SEALED_OVERHEAD;
+
         if slot.len() < min {
             return Err(NetError::SessionDatagramTooShort {
                 len: slot.len(),
@@ -155,6 +158,7 @@ impl SessionCipher {
 
         let (head, rest) = slot.split_at_mut(payload_start);
         let (payload, tag_room) = rest.split_at_mut(tag_start - payload_start);
+
         head[PacketHeader::SIZE..].copy_from_slice(&counter.to_be_bytes());
 
         let tag = self
@@ -165,6 +169,7 @@ impl SessionCipher {
                 payload.into(),
             )
             .map_err(NetError::SessionSeal)?;
+
         tag_room.copy_from_slice(&tag);
 
         Ok(())
@@ -172,6 +177,7 @@ impl SessionCipher {
 
     pub fn open_in_place(&self, sealed: &mut [u8]) -> Result<usize, NetError> {
         let min = PacketHeader::SIZE + SEALED_OVERHEAD;
+
         if sealed.len() < min {
             return Err(NetError::SessionDatagramTooShort {
                 len: sealed.len(),
@@ -184,7 +190,9 @@ impl SessionCipher {
         let tag_start = sealed.len() - TAG_LEN;
 
         let mut counter_bytes = [0; COUNTER_LEN];
+
         counter_bytes.copy_from_slice(&sealed[counter_start..payload_start]);
+
         let counter = u64::from_be_bytes(counter_bytes);
         let tag =
             Tag::try_from(&sealed[tag_start..]).map_err(|_| NetError::SessionDatagramTooShort {
@@ -193,12 +201,14 @@ impl SessionCipher {
             })?;
 
         let mut replay = self.replay.lock();
+
         if !replay.admits(counter) {
             return Err(NetError::SessionReplay { counter });
         }
 
         let (head, rest) = sealed.split_at_mut(payload_start);
         let ciphertext = &mut rest[..tag_start - payload_start];
+
         self.receive
             .decrypt_inout_detached(
                 &nonce_for(counter),
@@ -211,6 +221,7 @@ impl SessionCipher {
         drop(replay);
 
         let payload_len = tag_start - payload_start;
+
         sealed.copy_within(
             payload_start..payload_start + payload_len,
             PacketHeader::SIZE,
@@ -220,7 +231,9 @@ impl SessionCipher {
 
     pub fn open(&self, sealed: &[u8]) -> Result<Vec<u8>, NetError> {
         let mut buffer = sealed.to_vec();
+
         let len = self.open_in_place(&mut buffer)?;
+
         buffer.truncate(len);
 
         Ok(buffer)
@@ -229,6 +242,7 @@ impl SessionCipher {
 
 fn nonce_for(counter: u64) -> Nonce {
     let mut bytes = [0; 12];
+
     bytes[4..].copy_from_slice(&counter.to_be_bytes());
 
     Nonce::from(bytes)
@@ -244,6 +258,7 @@ mod tests {
     fn only_sealed_stream_kinds_prove_the_peer_is_alive() {
         let header = |stream| {
             let mut bytes = [0; PacketHeader::SIZE];
+
             PacketHeader {
                 version: ProtocolVersion::CURRENT,
                 stream,
@@ -288,6 +303,7 @@ mod tests {
             fragment_count: 1,
         };
         let mut datagram = vec![0; PacketHeader::SIZE];
+
         header.write(&mut datagram).unwrap();
         datagram.extend_from_slice(payload);
         datagram
@@ -346,6 +362,7 @@ mod tests {
 
         for index in 0..sealed.len() {
             let mut forged = sealed.clone();
+
             forged[index] ^= 0x01;
 
             assert!(host.open(&forged).is_err(), "byte {index} went unnoticed");
@@ -387,6 +404,7 @@ mod tests {
     fn datagrams_older_than_the_window_are_rejected() {
         let (client, host) = pair();
         let old = client.seal(&datagram(b"old")).unwrap();
+
         for _ in 0..REPLAY_WINDOW {
             host.open(&client.seal(&datagram(b"filler")).unwrap())
                 .unwrap();
@@ -402,8 +420,10 @@ mod tests {
     fn forged_counter_does_not_advance_the_window() {
         let (client, host) = pair();
         let mut forged = client.seal(&datagram(b"x")).unwrap();
+
         forged[PacketHeader::SIZE..PacketHeader::SIZE + COUNTER_LEN]
             .copy_from_slice(&u64::MAX.to_be_bytes());
+
         assert!(host.open(&forged).is_err());
 
         let genuine = client.seal(&datagram(b"y")).unwrap();
@@ -464,6 +484,7 @@ mod tests {
         for cut in 0..sealed.len() {
             assert!(host.open(&sealed[..cut]).is_err());
         }
+
         assert!(host.open(&sealed).is_ok());
     }
 }

@@ -24,7 +24,7 @@ const ICTCP_LMS_TO_ITP: [[f64; 3]; 3] = [
     [17933.0, -17390.0, -543.0],
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum WorkingSpace {
     Oklab,
     Ictcp,

@@ -102,14 +102,14 @@ pub(crate) fn fourcc_for(spa: VideoFormat) -> Option<DrmFourcc> {
         .map(|(_, fourcc)| *fourcc)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FormatRequest {
     pub size_hint: Option<Resolution>,
     pub frame_rate: FrameRate,
     pub color: Option<ColorOffer>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ColorOffer {
     pub transfer: u32,
     pub primaries: u32,
@@ -132,7 +132,7 @@ impl ColorOffer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NegotiatedFormat {
     pub fourcc: DrmFourcc,
     pub size: Resolution,
@@ -149,14 +149,14 @@ impl NegotiatedFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ModifierOffer {
     Absent,
     Fixed(u64),
     Choice(Vec<u64>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ParsedFormat {
     pub fourcc: DrmFourcc,
     pub size: Resolution,
@@ -165,7 +165,7 @@ pub(crate) struct ParsedFormat {
     pub refresh: Option<FrameRate>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FormatDecision {
     Accept(NegotiatedFormat),
     Fixate { fourcc: DrmFourcc, modifier: u64 },
@@ -201,13 +201,13 @@ pub(crate) fn decide(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BufferMemory {
     Shared,
     DmaBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModifierRequest<'a> {
     Negotiate(&'a [u64]),
     Fixed(u64),
@@ -250,6 +250,7 @@ pub(crate) fn dmabuf_enum_format(
     };
 
     let mut properties = media_properties();
+
     properties.push(Property::new(
         FormatProperties::VideoFormat.as_raw(),
         Value::Id(Id(spa.as_raw())),
@@ -276,6 +277,7 @@ pub(crate) fn enum_formats(
     if let Some(table) = dmabuf {
         for fourcc in formats {
             let modifiers = ModifierRequest::Negotiate(modifiers_for(table, *fourcc));
+
             pods.extend(dmabuf_enum_format(*fourcc, modifiers, request)?);
         }
     }
@@ -306,6 +308,7 @@ pub(crate) fn shm_enum_format(
     )));
 
     let mut properties = media_properties();
+
     properties.push(Property::new(
         FormatProperties::VideoFormat.as_raw(),
         format,
@@ -464,7 +467,7 @@ pub(crate) fn meta_param(meta_type: u32, size: MetaSize) -> Result<Vec<u8>, Capt
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MetaSize {
     Fixed(i32),
     Range { default: i32, min: i32, max: i32 },
@@ -547,6 +550,7 @@ fn modifier_offer(property: &Property) -> Option<ModifierOffer> {
             },
         ))) => {
             let mut offered = vec![default.cast_unsigned()];
+
             for alternative in alternatives {
                 let alternative = alternative.cast_unsigned();
                 if !offered.contains(&alternative) {
@@ -640,6 +644,7 @@ mod tests {
 
     fn fixed_format(spa: VideoFormat, width: u32, height: u32) -> Vec<u8> {
         let mut properties = media_properties();
+
         properties.push(Property::new(
             FormatProperties::VideoFormat.as_raw(),
             Value::Id(Id(spa.as_raw())),
@@ -658,6 +663,7 @@ mod tests {
 
     fn with_colorimetry(bytes: &[u8], colorimetry: SpaColorimetry) -> Vec<u8> {
         let mut object = parse_object(bytes).unwrap();
+
         for (key, id) in [
             (FormatProperties::VideoColorRange, colorimetry.range),
             (FormatProperties::VideoColorMatrix, colorimetry.matrix),
@@ -676,6 +682,7 @@ mod tests {
 
     fn with_modifier(bytes: &[u8], modifier: Property) -> Vec<u8> {
         let mut object = parse_object(bytes).unwrap();
+
         object.properties.push(modifier);
         serialize(object).unwrap()
     }
@@ -715,6 +722,7 @@ mod tests {
         let size = property(&object, FormatProperties::VideoSize.as_raw()).unwrap();
 
         assert_eq!(object.id, ParamType::EnumFormat.as_raw());
+
         let Value::Choice(ChoiceValue::Id(Choice(
             _,
             ChoiceEnum::Enum {
@@ -725,6 +733,7 @@ mod tests {
         else {
             panic!("expected an enum choice, got {:?}", format.value);
         };
+
         assert_eq!(*default, Id(VideoFormat::BGRx.as_raw()));
         assert_eq!(alternatives.len(), formats.len());
         assert!(matches!(
@@ -762,6 +771,7 @@ mod tests {
 
     fn with_rates(bytes: &[u8], rates: &[(FormatProperties, Fraction)]) -> Vec<u8> {
         let mut object = parse_object(bytes).unwrap();
+
         for (key, rate) in rates {
             object
                 .properties
@@ -873,6 +883,7 @@ mod tests {
         else {
             panic!("expected a flags choice, got {:?}", data_type.value);
         };
+
         assert_eq!(
             *default,
             (1 << sys::SPA_DATA_MemPtr) | (1 << sys::SPA_DATA_MemFd)
@@ -944,9 +955,13 @@ mod tests {
 
         assert_eq!(with_dmabuf.len(), 2);
         assert_eq!(without.len(), 1);
+
         let first = parse_object(&with_dmabuf[0]).unwrap();
+
         assert!(property(&first, FormatProperties::VideoModifier.as_raw()).is_ok());
+
         let last = parse_object(&with_dmabuf[1]).unwrap();
+
         assert!(property(&last, FormatProperties::VideoModifier.as_raw()).is_err());
     }
 
@@ -1017,6 +1032,7 @@ mod tests {
         let FormatDecision::Accept(format) = decision else {
             panic!("expected the format to be accepted, got {decision:?}");
         };
+
         assert_eq!(format.modifier, Some(AMD_TILED));
         assert_eq!(format.memory(), BufferMemory::DmaBuf);
     }
@@ -1030,6 +1046,7 @@ mod tests {
         let FormatDecision::Accept(format) = decision else {
             panic!("expected the format to be accepted, got {decision:?}");
         };
+
         assert_eq!(format.memory(), BufferMemory::Shared);
     }
 
@@ -1136,6 +1153,7 @@ mod tests {
             ..request()
         };
         let mut object = parse_object(&fixed_format(VideoFormat::xBGR_210LE, 64, 64)).unwrap();
+
         object.properties.extend(color_properties(offer.color));
 
         let format = parse_format(&serialize(object).unwrap()).unwrap();

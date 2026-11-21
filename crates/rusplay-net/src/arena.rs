@@ -10,14 +10,14 @@ use crate::{
 const BODY_START: usize = PacketHeader::SIZE + SEALED_HEADROOM;
 const NO_SLICE: &[u8] = &[];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Seal {
     Unsealed,
     Pending,
     Sealed,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Slot {
     start: usize,
     body_len: usize,
@@ -105,11 +105,13 @@ impl DatagramArena {
         };
 
         let end = slot.start + slot.slot_len();
+
         if self.bytes.len() < end {
             self.bytes.resize(end, 0);
         }
 
         let bytes = &mut self.bytes[slot.start..end];
+
         header.write(bytes)?;
         if let Some(fec_header) = fec_header {
             fec_header.write(&mut bytes[BODY_START..])?;
@@ -132,6 +134,7 @@ impl DatagramArena {
             }
 
             let end = slot.start + slot.slot_len();
+
             cipher.seal_in_place(&mut self.bytes[slot.start..end])?;
             slot.seal = Seal::Sealed;
         }
@@ -204,8 +207,10 @@ mod tests {
         fill(&mut arena, StreamKind::Video, 7, b"hello");
 
         let mut expected = vec![0; PacketHeader::SIZE];
+
         header(StreamKind::Video, 7).write(&mut expected).unwrap();
         expected.extend_from_slice(b"hello");
+
         assert_eq!(joined(&arena, 0), expected);
         assert_eq!(arena.to_vecs(), vec![expected]);
         assert_eq!(arena.plain_len(0), PacketHeader::SIZE + 5);
@@ -232,6 +237,7 @@ mod tests {
 
         let (parsed, body) = PacketHeader::parse(&datagram).unwrap();
         let (fec_parsed, payload) = FecHeader::parse(body).unwrap();
+
         assert_eq!(parsed.stream, StreamKind::Fec);
         assert_eq!(fec_parsed, fec);
         assert_eq!(payload, [1, 2, 3]);
@@ -241,14 +247,17 @@ mod tests {
     fn sealing_in_place_round_trips_through_open() {
         let (client, host) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Video, 0, b"first payload");
         fill(&mut arena, StreamKind::Video, 1, &[0xab; 300]);
+
         let plain = arena.to_vecs();
 
         arena.seal(0..2, &client).unwrap();
 
         for (index, expected) in plain.iter().enumerate() {
             let wire = joined(&arena, index);
+
             assert_eq!(wire.len(), expected.len() + SEALED_OVERHEAD);
             assert_eq!(&wire[..PacketHeader::SIZE], &expected[..PacketHeader::SIZE]);
             assert_ne!(
@@ -263,10 +272,13 @@ mod tests {
     fn in_place_sealing_matches_the_copying_seal() {
         let (client, host) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Audio, 3, b"same bytes");
+
         let plain = arena.to_vecs().remove(0);
 
         arena.seal(0..1, &client).unwrap();
+
         let in_place = joined(&arena, 0);
         let copied = ciphers().0.seal(&plain).unwrap();
 
@@ -278,11 +290,15 @@ mod tests {
     fn a_datagram_is_sealed_once_however_often_the_range_is_sealed() {
         let (client, host) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Video, 0, b"once");
+
         let plain = arena.to_vecs().remove(0);
 
         arena.seal(0..1, &client).unwrap();
+
         let first = joined(&arena, 0);
+
         arena.seal(0..1, &client).unwrap();
 
         assert_eq!(joined(&arena, 0), first);
@@ -293,7 +309,9 @@ mod tests {
     fn streams_that_do_not_require_sealing_stay_plain() {
         let (client, _) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Pairing, 0, b"handshake");
+
         let plain = arena.to_vecs().remove(0);
 
         arena.seal(0..1, &client).unwrap();
@@ -305,8 +323,10 @@ mod tests {
     fn only_the_requested_range_is_sealed() {
         let (client, _) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Video, 0, b"left alone");
         fill(&mut arena, StreamKind::Video, 1, b"sealed");
+
         let plain = arena.to_vecs();
 
         arena.seal(1..2, &client).unwrap();
@@ -319,13 +339,17 @@ mod tests {
     fn a_cleared_arena_reuses_its_storage_without_leaking_old_bytes() {
         let (client, host) = ciphers();
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Video, 0, &[0xee; 500]);
         arena.seal(0..1, &client).unwrap();
+
         let capacity = arena.bytes.len();
 
         arena.clear();
         fill(&mut arena, StreamKind::Video, 1, b"short");
+
         let plain = arena.to_vecs();
+
         arena.seal(0..1, &client).unwrap();
 
         assert_eq!(arena.len(), 1);
@@ -337,6 +361,7 @@ mod tests {
     #[test]
     fn plain_bytes_sums_a_range() {
         let mut arena = DatagramArena::new();
+
         fill(&mut arena, StreamKind::Video, 0, &[0; 10]);
         fill(&mut arena, StreamKind::Video, 1, &[0; 20]);
         fill(&mut arena, StreamKind::Video, 2, &[0; 30]);

@@ -14,7 +14,7 @@ const KEY_SET_WORDS: usize = 12;
 const KEY_SET_WORDS_U32: u32 = 12;
 const BITS_PER_WORD: u32 = u64::BITS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeySet([u64; KEY_SET_WORDS]);
 
 impl KeySet {
@@ -78,7 +78,7 @@ fn locate(code: u32) -> Option<(usize, u64)> {
     (word < KEY_SET_WORDS).then(|| (word, 1u64 << (code % BITS_PER_WORD)))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TouchSet(u16);
 
 impl TouchSet {
@@ -117,7 +117,7 @@ impl TouchSet {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PadState {
     pub buttons: u16,
     pub axes: [f32; PAD_AXES],
@@ -206,7 +206,7 @@ fn unit_position(x: f32, y: f32) -> Option<(f32, f32)> {
     (x.is_finite() && y.is_finite()).then(|| (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HeldInput {
     keys: KeySet,
     buttons: KeySet,
@@ -433,6 +433,7 @@ impl HeldInput {
 
         if pad.sensor(sensor).map(bits) != Some(bits(values)) {
             let [x, y, z] = values;
+
             out.push(pad_event(slot, GamepadEvent::Sensor { sensor, x, y, z }));
         }
     }
@@ -474,16 +475,19 @@ impl HeldInput {
         if entry.is_none() {
             out.push(pad_event(slot, GamepadEvent::Connected));
         }
+
         let current = entry.unwrap_or_default();
 
         let changed = current.buttons ^ target.buttons;
         let released = changed & current.buttons;
         let pressed = changed & target.buttons;
+
         for (mask, held) in [(released, false), (pressed, true)] {
             for id in (0..u16::BITS).filter(|id| mask & (1 << id) != 0) {
                 let Ok(id) = u16::try_from(id) else {
                     continue;
                 };
+
                 out.push(pad_event(
                     slot,
                     GamepadEvent::Button {
@@ -562,6 +566,7 @@ mod tests {
 
     fn held(events: &[InputEvent]) -> HeldInput {
         let mut held = HeldInput::new();
+
         for event in events {
             held.observe(event);
         }
@@ -570,11 +575,14 @@ mod tests {
 
     fn converge(host: &mut HeldInput, client: &HeldInput) -> Vec<InputEvent> {
         let mut records = Vec::new();
+
         client.snapshot(&mut records);
 
         let mut applied = Vec::new();
+
         for record in &records {
             let mut events = Vec::new();
+
             host.reconcile(record, &mut events);
             for event in &events {
                 host.observe(event);
@@ -593,6 +601,7 @@ mod tests {
         assert!(keys.insert(30));
         assert!(keys.insert(0x2ff));
         assert!(!keys.insert(KeySet::CAPACITY));
+
         keys.remove(30);
 
         assert_eq!(keys.iter().collect::<Vec<_>>(), vec![0, 0x2ff]);
@@ -743,7 +752,9 @@ mod tests {
         let mut events = Vec::new();
 
         state.release_all(&mut events);
+
         let mut after = state.clone();
+
         for event in &events {
             after.observe(event);
         }
@@ -767,12 +778,15 @@ mod tests {
     fn lock_state_is_unknown_until_the_client_reports_it() {
         let mut records = Vec::new();
         let mut known = HeldInput::new();
+
         known.observe(&locks(true, false));
 
         HeldInput::new().snapshot(&mut records);
+
         assert!(!records.iter().any(|r| matches!(r, StateRecord::Locks(_))));
 
         known.snapshot(&mut records);
+
         assert!(records.contains(&StateRecord::Locks(LockState {
             caps: true,
             num: false
@@ -817,6 +831,7 @@ mod tests {
     #[test]
     fn touches_are_held_from_down_until_up_or_cancel() {
         let mut state = held(&[land(0), land(3), land(5)]);
+
         state.observe(&touch(3, TouchEvent::Motion { x: 0.1, y: 0.2 }));
         state.observe(&lift(0));
         state.observe(&touch(5, TouchEvent::Cancel));
@@ -981,6 +996,7 @@ mod tests {
             motion(0, SensorKind::Accel, 1.0),
             finger_down(0, 0, 0.5, 0.5),
         ]);
+
         let client = host.clone();
 
         assert_eq!(converge(&mut host, &client), Vec::new());

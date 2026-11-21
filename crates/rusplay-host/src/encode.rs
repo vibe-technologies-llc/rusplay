@@ -51,13 +51,13 @@ struct Origin {
     output: Option<OutputRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct QualityTiming {
     pub interval_ms: u32,
     pub frame_rate: FrameRate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Forwarded {
     Sent(u32),
     Dropped,
@@ -79,6 +79,7 @@ pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Res
             let output = links.shared.output();
             let rate = links.shared.frame_rate(links.quality.frame_rate);
             let sink: Arc<dyn QualitySink> = links.outbox.clone();
+
             let mut sampler =
                 QualitySampler::new(QualitySettings::new(links.quality.interval_ms, rate), sink);
             EncodeStage::holding_first_frame(FirstFrameHold::new(
@@ -94,6 +95,7 @@ pub(crate) fn run(factory: Box<dyn PipelineFactory>, links: &EncodeLinks) -> Res
         }
         None => Ok(()),
     });
+
     links.shared.stop();
 
     result
@@ -109,6 +111,7 @@ fn open_negotiated(
     links: &EncodeLinks,
 ) -> Result<Option<NegotiatedPipeline>, HostError> {
     let negotiation = &links.shared.negotiation;
+
     negotiation.offer(factory.encodable()?);
 
     loop {
@@ -166,13 +169,13 @@ impl References {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Held {
     Encode,
     Wait,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct FirstFrameHold {
     wanted: Option<Resolution>,
     timeout: Duration,
@@ -307,6 +310,7 @@ impl EncodeStage {
             if frame.is_some() {
                 self.held = frame;
             }
+
             let frame = match self.held.take() {
                 Some(captured) => {
                     match self.hold.judge(captured.frame.resolution, Instant::now()) {
@@ -327,9 +331,13 @@ impl EncodeStage {
                 }) => {
                     drop(links.feed.take_retained());
                     plan_sample(pipeline, sampler, links);
+
                     let encoded = pipeline.encode(&frame, self.force_keyframe);
+
                     record_notices(pipeline.take_notices(), counters);
+
                     let encoded = encoded?;
+
                     self.last_input = Some((frame.timestamp, Instant::now()));
                     links.feed.retain(frame);
                     (encoded, captured_micros)
@@ -337,8 +345,11 @@ impl EncodeStage {
                 None if self.force_keyframe || self.recovering.is_some() => {
                     counters.frames_repeated.increment();
                     sampler.interrupt();
+
                     let encoded = pipeline.repeat(self.repeat_timestamp(), self.force_keyframe);
+
                     record_notices(pipeline.take_notices(), counters);
+
                     let encoded = encoded?;
                     (encoded, links.shared.clock.micros())
                 }
@@ -350,7 +361,9 @@ impl EncodeStage {
                 sampler.record(sample, None, Instant::now());
                 continue;
             };
+
             self.announce(pipeline.stream_format(), negotiated.configured, links)?;
+
             let origin = Origin {
                 captured_micros,
                 suspensions,
@@ -587,8 +600,10 @@ mod tests {
         ));
 
         let idle = stage.wait_timeout(now);
+
         stage.hold.judge(STALE, now);
         stage.held = Some(captured(STALE));
+
         let near = stage.wait_timeout(now);
         let overdue = stage.wait_timeout(now + 50 * MS);
 

@@ -178,6 +178,7 @@ mod tests {
         .unwrap();
 
         let log = log.borrow();
+
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].0, 3);
         assert_eq!(log[1].0, 0);
@@ -188,9 +189,11 @@ mod tests {
     #[test]
     fn disconnect_drops_the_device_and_later_events_fail() {
         let (mut pool, _) = pool(4);
+
         pool.handle(2, GamepadEvent::Connected).unwrap();
 
         pool.handle(2, GamepadEvent::Disconnected).unwrap();
+
         let result = pool.handle(2, button(true));
 
         assert!(!pool.is_connected(2));
@@ -232,9 +235,11 @@ mod tests {
     #[test]
     fn rumble_is_collected_from_connected_slots_only() {
         let (mut pool, _) = pool(4);
+
         pool.handle(1, GamepadEvent::Connected).unwrap();
         pool.handle(3, GamepadEvent::Connected).unwrap();
         pool.handle(1, GamepadEvent::Disconnected).unwrap();
+
         let mut out = Vec::new();
 
         pool.poll_feedback(&mut out).unwrap();
@@ -259,6 +264,7 @@ mod tests {
             event: button(true),
         })
         .unwrap();
+
         let other = pool.inject(InputEvent::Key {
             keycode: 30,
             pressed: true,

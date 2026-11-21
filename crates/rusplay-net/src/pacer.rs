@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pacer {
     bytes_per_second: u64,
 }

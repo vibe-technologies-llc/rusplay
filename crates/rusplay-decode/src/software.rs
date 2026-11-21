@@ -49,16 +49,19 @@ impl Rav1dDecoder {
         };
 
         let mut settings = default_settings();
+
         settings.n_threads = threads;
         settings.max_frame_delay = ONE_FRAME_IN_FLIGHT;
 
         let mut context = None;
+
         let result = unsafe {
             dav1d_open(
                 Some(NonNull::from(&mut context)),
                 Some(NonNull::from(&mut settings)),
             )
         };
+
         check(result).map_err(DecodeError::Rav1dOpen)?;
 
         Ok(Self {
@@ -78,6 +81,7 @@ impl Rav1dDecoder {
 
     fn next_picture(&self) -> Result<Option<OwnedPicture>, DecodeError> {
         let mut picture = OwnedPicture(Dav1dPicture::default());
+
         let result =
             unsafe { dav1d_get_picture(self.context, Some(NonNull::from(&mut picture.0))) };
         match check(result) {
@@ -109,6 +113,7 @@ impl VideoDecoder for Rav1dDecoder {
 
         let packet = self.syntax.check_packet(&frame.data)?;
         let decoded = self.decode_checked(frame);
+
         if decoded.is_err() {
             self.syntax.forget_after_decode_error(packet);
         }
@@ -176,8 +181,10 @@ struct InputData(Dav1dData);
 impl InputData {
     fn copy_from(bytes: &[u8], timestamp: Timestamp) -> Result<Self, DecodeError> {
         let mut data = Self(Dav1dData::default());
+
         let destination =
             unsafe { dav1d_data_create(Some(NonNull::from(&mut data.0)), bytes.len()) };
+
         if destination.is_null() {
             return Err(DecodeError::Rav1dDataAlloc { size: bytes.len() });
         }
@@ -268,6 +275,7 @@ impl OwnedPicture {
         if let Some(sequence) = self.0.seq_hdr {
             let sequence = unsafe { sequence.as_ref() };
             let code = |value: u32| u8::try_from(value).unwrap_or(u8::MAX);
+
             color = color
                 .with_h273_codes(code(sequence.pri), code(sequence.trc), code(sequence.mtrx))
                 .with_full_range(sequence.color_range != 0)
@@ -275,6 +283,7 @@ impl OwnedPicture {
         }
         if let Some(display) = self.0.mastering_display {
             let display = unsafe { display.as_ref() };
+
             color.mastering = av1_mastering_display(
                 display.primaries,
                 display.white_point,
@@ -284,6 +293,7 @@ impl OwnedPicture {
         }
         if let Some(light) = self.0.content_light {
             let light = unsafe { light.as_ref() };
+
             color.content_light = Some(content_light(
                 light.max_content_light_level,
                 light.max_frame_average_light_level,
@@ -333,6 +343,7 @@ impl PictureStorage {
 
     fn plane_size(&self, index: usize) -> (u32, u32) {
         let Resolution { width, height } = self.resolution;
+
         if index == 0 {
             return (width, height);
         }
@@ -354,6 +365,7 @@ impl PlaneStorage for PictureStorage {
         let base = (*self.picture.0.data.get(index)?)?;
         let stride = usize::try_from(self.picture.0.stride[index.min(1)]).ok()?;
         let (width, height) = self.plane_size(index);
+
         let length = stride.checked_mul(usize::try_from(height).ok()?)?;
         let data = unsafe { slice::from_raw_parts(base.cast::<u8>().as_ptr(), length) };
 

@@ -19,6 +19,7 @@ pub fn render_list(store: &PeerStore) -> String {
     }
 
     let mut text = String::new();
+
     for record in store.iter() {
         writeln!(text, "{} {}", record.id(), record.name()).ok();
     }
@@ -29,6 +30,7 @@ pub fn render_list(store: &PeerStore) -> String {
 pub fn resolve(store: &PeerStore, target: &str) -> Result<PeerId, PeersError> {
     let wanted_id = target.to_ascii_lowercase();
     let id_prefix = wanted_id.len() >= MIN_ID_PREFIX_CHARS;
+
     let matches: Vec<&PeerRecord> = store
         .iter()
         .filter(|record| {
@@ -58,8 +60,10 @@ mod tests {
     fn store_with(records: &[(&str, u8)]) -> (tempfile::TempDir, PeerStore) {
         let directory = tempfile::tempdir().unwrap();
         let mut store = PeerStore::open(directory.path().join("paired-clients")).unwrap();
+
         for (name, byte) in records {
             let record = PeerRecord::new(name, PeerSecret::from_bytes([*byte; 32])).unwrap();
+
             store.remember(record).unwrap();
         }
 

@@ -1,10 +1,10 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RefreshRegion {
     pub(super) location: u32,
     pub(super) size: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RefreshCadence {
     units: u32,
     period: u32,
@@ -33,6 +33,7 @@ impl RefreshCadence {
     pub(super) fn advance(&mut self) -> Option<RefreshRegion> {
         let location = self.refreshed_after(self.frame);
         let size = self.refreshed_after(self.frame + 1) - location;
+
         self.frame = (self.frame + 1) % self.period;
 
         (size > 0).then_some(RefreshRegion { location, size })
@@ -61,6 +62,7 @@ mod tests {
 
     fn coverage(regions: &[Option<RefreshRegion>], units: u32) -> Vec<u32> {
         let mut covered = vec![0; units as usize];
+
         for region in regions.iter().flatten() {
             for unit in region.location..region.location + region.size {
                 covered[unit as usize] += 1;
@@ -147,6 +149,7 @@ mod tests {
 
             for start in 0..period as usize {
                 let window = &regions[start..start + period as usize];
+
                 assert!(
                     coverage(window, units).iter().all(|&count| count == 1),
                     "{units} units over {period} frames from frame {start}"
@@ -160,7 +163,9 @@ mod tests {
         let mut cadence = RefreshCadence::new(4, 12);
 
         let before: Vec<_> = (0..5).map(|_| cadence.advance()).collect();
+
         cadence.restart();
+
         let after = sweep(&mut cadence, 12);
 
         assert_eq!(

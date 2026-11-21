@@ -45,6 +45,7 @@ fn encoder_settings(
     block_size: usize,
 ) -> Result<Verified<config::Encoder>, AudioError> {
     let mut settings = config::Encoder::default();
+
     settings.block_size = block_size;
     settings.multithread = false;
 
@@ -53,7 +54,9 @@ fn encoder_settings(
     settings.stereo_coding.use_midside = compression_level >= 1;
 
     settings.subframe_coding.use_lpc = compression_level >= FIRST_LPC_LEVEL;
+
     let order_index = usize::from(compression_level.saturating_sub(FIRST_LPC_LEVEL));
+
     if let Some(order) = LPC_ORDERS.get(order_index) {
         settings.subframe_coding.qlpc.lpc_order = *order;
     }
@@ -109,6 +112,7 @@ impl AudioEncoder for FlacAudioEncoder {
 
     fn encode(&mut self, pcm: &[f32], out: &mut [u8]) -> Result<usize, AudioError> {
         let expected = self.block_size * self.channels;
+
         if pcm.len() != expected {
             return Err(AudioError::FrameLengthMismatch {
                 expected,
@@ -130,6 +134,7 @@ impl AudioEncoder for FlacAudioEncoder {
             &self.stream_info,
         )
         .map_err(encode_error)?;
+
         self.frame_number = (self.frame_number + 1) & FRAME_NUMBER_MASK;
 
         self.sink.clear();
@@ -137,12 +142,14 @@ impl AudioEncoder for FlacAudioEncoder {
 
         let bytes = self.sink.as_slice();
         let capacity = out.len();
+
         let destination =
             out.get_mut(..bytes.len())
                 .ok_or(AudioError::FlacPacketBufferTooSmall {
                     needed: bytes.len(),
                     capacity,
                 })?;
+
         destination.copy_from_slice(bytes);
 
         Ok(bytes.len())
@@ -168,12 +175,14 @@ impl FlacAudioDecoder {
 impl AudioDecoder for FlacAudioDecoder {
     fn decode(&mut self, packet: &[u8], pcm: &mut [f32]) -> Result<usize, AudioError> {
         let mut reader = FrameReader::new(Cursor::new(packet));
+
         let block = reader
             .read_next_or_eof(mem::take(&mut self.buffer))
             .map_err(AudioError::FlacDecode)?
             .ok_or(AudioError::FlacEmptyPacket)?;
 
         let found_channels = block.channels() as usize;
+
         if found_channels != self.channels {
             return Err(AudioError::FlacChannelMismatch {
                 expected: self.channels,
@@ -184,6 +193,7 @@ impl AudioDecoder for FlacAudioDecoder {
         let frames = block.duration() as usize;
         let expected = frames * self.channels;
         let capacity = pcm.len();
+
         let destination = pcm
             .get_mut(..expected)
             .ok_or(AudioError::FrameLengthMismatch {
@@ -206,12 +216,14 @@ impl AudioDecoder for FlacAudioDecoder {
     fn conceal(&mut self, pcm: &mut [f32]) -> Result<usize, AudioError> {
         let expected = self.block_size * self.channels;
         let capacity = pcm.len();
+
         let silence = pcm
             .get_mut(..expected)
             .ok_or(AudioError::FrameLengthMismatch {
                 expected,
                 found: capacity,
             })?;
+
         silence.fill(0.0);
 
         Ok(self.block_size)
@@ -229,6 +241,7 @@ mod tests {
             channels: layout,
             ..AudioConfig::default()
         };
+
         config.flac.compression_level = compression_level;
         config
     }
@@ -238,6 +251,7 @@ mod tests {
         (0..len)
             .map(|_| {
                 state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+
                 let signed = i32::from_ne_bytes(state.to_ne_bytes()) >> 8;
                 dequantise(signed)
             })
@@ -299,9 +313,11 @@ mod tests {
         for level in [0.0, 1.0, -1.0] {
             let input = vec![level; samples];
             let written = encoder.encode(&input, &mut packet).unwrap();
+
             decoder.decode(&packet[..written], &mut output).unwrap();
 
             let expected = dequantise(quantise(level));
+
             assert!(
                 bits(&output)
                     .iter()
@@ -360,6 +376,7 @@ mod tests {
     #[test]
     fn unsupported_block_size_is_rejected() {
         let mut config = AudioConfig::default();
+
         config.flac.block_size = 8;
 
         assert!(matches!(

@@ -23,7 +23,7 @@ const CODEC: Codec = Codec::Av1;
 const GRAIN_SURFACES: usize = 1;
 const STRENGTH_SECONDARY_MAX: u32 = 4;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Slot {
     surface: PoolSurface,
     display: PoolSurface,
@@ -78,6 +78,7 @@ impl Av1Decoder {
                 }
             };
             let length = obu.bytes_used;
+
             if obu.header.obu_type == ObuType::Metadata {
                 self.hdr.read_av1_metadata(obu.as_ref());
             }
@@ -90,6 +91,7 @@ impl Av1Decoder {
                     if let Some(previous) = pending.take() {
                         output = self.finish(previous, frame.timestamp)?.or(output);
                     }
+
                     let current = self.begin(display, header)?;
                     if current.surface.is_none() {
                         output = self.finish(current, frame.timestamp)?.or(output);
@@ -113,6 +115,7 @@ impl Av1Decoder {
                     if let Some(previous) = pending.take() {
                         output = self.finish(previous, frame.timestamp)?.or(output);
                     }
+
                     let mut current = self.begin(display, frame_obu.header)?;
                     if self.add_tile_group(&mut current, &frame_obu.tile_group)? {
                         output = self.finish(current, frame.timestamp)?.or(output);
@@ -157,6 +160,7 @@ impl Av1Decoder {
 
         let format = stream_format(&sequence)?;
         let (stream, reopened) = Stream::ensure(&mut self.stream, display, CODEC, format)?;
+
         if reopened {
             self.slots = Default::default();
         }
@@ -200,6 +204,7 @@ impl Av1Decoder {
                 id: 0,
             });
         };
+
         if pending.surface.is_none() {
             return Err(DecodeError::Malformed {
                 codec: CODEC,
@@ -302,6 +307,7 @@ impl Av1Decoder {
 
 fn stream_format(sequence: &SequenceHeaderObu) -> Result<StreamFormat, DecodeError> {
     let color = &sequence.color_config;
+
     if color.mono_chrome {
         return Err(DecodeError::Monochrome {
             backend: Backend::Vaapi,
@@ -422,6 +428,7 @@ fn picture_parameters(
     }
 
     let strengths = 1_usize << cdef.cdef_bits.min(3);
+
     for index in 0..strengths {
         parameters.cdef_y_strengths[index] = cdef_strength(
             cdef.cdef_y_pri_strength[index],
@@ -434,8 +441,10 @@ fn picture_parameters(
     }
 
     let motion = &header.global_motion_params;
+
     for (index, warp) in parameters.wm.iter_mut().enumerate() {
         let reference = index + 1;
+
         warp.wmtype = motion.gm_type[reference] as u32;
         warp.wmmat[..6].copy_from_slice(&motion.gm_params[reference]);
         warp.invalid = u8::from(!motion.warp_valid[reference]);
@@ -460,7 +469,9 @@ fn fill_segmentation(target: &mut ffi::VASegmentationStructAV1, segmentation: &S
             .filter(|&feature| enabled[feature])
             .fold(0, |mask, feature| mask | (1 << feature));
     }
+
     let segment_fields = unsafe { &mut target.segment_info_fields.bits };
+
     segment_fields.set_enabled(u32::from(segmentation.segmentation_enabled));
     segment_fields.set_update_map(u32::from(segmentation.segmentation_update_map));
     segment_fields.set_temporal_update(u32::from(segmentation.segmentation_temporal_update));
@@ -473,6 +484,7 @@ fn set_sequence_fields(
 ) {
     let color = &sequence.color_config;
     let sequence_fields = unsafe { &mut parameters.seq_info_fields.fields };
+
     sequence_fields.set_still_picture(u32::from(sequence.still_picture));
     sequence_fields.set_use_128x128_superblock(u32::from(sequence.use_128x128_superblock));
     sequence_fields.set_enable_filter_intra(u32::from(sequence.enable_filter_intra));
@@ -497,6 +509,7 @@ fn set_frame_fields(parameters: &mut ffi::VADecPictureParameterBufferAV1, header
     let restoration = &header.loop_restoration_params;
 
     let picture_fields = unsafe { &mut parameters.pic_info_fields.bits };
+
     picture_fields.set_frame_type(header.frame_type as u32);
     picture_fields.set_show_frame(u32::from(header.show_frame));
     picture_fields.set_showable_frame(u32::from(header.showable_frame));
@@ -516,17 +529,20 @@ fn set_frame_fields(parameters: &mut ffi::VADecPictureParameterBufferAV1, header
     picture_fields.set_large_scale_tile(0);
 
     let filter_fields = unsafe { &mut parameters.loop_filter_info_fields.bits };
+
     filter_fields.set_sharpness_level(loop_filter.loop_filter_sharpness);
     filter_fields.set_mode_ref_delta_enabled(u8::from(loop_filter.loop_filter_delta_enabled));
     filter_fields.set_mode_ref_delta_update(u8::from(loop_filter.loop_filter_delta_update));
 
     let matrix_fields = unsafe { &mut parameters.qmatrix_fields.bits };
+
     matrix_fields.set_using_qmatrix(u16::from(quantization.using_qmatrix));
     matrix_fields.set_qm_y(u16::try_from(quantization.qm_y).unwrap_or(0));
     matrix_fields.set_qm_u(u16::try_from(quantization.qm_u).unwrap_or(0));
     matrix_fields.set_qm_v(u16::try_from(quantization.qm_v).unwrap_or(0));
 
     let mode_fields = unsafe { &mut parameters.mode_control_fields.bits };
+
     mode_fields.set_delta_q_present_flag(u32::from(quantization.delta_q_present));
     mode_fields.set_log2_delta_q_res(quantization.delta_q_res);
     mode_fields.set_delta_lf_present_flag(u32::from(loop_filter.delta_lf_present));
@@ -538,6 +554,7 @@ fn set_frame_fields(parameters: &mut ffi::VADecPictureParameterBufferAV1, header
     mode_fields.set_skip_mode_present(u32::from(header.skip_mode_present));
 
     let restoration_fields = unsafe { &mut parameters.loop_restoration_fields.bits };
+
     restoration_fields.set_yframe_restoration_type(restoration.frame_restoration_type[0] as u16);
     restoration_fields.set_cbframe_restoration_type(restoration.frame_restoration_type[1] as u16);
     restoration_fields.set_crframe_restoration_type(restoration.frame_restoration_type[2] as u16);
@@ -573,6 +590,7 @@ fn fill_film_grain(target: &mut ffi::VAFilmGrainStructAV1, header: &FrameHeaderO
     copy_prefix(&mut target.point_cr_scaling, &grain.point_cr_scaling);
 
     let centred = |value: u8| i8::try_from(i16::from(value) - 128).unwrap_or(0);
+
     for (coefficient, &value) in target
         .ar_coeffs_y
         .iter_mut()
@@ -596,6 +614,7 @@ fn fill_film_grain(target: &mut ffi::VAFilmGrainStructAV1, header: &FrameHeaderO
     }
 
     let fields = unsafe { &mut target.film_grain_info_fields.bits };
+
     fields.set_apply_grain(u32::from(grain.apply_grain));
     fields.set_chroma_scaling_from_luma(u32::from(grain.chroma_scaling_from_luma));
     fields.set_grain_scaling_minus_8(u32::from(grain.grain_scaling_minus_8));

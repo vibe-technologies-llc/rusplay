@@ -12,7 +12,7 @@ use crate::vaapi::{
 
 pub(super) const MAX_REFERENCE_FRAMES: usize = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Structure {
     Frame,
     Top,
@@ -72,20 +72,20 @@ impl Structure {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Marking {
     Unused,
     ShortTerm,
     LongTerm,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct FieldState {
     pub(super) poc: Option<i32>,
     pub(super) marking: Marking,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Reference {
     pub(super) surface: PoolSurface,
     pub(super) frame_num: u32,
@@ -207,7 +207,7 @@ pub(super) fn invalid_picture() -> ffi::VAPictureH264 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ListEntry {
     pub(super) index: usize,
     pub(super) structure: Structure,
@@ -215,20 +215,20 @@ pub(super) struct ListEntry {
 
 pub(super) type ReferenceList = Vec<Option<ListEntry>>;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct PreviousPicture {
     frame_num: u32,
     frame_num_offset: u32,
     pub(super) had_mmco5: bool,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 struct PreviousReference {
     poc_msb: i32,
     poc_lsb: i32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct OrderCount {
     pub(super) top: Option<i32>,
     pub(super) bottom: Option<i32>,
@@ -294,6 +294,7 @@ impl Dpb {
 
         for reference in &mut self.references {
             let own = i32::try_from(reference.frame_num).unwrap_or(i32::MAX);
+
             reference.frame_num_wrap = if reference.frame_num > frame_num {
                 own - max_frame_num
             } else {
@@ -369,14 +370,17 @@ impl Dpb {
                 } else {
                     frame_num_offset.wrapping_add(frame_num)
                 };
+
                 if nal_ref_idc == 0 && absolute > 0 {
                     absolute -= 1;
                 }
 
                 let mut expected = 0_i32;
+
                 if absolute > 0 {
                     let cycles = (absolute - 1) / cycle_length;
                     let in_cycle = (absolute - 1) % cycle_length;
+
                     expected = i32::try_from(cycles)
                         .unwrap_or(i32::MAX)
                         .wrapping_mul(sps.expected_delta_per_pic_order_cnt_cycle);
@@ -482,16 +486,20 @@ impl Dpb {
 
     fn long_term_frames(&self, structure: Structure) -> Vec<usize> {
         let mut frames = self.frames_where(structure, Marking::LongTerm);
+
         frames.sort_by_key(|&index| self.references[index].long_term_frame_idx);
         frames
     }
 
     fn initial_p_list(&self, structure: Structure) -> Vec<ListEntry> {
         let mut short_term = self.frames_where(structure, Marking::ShortTerm);
+
         short_term.sort_by_key(|&index| Reverse(self.references[index].frame_num_wrap));
+
         let long_term = self.long_term_frames(structure);
 
         let mut list = self.expand(&short_term, structure, Marking::ShortTerm);
+
         list.extend(self.expand(&long_term, structure, Marking::LongTerm));
         list
     }
@@ -511,12 +519,15 @@ impl Dpb {
                 }
             })
             .collect();
+
         before.sort_by_key(|&index| Reverse(poc_of(index)));
+
         let mut after: Vec<usize> = short_term
             .iter()
             .copied()
             .filter(|&index| poc_of(index) > poc)
             .collect();
+
         after.sort_by_key(|&index| poc_of(index));
 
         let long_term = self.expand(
@@ -529,8 +540,11 @@ impl Dpb {
         let order1: Vec<usize> = after.iter().chain(&before).copied().collect();
 
         let mut list0 = self.expand(&order0, structure, Marking::ShortTerm);
+
         list0.extend(&long_term);
+
         let mut list1 = self.expand(&order1, structure, Marking::ShortTerm);
+
         list1.extend(&long_term);
 
         if list1.len() > 1 && list1 == list0 {
@@ -629,6 +643,7 @@ impl Dpb {
         max_frame_num: u32,
     ) -> ReferenceList {
         let mut list: ReferenceList = initial.into_iter().map(Some).collect();
+
         list.resize(active, None);
 
         if !modified {
@@ -652,6 +667,7 @@ impl Dpb {
                     } else {
                         predicted + difference
                     };
+
                     if no_wrap < 0 {
                         no_wrap += max_pic_num;
                     } else if no_wrap >= max_pic_num {
@@ -752,6 +768,7 @@ impl Dpb {
                 structure,
                 frame_num,
             };
+
             for operation in &marking.inner {
                 match self.apply_operation(operation, &numbering, surface.id) {
                     Marked::Nothing => {}
@@ -776,6 +793,7 @@ impl Dpb {
         } else {
             Marking::ShortTerm
         };
+
         let own = |count: Option<i32>, parity: usize| FieldState {
             poc: count.map(|count| count.wrapping_sub(shift)),
             marking: if structure.parities().contains(&parity) {
@@ -792,6 +810,7 @@ impl Dpb {
         {
             let parity = structure.parity().unwrap_or(0);
             let own_state = own(if parity == 0 { order.top } else { order.bottom }, parity);
+
             entry.fields[parity] = own_state;
             if let Some(index) = current_long_term {
                 entry.long_term_frame_idx = index;
@@ -802,6 +821,7 @@ impl Dpb {
             }
 
             let mut fields = [own(order.top, 0), own(order.bottom, 1)];
+
             if let Some(parity) = structure.parity() {
                 fields[1 - parity] = FieldState {
                     poc: partner_poc,
@@ -845,7 +865,9 @@ impl Dpb {
                 let index = operation.long_term_frame_idx;
                 if let Some(entry) = self.find_short_term(pic_num_x, context.structure) {
                     self.free_long_term_index(index, Some(entry.index));
+
                     let reference = &mut self.references[entry.index];
+
                     reference.mark(entry.structure, Marking::LongTerm);
                     reference.long_term_frame_idx = index;
                 }
@@ -855,6 +877,7 @@ impl Dpb {
                     MaxLongTermFrameIdx::NoLongTermFrameIndices => None,
                     MaxLongTermFrameIdx::Idx(index) => Some(index),
                 };
+
                 let limit = self.max_long_term_frame_idx;
                 for reference in &mut self.references {
                     let allowed = limit.is_some_and(|limit| reference.long_term_frame_idx <= limit);
@@ -874,6 +897,7 @@ impl Dpb {
                     .references
                     .iter()
                     .position(|reference| reference.surface.id == current);
+
                 self.free_long_term_index(index, current);
                 return Marked::CurrentLongTerm(index);
             }

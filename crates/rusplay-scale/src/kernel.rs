@@ -13,13 +13,13 @@ const MITCHELL: (f64, f64) = (1.0 / 3.0, 1.0 / 3.0);
 const CATMULL_ROM: (f64, f64) = (0.0, 0.5);
 const HERMITE: (f64, f64) = (0.0, 0.0);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Geometry {
     Separable,
     Polar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Kernel {
     filter: ScaleFilter,
 }
@@ -61,6 +61,7 @@ impl Kernel {
     pub fn weight(self, distance: f64) -> f64 {
         let x = distance.abs();
         let radius = self.radius();
+
         if x >= radius {
             return 0.0;
         }

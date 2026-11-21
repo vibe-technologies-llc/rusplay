@@ -85,6 +85,7 @@ fn parse_bitmap(meta: &[u8], at: usize, hotspot: (i32, i32)) -> CursorShape {
     else {
         return CursorShape::Unchanged;
     };
+
     if width == 0 || height == 0 {
         return CursorShape::Hidden;
     }
@@ -123,6 +124,7 @@ mod tests {
     impl MetaBuilder {
         fn cursor(id: u32, position: (i32, i32), hotspot: (i32, i32), bitmap_at: u32) -> Self {
             let mut bytes = Vec::new();
+
             for word in [
                 id,
                 0,
@@ -140,6 +142,7 @@ mod tests {
         fn bitmap(mut self, format: VideoFormat, size: (u32, u32), pixels: &[u8]) -> Self {
             let stride = size.0 * 4;
             let pixels_at = u32::try_from(BITMAP_SIZE).unwrap();
+
             for word in [format.as_raw(), size.0, size.1, stride, pixels_at] {
                 self.bytes.extend(word.to_ne_bytes());
             }

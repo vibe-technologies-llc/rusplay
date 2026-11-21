@@ -9,7 +9,7 @@ use crate::{BitDepth, ChromaSubsampling, FrameRate, PixelFormat, Resolution};
 const PLANES: usize = 3;
 const SECOND_ORDER_FROM_FPS: u32 = 32;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum QualityError {
     #[error("plane holds {actual} samples, {width}x{height} needs {needed}")]
     PlaneTooShort {
@@ -50,7 +50,7 @@ pub enum QualityError {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PlaneBytes<'a> {
     pub data: &'a [u8],
     pub stride: usize,
@@ -76,6 +76,7 @@ impl PlaneBytes<'_> {
         } else {
             self.stride * (height - 1) + row
         };
+
         if self.data.len() < needed || (height > 1 && self.stride < row) {
             return Err(QualityError::PlaneBytesTooShort {
                 width,
@@ -90,7 +91,7 @@ impl PlaneBytes<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SamplePlane {
     width: usize,
     height: usize,
@@ -100,6 +101,7 @@ pub struct SamplePlane {
 impl SamplePlane {
     pub fn new(width: usize, height: usize, samples: Vec<u16>) -> Result<Self, QualityError> {
         let needed = width * height;
+
         if samples.len() < needed {
             return Err(QualityError::PlaneTooShort {
                 width,
@@ -110,6 +112,7 @@ impl SamplePlane {
         }
 
         let mut samples = samples;
+
         samples.truncate(needed);
 
         Ok(Self {
@@ -145,9 +148,11 @@ impl SamplePlane {
         let step = bytes.bytes_per_sample;
         let mut first = Vec::with_capacity(width * height);
         let mut second = Vec::with_capacity(width * height);
+
         for y in 0..height {
             for x in 0..width {
                 let offset = y * bytes.stride + 2 * x * step;
+
                 first.push(bytes.sample(offset));
                 second.push(bytes.sample(offset + step));
             }
@@ -188,7 +193,7 @@ impl SamplePlane {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SamplePicture {
     format: PixelFormat,
     planes: [SamplePlane; PLANES],
@@ -198,6 +203,7 @@ impl SamplePicture {
     pub fn new(format: PixelFormat, planes: [SamplePlane; PLANES]) -> Result<Self, QualityError> {
         let [luma, cb, cr] = &planes;
         let expected = chroma_size(luma.size(), format.chroma);
+
         for (plane, chroma) in [(1, cb), (2, cr)] {
             if chroma.size() != expected {
                 return Err(QualityError::ChromaPlaneSize {
@@ -247,7 +253,7 @@ pub fn chroma_size((width, height): (usize, usize), chroma: ChromaSubsampling) -
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum TemporalOrder {
     First,
     Second,
@@ -275,7 +281,7 @@ impl TemporalOrder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct Decibels(f32);
 
 impl Decibels {
@@ -317,7 +323,7 @@ impl fmt::Display for Decibels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaneScores {
     pub luma: Decibels,
     pub cb: Decibels,
@@ -334,7 +340,7 @@ impl PlaneScores {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QualityScore {
     pub psnr: PlaneScores,
     pub psnr_overall: Decibels,

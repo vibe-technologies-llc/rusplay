@@ -6,7 +6,7 @@ use std::{
 
 use crate::{ColorSpace, Resolution, Timestamp};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct DrmFourcc(pub u32);
 
 impl DrmFourcc {
@@ -15,7 +15,7 @@ impl DrmFourcc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plane {
     pub offset: u32,
     pub stride: u32,
@@ -176,7 +176,9 @@ mod tests {
             move |bytes| returned.send(bytes).unwrap()
         });
         let before = pool.try_recv();
+
         drop(bytes);
+
         let after = pool.try_recv();
 
         let kept = ShmBytes::recycled(vec![4, 5], move |bytes| returned.send(bytes).unwrap());
@@ -198,6 +200,7 @@ mod tests {
             counter.fetch_add(1, Ordering::Relaxed);
         });
         let held = released.load(Ordering::Relaxed);
+
         drop(lease);
 
         assert_eq!(held, 0);

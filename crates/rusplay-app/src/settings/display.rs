@@ -4,7 +4,7 @@ use rusplay_core::{ColorPrimaries, TransferFunction};
 
 const NITS_LIMIT: f64 = 10_000.0;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DisplayColorDefaults {
     primaries: String,
     transfer: String,
@@ -79,6 +79,7 @@ fn whole_nits(nits: f64) -> Option<u32> {
     }
 
     let rounded = nits.round();
+
     if !(1.0..=NITS_LIMIT).contains(&rounded) {
         return None;
     }

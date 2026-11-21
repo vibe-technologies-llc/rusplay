@@ -1,6 +1,6 @@
 use rusplay_core::{FrameRate, Resolution};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Level {
     pub(super) id: u8,
     pub(super) max_picture_samples: u64,
@@ -9,13 +9,13 @@ pub(super) struct Level {
     pub(super) max_kbps_high_tier: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Selected {
     pub(super) id: u8,
     pub(super) high_tier: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Demand {
     pub(super) picture_samples: u64,
     pub(super) sample_rate: u64,

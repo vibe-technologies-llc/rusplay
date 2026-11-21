@@ -16,7 +16,7 @@ const DIRECTION_SEED_SHIFT: u32 = 16;
 #[cfg(test)]
 const ITERATION_SEEDS: u32 = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DebandSettings {
     pub iterations: u32,
     pub radius: u32,
@@ -25,7 +25,7 @@ pub struct DebandSettings {
     pub limit: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PlaneTolerance {
     pub threshold: f64,
     pub limit: f64,
@@ -87,9 +87,11 @@ impl DebandSettings {
         );
         let low = self.radius * (iteration - 1) / self.iterations + 1;
         let high = (self.radius * iteration / self.iterations).max(low);
+
         let reach = low + seed % (high - low + 1);
         let direction = (seed >> DIRECTION_SEED_SHIFT) % DIRECTION_COUNT;
         let (cosine, sine) = directions()[direction as usize];
+
         let along = reach * cosine;
         let across = reach * sine;
         let round = |value: u32, shift: u32| {
@@ -104,7 +106,7 @@ impl DebandSettings {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DebandPlane {
     Luma = 0,
     Chroma = 1,

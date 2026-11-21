@@ -11,7 +11,7 @@ use crate::{ColorConverter, ScaleError, YuvFrame};
 
 static NEXT_ALLOCATION: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum MemoryHandle {
     DmaBuf,
     OpaqueFd,

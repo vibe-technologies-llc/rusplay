@@ -84,19 +84,23 @@ impl<'a> Probe<'a> {
         let (Some(_), Some(buffer)) = (profile(codec, format), buffer_format(format)) else {
             return Ok(false);
         };
+
         if !self.has_codec(codec) {
             return Ok(false);
         }
 
         let guid = codec_guid(codec);
+
         if !self.encoder.input_formats(guid)?.contains(&buffer) {
             return Ok(false);
         }
+
         let chroma_caps = match format.chroma {
             ChromaSubsampling::Yuv420 => None,
             ChromaSubsampling::Yuv422 => Some(ffi::CAPS_SUPPORT_YUV422_ENCODE),
             ChromaSubsampling::Yuv444 => Some(ffi::CAPS_SUPPORT_YUV444_ENCODE),
         };
+
         if let Some(query) = chroma_caps
             && self.encoder.caps(guid, query)? == 0
         {
@@ -125,7 +129,7 @@ fn capabilities_with(
     Capabilities::probe(BACKEND, |codec, format| probe.supports(codec, format))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Limits {
     min: Resolution,
     max: Resolution,
@@ -163,6 +167,7 @@ impl Device {
         let encoder = Encoder::open(Rc::clone(&context))?;
 
         let probe = Probe::new(&encoder)?;
+
         if !probe.has_codec(settings.codec) {
             return Err(EncodeError::CodecUnsupported {
                 backend: BACKEND,
@@ -175,6 +180,7 @@ impl Device {
 
         let guid = codec_guid(settings.codec);
         let modes = encoder.caps(guid, ffi::CAPS_SUPPORTED_RATECONTROL_MODES)?;
+
         if !rate_control_supported(modes, settings.rate_control) {
             return Err(EncodeError::RateControlUnsupported {
                 backend: BACKEND,
@@ -202,6 +208,7 @@ impl Device {
             preset_guid(settings.preset),
             tuning_info(settings.tuning),
         )?);
+
         configure(&mut config, settings, features);
         drop(probe);
 
@@ -214,13 +221,13 @@ impl Device {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ImportSource {
     DmaBuf { device: u64, inode: u64 },
     Opaque { allocation: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ImportKey {
     source: ImportSource,
     resolution: Resolution,
@@ -234,7 +241,7 @@ struct ImportRequest<'a> {
     opaque: Option<OpaqueMemory>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OpaqueMemory {
     allocation: u64,
     size: u64,
@@ -282,6 +289,7 @@ fn import_request(frame: &Frame, format: PixelFormat) -> Result<ImportRequest<'_
     };
 
     let expected = dma_buf_fourcc(format);
+
     if frame.format != expected {
         return Err(EncodeError::FrameFormatMismatch {
             backend: BACKEND,
@@ -310,7 +318,7 @@ struct Import {
     pitch: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Input {
     buffer: *mut c_void,
     pitch: u32,
@@ -342,8 +350,11 @@ impl Session {
         }
 
         let mut config = device.config.clone();
+
         let mut init = initialize_params(settings, resolution, &mut config);
+
         device.encoder.initialize(&mut init)?;
+
         let bitstream = Bitstream::create(&device.encoder)?;
 
         Ok(Self {
@@ -362,6 +373,7 @@ impl Session {
         config::apply_rate(&mut self.config.rc_params, settings.rate_values());
 
         let mut params = ffi::ReconfigureParams::zeroed();
+
         params.version = ffi::RECONFIGURE_PARAMS_VER;
         params.re_init_encode_params =
             initialize_params(settings, self.resolution, &mut self.config);
@@ -411,6 +423,7 @@ impl Session {
                 .try_clone_to_owned()
                 .map_err(EncodeError::DmaBufInspect)?,
         );
+
         let source = if let Some(opaque) = request.opaque {
             ImportSource::Opaque {
                 allocation: opaque.allocation,
@@ -430,6 +443,7 @@ impl Session {
 
         if let Some(position) = self.imports.iter().position(|cached| cached.key == key) {
             let entry = self.imports.remove(position);
+
             self.imports.push(entry);
             return Ok(self.imports.len() - 1);
         }
@@ -444,6 +458,7 @@ impl Session {
             let size = file
                 .seek(SeekFrom::End(0))
                 .map_err(EncodeError::DmaBufInspect)?;
+
             if size < layout.len {
                 return Err(EncodeError::DmaBufTooShort {
                     needed: layout.len,
@@ -481,7 +496,7 @@ impl Session {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Picture {
     keyframe: bool,
     index: u32,
@@ -513,6 +528,7 @@ fn picture_params(
     metadata: Metadata<'_>,
 ) -> ffi::PicParams {
     let mut params = ffi::PicParams::zeroed();
+
     params.version = ffi::PIC_PARAMS_VER;
     params.input_width = picture.resolution.width;
     params.input_height = picture.resolution.height;
@@ -534,15 +550,18 @@ fn picture_params(
     } else {
         sei.as_mut_ptr()
     };
+
     match codec {
         Codec::H264 => {
             let mut h264 = ffi::PicParamsH264::zeroed();
+
             h264.sei_payload_array_cnt = count;
             h264.sei_payload_array = array;
             params.codec.h264 = h264;
         }
         Codec::Hevc => {
             let mut hevc = ffi::PicParamsHevc::zeroed();
+
             hevc.sei_payload_array_cnt = count;
             hevc.sei_payload_array = array;
             hevc.mastering_display = native.mastering_ptr();
@@ -551,6 +570,7 @@ fn picture_params(
         }
         Codec::Av1 => {
             let mut av1 = ffi::PicParamsAv1::zeroed();
+
             av1.mastering_display = native.mastering_ptr();
             av1.max_cll = native.content_light_ptr();
             params.codec.av1 = av1;
@@ -587,6 +607,7 @@ impl NvencEncoder {
         libraries: LibraryNames,
     ) -> Result<Self, EncodeError> {
         let params = NvencParams::parse(&nvenc.params)?;
+
         if video.color.primaries.h273_code().is_none() {
             return Err(EncodeError::ColorPrimariesUnsignalable {
                 backend: BACKEND,
@@ -632,6 +653,7 @@ impl NvencEncoder {
 impl Drop for NvencEncoder {
     fn drop(&mut self) {
         let _current = self.device.context.enter();
+
         self.session = None;
     }
 }
@@ -681,6 +703,7 @@ impl VideoEncoder for NvencEncoder {
 
         let _current = device.context.enter()?;
         let session = session_for(slot, device, settings, frame.resolution)?;
+
         if std::mem::take(rate_changed) {
             session.reconfigure(device, settings)?;
         }
@@ -692,6 +715,7 @@ impl VideoEncoder for NvencEncoder {
         } else {
             Vec::new()
         };
+
         let mut sei = sei_array(&mut payloads);
         let picture = Picture {
             keyframe,
@@ -714,6 +738,7 @@ impl VideoEncoder for NvencEncoder {
                         native,
                     },
                 );
+
                 device.encoder.encode(&mut params)?;
                 session
                     .bitstream
@@ -723,6 +748,7 @@ impl VideoEncoder for NvencEncoder {
                 let index = session.import(device, frame, settings.format)?;
                 let import = &session.imports[index];
                 let mapped = import.registration.map()?;
+
                 let input = Input {
                     buffer: mapped.input,
                     pitch: import.pitch,
@@ -738,10 +764,13 @@ impl VideoEncoder for NvencEncoder {
                         native,
                     },
                 );
+
                 device.encoder.encode(&mut params)?;
+
                 let coded = session
                     .bitstream
                     .read(settings.codec == Codec::Av1, session.pool.take())?;
+
                 drop(mapped);
                 coded
             }

@@ -25,7 +25,7 @@ use crate::AudioError;
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NegotiatedFormat {
     pub rate: u32,
     pub channels: usize,
@@ -58,12 +58,14 @@ pub(crate) fn channel_positions(layout: ChannelLayout) -> [u32; MAX_CHANNELS] {
     };
 
     let mut positions = [0; MAX_CHANNELS];
+
     positions[..order.len()].copy_from_slice(order);
     positions
 }
 
 pub(crate) fn format_pod_bytes(layout: ChannelLayout, rate: u32) -> Result<Vec<u8>, AudioError> {
     let mut info = AudioInfoRaw::new();
+
     info.set_format(AudioFormat::F32LE);
     info.set_rate(rate);
     info.set_channels(u32::from(layout.channel_count()));
@@ -82,16 +84,19 @@ pub(crate) fn format_pod_bytes(layout: ChannelLayout, rate: u32) -> Result<Vec<u
 
 pub(crate) fn negotiated_format(id: u32, param: Option<&Pod>) -> Option<NegotiatedFormat> {
     let param = param?;
+
     if id != ParamType::Format.as_raw() {
         return None;
     }
 
     let (media_type, media_subtype) = format_utils::parse_format(param).ok()?;
+
     if media_type != MediaType::Audio || media_subtype != MediaSubtype::Raw {
         return None;
     }
 
     let mut info = AudioInfoRaw::new();
+
     info.parse(param).ok()?;
     if info.format() != AudioFormat::F32LE {
         return None;

@@ -70,6 +70,7 @@ impl SequenceParameters {
 
 pub(super) fn sub_layer_count(bits: &mut Bits) -> Result<usize, Stop> {
     let minus1 = bits.bits(3)?;
+
     if minus1 > MAX_SUB_LAYERS_MINUS1 {
         return Err(Stop::SubLayerCount);
     }
@@ -81,6 +82,7 @@ fn scan_profile_tier_level(bits: &mut Bits, sub_layers: usize) -> Result<(), Sto
     bits.skip(PROFILE_BITS + LEVEL_BITS)?;
 
     let mut level_present = Vec::with_capacity(sub_layers);
+
     for _ in 0..sub_layers {
         bits.bit()?;
         level_present.push(bits.bit()?);
@@ -140,6 +142,7 @@ fn scan_hrd_parameters(
         let fixed_rate = bits.bit()?;
         let fixed_within_sequence = !fixed_rate && bits.bit()?;
         let mut low_delay = false;
+
         if fixed_within_sequence {
             bits.unsigned_max(MAX_ELEMENTAL_DURATION)?;
         } else {
@@ -147,6 +150,7 @@ fn scan_hrd_parameters(
         }
 
         let mut cpb_count_minus1 = 0;
+
         if !low_delay {
             cpb_count_minus1 = bits.unsigned_max(MAX_CPB_COUNT_MINUS1)?;
         }
@@ -221,11 +225,13 @@ fn scan_screen_content_extension(
     bit_depth_chroma_minus8: u32,
 ) -> Result<SccExtension, Stop> {
     bits.skip(1)?;
+
     let mut palette_predictor_size = 0;
 
     if bits.bit()? {
         let palette_max_size = bits.unsigned_max(MAX_PALETTE_SIZE)?;
         let delta = bits.unsigned_max(MAX_PALETTE_PREDICTOR_SIZE - palette_max_size)?;
+
         palette_predictor_size = palette_max_size + delta;
 
         if bits.bit()? {
@@ -235,6 +241,7 @@ fn scan_screen_content_extension(
                     .wrapping_sub(1),
             );
             let initializers = bits.unsigned_max(wrapped_maximum)? + 1;
+
             if initializers > PALETTE_INITIALIZER_SLOTS {
                 return Err(Stop::PalettePredictorSize);
             }
@@ -254,6 +261,7 @@ fn scan_screen_content_extension(
     }
 
     let motion_vector_resolution_control_idc = bits.bits(MOTION_VECTOR_RESOLUTION_BITS)?;
+
     bits.skip(1)?;
 
     Ok(SccExtension {
@@ -276,6 +284,7 @@ fn scan_format(bits: &mut Bits) -> Result<Format, Stop> {
     let chroma_format_idc = bits.unsigned_max(MAX_CHROMA_FORMAT)?;
     let separate_colour_plane =
         chroma_format_idc == SEPARATE_COLOUR_PLANE_CHROMA_FORMAT && bits.bit()?;
+
     let chroma_array_type = if separate_colour_plane {
         0
     } else {
@@ -284,6 +293,7 @@ fn scan_format(bits: &mut Bits) -> Result<Format, Stop> {
 
     let width = bits.unsigned()?;
     let height = bits.unsigned()?;
+
     if !(1..=MAX_PICTURE_DIMENSION).contains(&width)
         || !(1..=MAX_PICTURE_DIMENSION).contains(&height)
     {
@@ -316,6 +326,7 @@ fn scan_ordering_info(bits: &mut Bits, sub_layers: usize) -> Result<u32, Stop> {
     };
 
     let mut max_dec_pic_buffering_minus1 = 0;
+
     for _ in first_ordered..=sub_layers {
         max_dec_pic_buffering_minus1 = bits.unsigned_max(MAX_DEC_PIC_BUFFERING_MINUS1)?;
         bits.unsigned_max(max_dec_pic_buffering_minus1)?;
@@ -333,6 +344,7 @@ fn scan_ctb_size(bits: &mut Bits) -> Result<u32, Stop> {
 
     let ctb_log2 = min_coding_block_log2 + coding_block_diff;
     let max_transform_block_log2 = min_transform_block_log2 + transform_block_diff;
+
     if max_transform_block_log2 > ctb_log2.min(MAX_TRANSFORM_BLOCK_LOG2) {
         return Err(Stop::ParserRejects);
     }
@@ -347,6 +359,7 @@ fn scan_short_term_sets(
     let declared = bits.unsigned_max(MAX_SHORT_TERM_SETS)?;
 
     let mut short_term_sets = Vec::new();
+
     for index in 0..declared {
         let sets = Sets {
             existing: &short_term_sets,
@@ -354,6 +367,7 @@ fn scan_short_term_sets(
             max_dec_pic_buffering_minus1,
         };
         let set = scan_short_term_set(bits, &sets, count(index))?;
+
         short_term_sets.push(set);
     }
 
@@ -367,6 +381,7 @@ fn scan_long_term_sequence_pictures(
     let pictures = bits.unsigned_max(MAX_LONG_TERM_SPS_PICTURES)?;
 
     let mut used_by_current = Vec::new();
+
     for _ in 0..pictures {
         bits.skip(poc_lsb_bits)?;
         used_by_current.push(bits.bit()?);
@@ -405,7 +420,9 @@ pub(super) fn scan_sequence_parameter_set(
     bits: &mut Bits,
 ) -> Result<(u8, SequenceParameters), Stop> {
     bits.skip(VPS_ID_BITS)?;
+
     let sub_layers = sub_layer_count(bits)?;
+
     bits.skip(1)?;
     scan_profile_tier_level(bits, sub_layers)?;
 
@@ -423,6 +440,7 @@ pub(super) fn scan_sequence_parameter_set(
     }
 
     bits.skip(1)?;
+
     let sample_adaptive_offset_enabled = bits.bit()?;
 
     if bits.bit()? {
@@ -437,6 +455,7 @@ pub(super) fn scan_sequence_parameter_set(
 
     let pic_order_count_lsb_bits = count(poc_lsb_bits_minus4) + 4;
     let long_term_present = bits.bit()?;
+
     let long_term_used_by_current = if long_term_present {
         scan_long_term_sequence_pictures(bits, pic_order_count_lsb_bits)?
     } else {
@@ -444,6 +463,7 @@ pub(super) fn scan_sequence_parameter_set(
     };
 
     let temporal_mvp_enabled = bits.bit()?;
+
     bits.skip(1)?;
 
     if bits.bit()? {

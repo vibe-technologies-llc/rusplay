@@ -43,7 +43,7 @@ pub fn symbol<T: Copy>(
         })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct ContextHandle(CuContext);
 
 impl ContextHandle {
@@ -89,6 +89,7 @@ impl Driver {
         check(CudaCall::Init, unsafe { (self.init)(0) })?;
 
         let mut count: c_int = 0;
+
         check(CudaCall::DeviceGetCount, unsafe {
             (self.device_get_count)(&raw mut count)
         })?;
@@ -100,6 +101,7 @@ impl Driver {
         let device = self.device(index)?;
         let get_pci_bus_id: CuDeviceGetPciBusIdFn = self.symbol("cuDeviceGetPCIBusId")?;
         let mut buffer = [0u8; PCI_BUS_ID_CAPACITY];
+
         let capacity = c_int::try_from(buffer.len()).unwrap_or(c_int::MAX);
 
         check(CudaCall::DeviceGetPciBusId, unsafe {
@@ -122,6 +124,7 @@ impl Driver {
             .ok_or(CudaError::DeviceMissing { index, count })?;
 
         let mut device: CuDevice = 0;
+
         check(CudaCall::DeviceGet, unsafe {
             (self.device_get)(&raw mut device, ordinal)
         })?;
@@ -153,6 +156,7 @@ pub struct Current<'a> {
 impl Drop for Current<'_> {
     fn drop(&mut self) {
         let mut popped: CuContext = ptr::null_mut();
+
         unsafe { (self.driver.ctx_pop_current)(&raw mut popped) };
     }
 }

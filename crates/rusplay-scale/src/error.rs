@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{MemoryHandle, PlaneLayout, TexelPacking, dmabuf::fourcc_name};
 
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Clone, Debug, PartialEq, Error)]
 pub enum ScaleError {
     #[error("source resolution {0} has no pixels")]
     EmptySource(Resolution),

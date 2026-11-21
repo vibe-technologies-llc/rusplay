@@ -38,6 +38,7 @@ impl Supervisor {
     pub fn run(mut self, service: &HostService) -> Result<(), HostError> {
         loop {
             let finished = service.is_finished();
+
             for event in service.poll_events() {
                 self.handle(event, service.ended_stream().as_ref())?;
             }
@@ -171,6 +172,7 @@ mod tests {
             };
             let pin_file = PinFile::open(&peers, None).unwrap();
             let phase = SharedPhase::new();
+
             let supervisor = Supervisor::new(pin_file, phase.clone(), &NetworkConfig::default());
 
             Self {
@@ -228,7 +230,9 @@ mod tests {
 
         fixture.handle(opened(60)).unwrap();
         fixture.handle(HostEvent::PairingLocked).unwrap();
+
         let locked = fixture.pin_path().exists();
+
         fixture.handle(opened(60)).unwrap();
         fixture.handle(admitted(Admission::Paired)).unwrap();
 
@@ -245,7 +249,9 @@ mod tests {
         fixture
             .handle(HostEvent::SessionFailed(HostError::AcceptCancelled))
             .unwrap();
+
         let failed = fixture.pin_path().exists();
+
         fixture.handle(opened(60)).unwrap();
         fixture.handle(HostEvent::Stopped(None)).unwrap();
 
@@ -265,6 +271,7 @@ mod tests {
     #[test]
     fn a_renewed_window_replaces_the_published_pin() {
         let mut fixture = Fixture::new(true);
+
         fixture.handle(opened(60)).unwrap();
         fs::write(fixture.pin_path(), "stale\n").unwrap();
 
@@ -287,7 +294,9 @@ mod tests {
         let mut fixture = Fixture::new(false);
 
         fixture.handle(admitted(Admission::Reconnected)).unwrap();
+
         let tracking = fixture.supervisor.stream.is_some();
+
         fixture
             .supervisor
             .handle(

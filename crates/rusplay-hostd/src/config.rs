@@ -29,6 +29,7 @@ mod tests {
     fn file(text: &str) -> (TempDir, ConfigSource) {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("host.toml");
+
         fs::write(&path, text).unwrap();
 
         (directory, ConfigSource::Explicit(path))

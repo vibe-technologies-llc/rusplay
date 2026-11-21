@@ -7,7 +7,7 @@ use parking_lot::{Condvar, Mutex};
 use rusplay_core::Resolution;
 use rusplay_protocol::{CursorImage, CursorMessage};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorState {
     pub x: i32,
     pub y: i32,
@@ -27,7 +27,7 @@ struct LatestState {
     watchers: Vec<Arc<dyn CursorWatcher>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LatestCursor {
     shared: Arc<(Mutex<LatestState>, Condvar)>,
 }
@@ -78,6 +78,7 @@ impl LatestCursor {
                 .as_ref()
                 .and_then(|previous| previous.image.clone()),
         };
+
         state.cursor = Some(CursorState {
             x: message.x,
             y: message.y,
@@ -86,7 +87,9 @@ impl LatestCursor {
             image,
         });
         state.updates += 1;
+
         let watchers = state.watchers.clone();
+
         drop(state);
 
         changed.notify_all();
@@ -138,6 +141,7 @@ mod tests {
         cursor.update(message(5, None));
 
         let latest = cursor.latest().unwrap();
+
         assert_eq!((latest.x, latest.y), (5, 10));
         assert_eq!(cursor.updates(), 2);
     }
@@ -156,8 +160,11 @@ mod tests {
         let cursor = LatestCursor::new();
 
         cursor.update(message(1, Some(image(7))));
+
         let first = cursor.latest().unwrap().image.unwrap();
+
         cursor.update(message(2, None));
+
         let second = cursor.latest().unwrap().image.unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
@@ -169,8 +176,11 @@ mod tests {
         let cursor = LatestCursor::new();
 
         cursor.update(message(1, Some(image(7))));
+
         let first = cursor.latest().unwrap().image.unwrap();
+
         cursor.update(message(1, Some(image(9))));
+
         let second = cursor.latest().unwrap().image.unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
@@ -183,6 +193,7 @@ mod tests {
         let writer = cursor.clone();
 
         let waiter = thread::spawn(move || cursor.wait_after(0, Duration::from_secs(5)));
+
         thread::sleep(Duration::from_millis(20));
         writer.update(message(3, None));
 
@@ -192,6 +203,7 @@ mod tests {
     #[test]
     fn waiting_times_out_when_nothing_changed() {
         let cursor = LatestCursor::new();
+
         cursor.update(message(3, None));
 
         assert_eq!(cursor.wait_after(1, Duration::from_millis(10)), None);

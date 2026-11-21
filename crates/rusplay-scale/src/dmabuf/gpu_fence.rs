@@ -83,6 +83,7 @@ impl LiveSemaphore {
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
         }
         .map_err(ScaleError::GpuFenceSemaphoreCreate)?;
+
         waiter.live.fetch_add(1, Ordering::Relaxed);
 
         Ok(Self {
@@ -120,6 +121,7 @@ impl fmt::Debug for GpuFenceWaiter {
 impl GpuFenceWaiter {
     pub fn new(device: &wgpu::Device) -> Result<Self, ScaleError> {
         let hal = unsafe { device.as_hal::<Vulkan>() }.ok_or(ScaleError::DmaBufNeedsVulkan)?;
+
         if !hal
             .enabled_device_extensions()
             .contains(&khr::external_semaphore_fd::NAME)
@@ -129,6 +131,7 @@ impl GpuFenceWaiter {
 
         let instance = hal.shared_instance().raw_instance();
         let physical = hal.raw_physical_device();
+
         if !imports_sync_files(instance, physical) {
             return Err(ScaleError::GpuFenceWaitUnavailable);
         }
@@ -154,11 +157,13 @@ impl GpuFenceWaiter {
     ) -> Result<GpuFenceWait, ScaleError> {
         let sync_file = export_write_fences(dmabuf)?;
         let semaphore = LiveSemaphore::create(self)?;
+
         self.import_sync_file(&semaphore, sync_file)?;
 
         let staged = with_hal_queue(queue, |hal_queue| {
             hal_queue.add_wait_semaphore(semaphore.semaphore, None, WAIT_STAGE);
         });
+
         if staged.is_none() {
             return Err(ScaleError::DmaBufNeedsVulkan);
         }
@@ -190,12 +195,14 @@ impl GpuFenceWaiter {
 
 fn imports_sync_files(instance: &ash::Instance, physical: vk::PhysicalDevice) -> bool {
     let properties = unsafe { instance.get_physical_device_properties(physical) };
+
     if properties.api_version < vk::API_VERSION_1_1 {
         return false;
     }
 
     let info = vk::PhysicalDeviceExternalSemaphoreInfo::default().handle_type(SYNC_FD);
     let mut support = vk::ExternalSemaphoreProperties::default();
+
     unsafe {
         instance.get_physical_device_external_semaphore_properties(physical, &info, &mut support);
     }
@@ -260,6 +267,7 @@ fn open_with_fence_wait(
         let supported = hal_adapter
             .physical_device_capabilities()
             .supports_extension(khr::external_semaphore_fd::NAME);
+
         if !supported || !imports_sync_files(instance, physical) {
             return None;
         }

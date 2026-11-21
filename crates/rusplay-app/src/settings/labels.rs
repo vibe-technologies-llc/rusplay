@@ -55,6 +55,7 @@ pub fn segmented_choice(optional: bool, options: &[&str]) -> bool {
 
 pub fn field_matches(field: &Field, query: &str) -> bool {
     let query = query.trim();
+
     if query.is_empty() {
         return true;
     }

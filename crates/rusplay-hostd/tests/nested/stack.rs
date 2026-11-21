@@ -37,6 +37,7 @@ impl Stack {
             hardware::missing("XDG_RUNTIME_DIR");
             return None;
         };
+
         if !runtime.join("pipewire-0").exists() {
             hardware::missing("a running PipeWire daemon");
             return None;
@@ -48,6 +49,7 @@ impl Stack {
             std::process::id(),
             NEXT_STACK.fetch_add(1, Ordering::Relaxed)
         );
+
         for name in ["config", "data", "state", "cache"] {
             fs::create_dir(dir.path().join(name)).unwrap();
         }
@@ -71,10 +73,13 @@ impl Stack {
         };
 
         let mut bus_address = String::new();
+
         BufReader::new(session.stdout.take().unwrap())
             .read_line(&mut bus_address)
             .unwrap();
+
         let bus_address = bus_address.trim().to_owned();
+
         assert!(
             bus_address.starts_with(PRIVATE_BUS_PREFIX)
                 && env::var("DBUS_SESSION_BUS_ADDRESS").ok().as_deref() != Some(&bus_address),
@@ -111,6 +116,7 @@ impl Stack {
         };
 
         let deadline = Instant::now() + COMPOSITOR_STARTUP;
+
         while !stack.socket().exists() {
             if Instant::now() >= deadline {
                 hardware::missing("a nested kwin_wayland that opens its socket");
@@ -125,6 +131,7 @@ impl Stack {
 
     fn base(dir: &TempDir, socket_name: &str, program: &str) -> Command {
         let mut command = Command::new(program);
+
         command
             .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("XDG_DATA_HOME", dir.path().join("data"))
@@ -142,6 +149,7 @@ impl Stack {
     pub fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let program = program.as_ref().to_string_lossy().into_owned();
         let mut command = Self::base(&self.dir, &self.socket_name, &program);
+
         command.env("DBUS_SESSION_BUS_ADDRESS", &self.bus_address);
         command
     }
@@ -197,6 +205,7 @@ fn terminate(child: &mut Child) {
 
 pub fn wait_for(within: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + within;
+
     while Instant::now() < deadline {
         if condition() {
             return true;

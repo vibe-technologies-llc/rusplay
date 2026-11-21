@@ -14,7 +14,7 @@ const TOGGLE_KNOB: f32 = 14.0;
 const DOT_SIZE: f32 = 6.0;
 const TAB_BAR_INSET: f32 = 10.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonStyle {
     Primary,
     Secondary,
@@ -22,7 +22,7 @@ pub enum ButtonStyle {
     Danger,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Accent,
     Live,

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Stop {
     ParserRejects,
     SubLayerCount,

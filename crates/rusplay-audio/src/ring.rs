@@ -89,6 +89,7 @@ mod tests {
 
         let dropped = writer.write_le_bytes(&le_bytes(&samples));
         let mut read = vec![0.0; samples.len()];
+
         consumer.pop_entire_slice(&mut read).unwrap();
 
         assert_eq!(dropped, 0);
@@ -99,6 +100,7 @@ mod tests {
     fn a_trailing_partial_frame_or_sample_is_dropped() {
         let (mut writer, consumer) = sample_ring(48_000, 2, 250);
         let mut bytes = le_bytes(&[1.0, 2.0, 3.0]);
+
         bytes.push(7);
 
         let dropped = writer.write_le_bytes(&bytes);

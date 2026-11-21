@@ -23,11 +23,13 @@ pub(crate) fn next_nalu<'a, H: Header + Debug>(
 ) -> Result<Option<Nalu<'a, H>>, DecodeError> {
     let position = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
     let remaining = cursor.get_ref().get(position..).unwrap_or_default();
+
     if !has_start_code(remaining) {
         return Ok(None);
     }
 
     let nalu: Nalu<'a, H> = Nalu::next(cursor).map_err(malformed(codec, BitstreamUnit::NalUnit))?;
+
     if nalu.as_ref().len() < nalu.header.len() {
         return Err(malformed(codec, BitstreamUnit::NalUnit)(String::from(
             "nal unit shorter than its header",

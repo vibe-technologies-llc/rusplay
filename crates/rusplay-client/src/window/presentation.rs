@@ -5,7 +5,7 @@ use crate::{
     window::pacing::{Feedback, PresentationFlags, Presented},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PresentationStats {
     pub feedback: bool,
     pub frames_presented: u64,
@@ -113,6 +113,7 @@ mod tests {
                 PresentationFlags::VSYNC | PresentationFlags::ZERO_COPY,
             ),
         }));
+
         let stats = counters.snapshot();
 
         assert!(stats.feedback);
@@ -141,6 +142,7 @@ mod tests {
             refresh: None,
             flags: PresentationFlags::default(),
         }));
+
         let stats = counters.snapshot();
 
         assert_eq!(stats.refresh, None);

@@ -4,13 +4,13 @@ use rusplay_config::{
 
 use crate::capabilities;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Node {
     path: std::path::PathBuf,
     pci_bus_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Device {
     gpu_index: u32,
     pci_bus_id: Option<String>,
@@ -189,6 +189,7 @@ mod tests {
         let resolved = resolve(&VideoDecoderConfig::default(), None);
 
         eprintln!("auto decoder resolved to {resolved:?}");
+
         assert!(!matches!(resolved, VideoDecoderConfig::Auto(_)));
         assert!(can_decode(&resolved));
     }

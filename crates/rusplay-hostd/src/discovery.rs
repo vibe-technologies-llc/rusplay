@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rusplay_config::{ConfigEnvironment, ConfigRole};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfigSource {
     Explicit(PathBuf),
     Discovered(PathBuf),

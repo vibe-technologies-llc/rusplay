@@ -65,6 +65,7 @@ fn the_first_keyframe_has_the_offered_size_because_the_first_frame_is_held() {
         let Some(observation) = observe((width, height, millihertz), true, OBSERVED_SECONDS) else {
             return;
         };
+
         observation.report();
 
         assert_eq!(observation.sizes, [offered(width, height)]);
@@ -85,6 +86,7 @@ fn without_the_hold_kwin_sends_a_keyframe_at_its_own_size_first() {
     ) else {
         return;
     };
+
     observation.report();
 
     assert_eq!(observation.sizes.first(), Some(&offered(1920, 1080)));
@@ -103,6 +105,7 @@ fn an_offer_kwin_ignores_is_streamed_at_its_own_size_after_the_timeout() {
     ) else {
         return;
     };
+
     observation.report();
 
     assert_eq!(observation.sizes, [offered(1920, 1080)]);
@@ -117,9 +120,11 @@ fn kwin_does_not_deliver_more_frames_than_its_output_refreshes() {
         let Some(observation) = observe((width, height, millihertz), true, OBSERVED_SECONDS) else {
             return;
         };
+
         observation.report();
 
         let captured = captured_per_interval(&observation.host);
+
         assert!(captured.len() >= 2, "{captured:?}");
         assert!(
             captured
@@ -141,6 +146,7 @@ fn a_static_virtual_monitor_delivers_a_frame_at_the_new_size_after_renegotiation
     let Some(observation) = observe((1280, 720, 60_000), false, OBSERVED_SECONDS) else {
         return;
     };
+
     observation.report();
 
     assert_eq!(observation.sizes, [offered(1280, 720)]);
@@ -154,6 +160,7 @@ fn kwin_describes_no_colour_so_the_stream_is_taken_as_srgb() {
     let Some(observation) = observe((1280, 720, 60_000), true, OBSERVED_SECONDS) else {
         return;
     };
+
     observation.report();
 
     assert_eq!(observation.colors.len(), 1);

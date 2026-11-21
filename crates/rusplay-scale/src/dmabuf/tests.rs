@@ -32,6 +32,7 @@ struct Fixture {
 fn fixture() -> Option<Fixture> {
     let gpu = testing::gpu()?;
     let importer = hardware::require(DmaBufImporter::new(&gpu.device).ok(), "dma-buf import")?;
+
     hardware::require(udmabuf(&[0]), "udmabuf")?;
 
     Some(Fixture { gpu, importer })
@@ -158,14 +159,17 @@ fn every_rgb_format_reads_back_in_drm_channel_order() {
                 )
                 .unwrap();
         });
+
         let read = testing::download(fixture.gpu, &target);
 
         assert_eq!(texture.channels(), Some(channels));
         for (index, texel) in read.pixels.iter().enumerate() {
             let (x, y) = (index % size.0 as usize, index / size.0 as usize);
+
             let at = y * usize::try_from(RGB_STRIDE).unwrap() + x * RGB_TEXEL_BYTES as usize;
             let word = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
             let want = drm_rgb(format, word).unwrap();
+
             for (got, want) in texel.iter().zip(want) {
                 assert!(
                     (got - want).abs() <= RGBA16F_TOLERANCE / 2.0,
@@ -201,6 +205,7 @@ fn yuv_settings(size: (u32, u32), depth: BitDepth) -> RgbConvertSettings {
 
 fn encode_yuv(gpu: &Gpu, pipelines: &ScalePipelines, settings: &RgbConvertSettings) -> Vec<u8> {
     let (width, height) = (settings.resolution.width, settings.resolution.height);
+
     let image = Image::pattern(width, height, 11);
 
     let mut converter = ColorConverter::new(
@@ -222,6 +227,7 @@ fn encode_yuv(gpu: &Gpu, pipelines: &ScalePipelines, settings: &RgbConvertSettin
         },
     )
     .unwrap();
+
     let frame = converter.create_frame(&gpu.device);
     let source = testing::upload(gpu, &image);
 
@@ -293,6 +299,7 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
                 .importer
                 .import(&semi_planar(&fd, format, converter.layout()))
                 .unwrap();
+
             gpu.queue.write_buffer(upload.buffer(), 0, &bytes);
             testing::submit(gpu, |encoder| {
                 converter
@@ -302,6 +309,7 @@ fn semi_planar_dmabufs_unpack_like_the_upload_buffer() {
                     .encode_planes(&gpu.device, encoder, &texture, &testing::view(&from_planes))
                     .unwrap();
             });
+
             let expected = testing::download(gpu, &from_buffer);
             let actual = testing::download(gpu, &from_planes);
             let (lut_expected, lut_actual) =
@@ -342,6 +350,7 @@ fn preserved_semi_planar_planes_unpack_like_the_upload_buffer() {
             let upload = converter.create_frame(&gpu.device);
             let from_buffer = testing::storage_target(gpu, size.0, size.1);
             let from_planes = testing::storage_target(gpu, size.0, size.1);
+
             let texture = fixture
                 .importer
                 .import_external(&semi_planar(&fd, format, converter.layout()))
@@ -364,9 +373,11 @@ fn preserved_semi_planar_planes_unpack_like_the_upload_buffer() {
             );
 
             gpu.queue.write_buffer(upload.buffer(), 0, &bytes);
+
             let mut encoder = gpu
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
             converter
                 .encode(
                     &gpu.device,
@@ -383,8 +394,10 @@ fn preserved_semi_planar_planes_unpack_like_the_upload_buffer() {
                     &testing::view(&from_planes),
                 )
                 .unwrap();
+
             let acquire = texture.acquire(&gpu.device).unwrap();
             let release = texture.release(&gpu.device, &mut encoder).unwrap();
+
             gpu.queue
                 .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
 
@@ -429,6 +442,7 @@ fn unpack_through_lut(
     )
     .unwrap();
     let (width, height) = (settings.resolution.width, settings.resolution.height);
+
     let from_buffer = testing::storage_target(gpu, width, height);
     let from_planes = testing::storage_target(gpu, width, height);
 
@@ -520,7 +534,9 @@ fn malformed_dmabufs_are_rejected() {
         .importer
         .import(&single_plane(&fd, nv12, size, RGB_STRIDE));
     let mut past_end = single_plane(&fd, xrgb, size, RGB_STRIDE);
+
     past_end.planes[0].offset = PAGE_BYTES as u64;
+
     let past_end = fixture.importer.import(&past_end);
 
     assert_eq!(
@@ -562,6 +578,7 @@ fn converters_refuse_planes_of_another_format() {
     let pipelines = ScalePipelines::new(&gpu.device);
     let size = (32, 16);
     let ten_bit = yuv_settings(size, BitDepth::Ten);
+
     let layout = RgbConverter::new(&pipelines, &gpu.device, yuv_settings(size, BitDepth::Eight))
         .unwrap()
         .layout()
@@ -577,6 +594,7 @@ fn converters_refuse_planes_of_another_format() {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     let result =
         converter.encode_planes(&gpu.device, &mut encoder, &texture, &testing::view(&target));
 
@@ -595,6 +613,7 @@ fn devices_without_dmabuf_features_cannot_import() {
     if testing::gpu().is_none() {
         return;
     }
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -655,6 +674,7 @@ fn fence_gpu() -> Option<&'static Gpu> {
 
 fn fence_fixture() -> Option<FenceFixture> {
     let gpu = fence_gpu()?;
+
     udmabuf(&[0])?;
 
     Some(FenceFixture {
@@ -672,9 +692,11 @@ fn read_through_lineariser(
 ) -> Image {
     let gpu = fixture.gpu;
     let channels = texture.channels().unwrap();
+
     let mut lineariser =
         Lineariser::new(pipelines, &gpu.device, LineariseSettings::encoded(channels)).unwrap();
     let (width, height) = (texture.resolution().width, texture.resolution().height);
+
     let target = testing::storage_target(gpu, width, height);
 
     fence();
@@ -726,6 +748,7 @@ fn waiting_on_the_gpu_reads_the_same_pixels_as_waiting_on_the_cpu() {
             wait_for_writes(fd.as_fd(), std::time::Duration::from_millis(100)).unwrap();
         });
         let mut staged = None;
+
         let gpu_waited = read_through_lineariser(&fixture, &pipelines, &texture, &mut || {
             staged = Some(
                 fixture
@@ -734,6 +757,7 @@ fn waiting_on_the_gpu_reads_the_same_pixels_as_waiting_on_the_cpu() {
                     .unwrap(),
             );
         });
+
         drop(staged);
 
         assert_eq!(gpu_waited.max_difference(&cpu_waited), 0.0, "{format:?}");
@@ -749,6 +773,7 @@ fn staged_semaphores_are_destroyed_once_their_submission_completes() {
     let size = (16, 8);
     let fd = udmabuf(&rgb_bytes(size, 9)).unwrap();
     let fourcc = DmaBufFormat::Xrgb8888.fourcc();
+
     let texture = fixture
         .importer
         .import(&single_plane(&fd, fourcc, size, RGB_STRIDE))
@@ -757,6 +782,7 @@ fn staged_semaphores_are_destroyed_once_their_submission_completes() {
 
     for _ in 0..300 {
         let mut staged = None;
+
         read_through_lineariser(&fixture, &pipelines, &texture, &mut || {
             staged = Some(
                 fixture
@@ -789,7 +815,9 @@ fn a_staged_wait_that_is_never_submitted_leaves_the_queue_clean() {
         .waiter
         .stage(&fixture.gpu.queue, fd.as_fd())
         .unwrap();
+
     assert_eq!(fixture.waiter.live_semaphores(), 1);
+
     drop(staged);
 
     assert_eq!(fixture.waiter.live_semaphores(), 0);

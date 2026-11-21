@@ -13,7 +13,7 @@ use crate::{
 
 pub(crate) const CACHED_FRAME_GROUPS: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Axis {
     Horizontal,
     Vertical,
@@ -28,7 +28,7 @@ impl Axis {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScaleSettings {
     pub filter: ScaleFilter,
     pub source: Resolution,
@@ -87,7 +87,7 @@ impl ScaleSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Reconfigured {
     Unchanged,
     Parameters,
@@ -141,6 +141,7 @@ impl Scaler {
             self.plan = Plan::new(&self.pipelines, device, &settings);
             Reconfigured::Tables
         };
+
         self.settings = settings;
         Ok(reconfigured)
     }
@@ -226,6 +227,7 @@ impl SeparablePlan {
 
         let source = resolution_pair(settings.source);
         let target = resolution_pair(settings.target);
+
         let intermediate_size = (target.0, source.1);
 
         let horizontal = PassTables::new(
@@ -406,13 +408,16 @@ impl<K: PartialEq + Clone> GroupCache<K> {
             .iter()
             .position(|(cached, _)| cached == key)
             .and_then(|position| self.entries.remove(position));
+
         if let Some(entry) = hit {
             let group = entry.1.clone();
+
             self.entries.push_back(entry);
             return group;
         }
 
         let group = create();
+
         while self.entries.len() >= self.capacity {
             self.entries.pop_front();
         }
@@ -568,6 +573,7 @@ mod tests {
             sigmoid: Some(Sigmoid::default()),
             ..plain
         };
+
         let mut scaler = Scaler::new(&pipelines, &gpu.device, plain).unwrap();
 
         let reconfigured = scaler.configure(&gpu.device, sigmoidal).unwrap();
@@ -647,6 +653,7 @@ mod tests {
         let pipelines = ScalePipelines::new(&gpu.device);
         let first = settings(ScaleFilter::Hermite, (64, 48), (32, 24));
         let second = settings(ScaleFilter::Mitchell, (40, 30), (70, 50));
+
         let mut scaler = Scaler::new(&pipelines, &gpu.device, first).unwrap();
 
         let unchanged = scaler.configure(&gpu.device, first).unwrap();
@@ -701,6 +708,7 @@ mod tests {
         };
 
         let mut scaler = Scaler::new(&pipelines, &gpu.device, ringing).unwrap();
+
         let ringing_range = range(&scale(gpu, &mut scaler, &step));
         let reconfigured = scaler.configure(&gpu.device, clamped).unwrap();
         let clamped_range = range(&scale(gpu, &mut scaler, &step));
@@ -767,6 +775,7 @@ mod tests {
 
         for _ in 0..CACHED_FRAME_GROUPS + 3 {
             let view = testing::view(&testing::upload(gpu, &Image::pattern(4, 4, 0)));
+
             groups.get_or_create(&view, || pipelines.source_group(&gpu.device, &view));
         }
 

@@ -32,6 +32,7 @@ impl<'a> BitReader<'a> {
             .get(self.position / BYTE_BITS)
             .ok_or_else(|| self.truncated())?;
         let shift = BYTE_BITS - 1 - self.position % BYTE_BITS;
+
         self.position += 1;
 
         Ok((byte >> shift) & 1 == 1)
@@ -39,6 +40,7 @@ impl<'a> BitReader<'a> {
 
     pub(super) fn bits(&mut self, count: u32) -> Result<u32, Av1SyntaxError> {
         let mut value = 0u64;
+
         for _ in 0..count {
             value = (value << 1) | u64::from(self.bit()?);
         }
@@ -49,6 +51,7 @@ impl<'a> BitReader<'a> {
     pub(super) fn signed(&mut self, count: u32) -> Result<i32, Av1SyntaxError> {
         let value = i64::from(self.bits(count)?);
         let sign = 1i64 << (count - 1);
+
         let signed = if value & sign == 0 {
             value
         } else {
@@ -60,6 +63,7 @@ impl<'a> BitReader<'a> {
 
     pub(super) fn uvlc(&mut self) -> Result<u32, Av1SyntaxError> {
         let mut leading_zeros = 0;
+
         while !self.bit()? {
             leading_zeros += 1;
         }
@@ -76,6 +80,7 @@ impl<'a> BitReader<'a> {
         let width = symbols.ilog2() + 1;
         let threshold = (1 << width) - symbols;
         let value = self.bits(width - 1)?;
+
         if value < threshold {
             return Ok(value);
         }
@@ -86,6 +91,7 @@ impl<'a> BitReader<'a> {
 
     pub(super) fn little_endian(&mut self, bytes: u32) -> Result<u64, Av1SyntaxError> {
         let mut value = 0u64;
+
         for index in 0..bytes {
             value |= u64::from(self.bits(8)?) << (8 * index);
         }
@@ -108,6 +114,7 @@ impl<'a> BitReader<'a> {
         }
 
         let bits = usize::try_from(bytes).map_err(|_| self.truncated())? * BYTE_BITS;
+
         self.position += bits;
         Ok(())
     }

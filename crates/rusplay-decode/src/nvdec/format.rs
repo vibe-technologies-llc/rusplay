@@ -26,7 +26,7 @@ pub(super) const fn cuda_chroma(chroma: ChromaSubsampling) -> c_int {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SurfaceFormat {
     Nv12,
     P016,
@@ -75,7 +75,7 @@ impl SurfaceFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StreamFormat {
     pub pixel_format: PixelFormat,
     pub surface: SurfaceFormat,
@@ -115,15 +115,19 @@ impl StreamFormat {
                 });
             }
         };
+
         let pixel_format = PixelFormat { chroma, depth };
 
         let picture = Resolution::new(format.coded_width, format.coded_height);
         let area = format.display_area;
+
         let left = clamp_edge(area.left, picture.width);
         let top = clamp_edge(area.top, picture.height);
         let right = clamp_edge(area.right, picture.width).max(left);
         let bottom = clamp_edge(area.bottom, picture.height).max(top);
+
         let display = Resolution::new(right - left, bottom - top);
+
         if display.width == 0 || display.height == 0 {
             return Err(DecodeError::ResolutionUnsupported {
                 backend: BACKEND,
@@ -138,6 +142,7 @@ impl StreamFormat {
             even(display.height).min(picture.height - top),
         );
         let short = |value: u32| c_short::try_from(value).unwrap_or(c_short::MAX);
+
         let crop = ShortRect {
             left: short(left),
             top: short(top),
@@ -162,7 +167,9 @@ impl StreamFormat {
         }
 
         let Resolution { width, height } = self.coded;
+
         let macroblocks = u64::from(width) * u64::from(height) / MACROBLOCK_PIXELS;
+
         if width > caps.max_width
             || height > caps.max_height
             || width < u32::from(caps.min_width)
@@ -375,6 +382,7 @@ mod tests {
     #[test]
     fn an_odd_display_size_maps_an_even_target_and_keeps_the_display_size() {
         let mut odd = video_format(ffi::CHROMA_FORMAT_444, 0);
+
         odd.display_area.right = 1917;
         odd.display_area.bottom = 1079;
 
@@ -389,6 +397,7 @@ mod tests {
     #[test]
     fn mixed_bit_depths_take_the_larger() {
         let mut mixed = video_format(ffi::CHROMA_FORMAT_420, 0);
+
         mixed.bit_depth_chroma_minus8 = 4;
 
         let format = StreamFormat::of(Codec::Av1, &mixed).unwrap();
@@ -426,6 +435,7 @@ mod tests {
         let nv12 = StreamFormat::of(Codec::H264, &video_format(ffi::CHROMA_FORMAT_420, 0)).unwrap();
         let p016 = StreamFormat::of(Codec::Av1, &video_format(ffi::CHROMA_FORMAT_420, 2)).unwrap();
         let mut small = caps(1 << ffi::SURFACE_FORMAT_NV12);
+
         small.max_width = 1280;
 
         assert!(

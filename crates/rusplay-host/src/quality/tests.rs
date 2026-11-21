@@ -52,6 +52,7 @@ fn sampler(interval_ms: u32, fps: u32) -> (QualitySampler, Arc<Recorder>) {
 fn wait_for_events(link: &Recorder) -> Vec<QualityEvent> {
     for _ in 0..500 {
         let events = link.take_events();
+
         if !events.is_empty() {
             return events;
         }
@@ -76,10 +77,15 @@ fn a_second_order_rate_collects_two_earlier_lumas_before_the_measured_frame() {
     let now = Instant::now();
 
     let first = sampler.plan(true, now);
+
     sampler.record(Some(Sample::Luma(plane(10))), Some(1), now);
+
     let second = sampler.plan(true, now);
+
     sampler.record(Some(Sample::Luma(plane(12))), Some(2), now);
+
     let third = sampler.plan(true, now);
+
     sampler.record(
         Some(Sample::Picture(Box::new(PictureSample {
             source: picture(14),
@@ -88,6 +94,7 @@ fn a_second_order_rate_collects_two_earlier_lumas_before_the_measured_frame() {
         Some(3),
         now,
     );
+
     let events = wait_for_events(&link);
 
     assert_eq!(first, Some(SampleKind::Luma));
@@ -105,7 +112,9 @@ fn a_first_order_rate_collects_one_earlier_luma() {
     let now = Instant::now();
 
     let first = sampler.plan(true, now);
+
     sampler.record(Some(Sample::Luma(plane(10))), Some(1), now);
+
     let second = sampler.plan(true, now);
 
     assert_eq!(first, Some(SampleKind::Luma));
@@ -128,6 +137,7 @@ fn the_next_sample_waits_for_the_interval() {
         Some(2),
         now,
     );
+
     let early = sampler.plan(true, now + INTERVAL / 2);
     let due = sampler.plan(true, now + INTERVAL);
     let events = wait_for_events(&link);
@@ -147,9 +157,12 @@ fn a_dropped_or_repeated_frame_restarts_the_history() {
 
     sampler.plan(true, now);
     sampler.record(Some(Sample::Luma(plane(10))), None, now);
+
     let after_drop = sampler.plan(true, now);
+
     sampler.record(Some(Sample::Luma(plane(10))), Some(1), now);
     sampler.interrupt();
+
     let after_repeat = sampler.plan(true, now);
 
     assert_eq!(after_drop, Some(SampleKind::Luma));
@@ -165,6 +178,7 @@ fn an_encoder_without_reconstruction_is_reported_once_and_never_sampled_again() 
     sampler.record(Some(Sample::Luma(plane(10))), Some(1), now);
     sampler.plan(true, now);
     sampler.record(Some(Sample::Unsupported), Some(2), now);
+
     let later = sampler.plan(true, now + 10 * INTERVAL);
 
     assert_eq!(later, None);
@@ -184,6 +198,7 @@ fn a_host_with_sampling_off_refuses_once_per_request() {
     let first = sampler.plan(true, now);
     let second = sampler.plan(true, now);
     let refused_once = link.take_events();
+
     sampler.plan(false, now);
     sampler.plan(true, now);
 
@@ -210,6 +225,7 @@ fn a_failed_read_is_reported_and_waits_for_the_interval() {
 
     sampler.plan(true, now);
     sampler.record(Some(Sample::Failed), Some(1), now);
+
     let early = sampler.plan(true, now);
 
     assert_eq!(early, None);
@@ -238,6 +254,7 @@ fn a_history_of_another_size_is_not_measured() {
         Some(2),
         now,
     );
+
     let again = sampler.plan(true, now);
 
     assert_eq!(again, Some(SampleKind::Luma));
@@ -256,6 +273,7 @@ fn the_history_reaches_the_measurement_newest_first() {
     };
     let source = SamplePicture::new(format(), [ramp(9), plane(128), plane(128)]).unwrap();
     let reconstruction = SamplePicture::new(format(), [ramp(8), plane(128), plane(128)]).unwrap();
+
     let expected = measure(
         &source,
         &reconstruction,

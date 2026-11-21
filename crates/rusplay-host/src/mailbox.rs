@@ -5,7 +5,7 @@ use parking_lot::{Condvar, Mutex};
 #[derive(Debug)]
 pub(crate) struct Closed;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveryRequest {
     pub frame: u32,
     pub last_good: u32,
@@ -114,11 +114,13 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn put(&self, frame: T) -> Result<Option<T>, Closed> {
         let mut state = self.state.lock();
+
         if state.closed {
             return Err(Closed);
         }
 
         let replaced = state.frame.replace(frame);
+
         drop(state);
         self.changed.notify_one();
 
@@ -127,6 +129,7 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn request_keyframe(&self, frame: u32) {
         let mut state = self.state.lock();
+
         state.keyframe_for = Some(
             state
                 .keyframe_for
@@ -138,6 +141,7 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn request_recovery(&self, request: RecoveryRequest) {
         let mut state = self.state.lock();
+
         state.recovery_for = Some(
             state
                 .recovery_for
@@ -149,6 +153,7 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn acknowledge(&self, frame: u32) {
         let mut state = self.state.lock();
+
         state.acknowledged = Some(
             state
                 .acknowledged
@@ -163,6 +168,7 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn suspend(&self) {
         let mut state = self.state.lock();
+
         state.started = false;
         state.suspensions = state.suspensions.wrapping_add(1);
         state.keyframe_for = None;
@@ -182,8 +188,11 @@ impl<T> Mailbox<T> {
 
     pub(crate) fn close(&self) -> Option<T> {
         let mut state = self.state.lock();
+
         state.closed = true;
+
         let pending = state.frame.take();
+
         drop(state);
         self.changed.notify_all();
 
@@ -240,8 +249,11 @@ mod tests {
         let mailbox = Mailbox::new();
 
         mailbox.put(1).unwrap();
+
         let before = mailbox.wait(SHORT);
+
         mailbox.start();
+
         let after = mailbox.wait(SHORT);
 
         assert_eq!(before, Waited::Idle);
@@ -262,6 +274,7 @@ mod tests {
     #[test]
     fn newest_frame_replaces_the_unread_one() {
         let mailbox = Mailbox::new();
+
         mailbox.start();
 
         let first = mailbox.put(1).unwrap();
@@ -278,6 +291,7 @@ mod tests {
     #[test]
     fn keyframe_requests_coalesce_to_the_earliest_frame() {
         let mailbox = Mailbox::<u32>::new();
+
         mailbox.start();
 
         mailbox.request_keyframe(7);
@@ -301,12 +315,15 @@ mod tests {
     #[test]
     fn suspending_holds_deliveries_until_the_restart_and_then_forces_a_keyframe() {
         let mailbox = Mailbox::<u32>::new();
+
         mailbox.start();
         mailbox.request_keyframe(3);
 
         mailbox.suspend();
         mailbox.put(4).unwrap();
+
         let held = mailbox.wait(SHORT);
+
         mailbox.start();
 
         assert_eq!(held, Waited::Idle);
@@ -327,6 +344,7 @@ mod tests {
     #[test]
     fn recovery_requests_coalesce_to_the_earliest_loss_and_reference() {
         let mailbox = Mailbox::<u32>::new();
+
         mailbox.start();
 
         mailbox.request_recovery(RecoveryRequest {
@@ -353,12 +371,15 @@ mod tests {
     #[test]
     fn acknowledgements_keep_the_newest_frame_and_wait_for_the_next_delivery() {
         let mailbox = Mailbox::<u32>::new();
+
         mailbox.start();
 
         mailbox.acknowledge(4);
         mailbox.acknowledge(6);
         mailbox.acknowledge(5);
+
         let alone = mailbox.wait(SHORT);
+
         mailbox.put(1).unwrap();
 
         assert_eq!(alone, Waited::Idle);
@@ -375,6 +396,7 @@ mod tests {
     #[test]
     fn suspending_drops_pending_recovery_and_acknowledgements() {
         let mailbox = Mailbox::<u32>::new();
+
         mailbox.start();
         mailbox.request_recovery(RecoveryRequest {
             frame: 3,

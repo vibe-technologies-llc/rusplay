@@ -160,6 +160,7 @@ mod tests {
             .unwrap();
 
         file.publish("583014").unwrap();
+
         let file_mode = fs::metadata(file.path()).unwrap().permissions().mode() & 0o777;
         let directory_mode = fs::metadata(file.path().parent().unwrap())
             .unwrap()
@@ -181,7 +182,9 @@ mod tests {
 
         file.publish("111111").unwrap();
         file.publish("222222").unwrap();
+
         let replaced = read(file.path()).unwrap();
+
         file.clear();
 
         assert_eq!(replaced, "222222");

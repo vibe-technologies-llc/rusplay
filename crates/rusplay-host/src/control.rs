@@ -45,13 +45,13 @@ fn protects_microphone(datagram: &[u8]) -> bool {
         .is_some_and(|(fec, _)| fec.protects == StreamKind::Microphone)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flow {
     Continue,
     Ended,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ControlTiming {
     pub handshake_timeout: Duration,
     pub peer_timeout: Duration,
@@ -73,7 +73,7 @@ impl From<&NetworkConfig> for ControlTiming {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum HintPolicy {
     Clamp(RangeInclusive<u32>),
     Ignore,
@@ -173,6 +173,7 @@ impl ControlStage {
 
     pub(crate) fn run(mut self) -> Result<(), HostError> {
         let result = self.serve();
+
         self.links.shared.stop();
 
         result
@@ -194,7 +195,9 @@ impl ControlStage {
             let wait = self
                 .next_wake(Instant::now())
                 .saturating_duration_since(Instant::now());
+
             self.links.transport.recv_batch_timeout(&mut batch, wait)?;
+
             let now = Instant::now();
 
             for (datagram, from) in batch.iter() {
@@ -207,11 +210,14 @@ impl ControlStage {
                     self.answer_stranger(datagram, from, now, &mut events)?;
                 }
             }
+
             let rtt = {
                 let mut channel = self.links.outbox.channel();
+
                 channel.poll(now, &mut events);
                 channel.rtt()
             };
+
             self.links.shared.counters.set_rtt(rtt);
 
             if self.handle(&mut events, now)? == Flow::Ended {
@@ -300,6 +306,7 @@ impl ControlStage {
                 request: datagram.to_vec(),
                 reply: output.reply.unwrap_or_default(),
             };
+
             self.switch_client(from, replay, now, events);
         }
 
@@ -336,6 +343,7 @@ impl ControlStage {
         events: &mut Vec<ControlEvent>,
     ) {
         let shared = &self.links.shared;
+
         shared.suspend();
         shared.client.switch(address);
         self.links.outbox.reset();
@@ -426,6 +434,7 @@ impl ControlStage {
         if !self.streaming {
             return;
         }
+
         let Some(input) = &self.links.input else {
             return;
         };
@@ -443,6 +452,7 @@ impl ControlStage {
         if !self.streaming {
             return;
         }
+
         let Some(microphone) = &self.links.microphone else {
             return;
         };
@@ -501,6 +511,7 @@ impl ControlStage {
                         sent_micros,
                         host_micros: shared.clock.micros(),
                     };
+
                     self.send(pong, now)?;
                 }
                 ControlEvent::Received(ControlMessage::Goodbye) => flow = Flow::Ended,
@@ -554,6 +565,7 @@ impl ControlStage {
         if !self.streaming {
             return;
         }
+
         let Some(link) = &mut self.links.clipboard else {
             return;
         };
@@ -571,6 +583,7 @@ impl ControlStage {
         if !self.streaming {
             return;
         }
+
         let Some(link) = &mut self.links.clipboard else {
             return;
         };
@@ -594,6 +607,7 @@ impl ControlStage {
         else {
             return Ok(());
         };
+
         if self.awaiting_display() || self.awaiting_source(now) {
             return Ok(());
         }
@@ -675,6 +689,7 @@ impl ControlStage {
         };
 
         let request = select_output(&display, &output.limits);
+
         if self.links.shared.output() == Some(request) {
             return;
         }
@@ -710,6 +725,7 @@ impl ControlStage {
         let ceiling = ControlMessage::BitrateCeiling {
             kbps: self.hints.ceiling_kbps(),
         };
+
         if self.send(ceiling, now)? {
             self.ceiling_owed = false;
         }
@@ -769,6 +785,7 @@ impl ControlStage {
 
         while self.links.outbox.flush().is_ok() {
             let now = Instant::now();
+
             if now >= deadline || events.contains(&ControlEvent::Acked { id: goodbye }) {
                 return;
             }
@@ -781,6 +798,7 @@ impl ControlStage {
                 .unwrap_or(deadline)
                 .min(deadline)
                 .saturating_duration_since(now);
+
             if self
                 .links
                 .transport
@@ -795,6 +813,7 @@ impl ControlStage {
                         .is_ok_and(|header| header.stream == StreamKind::Control)
                 {
                     let mut channel = self.links.outbox.channel();
+
                     channel
                         .handle_datagram(datagram, Instant::now(), &mut events)
                         .ok();
@@ -821,6 +840,7 @@ mod tests {
 
     fn policy(bitrate_kbps: u32, hint_min_kbps: u32) -> HintPolicy {
         let mut config = Config::default();
+
         config.video.bitrate_kbps = bitrate_kbps;
         config.network.bitrate_hint_min_kbps = hint_min_kbps;
 
@@ -850,6 +870,7 @@ mod tests {
     #[test]
     fn constant_quality_has_no_ceiling_to_announce() {
         let mut config = Config::default();
+
         config.video.encoder = VideoEncoderConfig::Vaapi(VaapiConfig {
             rate_control: RateControl::DEFAULT_CONSTANT_QUALITY,
             ..VaapiConfig::default()

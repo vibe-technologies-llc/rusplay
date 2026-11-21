@@ -26,7 +26,7 @@ pub struct FrameTimings {
     peak_micros: AtomicU64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TimingTotals {
     frames: u64,
     decode_micros: u64,
@@ -88,7 +88,7 @@ impl<S: FrameSink> FrameSink for TimingSink<S> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClientLatency {
     pub decode: Duration,
     pub present: Duration,
@@ -101,7 +101,7 @@ impl ClientLatency {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EndToEnd {
     pub receive: Option<Duration>,
     pub decode: Option<Duration>,
@@ -118,7 +118,7 @@ impl EndToEnd {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StreamRates {
     pub received_fps: f64,
     pub presented_fps: f64,
@@ -195,7 +195,7 @@ pub fn quality_rows(snapshot: &ClientStats) -> Vec<(&'static str, String)> {
     rows
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DisplayTiming {
     pub submit_to_display: Duration,
     pub capture_to_display: Option<Duration>,
@@ -219,7 +219,7 @@ impl DisplayTiming {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Reading {
     at: Instant,
     stats: ClientStats,
@@ -232,6 +232,7 @@ impl StreamRates {
             .at
             .saturating_duration_since(previous.at)
             .as_secs_f64();
+
         if seconds <= 0.0 {
             return None;
         }
@@ -343,7 +344,7 @@ impl StreamRates {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct JsonReporter {
     schedule: StatsSchedule,
 }
@@ -372,7 +373,7 @@ impl JsonReporter {
 
 const HOST_JSON_EVENT: &str = "host_stats";
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct HostJsonLog {
     interval_ms: u32,
     schedule: Option<StatsSchedule>,
@@ -501,7 +502,9 @@ mod tests {
         let reporter = JsonReporter::new(&on, start).unwrap();
 
         assert!(JsonReporter::new(&off, start).is_none());
+
         let mut schedule = reporter.schedule;
+
         assert!(!schedule.take_due(start + Duration::from_millis(999)));
         assert!(schedule.take_due(start + Duration::from_millis(1_000)));
     }
@@ -521,7 +524,9 @@ mod tests {
         let mut log = HostJsonLog::new(&network).unwrap();
 
         let before = log.observe(Some(&stats), start + Duration::from_secs(5));
+
         log.admitted(start);
+
         let early = log.observe(Some(&stats), start + Duration::from_millis(999));
         let due = log.observe(Some(&stats), start + Duration::from_millis(1_000));
         let last = log.left(Some(&stats));
@@ -530,7 +535,9 @@ mod tests {
         assert!(HostJsonLog::new(&NetworkConfig::default()).is_none());
         assert_eq!(before, None);
         assert_eq!(early, None);
+
         let due = due.unwrap();
+
         assert!(due.starts_with(r#"{"event":"host_stats","phase":"interval","#));
         assert!(due.contains(r#""frames_sent":42"#));
         assert!(last.unwrap().contains(r#""phase":"final""#));
@@ -583,6 +590,7 @@ mod tests {
     fn the_overlay_gets_a_quality_line_while_measuring() {
         let start = Instant::now();
         let mut current = reading(start + SAMPLE_WINDOW);
+
         current.stats.quality = QualityState::Reported;
         current.stats.quality_report = Some(quality_report());
 
@@ -613,6 +621,7 @@ mod tests {
         let start = Instant::now();
         let before = reading(start);
         let mut after = reading(start + Duration::from_secs(2));
+
         after.stats.frames_received = 130;
         after.stats.frames_presented = 120;
         after.stats.frames_lost = 3;
@@ -636,6 +645,7 @@ mod tests {
         let start = Instant::now();
         let before = reading(start);
         let mut after = reading(start + Duration::from_secs(1));
+
         after.totals = TimingTotals {
             frames: 4,
             decode_micros: 8_000,
@@ -657,7 +667,9 @@ mod tests {
     fn a_counter_that_went_backwards_reads_as_zero() {
         let start = Instant::now();
         let mut before = reading(start);
+
         before.stats.frames_lost = 9;
+
         let after = reading(start + Duration::from_secs(1));
 
         let rates = StreamRates::between(&before, &after, 0).unwrap();
@@ -691,6 +703,7 @@ mod tests {
         let start = Instant::now();
         let before = reading(start);
         let mut after = reading(start + Duration::from_secs(1));
+
         after.stats.frames_presented = 60;
         after.stats.frames_received = 60;
         after.stats.capture_to_receive = Some(Duration::from_micros(3_100));

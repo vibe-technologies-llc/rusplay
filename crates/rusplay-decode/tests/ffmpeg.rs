@@ -36,6 +36,7 @@ fn decode_all(codec: Codec, name: &str, threads: Option<u32>) -> Vec<DecodedFram
         outputs.extend(decoder.decode(frame).unwrap());
     }
     outputs.extend(decoder.flush().unwrap());
+
     assert!(decoder.flush().unwrap().is_empty());
 
     outputs
@@ -54,10 +55,12 @@ fn tight(frame: &DecodedFrame) -> Vec<u8> {
     for plane in cpu(frame).planes() {
         let width = usize::try_from(plane.width).unwrap();
         let sample = usize::from(plane.bytes_per_sample);
+
         let row = width * sample;
 
         for y in 0..plane.height {
             let start = usize::try_from(y).unwrap() * plane.stride;
+
             bytes.extend_from_slice(&plane.data[start..start + row]);
         }
     }
@@ -74,6 +77,7 @@ fn assert_planes(frame: &DecodedFrame, format: PixelFormat) {
 
     let expected = |index: usize| -> (u32, u32) {
         let Resolution { width, height } = FIXTURE_RESOLUTION;
+
         if index == 0 {
             return (width, height);
         }
@@ -113,6 +117,7 @@ fn assert_one_picture_per_packet(codec: Codec, name: &str, format: PixelFormat) 
             .unwrap_or_else(|| panic!("no picture for {:?}", frame.timestamp));
 
         assert_eq!(output.timestamp, frame.timestamp);
+
         assert_planes(&output, format);
         outputs.push(output);
     }
@@ -123,14 +128,18 @@ fn assert_one_picture_per_packet(codec: Codec, name: &str, format: PixelFormat) 
 
 fn assert_reorder(codec: Codec, name: &str, count: usize) {
     let frames = packets(codec, name);
+
     assert_eq!(frames.len(), count);
 
     let mut decoder = open(codec, None);
     let mut outputs = Vec::new();
+
     for frame in &frames {
         outputs.extend(decoder.decode(frame).unwrap());
     }
+
     let before_flush = outputs.len();
+
     outputs.extend(decoder.flush().unwrap());
 
     assert!(before_flush < count);
@@ -139,9 +148,13 @@ fn assert_reorder(codec: Codec, name: &str, count: usize) {
     assert!(decoder.flush().unwrap().is_empty());
 
     let mut timestamps: Vec<Timestamp> = outputs.iter().map(|output| output.timestamp).collect();
+
     timestamps.sort_unstable();
+
     let mut expected: Vec<Timestamp> = frames.iter().map(|frame| frame.timestamp).collect();
+
     expected.sort_unstable();
+
     assert_eq!(timestamps, expected);
 
     for output in &outputs {
@@ -185,6 +198,7 @@ fn decodes_hevc_main10_into_low_ten_bit_samples() {
     assert_eq!(outputs.len(), 8);
     for output in &outputs {
         assert_planes(output, format);
+
         let plane = cpu(output).plane(0).unwrap();
         let mut saw_sample = false;
 
@@ -195,9 +209,11 @@ fn decodes_hevc_main10_into_low_ten_bit_samples() {
                 let sample = u16::from_le_bytes(plane.data[offset..offset + 2].try_into().unwrap());
 
                 assert!(sample <= 1_023);
+
                 saw_sample |= sample != 0;
             }
         }
+
         assert!(saw_sample);
     }
 }
@@ -249,12 +265,14 @@ fn rejects_frames_of_another_codec() {
 fn a_hevc_frame_that_lost_its_reference_fails_and_the_next_keyframe_decodes() {
     let mut decoder = open(Codec::Hevc, Some(1));
     let frames = packets(Codec::Hevc, "hevc-420-8bit.hevc");
+
     assert!(
         frames.len() >= 3,
         "the fixture needs a frame after the lost one"
     );
 
     assert!(decoder.decode(&frames[0]).unwrap().is_some());
+
     let lost = decoder.decode(&frames[2]);
 
     assert!(
@@ -268,6 +286,7 @@ fn a_hevc_frame_that_lost_its_reference_fails_and_the_next_keyframe_decodes() {
 fn an_empty_packet_produces_nothing() {
     let mut decoder = open(Codec::H264, Some(1));
     let mut frame = packets(Codec::H264, "h264-420-8bit.h264").remove(0);
+
     frame.data = Vec::new().into();
 
     assert!(decoder.decode(&frame).unwrap().is_none());
@@ -377,6 +396,7 @@ fn motion_packets() -> Vec<(EncodedFrame, [u64; 3])> {
                 keyframe: number == 0,
                 data: encoded[offset..offset + size].to_vec().into(),
             };
+
             offset += size;
             (packet, checksums)
         })
@@ -417,6 +437,7 @@ fn a_rejected_packet_keeps_the_references_the_next_frame_predicts_from() {
     for (packet, _) in &packets[..10] {
         assert!(decoder.decode(packet).unwrap().is_some());
     }
+
     let rejected = decoder.decode(&broken);
     let picture = decoder.decode(resumed).unwrap().unwrap();
 

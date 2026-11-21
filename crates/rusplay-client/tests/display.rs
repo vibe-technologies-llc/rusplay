@@ -14,6 +14,7 @@ fn the_compositor_describes_its_outputs() {
     for output in outputs {
         let image = output.image.unwrap();
         let target = rusplay_client::resolve_target(&image, &DisplayTargetConfig::default());
+
         eprintln!("{:?}: {image:?} -> {target:?}", output.name);
         target.unwrap();
     }

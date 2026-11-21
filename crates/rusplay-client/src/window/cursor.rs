@@ -85,6 +85,7 @@ impl CursorLayer {
             return Ok(None);
         };
         let space = cursor.space;
+
         if image.width == 0 || image.height == 0 || space.pixel_count() == 0 {
             return Ok(None);
         }
@@ -95,6 +96,7 @@ impl CursorLayer {
         );
         let limit = device.limits().max_texture_dimension_2d;
         let source = Resolution::new(u32::from(image.width), u32::from(image.height));
+
         if !fits(source, limit) || !fits(size, limit) {
             self.skip_oversized(image, size);
             return Ok(None);
@@ -120,8 +122,10 @@ impl CursorLayer {
             .scaled
             .as_ref()
             .is_some_and(|scaled| Arc::ptr_eq(&scaled.image, image) && scaled.size == size);
+
         if !current {
             let view = self.rebuild(device, queue, encoder, image, size)?;
+
             self.scaled = Some(Scaled {
                 image: Arc::clone(image),
                 size,
@@ -147,9 +151,11 @@ impl CursorLayer {
             .uploaded
             .as_ref()
             .is_some_and(|uploaded| !Arc::ptr_eq(&uploaded.image, image));
+
         if stale {
             self.uploaded = None;
         }
+
         let uploaded = self.uploaded.get_or_insert_with(|| Uploaded {
             image: Arc::clone(image),
             texture: upload(device, queue, image),
@@ -159,6 +165,7 @@ impl CursorLayer {
         let source_view = uploaded
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
         if source == size {
             return Ok(source_view);
         }
@@ -180,6 +187,7 @@ impl CursorLayer {
             wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
         )
         .create_view(&wgpu::TextureViewDescriptor::default());
+
         scaler.encode(device, encoder, &source_view, &target);
 
         Ok(target)
@@ -334,6 +342,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         let halved = layer
             .prepare(
                 &gpu.device,
@@ -354,6 +363,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
+
         gpu.queue.submit([encoder.finish()]);
 
         assert_eq!(halved.1.size, [2, 2]);
@@ -390,6 +400,7 @@ mod tests {
                     Resolution::new(50, 50),
                 )
                 .unwrap();
+
             assert!(placed.is_none());
         }
     }
@@ -415,6 +426,7 @@ mod tests {
 
         let alpha = 128.0 / 255.0;
         let red = srgb_to_linear(188) * alpha;
+
         assert!((f16_at(&bytes, 0) - red).abs() < 1e-3);
         assert!((f16_at(&bytes, 3) - alpha).abs() < 1e-3);
         assert!((srgb_to_linear(188) - 0.5).abs() < 0.01);
@@ -435,6 +447,7 @@ mod tests {
             return;
         };
         let skipped = Arc::new(Counter::default());
+
         let mut layer =
             CursorLayer::new(&gpu.device, ScalingConfig::default(), Arc::clone(&skipped));
         let cursor = CursorState {
@@ -446,6 +459,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         let mut prepare = |layer: &mut CursorLayer| {
             layer
                 .prepare(
@@ -457,6 +471,7 @@ mod tests {
                 )
                 .unwrap()
         };
+
         let first = prepare(&mut layer);
         let second = prepare(&mut layer);
 
@@ -484,6 +499,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         let placed = layer
             .prepare(
                 &gpu.device,

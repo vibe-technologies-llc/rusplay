@@ -13,7 +13,7 @@ const MASTERING_PAYLOAD_LEN: usize = 24;
 #[cfg(any(feature = "vaapi", feature = "nvenc"))]
 const CONTENT_LIGHT_PAYLOAD_LEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct St2086 {
     pub green: [u16; 2],
     pub blue: [u16; 2],
@@ -45,6 +45,7 @@ impl St2086 {
     pub(crate) fn sei_payload(&self) -> [u8; MASTERING_PAYLOAD_LEN] {
         let mut payload = [0; MASTERING_PAYLOAD_LEN];
         let points = [self.green, self.blue, self.red, self.white];
+
         for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
             slot[..2].copy_from_slice(&x.to_be_bytes());
             slot[2..].copy_from_slice(&y.to_be_bytes());
@@ -74,6 +75,7 @@ impl St2086 {
         let fixed = self.av1_fixed_point();
         let mut payload = [0; MASTERING_PAYLOAD_LEN];
         let points = [fixed.red, fixed.green, fixed.blue, fixed.white];
+
         for (slot, [x, y]) in payload.as_chunks_mut::<4>().0.iter_mut().zip(points) {
             slot[..2].copy_from_slice(&x.to_be_bytes());
             slot[2..].copy_from_slice(&y.to_be_bytes());

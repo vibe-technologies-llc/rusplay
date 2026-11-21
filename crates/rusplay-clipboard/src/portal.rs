@@ -23,7 +23,7 @@ use crate::{
 const THREAD_NAME: &str = "rusplay-portal-clipboard";
 const READ_POLL: Duration = Duration::from_millis(20);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PortalStep {
     Connect,
     RequestClipboard,
@@ -79,6 +79,7 @@ pub async fn request_clipboard(
     let clipboard = Clipboard::new()
         .await
         .map_err(portal(PortalStep::Connect))?;
+
     clipboard
         .request(session.session(), RequestClipboardOptions::default())
         .await
@@ -115,9 +116,11 @@ impl PortalClipboard {
                 })
                 .map_err(ClipboardError::PortalSpawn)?
         };
+
         drop(signals);
 
         let writer_shared = Arc::clone(&shared);
+
         thread::Builder::new()
             .name(format!("{THREAD_NAME}-set"))
             .spawn(move || serve_commands(&writer_shared, &session, &clipboard, &queued))
@@ -129,8 +132,11 @@ impl PortalClipboard {
     pub fn link(&self, max_bytes: usize, watch: bool) -> Box<dyn ClipboardBackend> {
         let (changes_sender, changes) = mpsc::channel();
         let mut next = self.shared.next_token.lock();
+
         *next += 1;
+
         let token = *next;
+
         drop(next);
 
         *self.shared.subscriber.lock() = Some(Subscriber {
@@ -275,6 +281,7 @@ async fn read_selection(
     };
     let shareable = mimes.iter().any(|mime| mime == TEXT_MIME)
         && !mimes.iter().any(|mime| mime == PASSWORD_HINT_MIME);
+
     if is_ours || !shareable {
         return;
     }
@@ -304,6 +311,7 @@ fn read_to_end(fd: OwnedFd, max_bytes: usize) -> Option<String> {
             ReadStep::Abandoned => return None,
             ReadStep::Pending => {
                 let mut fds = [PollFd::new(job.fd(), PollFlags::IN)];
+
                 poll(&mut fds, Some(&limit)).ok();
             }
         }
@@ -324,9 +332,11 @@ async fn write_selection(
     let fd = OwnedFd::from(fd);
 
     let (session, clipboard) = (Arc::clone(session), Arc::clone(clipboard));
+
     thread::spawn(move || {
         let written =
             text.is_some_and(|text| write_all(&fd, text.as_bytes(), TRANSFER_TIMEOUT).is_ok());
+
         drop(fd);
         pollster::block_on(clipboard.selection_write_done(session.session(), serial, written)).ok();
     });

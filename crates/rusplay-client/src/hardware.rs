@@ -24,6 +24,7 @@ pub(crate) fn require<T>(found: Option<T>, what: impl Display) -> Option<T> {
 #[cfg(all(feature = "software", feature = "vaapi"))]
 pub(crate) fn device_present(path: &std::path::Path) -> bool {
     let present = path.exists();
+
     if !present {
         missing(format_args!("the render node {}", path.display()));
     }

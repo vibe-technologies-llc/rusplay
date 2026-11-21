@@ -148,6 +148,7 @@ fn fnv1a(planes: &[Vec<u8>]) -> u64 {
 
 fn open_decoder(codec: Codec) -> Option<VaapiDecoder> {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(Path::new(&config.device)) {
         return None;
     }
@@ -169,6 +170,7 @@ fn assert_pixels(codec: Codec, frames: &[EncodedFrame], expected: &[u64], max_he
 
     let mut hashes = Vec::new();
     let mut leading_gaps = 0;
+
     for (index, frame) in frames.iter().enumerate() {
         let output = match decoder.decode(frame) {
             Ok(Some(output)) => output,
@@ -195,7 +197,9 @@ fn assert_pixels(codec: Codec, frames: &[EncodedFrame], expected: &[u64], max_he
     );
 
     let flushed = decoder.flush().unwrap();
+
     assert_eq!(flushed.len(), max_held);
+
     hashes.extend(flushed.iter().map(|output| hash_of(&decoder, output)));
 
     assert_eq!(hashes, expected, "the decode differs from the reference");
@@ -339,6 +343,7 @@ fn h264_without_reordering_by_construction_is_held_for_nothing() {
 #[test]
 fn h264_rejects_a_picture_size_beyond_level_6_2_instead_of_dividing_by_zero() {
     let mut oversized = sps(Profile::High, 0);
+
     oversized.pic_width_in_mbs_minus1 = u16::MAX;
     oversized.pic_height_in_map_units_minus1 = u16::MAX;
 
@@ -364,6 +369,7 @@ fn h264_rejects_a_picture_size_beyond_level_6_2_instead_of_dividing_by_zero() {
 #[test]
 fn h264_rejects_a_single_column_picture_taller_than_any_level_allows() {
     let mut tall = sps(Profile::High, 0);
+
     tall.pic_width_in_mbs_minus1 = 0;
     tall.pic_height_in_map_units_minus1 = u16::MAX;
     tall.frame_mbs_only_flag = false;
@@ -377,6 +383,7 @@ fn h264_rejects_a_single_column_picture_taller_than_any_level_allows() {
 #[test]
 fn h264_accepts_the_largest_level_6_2_picture() {
     let mut largest = sps(Profile::High, 0);
+
     largest.chroma_format_idc = 1;
     largest.pic_width_in_mbs_minus1 = 511;
     largest.pic_height_in_map_units_minus1 = 271;
@@ -398,6 +405,7 @@ fn hevc_order_count_arithmetic_wraps_on_extreme_values() {
     }
 
     let mut header = SliceHeader::default();
+
     header.short_term_ref_pic_set.num_negative_pics = 1;
     header.short_term_ref_pic_set.num_positive_pics = 1;
     header.short_term_ref_pic_set.delta_poc_s0[0] = i32::MIN;
@@ -416,6 +424,7 @@ fn hevc_order_count_arithmetic_wraps_on_extreme_values() {
 #[test]
 fn h264_follows_the_bitstream_restrictions() {
     let mut restricted = sps(Profile::High, 0);
+
     restricted.vui_parameters_present_flag = true;
     restricted.vui_parameters.bitstream_restriction_flag = true;
     restricted.vui_parameters.max_num_reorder_frames = 2;
@@ -435,6 +444,7 @@ fn field_packets(
     per_frame: bool,
 ) -> Vec<EncodedFrame> {
     let mut units: Vec<Vec<u8>> = pictures.iter().map(FieldPicture::encode).collect();
+
     units[0].splice(
         0..0,
         fields::parameter_sets(max_num_ref_frames, reorder_frames),
@@ -476,6 +486,7 @@ fn assert_reordered_field_stream(
         };
 
         let mut outputs = Vec::new();
+
         for packet in field_packets(max_num_ref_frames, reorder_frames, pictures, per_frame) {
             outputs.extend(decoder.decode(&packet).unwrap());
         }
@@ -623,6 +634,7 @@ fn long_term_setup(with_probe: bool) -> Vec<FieldPicture> {
         ],
     ]
     .concat();
+
     if with_probe {
         pictures.extend(probe_frame(3, 3, (6, Vec::new()), (6, Vec::new())));
     }
@@ -631,6 +643,7 @@ fn long_term_setup(with_probe: bool) -> Vec<FieldPicture> {
 
 fn frame_after_setup(with_probe: bool, operations: Vec<Mmco>) -> Vec<FieldPicture> {
     let mut pictures = long_term_setup(with_probe);
+
     pictures.extend([
         FieldPicture::intra(4, 3, false, 7).with_marking(operations),
         FieldPicture::intra(4, 3, true, 8),
@@ -645,6 +658,7 @@ fn setup_frames(with_probe: bool) -> Vec<(Field, Field)> {
         (Field::intra(3), Field::intra(4)),
         (Field::intra(5), Field::intra(6)),
     ];
+
     if with_probe {
         frames.push((
             Field::probe(&[5, 6, 1, 2, 3, 4]),
@@ -658,10 +672,12 @@ fn setup_frames(with_probe: bool) -> Vec<(Field, Field)> {
 #[test]
 fn field_marking_orders_long_term_pairs_after_short_term_ones() {
     let mut expected = setup_frames(true);
+
     expected.push((
         Field::probe(&[7, 8, 1, 6, 2, 3]),
         Field::probe(&[8, 7, 6, 1, 2, 4]),
     ));
+
     let unmark_short_term_field = vec![Mmco::UnmarkShortTerm {
         difference_minus1: 1,
     }];
@@ -676,10 +692,12 @@ fn field_marking_orders_long_term_pairs_after_short_term_ones() {
 #[test]
 fn field_marking_unmarks_a_single_long_term_field() {
     let mut expected = setup_frames(false);
+
     expected.push((
         Field::probe(&[7, 8, 5, 6, 1, 2]),
         Field::probe(&[8, 7, 6, 5, 2, 1]),
     ));
+
     let unmark_long_term_field = vec![Mmco::UnmarkLongTerm {
         long_term_pic_num: 1,
     }];
@@ -695,15 +713,18 @@ fn field_marking_unmarks_a_single_long_term_field() {
 #[ignore = "decode-vaapi-driver-field-long-term: the vcn firmware mis-marks the long-term field"]
 fn field_marking_unmarks_a_long_term_field_after_a_non_reference_frame() {
     let mut expected = setup_frames(true);
+
     expected.push((
         Field::probe(&[7, 8, 5, 6, 1, 2, 4]),
         Field::probe(&[8, 7, 6, 5, 2, 1, 4]),
     ));
+
     let unmark_long_term_field = vec![Mmco::UnmarkLongTerm {
         long_term_pic_num: 1,
     }];
 
     let mut pictures = long_term_setup(true);
+
     pictures.extend([
         FieldPicture::intra(4, 3, false, 7).with_marking(unmark_long_term_field),
         FieldPicture::intra(4, 3, true, 8),
@@ -729,6 +750,7 @@ fn an_unpaired_field_is_output_as_its_own_frame() {
     ];
 
     let mut outputs = Vec::new();
+
     for packet in field_packets(2, 0, &pictures, false) {
         outputs.extend(decoder.decode(&packet).unwrap());
     }
@@ -854,6 +876,7 @@ fn a_crop_beyond_the_coded_size_is_malformed() {
 #[test]
 fn h264_and_hevc_stream_formats_report_the_cropped_size() {
     let mut h264_sps = sps(Profile::High, 0);
+
     h264_sps.chroma_format_idc = 1;
     h264_sps.frame_cropping_flag = true;
     h264_sps.frame_crop_bottom_offset = 4;
@@ -916,6 +939,7 @@ fn detached_decode_outputs_a_valid_picture() {
     ] {
         let mut decoder = VaapiDecoder::detached(codec);
         let packets = common::annexb_access_units(codec, &common::fixture(name));
+
         assert!(decoder.decode(&packets[0]).unwrap().is_some());
     }
 }

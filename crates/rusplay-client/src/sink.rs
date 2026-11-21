@@ -9,7 +9,7 @@ use rusplay_scale::ColorVolume;
 
 use crate::FrameColor;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PresentedFrame {
     pub frame: u32,
     pub keyframe: bool,
@@ -58,7 +58,7 @@ struct LatestState {
     presented: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LatestFrame {
     shared: Arc<(Mutex<LatestState>, Condvar)>,
 }
@@ -94,7 +94,9 @@ impl FrameSink for LatestFrame {
     fn present(&mut self, frame: PresentedFrame) {
         let (state, filled) = &*self.shared;
         let mut state = state.lock();
+
         let replaced = state.frame.replace(frame);
+
         state.presented += 1;
         drop(state);
         filled.notify_all();

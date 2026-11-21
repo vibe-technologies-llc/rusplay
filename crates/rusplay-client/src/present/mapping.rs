@@ -8,14 +8,14 @@ use rusplay_scale::{
 
 use crate::{ClientError, FrameColor, present::FRAME_VIEW_CAPACITY};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MappingOptions {
     pub tone: ToneMapping,
     pub gamut: GamutMapping,
     pub processing: Processing,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Processing {
     #[cfg(test)]
     Separate,
@@ -49,7 +49,7 @@ impl From<&ColorConfig> for MappingOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ColorRoute {
     pub linearise: Option<LineariseSettings>,
     pub map: Option<ColorMapSettings>,
@@ -80,6 +80,7 @@ impl ColorRoute {
             gamut: options.gamut,
         };
         let plan = ColorPlan::new(&settings)?;
+
         let map = (!plan.is_identity()).then_some(settings);
         let output = source.mapped_to(&target);
         let fusable = plan.tone().is_none_or(|stage| stage.dynamic_peak.is_none());
@@ -91,6 +92,7 @@ impl ColorRoute {
             matrix: source.matrix,
             map,
         };
+
         let separate = Self {
             linearise,
             map,
@@ -187,11 +189,13 @@ impl ColorStage {
         }
 
         let route = ColorRoute::plan(source, target, &self.options)?;
+
         if let Some(settings) = route.linearise {
             if let Some(lineariser) = &mut self.lineariser {
                 lineariser.configure(device, settings)?;
             } else {
                 let mut lineariser = Lineariser::new(&self.pipelines, device, settings)?;
+
                 lineariser.set_frame_capacity(FRAME_VIEW_CAPACITY);
                 self.lineariser = Some(lineariser);
             }
@@ -201,6 +205,7 @@ impl ColorStage {
                 mapper.configure(device, settings)?;
             } else {
                 let mut mapper = ColorMapper::new(&self.pipelines, device, settings)?;
+
                 mapper.set_frame_capacity(FRAME_VIEW_CAPACITY);
                 self.mapper = Some(mapper);
             }

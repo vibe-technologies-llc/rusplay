@@ -92,9 +92,11 @@ fn exported_dma_bufs_hold_what_the_converter_writes() {
     let Ok(mut importer) = DmaBufImporter::new(&gpu.device) else {
         return;
     };
+
     if !can_export(&gpu.device, MemoryHandle::DmaBuf) {
         return;
     }
+
     let pipelines = ScalePipelines::new(&gpu.device);
 
     for (format, depth) in [
@@ -105,6 +107,7 @@ fn exported_dma_bufs_hold_what_the_converter_writes() {
             let settings = convert_settings(size, depth, PlaneLayout::SemiPlanar);
             let image = Image::pattern(size.0, size.1, 7);
             let mut converter = ColorConverter::new(&pipelines, &gpu.device, settings).unwrap();
+
             let plain = converter.create_frame(&gpu.device);
             let exported = converter
                 .create_exported_frame(&gpu.device, MemoryHandle::DmaBuf)
@@ -112,6 +115,7 @@ fn exported_dma_bufs_hold_what_the_converter_writes() {
 
             convert_into(gpu, &mut converter, &image, &plain);
             convert_into(gpu, &mut converter, &image, exported.frame());
+
             let expected = testing::download_buffer(gpu, plain.buffer());
             let actual = testing::download_buffer(gpu, exported.frame().buffer());
             let dma_buf_bytes = seek(exported.fd(), SeekFrom::End(0)).unwrap();
@@ -123,6 +127,7 @@ fn exported_dma_bufs_hold_what_the_converter_writes() {
 
             let unpack = unpack_settings(&settings);
             let mut unpacker = RgbConverter::new(&pipelines, &gpu.device, unpack).unwrap();
+
             let upload = unpacker.create_frame(&gpu.device);
             let texture = importer
                 .import(&exported_planes(&exported, format, converter.layout()))
@@ -160,12 +165,15 @@ fn opaque_fd_frames_hold_what_the_converter_writes() {
     let Some(gpu) = testing::gpu() else {
         return;
     };
+
     if !can_export(&gpu.device, MemoryHandle::OpaqueFd) {
         return;
     }
+
     let pipelines = ScalePipelines::new(&gpu.device);
     let settings = convert_settings((48, 20), BitDepth::Ten, PlaneLayout::PlanarHigh);
     let image = Image::pattern(48, 20, 3);
+
     let mut converter = ColorConverter::new(&pipelines, &gpu.device, settings).unwrap();
 
     let plain = converter.create_frame(&gpu.device);
@@ -175,6 +183,7 @@ fn opaque_fd_frames_hold_what_the_converter_writes() {
     let second = converter
         .create_exported_frame(&gpu.device, MemoryHandle::OpaqueFd)
         .unwrap();
+
     convert_into(gpu, &mut converter, &image, &plain);
     convert_into(gpu, &mut converter, &image, first.frame());
 
@@ -194,6 +203,7 @@ fn devices_without_dma_buf_features_cannot_export_them() {
     if testing::gpu().is_none() {
         return;
     }
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -203,6 +213,7 @@ fn devices_without_dma_buf_features_cannot_export_them() {
     let (plain, _queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
     let pipelines = ScalePipelines::new(&plain);
+
     let converter = ColorConverter::new(
         &pipelines,
         &plain,

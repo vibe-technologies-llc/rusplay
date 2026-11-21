@@ -43,6 +43,7 @@ fn luma_frame(settings: &RgbConvertSettings, luma: impl Fn(u32, u32) -> u8) -> V
         for y in 0..plane.height {
             for x in 0..plane.width {
                 let at = usize::try_from(plane.offset).unwrap() + (y * plane.stride + x) as usize;
+
                 bytes[at] = if index == 0 {
                     luma(x, y)
                 } else {
@@ -85,6 +86,7 @@ fn ramp_error(codes: &[Vec<f32>]) -> RampError {
     let columns = RAMP_MARGIN..RAMP_WIDTH - RAMP_MARGIN;
     #[allow(clippy::cast_precision_loss)]
     let rows = codes.len() as f32;
+
     let column_means: Vec<f32> = columns
         .clone()
         .map(|x| codes.iter().map(|row| row[x as usize]).sum::<f32>() / rows)

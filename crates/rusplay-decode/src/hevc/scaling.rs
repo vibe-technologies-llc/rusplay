@@ -20,6 +20,7 @@ pub(super) fn scan_scaling_list_data(bits: &mut Bits) -> Result<(), Stop> {
                 if size_id > LARGEST_SIZE_ID_WITHOUT_DC {
                     bits.signed()?;
                 }
+
                 let coefficients = LONGEST_SCALING_LIST.min(1 << (4 + (size_id << 1)));
                 for _ in 0..coefficients {
                     bits.signed()?;

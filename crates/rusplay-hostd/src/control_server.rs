@@ -32,14 +32,14 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(1);
 const DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 const DRAIN_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Starting,
     Pairing { opened: Instant, timeout: Duration },
     Streaming { client: SocketAddr },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct SharedPhase(Arc<Mutex<Phase>>);
 
 impl SharedPhase {
@@ -84,12 +84,14 @@ impl ControlContext {
 
     fn status(&self) -> String {
         let mut body = String::new();
+
         writeln!(body, "listening {}", self.address).ok();
 
         match self.phase.get() {
             Phase::Starting => writeln!(body, "state starting").ok(),
             Phase::Pairing { opened, timeout } => {
                 let remaining = timeout.saturating_sub(opened.elapsed());
+
                 writeln!(body, "state pairing").ok();
                 writeln!(body, "window_remaining_s {}", remaining.as_secs()).ok()
             }
@@ -103,6 +105,7 @@ impl ControlContext {
 
     fn new_pin(&self) -> Result<String, Refusal> {
         let pin = Pin::generate(self.pin_digits).map_err(|_| Refusal::PinUnavailable)?;
+
         (self.request_pin)(pin.clone()).map_err(|error| match error {
             HostError::StreamActive => Refusal::Streaming,
             _ => Refusal::PinUnavailable,
@@ -113,6 +116,7 @@ impl ControlContext {
 
     fn forget(&self, target: &str) -> Result<String, Refusal> {
         let mut store = self.peers.write();
+
         if store.is_stale() {
             store.refresh().map_err(|error| store_failed(&error))?;
         }
@@ -124,6 +128,7 @@ impl ControlContext {
         let name = store
             .get(&id)
             .map_or_default(|record| record.name().to_owned());
+
         store.forget(&id).map_err(|error| store_failed(&error))?;
 
         Ok(format!("forgot {id} {name}\n"))
@@ -180,6 +185,7 @@ impl ControlServer {
             source,
         };
         let listener = UnixListener::bind(path).map_err(bind_error)?;
+
         fs::set_permissions(path, fs::Permissions::from_mode(SOCKET_MODE))
             .and_then(|()| listener.set_nonblocking(true))
             .map_err(bind_error)?;
@@ -234,6 +240,7 @@ fn accept_loop(listener: &UnixListener, context: &ControlContext, stop: &AtomicB
 
 fn answer(stream: &UnixStream, context: &ControlContext) -> io::Result<()> {
     let credentials = rustix::net::sockopt::socket_peercred(stream)?;
+
     if credentials.uid != rustix::process::geteuid() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -250,6 +257,7 @@ fn answer(stream: &UnixStream, context: &ControlContext) -> io::Result<()> {
     };
 
     let mut writer = stream;
+
     writer.write_all(control::render_reply(&reply).as_bytes())?;
     stream.shutdown(Shutdown::Write)?;
     drain(stream);
@@ -298,15 +306,19 @@ mod tests {
         fn new(names: &[(&str, u8)]) -> Self {
             let directory = TempDir::new().unwrap();
             let mut store = PeerStore::open(directory.path().join("paired-clients")).unwrap();
+
             for (name, byte) in names {
                 let record = PeerRecord::new(name, PeerSecret::from_bytes([*byte; 32])).unwrap();
+
                 store.remember(record).unwrap();
             }
+
             let peers = Arc::new(RwLock::new(store));
             let phase = SharedPhase::new();
             let requested = Arc::new(Mutex::new(Vec::new()));
             let streaming = Arc::new(AtomicBool::new(false));
             let socket = directory.path().join("run").join("control.sock");
+
             let server = ControlServer::start(
                 &socket,
                 ControlContext {
@@ -362,14 +374,18 @@ mod tests {
         let fixture = Fixture::new(&[("laptop", 1), ("desk pc", 2)]);
 
         let starting = send(&fixture.socket, &Request::Status).unwrap();
+
         fixture.phase.set(Phase::Pairing {
             opened: Instant::now(),
             timeout: Duration::from_secs(60),
         });
+
         let pairing = send(&fixture.socket, &Request::Status).unwrap();
+
         fixture.phase.set(Phase::Streaming {
             client: "10.0.0.2:5000".parse().unwrap(),
         });
+
         let streaming = send(&fixture.socket, &Request::Status).unwrap();
 
         assert_eq!(
@@ -388,6 +404,7 @@ mod tests {
         let second = send(&fixture.socket, &Request::NewPin).unwrap();
 
         let requested = fixture.requested.lock();
+
         assert_eq!(requested.len(), 2);
         assert_eq!(reply.trim(), requested[0].as_str());
         assert_eq!(second.trim(), requested[1].as_str());
@@ -398,6 +415,7 @@ mod tests {
     #[test]
     fn a_new_pin_is_refused_while_a_client_streams() {
         let fixture = Fixture::new(&[]);
+
         fixture.streaming.store(true, Ordering::Release);
 
         let result = send(&fixture.socket, &Request::NewPin);
@@ -451,12 +469,16 @@ mod tests {
         let fixture = Fixture::new(&[]);
 
         let mut stream = UnixStream::connect(&fixture.socket).unwrap();
+
         stream
             .write_all(&vec![b'a'; control::MAX_REQUEST_BYTES * 4])
             .unwrap();
         stream.shutdown(Shutdown::Write).unwrap();
+
         let mut reply = String::new();
+
         stream.read_to_string(&mut reply).unwrap();
+
         let unknown = send(
             &fixture.socket,
             &Request::Forget {
@@ -485,9 +507,12 @@ mod tests {
         };
 
         let second = ControlServer::start(&socket, context.clone());
+
         assert!(matches!(second, Err(ControlError::AlreadyRunning { .. })));
         assert_eq!(fixture.server.path(), socket);
+
         let Fixture { server, .. } = fixture;
+
         drop(server);
 
         assert!(!socket.exists());
@@ -495,9 +520,13 @@ mod tests {
             send(&socket, &Request::Status),
             Err(ControlError::NotRunning { .. })
         ));
+
         drop(UnixListener::bind(&socket).unwrap());
+
         let replacement = ControlServer::start(&socket, context).unwrap();
+
         assert!(send(&socket, &Request::Status).is_ok());
+
         drop(replacement);
     }
 }

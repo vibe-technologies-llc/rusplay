@@ -49,12 +49,14 @@ impl Writer {
 
     fn nalu(&self, kind: u8) -> Vec<u8> {
         let mut bits = self.bits.clone();
+
         bits.push(true);
         while !bits.len().is_multiple_of(8) {
             bits.push(false);
         }
 
         let mut nalu = vec![kind << 1, 1];
+
         nalu.extend(bits.chunks(8).map(|byte| {
             byte.iter()
                 .fold(0u8, |value, &bit| (value << 1) | u8::from(bit))
@@ -102,6 +104,7 @@ impl Default for Sequence {
 impl Sequence {
     fn nalu(&self) -> Vec<u8> {
         let mut writer = Writer::default();
+
         writer
             .bits(4, 0)
             .bits(3, u64::try_from(self.sub_layers.len()).unwrap())
@@ -236,6 +239,7 @@ struct Picture {
 impl Picture {
     fn nalu(&self) -> Vec<u8> {
         let mut writer = Writer::default();
+
         writer.unsigned(0).unsigned(0);
         writer
             .bit(false)
@@ -281,6 +285,7 @@ impl Picture {
 
 fn slice(kind: u8, body: impl FnOnce(&mut Writer)) -> Vec<u8> {
     let mut writer = Writer::default();
+
     writer.bit(true);
     if (16..=23).contains(&kind) {
         writer.bit(false);
@@ -316,12 +321,14 @@ fn parameter_set(file: &str, kind: u8) -> Vec<u8> {
         .position(|window| window[..3] == [0, 0, 1] && (window[3] >> 1) & 0x3f == kind)
         .unwrap()
         + 3;
+
     let end = data[start..]
         .windows(3)
         .position(|window| window == [0, 0, 1])
         .map_or(data.len(), |offset| start + offset);
 
     let mut nalu = data[start..end].to_vec();
+
     while nalu.last() == Some(&0) {
         nalu.pop();
     }
@@ -335,10 +342,13 @@ fn sequence_result(nalu: &[u8]) -> Result<bool, DecodeError> {
 fn picture_result(sequence: &Sequence, picture: &Picture) -> Result<(), DecodeError> {
     let mut sets = ParameterSets::default();
     let checked = check_sequence_parameter_set(&sequence.nalu())?;
+
     assert!(checked.0.is_some());
+
     sets.keep_sequence_parameter_set(checked);
 
     let checked = sets.check_picture_parameter_set(&picture.nalu())?;
+
     assert!(checked.0.is_some());
 
     Ok(())
@@ -352,10 +362,15 @@ fn slice_result(
 ) -> Result<(), DecodeError> {
     let mut sets = ParameterSets::default();
     let checked = check_sequence_parameter_set(&sequence.nalu())?;
+
     assert!(checked.0.is_some());
+
     sets.keep_sequence_parameter_set(checked);
+
     let checked = sets.check_picture_parameter_set(&picture.nalu())?;
+
     assert!(checked.0.is_some());
+
     sets.keep_picture_parameter_set(checked);
 
     sets.check_slice_header(slice, NaluType::try_from(u32::from(kind)).unwrap())
@@ -364,10 +379,15 @@ fn slice_result(
 fn kept_sets(sequence: &Sequence, picture: &Picture) -> ParameterSets {
     let mut sets = ParameterSets::default();
     let checked = check_sequence_parameter_set(&sequence.nalu()).unwrap();
+
     assert!(checked.0.is_some());
+
     sets.keep_sequence_parameter_set(checked);
+
     let checked = sets.check_picture_parameter_set(&picture.nalu()).unwrap();
+
     assert!(checked.0.is_some());
+
     sets.keep_picture_parameter_set(checked);
     sets
 }
@@ -390,12 +410,15 @@ fn the_fixture_parameter_sets_pass() {
 
         let mut sets = ParameterSets::default();
         let sequence = check_sequence_parameter_set(&parameter_set(file, 33)).unwrap();
+
         assert!(sequence.0.is_some(), "{file}");
+
         sets.keep_sequence_parameter_set(sequence);
 
         let picture = sets
             .check_picture_parameter_set(&parameter_set(file, 34))
             .unwrap();
+
         assert!(picture.0.is_some(), "{file}");
     }
 }
@@ -417,14 +440,20 @@ fn every_fixture_stream_passes_the_checks_the_parser_accepts() {
                 }
                 NaluType::SpsNut => {
                     let checked = check_sequence_parameter_set(nalu.as_ref()).unwrap();
+
                     parser.parse_sps(&nalu).unwrap();
+
                     assert!(checked.0.is_some(), "{file}");
+
                     sets.keep_sequence_parameter_set(checked);
                 }
                 NaluType::PpsNut => {
                     let checked = sets.check_picture_parameter_set(nalu.as_ref()).unwrap();
+
                     parser.parse_pps(&nalu).unwrap();
+
                     assert!(checked.0.is_some(), "{file}");
+
                     sets.keep_picture_parameter_set(checked);
                 }
                 kind if kind.is_irap() || (0..=9).contains(&(kind as u32)) => {
@@ -443,6 +472,7 @@ fn every_fixture_stream_passes_the_checks_the_parser_accepts() {
 #[test]
 fn seven_sub_layers_in_a_video_parameter_set_are_malformed() {
     let mut nalu = parameter_set("hevc-420-8bit.hevc", 32);
+
     nalu[3] |= 0b0000_1110;
 
     assert!(is_malformed(
@@ -454,6 +484,7 @@ fn seven_sub_layers_in_a_video_parameter_set_are_malformed() {
 #[test]
 fn seven_sub_layers_in_a_sequence_parameter_set_are_malformed() {
     let mut nalu = parameter_set("hevc-420-8bit.hevc", 33);
+
     nalu[2] |= 0b0000_1110;
 
     assert!(is_malformed(
@@ -502,12 +533,16 @@ fn a_scaling_list_after_sub_layer_levels_follows_the_parser_layout() {
 #[test]
 fn a_set_predicted_from_sixty_four_pictures_is_malformed() {
     let mut short_term_sets = vec![ShortTermSet::Explicit(16)];
+
     short_term_sets.extend([ShortTermSet::PredictedWithOneMore; 48]);
+
     let reachable = Sequence {
         short_term_sets: short_term_sets.clone(),
         ..Sequence::default()
     };
+
     short_term_sets.push(ShortTermSet::PredictedWithOneMore);
+
     let unreachable = Sequence {
         short_term_sets,
         ..Sequence::default()
@@ -563,6 +598,7 @@ fn too_many_tile_columns_are_malformed() {
     };
 
     picture_result(&sequence, &tiled(18, 0, TileSpacing::Uniform)).unwrap();
+
     assert!(is_malformed(
         &picture_result(&sequence, &tiled(19, 0, TileSpacing::Uniform)),
         BitstreamUnit::PictureParameterSet
@@ -577,6 +613,7 @@ fn too_many_tile_rows_are_malformed() {
     };
 
     picture_result(&sequence, &tiled(0, 20, TileSpacing::Uniform)).unwrap();
+
     assert!(is_malformed(
         &picture_result(&sequence, &tiled(0, 21, TileSpacing::Uniform)),
         BitstreamUnit::PictureParameterSet
@@ -599,6 +636,7 @@ fn tile_columns_wider_than_the_picture_are_malformed() {
     };
 
     picture_result(&sequence, &tiled(2, 0, fits)).unwrap();
+
     assert!(is_malformed(
         &picture_result(&sequence, &tiled(2, 0, overflows)),
         BitstreamUnit::PictureParameterSet
@@ -621,6 +659,7 @@ fn tile_rows_taller_than_the_picture_are_malformed() {
     };
 
     picture_result(&sequence, &tiled(0, 2, fits)).unwrap();
+
     assert!(is_malformed(
         &picture_result(&sequence, &tiled(0, 2, overflows)),
         BitstreamUnit::PictureParameterSet
@@ -646,6 +685,7 @@ fn more_than_sixteen_long_term_pictures_are_malformed() {
     });
 
     slice_result(&sequence, &picture, &fits, TRAIL_R).unwrap();
+
     assert!(is_malformed(
         &slice_result(&sequence, &picture, &overflows, TRAIL_R),
         BitstreamUnit::SliceHeader
@@ -689,16 +729,20 @@ fn slices_with_more_than_thirty_two_entry_points_pass_and_parse() {
             }
             NaluType::PpsNut => {
                 let checked = sets.check_picture_parameter_set(nalu.as_ref()).unwrap();
+
                 parser.parse_pps(&nalu).unwrap();
                 sets.keep_picture_parameter_set(checked);
             }
             kind if kind.is_irap() || (0..=9).contains(&(kind as u32)) => {
                 sets.check_slice_header(nalu.as_ref(), kind).unwrap();
+
                 let header = parser.parse_slice_header(nalu).unwrap().header;
+
                 assert_eq!(
                     header.entry_point_offset_minus1.len(),
                     usize::try_from(header.num_entry_point_offsets).unwrap()
                 );
+
                 entry_points.push(header.num_entry_point_offsets);
             }
             _ => {}
@@ -726,6 +770,7 @@ fn a_slice_of_an_unknown_picture_parameter_set_is_malformed() {
 fn a_rejected_parameter_set_leaves_the_kept_one_in_place() {
     let sequence = Sequence::default();
     let picture = Picture::default();
+
     let sets = kept_sets(&sequence, &picture);
 
     let nalu = slice(IDR_W_RADL, |writer| {
@@ -742,6 +787,7 @@ fn every_truncation_of_a_parameter_set_is_handled() {
     let pps = parameter_set("hevc-422-8bit.hevc", 34);
     let mut sets = ParameterSets::default();
     let checked = check_sequence_parameter_set(&sps).unwrap();
+
     sets.keep_sequence_parameter_set(checked);
 
     for length in 0..sps.len() {
@@ -763,10 +809,12 @@ fn every_truncation_of_a_slice_header_is_handled() {
             match nalu.header.type_ {
                 NaluType::SpsNut => {
                     let checked = check_sequence_parameter_set(nalu.as_ref()).unwrap();
+
                     sets.keep_sequence_parameter_set(checked);
                 }
                 NaluType::PpsNut => {
                     let checked = sets.check_picture_parameter_set(nalu.as_ref()).unwrap();
+
                     sets.keep_picture_parameter_set(checked);
                 }
                 kind if kind.is_irap() || (0..=9).contains(&(kind as u32)) => {

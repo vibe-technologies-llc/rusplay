@@ -3,7 +3,7 @@ use rusplay_core::{
     BitDepth, ChromaSubsampling, Codec, CodecFormat, DepthPreference, FormatPreference, FormatSet,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutlookLine {
     pub text: String,
     pub attention: bool,
@@ -106,6 +106,7 @@ pub fn decoder_outlook(backend: &str, available: FormatSet) -> Vec<OutlookLine> 
     }
 
     let mut lines = Vec::new();
+
     lines.extend(depth_lines(backend, available));
     lines.extend(chroma_lines(backend, available));
     lines.extend(codec_lines(backend, available));
@@ -189,6 +190,7 @@ where
 
     let mut lines = Vec::new();
     let above: Vec<String> = order[..best_at].iter().copied().map(&name).collect();
+
     if !above.is_empty() {
         lines.push(line(
             format!(
@@ -207,6 +209,7 @@ where
         .filter(|item| !available.iter().any(|format| matches(format, *item)))
         .map(&name)
         .collect();
+
     for hole in holes {
         lines.push(line(
             format!("{hole} does not exist on this {backend} decoder."),
@@ -232,6 +235,7 @@ fn join(parts: &[String]) -> String {
         [first, second] => format!("{first} and {second}"),
         _ => {
             let mut text = parts[..parts.len() - 1].join(", ");
+
             text.push_str(" and ");
             text.push_str(&parts[parts.len() - 1]);
             text
@@ -328,6 +332,7 @@ mod tests {
             ChromaSubsampling::Yuv420,
             BitDepth::Eight,
         )]);
+
         let outlook = encoder_outlook("x264", FormatPreference::pinned(configured), only_h264);
 
         assert!(outlook.attention);

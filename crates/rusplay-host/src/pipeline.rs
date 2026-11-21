@@ -38,7 +38,7 @@ const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const CONSECUTIVE_IMPORT_FAILURES: u32 = 60;
 const GPU_FENCE_POLL_ALLOWANCE: Duration = Duration::from_millis(500);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StreamFormat {
     pub codec: Codec,
     pub resolution: Resolution,
@@ -65,20 +65,20 @@ impl StreamFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PipelineNotices {
     pub dmabuf_fallbacks: u64,
     pub dmabuf_import_failures: u64,
     pub handoff_disabled: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OutputRef {
     pub epoch: u32,
     pub index: OutputIndex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PipelineRecovery {
     Reference(OutputRef),
     Keyframe,
@@ -167,7 +167,7 @@ struct Conversion {
     target: Target,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HandoffState {
     Off,
     Trying(Handoff),
@@ -251,6 +251,7 @@ impl GpuPipelineFactory {
 impl PipelineFactory for GpuPipelineFactory {
     fn encodable(&mut self) -> Result<FormatSet, HostError> {
         let capabilities = rusplay_encode::capabilities(&self.config.video.encoder)?;
+
         self.pipelines = Some(ScalePipelines::new(&self.gpu.device));
 
         Ok(capabilities.format_set())
@@ -272,8 +273,10 @@ impl PipelineFactory for GpuPipelineFactory {
             fallback,
             pipelines,
         } = *self;
+
         config.video.codec = rusplay_config::CodecChoice::pinned(format.codec);
         config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(format.format);
+
         let pipelines = pipelines.unwrap_or_else(|| ScalePipelines::new(&gpu.device));
 
         Ok(Box::new(GpuPipeline::with_pipelines(
@@ -368,6 +371,7 @@ impl GpuPipeline {
             let Some(fallback) = &self.fallback else {
                 return Err(error);
             };
+
             if !fallback.is_requested() {
                 self.notices.dmabuf_fallbacks += 1;
             }
@@ -391,6 +395,7 @@ impl GpuPipeline {
             frame.resolution.width,
             frame.resolution.height,
         )?;
+
         let format = upload_format_for(frame.format)?;
         let upload = ensure_upload(&self.gpu.device, &mut self.upload, frame.resolution, format);
 
@@ -452,6 +457,7 @@ impl GpuPipeline {
             return Err(unsupported);
         };
         let srgb_view = dmabuf.linear_view().cloned();
+
         let upload = UploadFormat {
             texture: texture.format(),
             srgb_view: srgb_view
@@ -507,6 +513,7 @@ impl GpuPipeline {
         }
 
         let route = Route::plan(&self.config, &key)?;
+
         self.route = Some((key, route));
         Ok(route)
     }
@@ -530,6 +537,7 @@ impl GpuPipeline {
                 ensure_lineariser(&self.pipelines, device, &mut self.preparer, settings)?;
             let target =
                 ensure_linear(device, &mut self.prepared, capture, "rusplay-host-prepared");
+
             preparer.encode(device, &mut encoder, current, &target.view)?;
             current = &target.view;
         }
@@ -537,6 +545,7 @@ impl GpuPipeline {
         if let Some(settings) = route.scale {
             let scaler = ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?;
             let target = ensure_linear(device, &mut self.scaled, stream, "rusplay-host-scaled");
+
             scaler.encode(device, &mut encoder, current, &target.view);
             current = &target.view;
         }
@@ -550,6 +559,7 @@ impl GpuPipeline {
                 stream,
                 "rusplay-host-relinearised",
             );
+
             relineariser.encode(device, &mut encoder, current, &target.view)?;
             current = &target.view;
         }
@@ -557,6 +567,7 @@ impl GpuPipeline {
         if let Some(settings) = route.map {
             let mapper = ensure_mapper(&self.pipelines, device, &mut self.mapper, settings)?;
             let target = ensure_linear(device, &mut self.mapped, stream, "rusplay-host-mapped");
+
             mapper.encode(device, &mut encoder, current, &target.view);
             current = &target.view;
         }
@@ -573,6 +584,7 @@ impl GpuPipeline {
             Err(_) if matches!(self.handoff, HandoffState::Trying(_)) => {
                 self.notices.handoff_disabled += 1;
                 self.handoff = HandoffState::Off;
+
                 let settings = convert_settings(&self.config, stream, route.input, None);
                 ensure_conversion(
                     &self.pipelines,
@@ -586,6 +598,7 @@ impl GpuPipeline {
             result => result?,
         };
         let frame = conversion.target.frame();
+
         conversion
             .converter
             .encode(device, &mut encoder, current, frame)?;
@@ -598,7 +611,9 @@ impl GpuPipeline {
                 readback.output.layout().size,
             );
         }
+
         let submission = self.gpu.queue.submit([encoder.finish()]);
+
         self.poll_timeout = source.fence.take().map(|_| {
             Duration::from_millis(u64::from(self.config.capture.dmabuf_fence_timeout_ms))
                 + GPU_FENCE_POLL_ALLOWANCE
@@ -635,6 +650,7 @@ impl GpuPipeline {
 
         let resolution = converter.settings().resolution;
         let frame = handoff.frame(exported, resolution, self.config.video.color, timestamp)?;
+
         self.poll_gpu(Some(submission))?;
         if let Some(kind) = self.sampling {
             self.captured_source = Some(sample::read_exported(
@@ -681,6 +697,7 @@ impl GpuPipeline {
 
     fn map_readback(&self, readback: &Readback) -> Result<(), HostError> {
         let (done, mapped) = mpsc::channel();
+
         readback
             .buffer
             .map_async(wgpu::MapMode::Read, .., move |result| {
@@ -737,12 +754,14 @@ impl GpuPipeline {
         else {
             return Ok(None);
         };
+
         self.map_readback(readback)?;
 
         let Some(open) = &mut self.encoder else {
             readback.buffer.unmap();
             return Ok(None);
         };
+
         if keyframe {
             open.encoder.request_keyframe();
         }
@@ -750,12 +769,14 @@ impl GpuPipeline {
         let settings = converter.settings();
         let mut captured = None;
         let mut armed = false;
+
         let encoded = match readback.buffer.get_mapped_range(..) {
             Ok(mapped) => {
                 captured = self.sampling.map(|kind| {
                     sample::read_source(converter.layout(), &mapped, settings.format, kind)
                 });
                 armed = sample::arm(&mut *open.encoder, captured.as_ref());
+
                 let planes = EncoderPlanes::view(
                     converter.layout(),
                     &mapped,
@@ -768,6 +789,7 @@ impl GpuPipeline {
             }
             Err(error) => Err(HostError::GpuMappedRange(error)),
         };
+
         readback.buffer.unmap();
         if encoded.is_ok() {
             self.sample = sample::finish(&mut *open.encoder, captured, armed);
@@ -794,12 +816,14 @@ impl GpuPipeline {
         else {
             return Ok(());
         };
+
         self.map_readback(readback)?;
 
         let layout = converter.layout();
         let settings = converter.settings();
         let stride = u32::try_from(readback.planes.luma_stride).unwrap_or(u32::MAX);
         let color = self.config.video.color;
+
         if self
             .input
             .as_ref()
@@ -807,6 +831,7 @@ impl GpuPipeline {
         {
             self.input = None;
         }
+
         let input = self.input.get_or_insert_with(|| Frame {
             resolution: settings.resolution,
             format: fourcc_for(settings.format),
@@ -817,6 +842,7 @@ impl GpuPipeline {
                 stride,
             },
         });
+
         input.resolution = settings.resolution;
         input.format = fourcc_for(settings.format);
         input.timestamp = timestamp;
@@ -826,6 +852,7 @@ impl GpuPipeline {
                 .buffer
                 .get_mapped_range(..)
                 .map_err(HostError::GpuMappedRange)?;
+
             if let FrameBuffer::Shm { data, stride: held } = &mut input.buffer {
                 readback.planes.repack(layout, &view, data);
                 *held = stride;
@@ -836,6 +863,7 @@ impl GpuPipeline {
             }
             Ok(())
         };
+
         readback.buffer.unmap();
 
         repacked
@@ -857,9 +885,11 @@ impl GpuPipeline {
         if keyframe {
             encoder.encoder.request_keyframe();
         }
+
         let captured = self.captured_source.take();
         let armed = sample::arm(&mut *encoder.encoder, captured.as_ref());
         let output = encoder.encoder.encode(input)?;
+
         self.sample = sample::finish(&mut *encoder.encoder, captured, armed);
         if output.is_some() {
             self.last_output = Some(OutputRef {
@@ -886,6 +916,7 @@ impl GpuPipeline {
             return Ok(None);
         };
         let submission = self.convert(&mut source)?;
+
         if let Some(handoff) = self.handoff.active() {
             return self.encode_handed_off(
                 handoff,
@@ -902,10 +933,12 @@ impl GpuPipeline {
 impl VideoPipeline for GpuPipeline {
     fn encode(&mut self, frame: &Frame, keyframe: bool) -> Result<Option<EncodedFrame>, HostError> {
         let gpu = self.gpu.clone();
+
         self.sample = None;
         self.captured_source = None;
 
         let encoded = gpu.guard(|| self.encode_frame(frame, keyframe));
+
         self.sampling = None;
         self.captured_source = None;
 
@@ -996,6 +1029,7 @@ fn open_encoder<'a>(
         _ => {
             let mut encoder =
                 rusplay_encode::open_sited(&config.video, config.scaling.chroma_siting)?;
+
             if let Some(kbps) = bitrate_kbps {
                 encoder.set_bitrate(kbps)?;
             }

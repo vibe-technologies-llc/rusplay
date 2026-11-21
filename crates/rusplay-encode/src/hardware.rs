@@ -24,6 +24,7 @@ pub(crate) fn require<T>(found: Option<T>, what: impl Display) -> Option<T> {
 
 pub(crate) fn device_present(path: &Path) -> bool {
     let present = path.exists();
+
     if !present {
         missing(format_args!("the render node {}", path.display()));
     }

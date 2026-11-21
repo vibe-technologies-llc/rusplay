@@ -21,7 +21,7 @@ pub enum DecodedBuffer {
     Cpu(CpuFrame),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct DrmFourcc(u32);
 
 impl DrmFourcc {
@@ -74,7 +74,7 @@ pub struct DmaBufObject {
     pub size: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DmaBufPlane {
     pub object: usize,
     pub offset: u64,
@@ -117,7 +117,7 @@ impl DmaBufFrame {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct CpuPlane<'a> {
     pub data: &'a [u8],
     pub stride: usize,

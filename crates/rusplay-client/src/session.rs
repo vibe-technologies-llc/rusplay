@@ -43,7 +43,7 @@ use crate::{
 
 const DECODE_STACK_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -93,7 +93,7 @@ impl Gpu {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum Credentials {
     Pin(Pin),
     Peer(PeerRecord),
@@ -217,7 +217,9 @@ impl ClientSession {
             None => default_display(&self.config)?,
         };
         let mut config = self.config.clone();
+
         config.video.decoder = rusplay_decode::resolve(&config.video.decoder, None);
+
         let decodable = rusplay_decode::capabilities(&config.video.decoder)?.formats();
         let transport = Transport::bind(
             SocketAddr::new(bind_address(network.bind_address, host), 0),
@@ -242,10 +244,12 @@ impl ClientSession {
             clipboard: ClipboardState::Off,
             paired,
         };
+
         let decoded = Arc::clone(&stream.decoded);
         let output = open_audio(&self.config.audio)?;
 
         stream.spawn_present(&self.config, gpu, sink, &decoded)?;
+
         let (queue, feedback) = stream.spawn_decode(&config, &decoded)?;
         let audio_queue = match output {
             Some(output) => Some(stream.spawn_audio(&self.config.audio, output)?),
@@ -257,6 +261,7 @@ impl ClientSession {
             self.clipboard.as_ref(),
             ClipboardPolicy::client(&self.config.input),
         );
+
         stream.clipboard = clipboard_state;
 
         let (handshake, handshake_done) = mpsc::channel();
@@ -278,6 +283,7 @@ impl ClientSession {
             counters: Arc::clone(&stream.counters),
         };
         let bitrate = BitrateSettings::from_config(network, self.config.video.bitrate_kbps);
+
         let receive = ReceiveStage::new(
             Arc::clone(&transport),
             host,
@@ -286,6 +292,7 @@ impl ClientSession {
             bitrate,
             links,
         );
+
         stream.spawn(Stage::Receive, None, move || receive.run())?;
 
         let timeout = Duration::from_millis(u64::from(network.handshake_timeout_ms));
@@ -343,12 +350,14 @@ fn authenticate(
                 announced_name(&config.peers),
                 PairingTiming::from(network),
             )?;
+
             transport.install_session(&outcome.keys);
             Ok(Some(outcome.secret))
         }
         Credentials::Peer(record) => {
             let keys =
                 reconnect_as_client(transport, host, record, ReconnectTiming::from(network))?;
+
             transport.install_session(&keys);
             Ok(None)
         }
@@ -393,6 +402,7 @@ impl ClientStream {
 
     pub fn set_target(&self, target: Option<Resolution>) {
         let mut current = self.target.lock();
+
         if *current == target {
             return;
         }
@@ -465,6 +475,7 @@ impl ClientStream {
             let result = handle
                 .join()
                 .unwrap_or(Err(ClientError::StagePanicked { stage }));
+
             self.stop.store(true, Ordering::Relaxed);
             if let Err(error) = result {
                 first_error.get_or_insert(error);
@@ -495,6 +506,7 @@ impl ClientStream {
                 body()
             })
             .map_err(|source| ClientError::SpawnStage { stage, source })?;
+
         self.stages.push((stage, handle));
 
         Ok(())
@@ -519,6 +531,7 @@ impl ClientStream {
             stop: Arc::clone(&self.stop),
             counters: Arc::clone(&self.counters),
         };
+
         self.counters
             .thread_priority_failures
             .add(links.sink.thread_priority_failures());
@@ -536,6 +549,7 @@ impl ClientStream {
         let (queue, queued) = mpsc::sync_channel(usize::from(config.video.decode_queue_frames));
         let (feedback, feedback_received) = mpsc::channel();
         let backend = config.video.decoder.clone();
+
         let links = DecodeLinks {
             queue: queued,
             output: Arc::clone(decoded),
@@ -564,6 +578,7 @@ impl ClientStream {
             stop: Arc::clone(&self.stop),
             counters: Arc::clone(&self.counters),
         };
+
         self.gamepads_done.store(false, Ordering::Relaxed);
 
         self.spawn(Stage::Gamepad, None, move || {
@@ -589,6 +604,7 @@ impl ClientStream {
             resend_delay: Duration::from_millis(u64::from(config.resend_delay_ms)),
             snapshot_interval: Duration::from_millis(u64::from(config.snapshot_interval_ms)),
         };
+
         let stage = InputStage::new(transport, host, timing, links);
 
         self.spawn(Stage::Input, None, move || stage.run())
@@ -641,6 +657,7 @@ impl ClientStream {
         let (queue, queued) = mpsc::sync_channel(usize::from(config.decode_queue_packets));
         let (ready, ready_received) = mpsc::channel();
         let config = *config;
+
         let links = AudioLinks {
             queue: queued,
             ready,

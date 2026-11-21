@@ -37,7 +37,7 @@ const VALID0_LEFT_TRIGGER: u8 = 0x08;
 
 const CRC32_POLYNOMIAL: u32 = 0xedb8_8320;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HidBus {
     Usb,
     Bluetooth,
@@ -48,6 +48,7 @@ pub(super) fn dualsense_bus(hid_device_name: &str) -> Option<HidBus> {
     let mut parts = ids
         .split(':')
         .map(|part| u16::from_str_radix(part, 16).ok());
+
     let (bus, vendor, product) = (parts.next()??, parts.next()??, parts.next()??);
 
     if parts.next().is_some()
@@ -85,6 +86,7 @@ pub(super) fn crc32(parts: &[&[u8]]) -> u32 {
         crc ^= u32::from(*byte);
         for _ in 0..8 {
             let carry = crc & 1;
+
             crc >>= 1;
             if carry != 0 {
                 crc ^= CRC32_POLYNOMIAL;
@@ -112,6 +114,7 @@ pub(super) fn trigger_report(
     };
 
     let mut report = vec![0; length];
+
     report[common + COMMON_VALID0] = flag;
     report[common + offset..common + offset + TRIGGER_EFFECT_LEN].copy_from_slice(&effect);
 
@@ -124,6 +127,7 @@ pub(super) fn trigger_report(
 
             let body = length - CRC_LEN;
             let crc = crc32(&[&[BLUETOOTH_CRC_SEED], &report[..body]]);
+
             report[body..].copy_from_slice(&crc.to_le_bytes());
         }
     }
@@ -182,6 +186,7 @@ mod tests {
         assert!(report[24..74].iter().all(|byte| *byte == 0));
 
         let expected = crc32(&[&[0xa2], &report[..74]]);
+
         assert_eq!(&report[74..], &expected.to_le_bytes());
         assert_ne!(expected, crc32(&[&report[..74]]));
     }
@@ -219,8 +224,10 @@ mod tests {
     fn the_hidraw_node_comes_from_the_hid_device_directory() {
         let directory = tempfile::tempdir().unwrap();
         let hid = directory.path().join("0003:054C:0CE6.0005");
+
         fs::create_dir_all(hid.join("hidraw/hidraw7")).unwrap();
         fs::create_dir_all(hid.join("hidraw/other")).unwrap();
+
         let dev = directory.path().join("dev");
 
         let found = hidraw_node(&hid, &dev);
@@ -234,7 +241,9 @@ mod tests {
     fn a_report_is_written_whole_to_the_node() {
         let directory = tempfile::tempdir().unwrap();
         let node = directory.path().join("hidraw3");
+
         fs::write(&node, []).unwrap();
+
         let report = trigger_report(HidBus::Usb, false, EFFECT, 0);
 
         send(&node, &report).unwrap();
@@ -246,6 +255,7 @@ mod tests {
     fn a_node_that_cannot_be_opened_is_an_error() {
         let directory = tempfile::tempdir().unwrap();
         let link = directory.path().join("hidraw3");
+
         symlink(directory.path().join("nowhere"), &link).unwrap();
 
         let result = send(&link, &[0x02]);

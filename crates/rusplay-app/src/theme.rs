@@ -155,6 +155,7 @@ mod tests {
 
     fn contrast(foreground: Rgba, background: Rgba) -> f32 {
         let (first, second) = (luminance(foreground), luminance(background));
+
         let (light, dark) = if first > second {
             (first, second)
         } else {
@@ -167,6 +168,7 @@ mod tests {
     fn assert_readable(name: &str, foreground: Rgba, backgrounds: &[(&str, Rgba)]) {
         for (background_name, background) in backgrounds {
             let ratio = contrast(foreground, *background);
+
             assert!(
                 ratio >= MINIMUM_CONTRAST,
                 "{name} on {background_name} is {ratio:.2}:1"

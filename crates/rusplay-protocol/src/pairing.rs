@@ -6,7 +6,7 @@ const TAG_CONFIRM: u8 = 2;
 const TAG_DONE: u8 = 3;
 const TAG_REJECTED: u8 = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PairingRejection {
     WrongPin = 0,
@@ -27,7 +27,7 @@ impl TryFrom<u8> for PairingRejection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PairingMessage {
     Start {
         attempt: u32,
@@ -79,6 +79,7 @@ impl PairingMessage {
             fragment_count: 1,
         };
         let mut datagram = vec![0; PacketHeader::SIZE];
+
         header.write(&mut datagram)?;
 
         let (tag, attempt) = match self {
@@ -88,6 +89,7 @@ impl PairingMessage {
             Self::Done { attempt } => (TAG_DONE, *attempt),
             Self::Rejected { attempt, .. } => (TAG_REJECTED, *attempt),
         };
+
         datagram.push(tag);
         datagram.extend_from_slice(&attempt.to_be_bytes());
 
@@ -201,6 +203,7 @@ impl PairingMessage {
 
 fn fixed<const N: usize>(bytes: &[u8]) -> [u8; N] {
     let mut out = [0; N];
+
     out.copy_from_slice(bytes);
     out
 }
@@ -294,10 +297,15 @@ mod tests {
         let name_len_at = PacketHeader::SIZE + 5 + PairingMessage::SPAKE_LEN;
 
         let mut oversized = start.to_datagram().unwrap();
+
         oversized[name_len_at] = 200;
+
         let mut control = start.to_datagram().unwrap();
+
         control[name_len_at + 1] = b'\n';
+
         let mut invalid = start.to_datagram().unwrap();
+
         invalid[name_len_at + 1] = 0xff;
 
         assert_eq!(
@@ -339,6 +347,7 @@ mod tests {
     fn trailing_bytes_are_rejected() {
         for message in every_message() {
             let mut datagram = message.to_datagram().unwrap();
+
             datagram.push(0);
 
             assert_eq!(
@@ -351,15 +360,20 @@ mod tests {
     #[test]
     fn unknown_tag_and_rejection_are_rejected() {
         let mut datagram = PairingMessage::Done { attempt: 0 }.to_datagram().unwrap();
+
         datagram[PacketHeader::SIZE] = 99;
+
         assert_eq!(
             PairingMessage::from_datagram(&datagram),
             Err(ProtocolError::UnknownPairingTag(99))
         );
 
         let mut rejected = every_message()[4].to_datagram().unwrap();
+
         let last = rejected.len() - 1;
+
         rejected[last] = 77;
+
         assert_eq!(
             PairingMessage::from_datagram(&rejected),
             Err(ProtocolError::UnknownPairingRejection(77))

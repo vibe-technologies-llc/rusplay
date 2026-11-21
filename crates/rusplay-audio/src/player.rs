@@ -4,7 +4,7 @@ use crate::{AudioDecoder, AudioError};
 
 const MILLIS_PER_SECOND: usize = 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AudioOutputStats {
     pub underruns: u64,
     pub trims: u64,
@@ -18,7 +18,7 @@ pub trait AudioOutput: Send + 'static {
     fn stats(&self) -> AudioOutputStats;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayerStats {
     pub late: u64,
     pub lost: u64,
@@ -47,6 +47,7 @@ impl ConcealingPlayer {
         let frame_samples = config.frame_samples().max(1);
         let conceal_samples = config.sample_rate.hz() as usize * usize::from(config.max_conceal_ms)
             / MILLIS_PER_SECOND;
+
         let max_conceal_frames = u32::try_from(conceal_samples / frame_samples).unwrap_or(u32::MAX);
 
         Self {
@@ -76,6 +77,7 @@ impl ConcealingPlayer {
         let gap = self
             .expected
             .map_or(0, |expected| number.wrapping_sub(expected).cast_signed());
+
         if gap < 0 {
             self.stats.late += 1;
             return Ok(());
@@ -83,6 +85,7 @@ impl ConcealingPlayer {
         self.expected = Some(number.wrapping_add(1));
 
         let lost = gap.cast_unsigned();
+
         self.stats.lost += u64::from(lost);
         self.bridge_gap(lost, packet)?;
         self.decode(packet)
@@ -123,6 +126,7 @@ impl ConcealingPlayer {
 
     fn emit(&mut self, samples: usize) -> Result<(), AudioError> {
         let len = (samples * self.channels).min(self.pcm.len());
+
         self.output.submit(&self.pcm[..len])?;
 
         Ok(())
@@ -142,7 +146,7 @@ mod tests {
     const CONCEALED: u32 = 2000;
     const RECOVERED: u32 = 3000;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Produced {
         Decoded(u32),
         Concealed,
@@ -286,6 +290,7 @@ mod tests {
     #[test]
     fn a_restart_accepts_numbers_from_the_start_again() {
         let (mut player, _) = player(&mono());
+
         feed(&mut player, 200);
         feed(&mut player, 201);
 

@@ -20,6 +20,7 @@ fn sample(config: Config) -> Option<(Sampled, bool)> {
         pipeline
             .encode(&shm_frame(RESOLUTION, index), index == 0)
             .unwrap();
+
         assert!(pipeline.take_sample().is_none());
     }
 
@@ -27,6 +28,7 @@ fn sample(config: Config) -> Option<(Sampled, bool)> {
     pipeline
         .encode(&shm_frame(RESOLUTION, WARMUP_FRAMES), false)
         .unwrap();
+
     let Some(Sample::Luma(history)) = pipeline.take_sample() else {
         panic!("a luma sample was asked for");
     };
@@ -35,6 +37,7 @@ fn sample(config: Config) -> Option<(Sampled, bool)> {
     pipeline
         .encode(&shm_frame(RESOLUTION, WARMUP_FRAMES + 1), false)
         .unwrap();
+
     let Some(Sample::Picture(picture)) = pipeline.take_sample() else {
         panic!("a picture sample was asked for");
     };
@@ -49,6 +52,7 @@ fn sample(config: Config) -> Option<(Sampled, bool)> {
     pipeline
         .encode(&shm_frame(RESOLUTION, WARMUP_FRAMES + 2), false)
         .unwrap();
+
     assert!(pipeline.take_sample().is_none());
 
     let handed_off = pipeline.hands_off();
@@ -95,9 +99,11 @@ fn assert_plausible(sampled: &Sampled, format: PixelFormat, what: &str) {
 fn the_handoff_samples_the_same_source_as_the_readback() {
     for depth in [BitDepth::Eight, BitDepth::Ten] {
         let config = vaapi_config(Codec::Av1, depth, true);
+
         if !supported(&config) {
             continue;
         }
+
         let format = config.video.pixel_format;
         let Some((handed_off, used_handoff)) = sample(config) else {
             return;
@@ -108,6 +114,7 @@ fn the_handoff_samples_the_same_source_as_the_readback() {
         assert!(!used_readback);
         assert_eq!(handed_off.source, read_back.source, "{depth:?}");
         assert_eq!(handed_off.history, read_back.history, "{depth:?}");
+
         assert_plausible(&handed_off, (format).or_unnegotiated(), "vaapi hand-off");
         assert_plausible(&read_back, (format).or_unnegotiated(), "vaapi readback");
     }
@@ -117,7 +124,9 @@ fn the_handoff_samples_the_same_source_as_the_readback() {
 #[test]
 fn a_software_encoder_samples_from_the_mapped_readback() {
     let mut config = vaapi_config(Codec::H264, BitDepth::Eight, false);
+
     config.video.encoder = VideoEncoderConfig::X264(rusplay_config::X264Config::default());
+
     let format = config.video.pixel_format;
 
     let Some((sampled, handed_off)) = sample(config) else {
@@ -125,6 +134,7 @@ fn a_software_encoder_samples_from_the_mapped_readback() {
     };
 
     assert!(!handed_off);
+
     assert_plausible(&sampled, (format).or_unnegotiated(), "x264");
 }
 
@@ -132,7 +142,9 @@ fn a_software_encoder_samples_from_the_mapped_readback() {
 #[test]
 fn an_encoder_without_reconstruction_answers_unsupported() {
     let mut config = vaapi_config(Codec::Av1, BitDepth::Eight, false);
+
     config.video.encoder = VideoEncoderConfig::SvtAv1(rusplay_config::SvtAv1Config::default());
+
     let Some(mut pipeline) = pipeline(config) else {
         return;
     };

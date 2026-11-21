@@ -142,6 +142,7 @@ mod tests {
         assert!(counters.len() > 40);
         for counter in counters {
             let name = if counter == "rtt" { "rtt_us" } else { counter };
+
             assert!(emitted.contains(&name), "{name} is missing from the line");
         }
     }

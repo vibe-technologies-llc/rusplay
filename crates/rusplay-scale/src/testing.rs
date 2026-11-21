@@ -39,7 +39,7 @@ async fn request_gpu() -> Option<Gpu> {
     Some(Gpu { device, queue })
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Image {
     pub width: u32,
     pub height: u32,
@@ -97,6 +97,7 @@ fn unit_hash(x: u32, y: u32, seed: u32) -> f32 {
         .wrapping_mul(0x9E37_79B1)
         .wrapping_add(y.wrapping_mul(0x85EB_CA77))
         .wrapping_add(seed.wrapping_mul(0xC2B2_AE3D));
+
     state ^= state >> 15;
     state = state.wrapping_mul(0x2C1B_3C6D);
     state ^= state >> 12;
@@ -124,6 +125,7 @@ pub(crate) fn upload(gpu: &Gpu, image: &Image) -> wgpu::Texture {
         .flatten()
         .flat_map(|value| f16::from_f32(*value).to_le_bytes())
         .collect();
+
     gpu.queue.write_texture(
         texture.as_image_copy(),
         &bytes,
@@ -182,11 +184,13 @@ pub(crate) fn download_raw(gpu: &Gpu, texture: &wgpu::Texture, texel_bytes: u32)
     let (width, height) = (texture.width(), texture.height());
     let tight_row = (width * texel_bytes) as usize;
     let row_bytes = (width * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+
     let staging = readback_buffer(gpu, u64::from(row_bytes * height));
 
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -214,6 +218,7 @@ pub(crate) fn download_buffer(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
     gpu.queue.submit([encoder.finish()]);
 
@@ -224,6 +229,7 @@ pub(crate) fn submit(gpu: &Gpu, record: impl FnOnce(&mut wgpu::CommandEncoder)) 
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     record(&mut encoder);
     gpu.queue.submit([encoder.finish()]);
 }
@@ -249,6 +255,7 @@ fn map_read(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
         .get_mapped_range(..)
         .expect("mapped range is readable")
         .to_vec();
+
     buffer.unmap();
     bytes
 }

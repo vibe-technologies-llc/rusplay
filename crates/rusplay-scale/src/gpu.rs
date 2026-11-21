@@ -278,13 +278,13 @@ pub(crate) const DEBANDED_LUMA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat
 pub(crate) const LUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub(crate) const BOUNDARY_TABLE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ShaderPass {
     pub pipeline: wgpu::ComputePipeline,
     pub workgroup: (u32, u32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ScalePipelines {
     pub(crate) source_layout: wgpu::BindGroupLayout,
     pub(crate) destination_layout: wgpu::BindGroupLayout,
@@ -298,7 +298,7 @@ pub struct ScalePipelines {
     pub(crate) linearise: LinearisePipelines,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct LinearisePipelines {
     pub params_layout: wgpu::BindGroupLayout,
     pub packed_source_layout: wgpu::BindGroupLayout,
@@ -327,6 +327,7 @@ impl LinearisePipelines {
             LINEARISE_WORKGROUP,
             &[],
         );
+
         let packed = compute_pipeline(
             device,
             "rusplay-linearise-packed",
@@ -346,21 +347,21 @@ impl LinearisePipelines {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnpackSource {
     Buffer,
     Planes,
     Debanded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnpackOutput {
     Transfer,
     Lut,
     Chain,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct UnpackPasses {
     pub input_layout: wgpu::BindGroupLayout,
     pub planes_layout: wgpu::BindGroupLayout,
@@ -387,13 +388,13 @@ impl UnpackPasses {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ChromaPasses {
     pub separable: ShaderPass,
     pub polar: ShaderPass,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct DebandPasses {
     pub target_layout: wgpu::BindGroupLayout,
     pub params_layout: wgpu::BindGroupLayout,
@@ -420,6 +421,7 @@ impl DebandPasses {
             "rusplay-deband-params",
             &[uniform_entry(0), uniform_entry(1)],
         );
+
         let planes = |label: &str, input: &wgpu::BindGroupLayout, shader: &str| {
             let layouts = [input, &target_layout, &params_layout];
             let [luma, chroma] = ["deband_luma", "deband_chroma"].map(|entry_point| {
@@ -456,13 +458,13 @@ impl DebandPasses {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct DebandPlanes {
     pub luma: ShaderPass,
     pub chroma: ShaderPass,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct FusedUnpack {
     pub target_layout: wgpu::BindGroupLayout,
     pub rgb: [ShaderPass; 3],
@@ -484,6 +486,7 @@ impl FusedUnpack {
     ) -> Self {
         let [source_layout, _, _, table_layout] = layouts;
         let target_layout = layout(device, descriptor.label, descriptor.target_entries);
+
         let rgb = [0, 1, 2].map(|index| {
             compute_pipeline(
                 device,
@@ -500,7 +503,7 @@ impl FusedUnpack {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ColorPipelines {
     pub params_layout: wgpu::BindGroupLayout,
     pub analysis_layout: wgpu::BindGroupLayout,
@@ -513,7 +516,7 @@ pub(crate) struct ColorPipelines {
     pub boundary: BoundaryPipelines,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct BoundaryPipelines {
     pub store_layout: wgpu::BindGroupLayout,
     pub params_layout: wgpu::BindGroupLayout,
@@ -607,6 +610,7 @@ impl ColorPipelines {
             ],
         );
         let gamut_constants = gamut_constants();
+
         let map = compute_pipeline(
             device,
             "rusplay-color-map",
@@ -622,6 +626,7 @@ impl ColorPipelines {
             &[storage_texture_3d_entry(0, LUT_FORMAT)],
         );
         let lut_bake_layout = layout(device, "rusplay-color-lut-bake", &[uniform_entry(0)]);
+
         let lut_bake = compute_pipeline(
             device,
             "rusplay-color-lut-bake",
@@ -665,7 +670,7 @@ impl ColorPipelines {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ConvertPipelines {
     pub output_layout: wgpu::BindGroupLayout,
     pub chroma_target_layout: wgpu::BindGroupLayout,
@@ -704,6 +709,7 @@ impl ConvertPipelines {
                 storage_buffer_entry(2),
             ],
         );
+
         let direct = compute_pipeline(
             device,
             "rusplay-convert-direct",
@@ -885,6 +891,7 @@ fn unpack_passes(device: &wgpu::Device, layouts: [&wgpu::BindGroupLayout; 3]) ->
         ],
     );
     let [source_layout, destination_layout, chroma_target_layout] = layouts;
+
     let layouts = [
         source_layout,
         destination_layout,
@@ -1008,6 +1015,7 @@ fn unpack_pair(
         table_layout,
     ] = layouts;
     let [separable_shader, polar_shader, rgb_shader] = shaders;
+
     let chroma_layouts = [input_layout, chroma_target_layout, table_layout];
 
     let separable = compute_pipeline(
@@ -1334,6 +1342,7 @@ pub(crate) fn dispatch_layers(
         label: Some(label),
         timestamp_writes: None,
     });
+
     compute.set_pipeline(&pass.pipeline);
     for (index, group) in (0..).zip(groups) {
         compute.set_bind_group(index, *group, &[]);

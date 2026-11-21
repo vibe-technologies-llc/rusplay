@@ -7,7 +7,7 @@ use crate::{
     window::output::{Display, SurfaceOutput},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Admission {
     Reject,
     Draw,
@@ -38,12 +38,14 @@ impl OutputChoice {
         capabilities: impl FnOnce() -> Vec<wgpu::SurfaceFormatCapabilities>,
     ) -> Option<ColorVolume> {
         let display = Display::Managed(resolve_target(image, overrides).ok()?);
+
         if display == self.display {
             return None;
         }
 
         let output = SurfaceOutput::choose(&capabilities(), &display, config).ok()?;
         let intended = self.staged.unwrap_or(self.active);
+
         self.display = display;
         if output == intended {
             return None;
@@ -145,6 +147,7 @@ mod tests {
         let overrides = DisplayTargetConfig::default();
         let config = DisplayOutputConfig::default();
         let display = Display::Managed(resolve_target(image, &overrides).unwrap());
+
         let active = SurfaceOutput::choose(&capabilities(), &display, config).unwrap();
 
         OutputChoice::new(display, active)
@@ -243,6 +246,7 @@ mod tests {
     #[test]
     fn a_staged_output_waits_for_a_frame_mapped_to_its_target() {
         let mut choice = started_on(&sdr_image(80.0));
+
         let old = choice.active.encoding.target;
         let new = observe(&mut choice, &hdr_image()).unwrap();
 
@@ -264,6 +268,7 @@ mod tests {
     #[test]
     fn returning_to_the_active_output_before_any_frame_unstages_it() {
         let mut choice = started_on(&sdr_image(80.0));
+
         let old = choice.active.encoding.target;
         let away = observe(&mut choice, &hdr_image()).unwrap();
 
@@ -278,6 +283,7 @@ mod tests {
     #[test]
     fn a_frame_for_a_superseded_stage_is_rejected() {
         let mut choice = started_on(&sdr_image(80.0));
+
         let first = observe(&mut choice, &sdr_image(120.0)).unwrap();
         let second = observe(&mut choice, &hdr_image()).unwrap();
 

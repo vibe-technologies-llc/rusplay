@@ -47,6 +47,7 @@ impl InputTarget for NiceTarget {
 
 fn observed(nice: &ObservedNice) -> Option<i32> {
     let deadline = Instant::now() + WAIT;
+
     while nice.lock().is_none() && Instant::now() < deadline {
         thread::sleep(POLL);
     }
@@ -56,6 +57,7 @@ fn observed(nice: &ObservedNice) -> Option<i32> {
 
 fn tuned_config() -> rusplay_config::Config {
     let mut config = host_config();
+
     config.network = network_with_nice(TEST_NICE);
 
     config
@@ -75,6 +77,7 @@ fn the_capture_and_input_stage_threads_take_the_configured_nice_value() {
         session.without_audio().with_input(InputFeed::new(target))
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(
         Some(pin()),
         CaptureFeed::new(source),
@@ -82,12 +85,15 @@ fn the_capture_and_input_stage_threads_take_the_configured_nice_value() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
 
     assert_eq!(observed(&capture_nice), Some(i32::from(TEST_NICE)));
     assert_eq!(observed(&input_nice), Some(i32::from(TEST_NICE)));
     assert_eq!(stream.stats().thread_priority_failures, 0);
+
     stream.stop().unwrap();
 }
 
@@ -109,6 +115,7 @@ fn a_session_counts_what_the_capture_loop_and_the_injector_were_refused() {
         nice: ObservedNice::default(),
     };
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(
         Some(pin()),
         CaptureFeed::tuned(source, TuningRefusals::of(CAPTURE_LOOP_REFUSALS)),
@@ -116,13 +123,16 @@ fn a_session_counts_what_the_capture_loop_and_the_injector_were_refused() {
     );
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
 
     assert_eq!(
         stream.stats().thread_priority_failures,
         CAPTURE_LOOP_REFUSALS + INJECTOR_REFUSALS
     );
+
     stream.stop().unwrap();
 }
 
@@ -130,12 +140,16 @@ fn a_session_counts_what_the_capture_loop_and_the_injector_were_refused() {
 fn a_session_without_standing_threads_counts_no_refusals() {
     let fixture = Fixture::new(tuned_config());
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
 
     assert_eq!(stream.stats().thread_priority_failures, 0);
+
     stream.stop().unwrap();
 }

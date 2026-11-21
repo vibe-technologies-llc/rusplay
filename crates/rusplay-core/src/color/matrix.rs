@@ -6,7 +6,7 @@ const BRADFORD: Matrix3 = Matrix3([
     [0.0389, -0.0685, 1.0296],
 ]);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Matrix3(pub [[f64; 3]; 3]);
 
 impl Matrix3 {
@@ -105,6 +105,7 @@ impl Mul for Matrix3 {
 pub fn bradford_adaptation(from_white: [f64; 3], to_white: [f64; 3]) -> Matrix3 {
     let from_cone = BRADFORD.apply(from_white);
     let to_cone = BRADFORD.apply(to_white);
+
     let gains = std::array::from_fn(|channel| to_cone[channel] / from_cone[channel]);
 
     BRADFORD.inverse_of_invertible() * Matrix3::diagonal(gains) * BRADFORD

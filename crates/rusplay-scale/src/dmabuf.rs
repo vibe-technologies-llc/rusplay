@@ -36,7 +36,7 @@ pub(crate) fn fourcc_name(fourcc: u32) -> String {
     fourcc.to_le_bytes().escape_ascii().to_string()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum DmaBufFormat {
     Xrgb8888,
     Argb8888,
@@ -54,7 +54,7 @@ pub enum DmaBufFormat {
     P010,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct PlaneSpec {
     vulkan: vk::Format,
     texture: wgpu::TextureFormat,
@@ -223,14 +223,14 @@ impl DmaBufFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct DmaBufPlane<'a> {
     pub fd: BorrowedFd<'a>,
     pub offset: u64,
     pub stride: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct DmaBuf<'a> {
     pub fourcc: u32,
     pub modifier: u64,
@@ -239,14 +239,14 @@ pub struct DmaBuf<'a> {
     pub planes: Vec<DmaBufPlane<'a>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct ImportedPlane {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     linear_view: Option<wgpu::TextureView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct DmaBufTexture {
     ownership: Option<Arc<VulkanImporter>>,
     format: DmaBufFormat,
@@ -285,6 +285,7 @@ impl DmaBufTexture {
             .as_ref()
             .map(|ownership| {
                 let textures: Vec<_> = self.planes.iter().map(|plane| &plane.texture).collect();
+
                 encoder.transition_resources(
                     std::iter::empty(),
                     textures.iter().map(|texture| wgpu::TextureTransition {
@@ -323,7 +324,7 @@ impl DmaBufTexture {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BufferIdentity {
     device: u64,
     inode: u64,
@@ -346,7 +347,7 @@ impl BufferIdentity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ImportKey {
     external: bool,
     fourcc: u32,
@@ -459,6 +460,7 @@ impl DmaBufImporter {
         }
 
         let texture = self.import_uncached(format, dmabuf, &identities, external)?;
+
         if self.cache.len() == IMPORT_CACHE_ENTRIES {
             self.cache.pop_front();
         }
@@ -508,6 +510,7 @@ impl DmaBufImporter {
             .into_iter()
             .find(|properties| properties.modifier == dmabuf.modifier)
             .ok_or_else(|| unsupported.clone())?;
+
         if properties.plane_count != group.count {
             return Err(ScaleError::DmaBufPlaneCount {
                 fourcc: dmabuf.fourcc,
@@ -523,6 +526,7 @@ impl DmaBufImporter {
             (dmabuf.width, dmabuf.height)
         };
         let (request, max_extent) = self.request_for(spec, &properties).ok_or(unsupported)?;
+
         if width > max_extent.0 || height > max_extent.1 || width == 0 || height == 0 {
             return Err(ScaleError::DmaBufExtentUnsupported { width, height });
         }
@@ -530,6 +534,7 @@ impl DmaBufImporter {
         let memory_planes = (group.first..group.first + group.count)
             .map(|index| {
                 let plane = dmabuf.planes[index];
+
                 if plane.offset >= identities[index].size {
                     return Err(ScaleError::DmaBufPlaneOutOfBounds {
                         plane: index,
@@ -551,6 +556,7 @@ impl DmaBufImporter {
         } else {
             wgpu::TextureUsages::TEXTURE_BINDING
         };
+
         let desc = wgpu::TextureDescriptor {
             label: Some("rusplay-dmabuf"),
             size: wgpu::Extent3d {
@@ -590,7 +596,7 @@ impl DmaBufImporter {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct PlaneGroup {
     first: usize,
     count: usize,
@@ -602,6 +608,7 @@ fn plane_groups(
     identities: &[BufferIdentity],
 ) -> Result<Vec<PlaneGroup>, ScaleError> {
     let found = dmabuf.planes.len();
+
     if found == 0 || (textures > 1 && found != textures) {
         return Err(ScaleError::DmaBufPlaneCount {
             fourcc: dmabuf.fourcc,

@@ -65,7 +65,7 @@ const fn chroma_shifts(chroma: ChromaSubsampling) -> (u32, u32) {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct YuvPlane<'a> {
     pub data: &'a [u8],
     pub stride: usize,
@@ -73,7 +73,7 @@ pub struct YuvPlane<'a> {
     pub rows: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct YuvFrame<'a> {
     pub format: PixelFormat,
     pub resolution: Resolution,
@@ -110,6 +110,7 @@ impl<'a> YuvFrame<'a> {
         };
 
         let expected = fourcc_for(format);
+
         if frame.format != expected {
             return Err(EncodeError::FrameFormatMismatch {
                 backend,
@@ -145,7 +146,9 @@ impl<'a> YuvFrame<'a> {
 
         let luma_len = luma_stride * luma_rows;
         let chroma_len = chroma_stride * chroma_rows;
+
         let needed = luma_len + 2 * chroma_len;
+
         if data.len() < needed {
             return Err(EncodeError::FrameBufferTooShort {
                 needed,
@@ -203,11 +206,13 @@ pub(crate) mod fixtures {
         let (shift_x, shift_y) = chroma_shifts(format.chroma);
         let width = resolution.width as usize;
         let height = resolution.height as usize;
+
         let chroma_width = width.div_ceil(1 << shift_x);
         let chroma_height = height.div_ceil(1 << shift_y);
         let max = (1_u32 << format.depth.bits()) - 1;
 
         let mut data = Vec::new();
+
         for (plane, (plane_width, rows)) in [
             (width, height),
             (chroma_width, chroma_height),
@@ -222,7 +227,9 @@ pub(crate) mod fixtures {
                         .wrapping_mul(2_654_435_761)
                         >> 7;
                     let gradient = (x * max as usize / plane_width.max(1)) as u64;
+
                     let value = (gradient + noise % 16 + index * 3) % u64::from(max + 1);
+
                     data.extend_from_slice(&value.to_le_bytes()[..sample]);
                 }
             }
@@ -323,6 +330,7 @@ mod tests {
     fn short_buffer_is_reported() {
         let format = PixelFormat::default();
         let mut frame = yuv_frame(format, Resolution::new(16, 16), 0, Timestamp::ZERO);
+
         if let FrameBuffer::Shm { data, .. } = &mut frame.buffer {
             data.truncate(10);
         }
@@ -338,6 +346,7 @@ mod tests {
             for depth in [BitDepth::Ten, BitDepth::Twelve] {
                 let format = PixelFormat { chroma, depth };
                 let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+
                 frame.resolution = Resolution::new(401, 4);
                 if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
                     *stride = 802;
@@ -364,6 +373,7 @@ mod tests {
             depth: BitDepth::Ten,
         };
         let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+
         if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
             *stride = 806;
             data.resize(806 * 4 * 2, 0);
@@ -384,6 +394,7 @@ mod tests {
     fn odd_width_at_minimum_stride_is_accepted_for_8_bit() {
         let format = PixelFormat::default();
         let mut frame = yuv_frame(format, Resolution::new(400, 4), 0, Timestamp::ZERO);
+
         frame.resolution = Resolution::new(401, 4);
         if let FrameBuffer::Shm { data, stride } = &mut frame.buffer {
             *stride = 401;
@@ -400,6 +411,7 @@ mod tests {
     fn narrow_stride_is_reported() {
         let format = PixelFormat::default();
         let mut frame = yuv_frame(format, Resolution::new(16, 16), 0, Timestamp::ZERO);
+
         if let FrameBuffer::Shm { stride, .. } = &mut frame.buffer {
             *stride = 8;
         }

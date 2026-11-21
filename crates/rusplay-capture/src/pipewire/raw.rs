@@ -12,7 +12,7 @@ use pipewire::{
     sys as pw_sys,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct BufferHandle {
     address: usize,
     serial: u64,
@@ -38,9 +38,11 @@ impl<'s> DequeuedBuffer<'s> {
             return &mut [];
         };
         let count = usize::try_from(buffer.n_datas).unwrap_or(0);
+
         if count == 0 || buffer.datas.is_null() {
             return &mut [];
         }
+
         let datas = buffer.datas.cast::<Data>();
 
         unsafe { slice::from_raw_parts_mut(datas, count) }
@@ -49,15 +51,18 @@ impl<'s> DequeuedBuffer<'s> {
     pub fn meta(&self, meta_type: u32) -> Option<&[u8]> {
         let buffer = self.spa()?;
         let count = usize::try_from(buffer.n_metas).ok()?;
+
         if count == 0 || buffer.metas.is_null() {
             return None;
         }
 
         let metas = unsafe { slice::from_raw_parts(buffer.metas, count) };
         let meta = metas.iter().find(|meta| meta.type_ == meta_type)?;
+
         if meta.data.is_null() {
             return None;
         }
+
         let size = usize::try_from(meta.size).ok()?;
 
         Some(unsafe { slice::from_raw_parts(meta.data.cast::<u8>(), size) })
@@ -65,6 +70,7 @@ impl<'s> DequeuedBuffer<'s> {
 
     fn hold(self) -> usize {
         let address = self.raw.as_ptr().expose_provenance();
+
         mem::forget(self);
         address
     }
@@ -78,6 +84,7 @@ impl Drop for DequeuedBuffer<'_> {
 
 pub(crate) fn borrow_fd(data: &Data) -> Option<BorrowedFd<'_>> {
     let fd = data.fd();
+
     if fd < 0 {
         return None;
     }
@@ -97,6 +104,7 @@ impl HeldBuffers {
             address: buffer.hold(),
             serial: self.next_serial,
         };
+
         self.next_serial += 1;
         self.handles.push(handle);
         handle
@@ -104,6 +112,7 @@ impl HeldBuffers {
 
     pub fn forget(&mut self, raw: *mut pw_sys::pw_buffer) {
         let address = raw.expose_provenance();
+
         self.handles.retain(|held| held.address != address);
     }
 
@@ -111,15 +120,18 @@ impl HeldBuffers {
         let Some(index) = self.handles.iter().position(|held| *held == handle) else {
             return;
         };
+
         self.handles.swap_remove(index);
 
         let raw = ptr::with_exposed_provenance_mut::<pw_sys::pw_buffer>(handle.address);
+
         unsafe { stream.queue_raw_buffer(raw) };
     }
 }
 
 pub(crate) fn library_version() -> String {
     let version = unsafe { pw_sys::pw_get_library_version() };
+
     if version.is_null() {
         return String::new();
     }
@@ -145,7 +157,9 @@ mod tests {
         let mut header = [0u8; 32];
 
         let clean = header_is_corrupted(&header);
+
         header[..4].copy_from_slice(&spa_sys::SPA_META_HEADER_FLAG_CORRUPTED.to_ne_bytes());
+
         let corrupted = header_is_corrupted(&header);
 
         assert!(!clean);

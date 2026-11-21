@@ -108,9 +108,11 @@ mod tests {
         let (link, state) = open_link(Some(&opener), policy(true, true));
 
         assert!(link.is_none());
+
         let ClipboardState::Unavailable(error) = state else {
             panic!("the backend failed to open");
         };
+
         assert!(matches!(*error, ClipboardError::DataControlMissing));
     }
 
@@ -119,9 +121,11 @@ mod tests {
         let (link, state) = open_link(None, policy(true, false));
 
         assert!(link.is_none());
+
         let ClipboardState::Unavailable(error) = state else {
             panic!("no opener was given");
         };
+
         assert!(matches!(*error, ClipboardError::NotCompiled));
     }
 }

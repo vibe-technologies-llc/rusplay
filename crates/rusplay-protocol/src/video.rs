@@ -2,7 +2,7 @@ use crate::ProtocolError;
 
 const FLAG_RECOVERY: u8 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VideoFrameHeader {
     pub captured_micros: u64,
     pub recovers_from: Option<u32>,
@@ -30,6 +30,7 @@ impl VideoFrameHeader {
             });
         };
         let [m0, m1, m2, m3, m4, m5, m6, m7, flags, r0, r1, r2, r3] = *head;
+
         let captured = [m0, m1, m2, m3, m4, m5, m6, m7];
         let reference = u32::from_be_bytes([r0, r1, r2, r3]);
 
@@ -67,6 +68,7 @@ mod tests {
     #[test]
     fn the_header_leads_the_frame_in_big_endian() {
         let mut frame = Vec::new();
+
         PLAIN.write(&mut frame);
         frame.extend_from_slice(&[9, 9]);
 
@@ -80,6 +82,7 @@ mod tests {
     #[test]
     fn a_recovery_frame_names_its_reference_after_the_flag() {
         let mut frame = Vec::new();
+
         RECOVERY.write(&mut frame);
 
         let (header, body) = VideoFrameHeader::parse(&frame).unwrap();
@@ -96,6 +99,7 @@ mod tests {
             recovers_from: Some(0),
         };
         let mut frame = Vec::new();
+
         header.write(&mut frame);
 
         assert_eq!(VideoFrameHeader::parse(&frame).unwrap().0, header);
@@ -104,6 +108,7 @@ mod tests {
     #[test]
     fn unknown_flags_are_rejected() {
         let mut frame = [0; VideoFrameHeader::SIZE];
+
         frame[8] = 0x82;
 
         assert_eq!(
@@ -115,6 +120,7 @@ mod tests {
     #[test]
     fn a_reference_without_the_recovery_flag_is_rejected() {
         let mut frame = [0; VideoFrameHeader::SIZE];
+
         frame[12] = 5;
 
         assert_eq!(
@@ -145,6 +151,7 @@ mod tests {
     fn every_strict_prefix_of_the_header_is_rejected() {
         for header in [PLAIN, RECOVERY] {
             let mut frame = Vec::new();
+
             header.write(&mut frame);
 
             for cut in 0..VideoFrameHeader::SIZE {

@@ -267,6 +267,7 @@ fn texture(x: usize, y: usize, frame: usize, peak: u64, noise: &mut Noise) -> u1
     let region = (x / 48 + y / 40) % 4;
     let moved = x + 3 * frame;
     let gradient = (moved as u64 * peak / 4096 + y as u64 * peak / 8192) % (peak / 2);
+
     let detail = match region {
         0 => 0,
         1 => noise.next() % (peak / 64 + 1),
@@ -279,6 +280,7 @@ fn texture(x: usize, y: usize, frame: usize, peak: u64, noise: &mut Noise) -> u1
 
 fn generated_plane(width: usize, height: usize, frame: usize, peak: u64, seed: u64) -> SamplePlane {
     let mut noise = Noise::new(seed);
+
     let samples = (0..height)
         .flat_map(|y| (0..width).map(move |x| (x, y)))
         .map(|(x, y)| texture(x, y, frame, peak, &mut noise))
@@ -291,6 +293,7 @@ fn distorted(plane: &SamplePlane, peak: u64, seed: u64) -> SamplePlane {
     let mut noise = Noise::new(seed);
     let width = plane.width();
     let step = (peak / 255).max(1);
+
     let samples = plane
         .samples()
         .iter()
@@ -299,6 +302,7 @@ fn distorted(plane: &SamplePlane, peak: u64, seed: u64) -> SamplePlane {
             let x = index % width;
             let amplitude = if x < width / 3 { 1 } else { 3 } * step;
             let offset = noise.next() % (2 * amplitude + 1);
+
             let shifted = (u64::from(value) + offset)
                 .saturating_sub(amplitude)
                 .min(peak);
@@ -398,6 +402,7 @@ fn write_raw(path: &Path, pictures: &[SamplePicture], depth: BitDepth) {
                     }
                 })
                 .collect();
+
             file.write_all(&bytes).unwrap();
         }
     }
@@ -423,11 +428,14 @@ fn ffmpeg_format(format: PixelFormat) -> String {
 fn write_xpsnr_fixtures() {
     let directory = std::env::var_os(FIXTURE_DIR).expect("RUSPLAY_XPSNR_FIXTURE_DIR is set");
     let directory = Path::new(&directory);
+
     fs::create_dir_all(directory).unwrap();
+
     let mut index = fs::File::create(directory.join("cases.txt")).unwrap();
 
     for case in CASES {
         let sequence = sequence(case);
+
         write_raw(
             &directory.join(format!("{}.src.yuv", case.name)),
             &sequence.sources,

@@ -75,6 +75,7 @@ impl AudioPipeline {
 
     pub(crate) fn process(&mut self, packet: &EncodedAudio) -> Result<(), ClientError> {
         let result = self.player.process(packet.number, &packet.data);
+
         self.publish_stats();
 
         Ok(result?)
@@ -115,7 +116,9 @@ pub(crate) fn run(
     };
 
     let mut pipeline = AudioPipeline::new(decoder, output, config, Arc::clone(&links.counters));
+
     let result = decode_loop(&mut pipeline, links);
+
     links.stop.store(true, Ordering::Relaxed);
 
     result
@@ -157,7 +160,7 @@ mod tests {
         f32::from_bits(bits)
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Produced {
         Decoded(u32),
         Concealed,
@@ -246,6 +249,7 @@ mod tests {
     ) -> (AudioPipeline, Capture, Arc<Counters>) {
         let output = Capture::default();
         let counters = Arc::new(Counters::default());
+
         let pipeline = AudioPipeline::new(
             Box::new(decoder),
             Box::new(output.clone()),
@@ -273,6 +277,7 @@ mod tests {
         }
 
         let stats = counters.snapshot();
+
         assert_eq!(
             output.produced(),
             [
@@ -294,6 +299,7 @@ mod tests {
         pipeline.process(&packet(3)).unwrap();
 
         let stats = counters.snapshot();
+
         assert_eq!(
             output.produced(),
             [
@@ -316,6 +322,7 @@ mod tests {
         pipeline.process(&packet(5)).unwrap();
 
         let stats = counters.snapshot();
+
         assert_eq!(
             output.produced(),
             [
@@ -339,6 +346,7 @@ mod tests {
         pipeline.process(&packet(50)).unwrap();
 
         let stats = counters.snapshot();
+
         assert_eq!(
             output.produced(),
             [
@@ -411,6 +419,7 @@ mod tests {
         pipeline.process(&packet(3)).unwrap();
 
         let stats = counters.snapshot();
+
         assert_eq!(
             output.produced(),
             [
@@ -431,6 +440,7 @@ mod tests {
         pipeline.process(&packet(1)).unwrap();
 
         let stats = counters.snapshot();
+
         assert_eq!(
             (
                 stats.audio_underruns,
@@ -446,6 +456,7 @@ mod tests {
     fn a_failing_output_ends_the_stage_with_an_error() {
         let (mut pipeline, output, _counters) =
             pipeline(&AudioConfig::default(), ScriptedDecoder { fail_on: None });
+
         output.broken.store(true, Ordering::Relaxed);
 
         let result = pipeline.process(&packet(1));
@@ -468,6 +479,7 @@ mod tests {
         let mut encoder = OpusAudioEncoder::new(&config).unwrap();
         let output = Capture::default();
         let counters = Arc::new(Counters::default());
+
         let mut pipeline = AudioPipeline::new(
             open_decoder(&config).unwrap(),
             Box::new(output.clone()),
@@ -476,6 +488,7 @@ mod tests {
         );
 
         let mut packets = Vec::new();
+
         for number in 0..6_u32 {
             let tone: Vec<f32> = (0..FRAME_SAMPLES * CHANNELS)
                 .map(|index| {
@@ -484,7 +497,9 @@ mod tests {
                 })
                 .collect();
             let mut data = vec![0; PACKET_BUFFER];
+
             let written = encoder.encode(&tone, &mut data).unwrap();
+
             data.truncate(written);
             packets.push(EncodedAudio { number, data });
         }
@@ -495,6 +510,7 @@ mod tests {
 
         let stats = counters.snapshot();
         let submitted = output.submitted.lock();
+
         assert_eq!(submitted.len(), 6);
         assert!(
             submitted

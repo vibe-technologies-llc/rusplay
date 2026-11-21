@@ -19,14 +19,14 @@ const REQUIRED_EXTENSIONS: [&std::ffi::CStr; 3] = [
     ext::image_drm_format_modifier::NAME,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ModifierProperties {
     pub modifier: u64,
     pub plane_count: usize,
     pub copyable: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ImageRequest<'a> {
     pub format: vk::Format,
     pub view_formats: &'a [vk::Format],
@@ -52,7 +52,7 @@ impl ImageRequest<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct MemoryPlane {
     pub offset: u64,
     pub stride: u64,
@@ -88,6 +88,7 @@ impl VulkanImporter {
 
         let hal = unsafe { device.as_hal::<Vulkan>() }.ok_or(ScaleError::DmaBufNeedsVulkan)?;
         let enabled = hal.enabled_device_extensions();
+
         if !REQUIRED_EXTENSIONS
             .iter()
             .all(|extension| enabled.contains(extension))
@@ -97,6 +98,7 @@ impl VulkanImporter {
 
         let instance = hal.shared_instance().raw_instance().clone();
         let raw = hal.raw_device().clone();
+
         let memory_fd = khr::external_memory_fd::Device::new(&instance, &raw);
 
         Ok(Self {
@@ -115,15 +117,19 @@ impl VulkanImporter {
 
     pub fn modifiers(&self, format: vk::Format) -> Vec<ModifierProperties> {
         let mut list = vk::DrmFormatModifierPropertiesListEXT::default();
+
         self.format_properties(format, &mut list);
 
         let mut modifiers = vec![
             vk::DrmFormatModifierPropertiesEXT::default();
             list.drm_format_modifier_count as usize
         ];
+
         let mut list = vk::DrmFormatModifierPropertiesListEXT::default()
             .drm_format_modifier_properties(&mut modifiers);
+
         self.format_properties(format, &mut list);
+
         let written = list.drm_format_modifier_count as usize;
 
         modifiers
@@ -167,6 +173,7 @@ impl VulkanImporter {
             vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(DMA_BUF);
         let mut format_list =
             vk::ImageFormatListCreateInfo::default().view_formats(request.view_formats);
+
         let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(request.format)
             .ty(vk::ImageType::TYPE_2D)
@@ -175,12 +182,15 @@ impl VulkanImporter {
             .flags(request.flags())
             .push_next(&mut modifier_info)
             .push_next(&mut external_info);
+
         if !request.view_formats.is_empty() {
             info = info.push_next(&mut format_list);
         }
 
         let mut external = vk::ExternalImageFormatProperties::default();
+
         let mut properties = vk::ImageFormatProperties2::default().push_next(&mut external);
+
         let supported = unsafe {
             self.instance.get_physical_device_image_format_properties2(
                 self.physical,
@@ -222,6 +232,7 @@ impl VulkanImporter {
             .plane_layouts(&layouts);
         let mut format_list =
             vk::ImageFormatListCreateInfo::default().view_formats(request.view_formats);
+
         let mut info = vk::ImageCreateInfo::default()
             .flags(request.flags())
             .image_type(vk::ImageType::TYPE_2D)
@@ -240,6 +251,7 @@ impl VulkanImporter {
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut external_info)
             .push_next(&mut modifier_info);
+
         if !request.view_formats.is_empty() {
             info = info.push_next(&mut format_list);
         }
@@ -251,6 +263,7 @@ impl VulkanImporter {
             image,
             memory: vk::DeviceMemory::null(),
         };
+
         pending.memory = self.import_memory(image, fd)?;
         unsafe { self.device.bind_image_memory(image, pending.memory, 0) }
             .map_err(ScaleError::DmaBufMemoryBind)?;
@@ -267,6 +280,7 @@ impl VulkanImporter {
             memory_flags: hal::MemoryFlags::empty(),
             view_formats: desc.view_formats.to_vec(),
         };
+
         let hal_texture = {
             let hal_device = unsafe { device.as_hal::<Vulkan>() };
             let Some(hal_device) = hal_device else {
@@ -356,6 +370,7 @@ impl VulkanImporter {
         unsafe {
             encoder.as_hal_mut::<Vulkan, _, _>(|hal| {
                 let hal = hal.ok_or(ScaleError::DmaBufNeedsVulkan)?;
+
                 self.device.cmd_pipeline_barrier(
                     hal.raw_handle(),
                     vk::PipelineStageFlags::ALL_COMMANDS,
@@ -382,6 +397,7 @@ impl VulkanImporter {
         let close = || drop(unsafe { OwnedFd::from_raw_fd(raw) });
 
         let mut fd_properties = vk::MemoryFdPropertiesKHR::default();
+
         if let Err(result) = unsafe {
             self.memory_fd
                 .get_memory_fd_properties(DMA_BUF, raw, &mut fd_properties)
@@ -391,6 +407,7 @@ impl VulkanImporter {
         }
 
         let types = requirements.memory_type_bits & fd_properties.memory_type_bits;
+
         if types == 0 {
             close();
             return Err(ScaleError::DmaBufNoMemoryType);
@@ -400,6 +417,7 @@ impl VulkanImporter {
         let mut import = vk::ImportMemoryFdInfoKHR::default()
             .handle_type(DMA_BUF)
             .fd(raw);
+
         let info = vk::MemoryAllocateInfo::default()
             .allocation_size(requirements.size)
             .memory_type_index(types.trailing_zeros())
@@ -415,6 +433,7 @@ impl VulkanImporter {
 
 fn hal_usage(usage: wgpu::TextureUsages) -> wgpu::TextureUses {
     let mut uses = wgpu::TextureUses::RESOURCE;
+
     if usage.contains(wgpu::TextureUsages::COPY_SRC) {
         uses |= wgpu::TextureUses::COPY_SRC;
     }
@@ -430,6 +449,7 @@ struct PendingImage<'a> {
 impl PendingImage<'_> {
     fn release(mut self) -> (vk::Image, vk::DeviceMemory) {
         let parts = (self.image, self.memory);
+
         self.image = vk::Image::null();
         self.memory = vk::DeviceMemory::null();
         parts

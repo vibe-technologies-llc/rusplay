@@ -137,7 +137,9 @@ struct RemoteTarget {
 impl RemoteTarget {
     fn call(&mut self, request: Request) -> Result<Reply, InputError> {
         self.next_id += 1;
+
         let id = self.next_id;
+
         self.requests
             .send((id, request))
             .map_err(|_| InputError::SinkClosed)?;
@@ -157,6 +159,7 @@ impl RemoteTarget {
 impl InputTarget for RemoteTarget {
     fn inject(&mut self, event: InputEvent) -> Result<(), InputError> {
         let mut results = Vec::with_capacity(1);
+
         self.inject_batch(&[event], &mut results);
 
         results.pop().unwrap_or(Err(InputError::SinkClosed))
@@ -230,12 +233,15 @@ fn serve_requests(
         match requests.recv_timeout(IDLE_SERVICE_INTERVAL) {
             Ok((id, Request::Inject(events))) => {
                 let mut results = Vec::with_capacity(events.len());
+
                 target.inject_batch(&events, &mut results);
                 replies.send((id, Reply::Injected(results))).ok();
             }
             Ok((id, Request::Service)) => {
                 let mut feedback = Vec::new();
+
                 let result = target.service(&mut feedback);
+
                 replies
                     .send((id, Reply::Serviced { feedback, result }))
                     .ok();
@@ -264,10 +270,12 @@ pub(crate) struct InputLinks {
 
 pub(crate) fn run(links: &InputLinks) -> Result<(), HostError> {
     let mut guard = links.feed.target();
+
     let target: &mut dyn InputTarget = &mut **guard;
     let mut stage = InputStage::new(&links.shared, &links.outbox);
 
     let result = stage.serve(target, &links.datagrams);
+
     stage.release_all(target);
     links.shared.stop();
 
@@ -357,6 +365,7 @@ impl<'a> InputStage<'a> {
 
     fn follow_client(&mut self, target: &mut dyn InputTarget) {
         let epoch = self.shared.client.epoch();
+
         if epoch == self.epoch {
             return;
         }
@@ -383,6 +392,7 @@ impl<'a> InputStage<'a> {
             counters.malformed_datagrams.increment();
             return;
         };
+
         counters.input_packets.increment();
 
         match self.sequence.admit(packet.sequence) {
@@ -426,9 +436,12 @@ impl<'a> InputStage<'a> {
         self.shared.counters.input_state_records.increment();
 
         let mut events = std::mem::take(&mut self.repairs);
+
         events.clear();
         self.held.reconcile(state, &mut events);
+
         let repaired = self.inject_all(target, &events);
+
         self.shared
             .counters
             .input_events_repaired
@@ -443,6 +456,7 @@ impl<'a> InputStage<'a> {
 
         let counters = &self.shared.counters;
         let mut injected = 0;
+
         target.inject_batch(events, &mut self.outcomes);
 
         for (event, outcome) in events.iter().zip(&self.outcomes) {
@@ -459,7 +473,9 @@ impl<'a> InputStage<'a> {
                 Err(_) => {}
             }
         }
+
         let failed = events.len() - injected;
+
         counters.input_failures.add(failed as u64);
 
         injected
@@ -502,13 +518,14 @@ impl<'a> InputStage<'a> {
         self.flush(target);
 
         let mut events = Vec::new();
+
         self.held.release_all(&mut events);
 
         self.inject_all(target, &events);
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct ServiceCadence {
     interval: Duration,
     due: Instant,
@@ -635,6 +652,7 @@ mod tests {
     fn section(records: &[InputRecord]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut encoded = Vec::new();
+
         for record in records {
             encoded.clear();
             record.encode_into(&mut encoded);
@@ -647,6 +665,7 @@ mod tests {
         let current = section(current);
         let previous = section(previous);
         let mut out = Vec::new();
+
         InputPacket {
             sequence,
             current: &current,
@@ -663,10 +682,13 @@ mod tests {
 
     fn snapshot_of(events: &[InputEvent]) -> Vec<InputRecord> {
         let mut held = HeldInput::new();
+
         for event in events {
             held.observe(event);
         }
+
         let mut records = Vec::new();
+
         held.snapshot(&mut records);
         records.into_iter().map(InputRecord::State).collect()
     }
@@ -700,6 +722,7 @@ mod tests {
             duration_ms: 100,
         });
         let recorded = Arc::clone(&events);
+
         let feed = InputFeed::spawn(&untuned(), move || {
             Ok(ThreadBound {
                 events: recorded,
@@ -710,8 +733,10 @@ mod tests {
         .unwrap();
 
         let mut commands = Vec::new();
+
         let outcome = {
             let mut target = feed.target();
+
             target.inject(key(30, true)).unwrap();
             target.service(&mut commands)
         };
@@ -800,10 +825,13 @@ mod tests {
             })
         })
         .unwrap();
+
         assert_eq!(Arc::strong_count(&events), 2);
 
         drop(feed);
+
         let deadline = Instant::now() + Duration::from_secs(5);
+
         while Arc::strong_count(&events) > 1 && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
@@ -892,6 +920,7 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = Batches::default();
         let mut records = vec![event(key(30, true))];
+
         records.extend(snapshot_of(&[]));
 
         stage.apply_datagram(&mut target, &datagram(0, &records, &[]));
@@ -1018,7 +1047,9 @@ mod tests {
             .client
             .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
         stage.follow_client(&mut target);
+
         let lifted = target.events.len();
+
         stage.apply_datagram(&mut target, &datagram(0, &snapshot_of(&[]), &[]));
 
         assert_eq!(lifted, 2);
@@ -1033,9 +1064,11 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = Recorder::default();
         let old_epoch = rig.shared.client.epoch();
+
         rig.shared
             .client
             .switch(SocketAddr::from(([127, 0, 0, 1], 9)));
+
         let new_epoch = rig.shared.client.epoch();
 
         stage.admit(
@@ -1140,11 +1173,16 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = Recorder::default();
         let mut current = Vec::new();
+
         push_input_record(&mut current, &[200]).unwrap();
+
         let mut good = Vec::new();
+
         event(key(9, true)).encode_into(&mut good);
         push_input_record(&mut current, &good).unwrap();
+
         let mut bytes = Vec::new();
+
         InputPacket {
             sequence: 0,
             current: &current,
@@ -1212,6 +1250,7 @@ mod tests {
 
     fn queued(datagrams: Vec<ForwardedDatagram>) -> Receiver<ForwardedDatagram> {
         let (sender, receiver) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+
         for datagram in datagrams {
             sender.send(datagram).unwrap();
         }
@@ -1221,6 +1260,7 @@ mod tests {
 
     fn wait_until(done: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + WAIT;
+
         while !done() {
             if Instant::now() >= deadline {
                 return false;
@@ -1262,7 +1302,9 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = BatchLog::default();
         let mut repaired = vec![event(key(3, true))];
+
         repaired.extend(snapshot_of(&[]));
+
         let datagrams = queued(vec![
             forwarded(&rig, 0, &[event(key(1, true))]),
             forwarded(&rig, 1, &[event(key(2, true))]),
@@ -1290,6 +1332,7 @@ mod tests {
         let mut stage = rig.stage();
         let mut target = BatchLog::default();
         let count = u32::try_from(MAX_BATCH_EVENTS + 72).unwrap();
+
         let datagrams = queued(
             (0..count)
                 .map(|sequence| forwarded(&rig, sequence, &[event(key(sequence, true))]))
@@ -1297,6 +1340,7 @@ mod tests {
         );
 
         stage.serve_every(NEVER, &mut target, &datagrams).unwrap();
+
         let sizes: Vec<usize> = target.batches.iter().map(Vec::len).collect();
 
         assert_eq!(sizes, vec![MAX_BATCH_EVENTS, 72]);
@@ -1363,12 +1407,14 @@ mod tests {
 
         let services = Arc::new(AtomicUsize::new(0));
         let (injected, injections) = mpsc::channel();
+
         let mut target = Counting {
             services: Arc::clone(&services),
             injected,
         };
         let epoch = rig.shared.client.epoch();
         let (sender, datagrams) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+
         let feeder = thread::spawn(move || {
             for sequence in 0..DATAGRAMS {
                 sender.send(motion(epoch, sequence)).unwrap();
@@ -1394,6 +1440,7 @@ mod tests {
 
         let services = Arc::new(AtomicUsize::new(0));
         let (injected, _injections) = mpsc::channel();
+
         let mut target = Counting {
             services: Arc::clone(&services),
             injected,
@@ -1404,13 +1451,16 @@ mod tests {
             let services = Arc::clone(&services);
             thread::spawn(move || {
                 let reached = wait_until(|| services.load(Ordering::Relaxed) >= SERVICES_AWAITED);
+
                 shared.stop();
                 reached
             })
         };
 
         let started = Instant::now();
+
         stage.serve(&mut target, &datagrams).unwrap();
+
         let elapsed = started.elapsed();
         let count = services.load(Ordering::Relaxed);
 
@@ -1426,12 +1476,14 @@ mod tests {
 
         let services = Arc::new(AtomicUsize::new(0));
         let (injected, _injections) = mpsc::channel();
+
         let mut target = Counting {
             services: Arc::clone(&services),
             injected,
         };
         let epoch = rig.shared.client.epoch();
         let (sender, datagrams) = mpsc::sync_channel(QUEUE_DATAGRAMS);
+
         let flood = {
             let shared = Arc::clone(&rig.shared);
             thread::spawn(move || {
@@ -1452,14 +1504,18 @@ mod tests {
                 let before = services.load(Ordering::Relaxed);
                 let kept_up =
                     wait_until(|| services.load(Ordering::Relaxed) >= before + SERVICES_AWAITED);
+
                 shared.stop();
                 flooded && kept_up
             })
         };
 
         let started = Instant::now();
+
         stage.serve(&mut target, &datagrams).unwrap();
+
         let elapsed = started.elapsed();
+
         flood.join().unwrap();
 
         assert!(watcher.join().unwrap());

@@ -73,6 +73,7 @@ fn video(codec: Codec, format: PixelFormat, resolution: Resolution) -> VideoConf
 
 fn with_vaapi(config: VideoConfig, edit: impl FnOnce(&mut VaapiConfig)) -> VideoConfig {
     let mut vaapi = VaapiConfig::default();
+
     edit(&mut vaapi);
 
     VideoConfig {
@@ -122,6 +123,7 @@ fn pattern_value(
 ) -> u64 {
     let (width, height) = size;
     let shift = usize::try_from(index * 3).unwrap_or(0);
+
     let horizontal = ((x + shift) % width) as u64 * max / width as u64;
     let vertical = y as u64 * max / height.max(1) as u64;
 
@@ -139,6 +141,7 @@ pub(crate) fn pattern_planes(
 ) -> Vec<Vec<u16>> {
     let width = resolution.width as usize;
     let height = resolution.height as usize;
+
     let (chroma_width, chroma_height) = match format.chroma {
         ChromaSubsampling::Yuv420 => (width.div_ceil(2), height.div_ceil(2)),
         ChromaSubsampling::Yuv422 => (width.div_ceil(2), height),
@@ -220,6 +223,7 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
         panic!("vaapi decode produced a CPU frame");
     };
     let image = dma_buf.image();
+
     assert_eq!(
         image.objects.len(),
         1,
@@ -235,6 +239,7 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
             pitch: u32::try_from(plane.pitch).unwrap(),
         })
         .collect();
+
     let surface = imported_surface(
         display,
         surface_format(format),
@@ -250,12 +255,14 @@ fn read_back(display: &Rc<Display>, output: &DecodedFrame) -> Picture {
 
     let mut va_image =
         Image::new(display, surface_format(format).va_fourcc, output.resolution).unwrap();
+
     let bytes = va_image.get(&surface).unwrap();
     let layout = va_image.layout();
 
     let wide = format.depth != BitDepth::Eight;
     let shift = 16 - u32::from(format.depth.bits());
     let width = output.resolution.width as usize;
+
     let luma = (0..output.resolution.height as usize)
         .flat_map(|y| {
             let row = layout.offsets[0] + y * layout.pitches[0];
@@ -299,6 +306,7 @@ pub(crate) fn decode_vaapi(codec: Codec, frames: &[EncodedFrame]) -> Option<Vec<
                     frame.timestamp
                 ),
             };
+
             assert_eq!(output.timestamp, frame.timestamp);
             read_back(&display, &output)
         })
@@ -322,6 +330,7 @@ fn decode_rav1d<'a>(frames: impl IntoIterator<Item = &'a EncodedFrame>) -> Vec<P
             };
             let plane = cpu.plane(0).unwrap();
             let sample = usize::from(plane.bytes_per_sample);
+
             let luma = (0..plane.height as usize)
                 .flat_map(|y| {
                     (0..plane.width as usize).map(move |x| {
@@ -377,6 +386,7 @@ fn check_pictures(codec: Codec, pictures: &[Picture], format: PixelFormat, resol
 fn h264_nal_types(data: &[u8]) -> Vec<H264NaluType> {
     let mut cursor = Cursor::new(data);
     let mut types = Vec::new();
+
     while let Ok(nalu) = H264Nalu::next(&mut cursor) {
         types.push(nalu.header.type_);
     }
@@ -386,6 +396,7 @@ fn h264_nal_types(data: &[u8]) -> Vec<H264NaluType> {
 fn hevc_nal_types(data: &[u8]) -> Vec<H265NaluType> {
     let mut cursor = Cursor::new(data);
     let mut types = Vec::new();
+
     while let Ok(nalu) = H265Nalu::next(&mut cursor) {
         types.push(nalu.header.type_);
     }
@@ -410,6 +421,7 @@ fn av1_obus(data: &[u8]) -> Vec<(u8, &[u8])> {
         let kind = (header >> 3) & 0x0f;
         let mut size = 0;
         let mut used = 0;
+
         for (index, byte) in tail.iter().enumerate() {
             size |= usize::from(byte & 0x7f) << (7 * index);
             used = index + 1;
@@ -463,11 +475,13 @@ fn streams_start_on_a_keyframe_and_stay_inter() {
         match codec {
             Codec::H264 => {
                 let types = h264_nal_types(&packets[0].data);
+
                 assert!(types.contains(&H264NaluType::Sps));
                 assert!(types.contains(&H264NaluType::Pps));
             }
             Codec::Hevc => {
                 let types = hevc_nal_types(&packets[0].data);
+
                 assert!(types.contains(&H265NaluType::VpsNut));
                 assert!(types.contains(&H265NaluType::SpsNut));
                 assert!(types.contains(&H265NaluType::PpsNut));
@@ -538,12 +552,14 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
         let Some(mut encoder) = try_open(&config) else {
             continue;
         };
+
         let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, 3));
 
         match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
             Ok(mut decoder) => {
                 for packet in &packets {
                     let output = decoder.decode(packet).unwrap().unwrap();
+
                     assert_eq!(output.color, expected, "{codec} through vaapi");
                 }
             }
@@ -556,6 +572,7 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
             let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig::default()).unwrap();
             for packet in &packets {
                 let output = decoder.decode(packet).unwrap().unwrap();
+
                 assert_eq!(output.color, expected, "av1 through rav1d");
             }
         }
@@ -596,6 +613,7 @@ fn keyframe_is_produced_on_request() {
                 .unwrap();
         }
         encoder.request_keyframe();
+
         let forced = encoder
             .encode(&pattern_frame(format, RESOLUTION, 3))
             .unwrap()
@@ -640,6 +658,7 @@ fn decode_ffmpeg(
     } else {
         ("yuv420p10le", 2)
     };
+
     let child = Command::new("ffmpeg")
         .args(["-hide_banner", "-v", "error", "-f", demuxer, "-i", "pipe:0"])
         .args(["-fps_mode", "passthrough", "-pix_fmt", planar])
@@ -661,10 +680,12 @@ fn decode_ffmpeg(
         .flat_map(|frame| frame.data.iter().copied())
         .collect();
     let mut input = child.stdin.take().unwrap();
+
     let writer = thread::spawn(move || {
         let _ = input.write_all(&stream);
     });
     let output = child.wait_with_output().unwrap();
+
     writer.join().unwrap();
 
     let luma_size = usize::try_from(resolution.pixel_count()).unwrap() * sample;
@@ -720,6 +741,7 @@ fn check_every_decoder(
 
     if codec == Codec::Av1 {
         let decoded = lumas(decode_rav1d(&survivors));
+
         check_received(codec, received, &decoded, format, "rav1d");
         return;
     }
@@ -728,6 +750,7 @@ fn check_every_decoder(
     }
     if let Some(ffmpeg) = decode_ffmpeg(codec, format, RESOLUTION, &survivors) {
         assert_eq!(ffmpeg.errors, "", "{codec} through ffmpeg");
+
         check_received(codec, received, &ffmpeg.lumas, format, "ffmpeg");
     }
 }
@@ -738,6 +761,7 @@ fn long_term_verified() -> bool {
         .and_then(|display| display.vendor())
         .unwrap_or_default();
     let verified = driver_honours_long_term(&vendor);
+
     if !verified {
         hardware::unsupported(format_args!(
             "long-term reference recovery is unverified on {vendor}"
@@ -773,11 +797,15 @@ fn recover_after_a_loss(case: &LossCase, config: &VideoConfig) {
     let split = usize::try_from(case.resumed).unwrap();
 
     let mut packets = encode_all(encoder.as_mut(), &frames[..split]);
+
     if let Some(output) = case.acknowledged {
         encoder.acknowledge(OutputIndex(output));
     }
+
     let recovery = encoder.recover(OutputIndex(case.last_good));
+
     packets.extend(encode_all(encoder.as_mut(), &frames[split..]));
+
     let received: Vec<u64> = (0..=case.last_good)
         .chain(case.resumed..case.count)
         .collect();
@@ -785,14 +813,18 @@ fn recover_after_a_loss(case: &LossCase, config: &VideoConfig) {
     let Recovery::Reference(OutputIndex(reference)) = recovery else {
         panic!("vaapi {codec} fell back to a keyframe: {recovery:?}");
     };
+
     assert!(reference <= case.last_good);
+
     if let Some(expected) = case.reference {
         assert_eq!(reference, expected, "{codec}");
     }
+
     assert!(case.last_good - reference < 16);
     assert!(!packets[split].keyframe);
     assert!(!keyframe_check(codec)(&packets[split].data));
     assert!(packets[split + 1..].iter().all(|frame| !frame.keyframe));
+
     check_every_decoder(codec, format, &received, &packets);
 }
 
@@ -922,17 +954,21 @@ fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
         };
         let packets = encode_all(encoder.as_mut(), &pattern_frames(format, RESOLUTION, COUNT));
         let received: Vec<u64> = (0..=LAST_GOOD).chain(RESUMED..COUNT).collect();
+
         let survivors = pick(&packets, &received);
+
         if codec == Codec::Hevc {
             assert_refused_after_the_loss(&survivors, LAST_GOOD);
             continue;
         }
+
         let Some(pictures) = decode_vaapi(codec, &survivors) else {
             continue;
         };
 
         let source = &pattern_planes(format, RESOLUTION, RESUMED)[0];
         let at_resume = usize::try_from(LAST_GOOD + 1).unwrap();
+
         let quality = psnr(source, &pictures[at_resume].luma, format.depth);
 
         assert!(
@@ -944,6 +980,7 @@ fn h26x_without_a_recovery_frame_is_visibly_wrong_after_the_loss() {
 
 fn assert_refused_after_the_loss(survivors: &[EncodedFrame], last_good: u64) {
     let mut decoder = VaapiDecoder::new(Codec::Hevc, &VaapiDecoderConfig::default()).unwrap();
+
     let refused = survivors
         .iter()
         .enumerate()
@@ -1050,6 +1087,7 @@ fn survive_losses(codec: Codec, format: PixelFormat, config: &VideoConfig, run: 
             .find(|&&frame| frame + ACK_DELAY <= index)
             .copied()
             .filter(|_| index < run.acknowledged_until);
+
         if let Some(frame) = acknowledged {
             encoder.acknowledge(OutputIndex(frame));
         }
@@ -1068,6 +1106,7 @@ fn survive_losses(codec: Codec, format: PixelFormat, config: &VideoConfig, run: 
 
         let frame = pattern_frame(format, RESOLUTION, index);
         let packet = encoder.encode(&frame).unwrap().unwrap();
+
         if run.events.iter().any(|event| event.resumed == index) {
             assert!(!packet.keyframe, "{codec} at frame {index}");
         }
@@ -1125,11 +1164,13 @@ fn recovery_before_any_frame_is_a_keyframe() {
             .encode(&pattern_frame(format, RESOLUTION, 0))
             .unwrap()
             .unwrap();
+
         for index in 1..4 {
             encoder
                 .encode(&pattern_frame(format, RESOLUTION, index))
                 .unwrap();
         }
+
         let later = encoder.recover(OutputIndex(2));
         let answered = encoder
             .encode(&pattern_frame(format, RESOLUTION, 4))
@@ -1164,7 +1205,9 @@ fn bitrate_changes_apply_in_place() {
             .collect();
 
         let high = encode_all(encoder.as_mut(), &frames[..30]);
+
         encoder.set_bitrate(BITRATE_KBPS / 10).unwrap();
+
         let low = encode_all(encoder.as_mut(), &frames[30..]);
 
         assert!(!low[0].keyframe);
@@ -1297,6 +1340,7 @@ fn intra_refresh_spends_its_rows_over_the_whole_period() {
             continue;
         };
         let still = yuv_frame(yuv420(BitDepth::Eight), RESOLUTION, 0, timestamp(0));
+
         let mut cadence = RefreshCadence::new(rows, period);
 
         let sizes: Vec<usize> = (0..=period * SWEEPS)
@@ -1305,6 +1349,7 @@ fn intra_refresh_spends_its_rows_over_the_whole_period() {
         let refreshes: Vec<bool> = (0..sizes.len())
             .map(|frame| frame > 0 && cadence.advance().is_some())
             .collect();
+
         let sizes_where = |refreshing: bool| -> Vec<usize> {
             (1..sizes.len())
                 .filter(|&frame| refreshes[frame] == refreshing)
@@ -1349,6 +1394,7 @@ fn likeness_after_a_lost_h264_frame(period: u32, lost: u64, count: u64) -> Optio
     let packets = encode_all(encoder.as_mut(), &frames);
     let received: Vec<u64> = (0..count).filter(|&index| index != lost).collect();
     let whole = decode_ffmpeg(codec, format, RESOLUTION, &packets)?;
+
     let broken = decode_ffmpeg(codec, format, RESOLUTION, &pick(&packets, &received))?;
 
     assert_eq!(whole.errors, "");
@@ -1418,14 +1464,17 @@ fn radeonsi_quality_modes_encode() {
     if !device_present() {
         return;
     }
+
     let vendor = Display::open(&VaapiConfig::default().device)
         .ok()
         .and_then(|display| display.vendor())
         .unwrap_or_default();
+
     if !is_radeonsi(&vendor) {
         hardware::unsupported(format_args!("the radeonsi quality modes on {vendor}"));
         return;
     }
+
     let modes = [
         [("preset", "balanced"), ("vbaq", "on"), ("pre-encode", "on")],
         [
@@ -1467,6 +1516,7 @@ fn exported_frame(display: &Rc<Display>, format: PixelFormat, index: u64) -> (Su
     let surface_format = surface_format(format);
     let surface = exportable_surface(display, surface_format, RESOLUTION).unwrap();
     let mut image = Image::new(display, surface_format.va_fourcc, RESOLUTION).unwrap();
+
     image
         .write(|data, layout| pack(&view, data, layout, RESOLUTION))
         .unwrap();
@@ -1502,6 +1552,7 @@ fn dma_buf_frames_are_imported() {
     if !device_present() {
         return;
     }
+
     let display = Display::open(&VaapiConfig::default().device).unwrap();
 
     for (codec, depth) in [
@@ -1518,7 +1569,9 @@ fn dma_buf_frames_are_imported() {
             .map(|index| exported_frame(&display, format, index))
             .collect();
         let mut frames: Vec<&Frame> = sources.iter().map(|(_, frame)| frame).collect();
+
         frames.extend(sources.iter().map(|(_, frame)| frame));
+
         let packets: Vec<_> = frames
             .iter()
             .map(|frame| encoder.encode(frame).unwrap().unwrap())
@@ -1604,6 +1657,7 @@ fn unsupported_formats_are_reported_not_downgraded() {
     if !device_present() {
         return;
     }
+
     let cases = [
         (
             Codec::H264,
@@ -1641,6 +1695,7 @@ fn unsupported_formats_are_reported_not_downgraded() {
                 let packet = encoder
                     .encode(&pattern_frame(format, RESOLUTION, 0))
                     .unwrap();
+
                 assert!(packet.is_some_and(|frame| frame.keyframe));
             }
             Err(error) => assert!(matches!(
@@ -1656,6 +1711,7 @@ fn capabilities_match_what_opens() {
     if !device_present() {
         return;
     }
+
     let found = capabilities(&VideoEncoderConfig::Vaapi(VaapiConfig::default())).unwrap();
 
     for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
@@ -1678,6 +1734,7 @@ fn capabilities_match_what_opens() {
             }
         }
     }
+
     assert!(
         found
             .formats(Codec::H264)
@@ -1695,6 +1752,7 @@ fn bad_parameters_fail_at_open() {
     if !device_present() {
         return;
     }
+
     let format = yuv420(BitDepth::Eight);
     let config = with_vaapi(video(Codec::Hevc, format, RESOLUTION), |vaapi| {
         vaapi.params = [("no-such-knob".to_owned(), "1".to_owned())].into();
@@ -1711,6 +1769,7 @@ fn resolutions_outside_the_driver_limits_are_rejected() {
     if !device_present() {
         return;
     }
+
     let format = yuv420(BitDepth::Eight);
 
     for codec in [Codec::H264, Codec::Hevc, Codec::Av1] {
@@ -1770,8 +1829,11 @@ fn reconstruction_is_what_the_decoder_outputs() {
             let frames = pattern_frames(format, resolution, FRAMES);
 
             let mut packets = encode_all(&mut *encoder, &frames[..MEASURED]);
+
             assert!(encoder.capture_reconstruction());
+
             packets.push(encoder.encode(&frames[MEASURED]).unwrap().unwrap());
+
             let reconstruction = encoder.take_reconstruction().unwrap().unwrap();
             let Some(pictures) = decode_vaapi(codec, &packets) else {
                 continue;

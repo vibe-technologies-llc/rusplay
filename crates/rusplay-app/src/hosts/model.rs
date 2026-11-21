@@ -6,7 +6,7 @@ use rusplay_client::{
 use rusplay_config::HostProfile;
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum HostError {
     #[error("{text:?} is not an IP address with an optional port")]
     InvalidAddress { text: String },
@@ -22,16 +22,16 @@ pub enum HostError {
     AmbiguousHost { target: String, count: usize },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostOrigin {
     Added,
     Discovered,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostId(u64);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostEntry {
     pub id: HostId,
     pub name: String,
@@ -44,7 +44,7 @@ pub struct HostEntry {
     pub busy: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostList {
     default_port: u16,
     entries: Vec<HostEntry>,
@@ -64,6 +64,7 @@ impl HostList {
 
     fn allocate_id(&mut self) -> HostId {
         let id = HostId(self.next_id);
+
         self.next_id += 1;
 
         id
@@ -177,6 +178,7 @@ impl HostList {
         let name = display_name(name, address)?;
 
         let id = self.allocate_id();
+
         self.entries.push(HostEntry {
             id,
             name,
@@ -188,7 +190,9 @@ impl HostList {
             online: false,
             busy: false,
         });
+
         let index = self.entries.len() - 1;
+
         self.selected = Some(index);
 
         Ok(index)
@@ -201,6 +205,7 @@ impl HostList {
         let name = display_name(name, address)?;
 
         let entry = &mut self.entries[index];
+
         entry.name = name;
         entry.origin = HostOrigin::Added;
         Ok(())
@@ -210,6 +215,7 @@ impl HostList {
         if index >= self.entries.len() {
             return Ok(());
         }
+
         let address = self.parse_address(address_text)?;
 
         if self
@@ -222,6 +228,7 @@ impl HostList {
         }
 
         let entry = &mut self.entries[index];
+
         entry.address = address;
         entry.host_id = None;
         entry.origin = HostOrigin::Added;
@@ -269,6 +276,7 @@ impl HostList {
         let selected = self.selected().map(|entry| entry.id);
 
         let mut unmatched = Vec::new();
+
         for host in found {
             match announced_id(host).and_then(|id| self.position_by_host_id(id)) {
                 Some(index) => self.mark_seen(index, host, true),
@@ -277,6 +285,7 @@ impl HostList {
         }
 
         let mut unplaced = Vec::new();
+
         for host in unmatched {
             match self.position_by_address(host) {
                 Some(index) => self.mark_seen(index, host, false),
@@ -285,11 +294,14 @@ impl HostList {
         }
 
         let mut new_hosts = Vec::new();
+
         for host in &unplaced {
             if self.move_saved_host(host, &unplaced) {
                 continue;
             }
+
             let id = self.allocate_id();
+
             new_hosts.push(HostEntry {
                 id,
                 name: announced_name(host),
@@ -337,6 +349,7 @@ impl HostList {
             && !self.address_is_taken(host.address, index);
 
         let entry = &mut self.entries[index];
+
         entry.online = true;
         entry.busy = host.busy;
         if entry.host_id.is_none() {
@@ -356,6 +369,7 @@ impl HostList {
             .filter(|other| other.name == host.name)
             .count()
             == 1;
+
         if !announced_once {
             return false;
         }
@@ -376,6 +390,7 @@ impl HostList {
         match candidates.as_slice() {
             [index] if !self.address_is_taken(host.address, *index) => {
                 let entry = &mut self.entries[*index];
+
                 entry.address = host.address;
                 entry.host_id = announced_id(host);
                 entry.online = true;
@@ -501,6 +516,7 @@ mod tests {
     #[test]
     fn duplicate_addresses_are_rejected() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.2").unwrap();
 
         assert!(matches!(
@@ -513,23 +529,28 @@ mod tests {
     #[test]
     fn removing_keeps_the_selection_pointing_at_the_same_host() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.add("b", "10.0.0.2").unwrap();
         hosts.add("c", "10.0.0.3").unwrap();
 
         hosts.select(2);
         hosts.remove(0);
+
         assert_eq!(hosts.selected().unwrap().name, "c");
 
         hosts.remove(1);
+
         assert_eq!(hosts.selected(), None);
     }
 
     #[test]
     fn a_paired_host_remembers_its_peer_record() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.add("b", "10.0.0.2").unwrap();
+
         let record = PeerRecord::new("b", PeerSecret::from_bytes([7; 32])).unwrap();
 
         let known = hosts.entries()[1].id;
@@ -566,6 +587,7 @@ mod tests {
     #[test]
     fn a_discovered_host_matching_a_saved_address_keeps_the_saved_name() {
         let mut hosts = list();
+
         hosts.add("Living room", "10.0.0.2").unwrap();
 
         hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
@@ -579,6 +601,7 @@ mod tests {
     #[test]
     fn a_saved_host_that_changed_address_is_matched_by_its_name() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
 
         hosts.merge_discovered(&[found("desk", "10.0.0.9:47800")]);
@@ -597,7 +620,9 @@ mod tests {
     #[test]
     fn a_pairing_is_remembered_after_the_host_changed_address() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
+
         let id = hosts.entries()[0].id;
         let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
 
@@ -610,7 +635,9 @@ mod tests {
     #[test]
     fn a_pairing_for_a_removed_host_is_reported_as_missed() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
+
         let id = hosts.entries()[0].id;
         let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
 
@@ -622,7 +649,9 @@ mod tests {
     #[test]
     fn ids_are_not_reused_after_a_removal() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
+
         let first = hosts.entries()[0].id;
 
         hosts.remove(0);
@@ -634,6 +663,7 @@ mod tests {
     #[test]
     fn a_host_is_found_by_name_or_address() {
         let mut hosts = list();
+
         hosts.add("Desk", "10.0.0.2").unwrap();
         hosts.add("lap", "10.0.0.3:9000").unwrap();
 
@@ -654,6 +684,7 @@ mod tests {
     #[test]
     fn a_name_shared_by_several_hosts_is_ambiguous() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
         hosts.add("Desk", "10.0.0.3").unwrap();
 
@@ -669,6 +700,7 @@ mod tests {
     #[test]
     fn ambiguous_names_are_not_matched_by_name() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
 
         hosts.merge_discovered(&[
@@ -687,6 +719,7 @@ mod tests {
     #[test]
     fn hosts_that_vanish_are_dropped_unless_saved() {
         let mut hosts = list();
+
         hosts.add("saved", "10.0.0.1").unwrap();
         hosts.merge_discovered(&[found("gone", "10.0.0.2:47800")]);
         hosts.select(1);
@@ -702,10 +735,13 @@ mod tests {
     #[test]
     fn pairing_a_discovered_host_saves_it() {
         let mut hosts = list();
+
         hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
+
         let record = PeerRecord::new("desk", PeerSecret::from_bytes([7; 32])).unwrap();
 
         let id = hosts.entries()[0].id;
+
         hosts.remember_peer(id, record);
         hosts.merge_discovered(&[]);
 
@@ -716,6 +752,7 @@ mod tests {
     #[test]
     fn renaming_validates_and_saves_the_host() {
         let mut hosts = list();
+
         hosts.merge_discovered(&[found("desk", "10.0.0.2:47800")]);
 
         assert_eq!(
@@ -726,6 +763,7 @@ mod tests {
             hosts.rename(0, &"x".repeat(MAX_PEER_NAME_BYTES + 1)),
             Err(HostError::NameTooLong { .. })
         ));
+
         hosts.rename(0, "  Den  ").unwrap();
         hosts.merge_discovered(&[]);
 
@@ -736,10 +774,13 @@ mod tests {
     #[test]
     fn editing_the_address_keeps_the_pairing_and_rejects_duplicates() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.add("b", "10.0.0.2").unwrap();
+
         let record = PeerRecord::new("a", PeerSecret::from_bytes([7; 32])).unwrap();
         let id = hosts.entries()[0].id;
+
         hosts.remember_peer(id, record.clone());
 
         assert!(matches!(
@@ -750,6 +791,7 @@ mod tests {
             hosts.set_address(0, "nope"),
             Err(HostError::InvalidAddress { .. })
         ));
+
         hosts.set_address(0, "10.0.0.9:9000").unwrap();
 
         assert_eq!(hosts.entries()[0].address, "10.0.0.9:9000".parse().unwrap());
@@ -759,9 +801,12 @@ mod tests {
     #[test]
     fn forgetting_a_pairing_keeps_the_host() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
+
         let record = PeerRecord::new("a", PeerSecret::from_bytes([7; 32])).unwrap();
         let id = hosts.entries()[0].id;
+
         hosts.remember_peer(id, record);
 
         assert!(hosts.forget_pairing(0));
@@ -775,6 +820,7 @@ mod tests {
     #[test]
     fn saved_hosts_round_trip_and_leave_out_discovered_ones() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.merge_discovered(&[found("seen", "10.0.0.5:47800")]);
 
@@ -803,6 +849,7 @@ mod tests {
     #[test]
     fn selecting_out_of_range_is_ignored() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.select(5);
 
@@ -812,14 +859,17 @@ mod tests {
     #[test]
     fn a_profile_is_saved_with_its_host_and_survives_the_list_round_trip() {
         let mut hosts = list();
+
         hosts.add("a", "10.0.0.1").unwrap();
         hosts.add("b", "10.0.0.2").unwrap();
+
         let profile = HostProfile {
             present_mode: Some(PresentMode::Fifo),
             ..HostProfile::default()
         };
 
         hosts.set_profile(1, profile.clone());
+
         let saved = hosts.saved_hosts();
         let restored = HostList::from_saved(47_800, &saved);
 
@@ -831,7 +881,9 @@ mod tests {
     #[test]
     fn a_profile_on_a_discovered_host_saves_it() {
         let mut hosts = list();
+
         hosts.merge_discovered(&[found("den", "10.0.0.5:47800")]);
+
         assert_eq!(hosts.saved_hosts().len(), 0);
 
         hosts.set_profile(
@@ -865,7 +917,9 @@ mod tests {
     #[test]
     fn the_busy_flag_follows_the_latest_scan() {
         let mut hosts = list();
+
         hosts.add("saved", "10.0.0.1").unwrap();
+
         let busy = DiscoveredHost {
             busy: true,
             ..found("saved", "10.0.0.1:47800")
@@ -876,10 +930,12 @@ mod tests {
         };
 
         hosts.merge_discovered(&[busy, busy_new]);
+
         assert!(hosts.entries()[0].busy);
         assert!(hosts.entries()[1].busy);
 
         hosts.merge_discovered(&[found("saved", "10.0.0.1:47800")]);
+
         assert!(!hosts.entries()[0].busy);
         assert_eq!(hosts.entries().len(), 1);
     }
@@ -887,6 +943,7 @@ mod tests {
     #[test]
     fn a_host_that_was_not_seen_is_not_busy() {
         let mut hosts = list();
+
         hosts.add("saved", "10.0.0.1").unwrap();
         hosts.merge_discovered(&[DiscoveredHost {
             busy: true,
@@ -945,6 +1002,7 @@ mod tests {
     #[test]
     fn the_selection_follows_a_host_matched_by_id() {
         let mut hosts = HostList::from_saved(47_800, &[saved_with_id("Den", "10.0.0.2:47800", 7)]);
+
         hosts.select(0);
 
         hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 7)]);
@@ -958,7 +1016,9 @@ mod tests {
     #[test]
     fn a_saved_host_learns_the_id_announced_at_its_address() {
         let mut hosts = list();
+
         hosts.add("Den", "10.0.0.2").unwrap();
+
         let before = hosts.saved_hosts();
 
         hosts.merge_discovered(&[identified("desk", "10.0.0.2:47800", 7)]);
@@ -974,6 +1034,7 @@ mod tests {
     #[test]
     fn a_saved_host_without_an_id_moves_by_name_and_learns_the_id() {
         let mut hosts = list();
+
         hosts.add("desk", "10.0.0.2").unwrap();
 
         hosts.merge_discovered(&[identified("desk", "10.0.0.9:47800", 7)]);

@@ -41,6 +41,7 @@ fn receive_all(
 
     for _ in 0..expected {
         let (len, _) = receiver.recv_from(&mut buf).unwrap();
+
         reassembler
             .push(&buf[..len], Instant::now(), &mut events)
             .unwrap();
@@ -53,6 +54,7 @@ fn receive_all(
 fn keyframe_survives_a_lossy_loopback_hop() {
     let (sender, receiver) = pair();
     let peer = receiver.local_addr().unwrap();
+
     let mut packetizer = Packetizer::new(
         StreamKind::Video,
         sender.max_datagram_len(&peer),
@@ -64,6 +66,7 @@ fn keyframe_survives_a_lossy_loopback_hop() {
 
     let datagrams = packetizer.packetize(1, true, &data).unwrap();
     let mut sent = 0;
+
     for (index, datagram) in datagrams.iter().enumerate() {
         if index % 40 == 7 {
             continue;
@@ -81,6 +84,7 @@ fn keyframe_survives_a_lossy_loopback_hop() {
             _ => None,
         })
         .unwrap();
+
     assert_eq!(frame.data, data);
     assert!(frame.keyframe);
     assert!(frame.recovered_fragments > 0);
@@ -90,6 +94,7 @@ fn keyframe_survives_a_lossy_loopback_hop() {
 fn unrecoverable_frame_is_reported_lost() {
     let (sender, receiver) = pair();
     let peer = receiver.local_addr().unwrap();
+
     let mut packetizer = Packetizer::new(
         StreamKind::Video,
         sender.max_datagram_len(&peer),
@@ -103,11 +108,13 @@ fn unrecoverable_frame_is_reported_lost() {
     let mut reassembler = Reassembler::new(StreamKind::Video, limits);
 
     let datagrams = packetizer.packetize(1, false, &frame_data(10_000)).unwrap();
+
     for datagram in datagrams.iter().skip(1) {
         sender.send_to(datagram, peer).unwrap();
     }
 
     let mut events = receive_all(&receiver, &mut reassembler, datagrams.len() - 1);
+
     reassembler.poll_timeouts(Instant::now() + Duration::from_secs(1), &mut events);
 
     assert!(events.contains(&ReassemblyEvent::FrameLost { frame: 1 }));

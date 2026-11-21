@@ -4,7 +4,7 @@ use reed_solomon_simd::{EncoderResult, ReedSolomonEncoder};
 
 use crate::NetError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FecScheme {
     #[default]
     None,
@@ -14,7 +14,7 @@ pub enum FecScheme {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FecBlock {
     pub first_fragment: u16,
     pub data_shards: u8,
@@ -51,6 +51,7 @@ impl FecScheme {
 
         let fragments = usize::from(fragment_count);
         let block_count = fragments.div_ceil(usize::from(data_shards));
+
         let base = fragments / block_count;
         let larger_blocks = fragments % block_count;
 
@@ -61,11 +62,13 @@ impl FecScheme {
                 let parity = (size * usize::from(parity_shards))
                     .div_ceil(usize::from(data_shards))
                     .clamp(1, usize::from(u8::MAX));
+
                 let block = FecBlock {
                     first_fragment,
                     data_shards: u8::try_from(size).unwrap_or(u8::MAX),
                     parity_shards: u8::try_from(parity).unwrap_or(u8::MAX),
                 };
+
                 first_fragment += u16::try_from(size).unwrap_or(u16::MAX);
                 block
             })
@@ -136,6 +139,7 @@ impl FecEncoder {
     ) -> Result<EncoderResult<'a>, NetError> {
         let shard_len = data.first().map_or(0, |shard| shard.len());
         let mut encoding = self.begin(block, shard_len)?;
+
         for shard in data {
             encoding.add(shard)?;
         }
@@ -203,6 +207,7 @@ mod tests {
 
     fn parity_of(block: FecBlock, refs: &[&[u8]]) -> Result<Vec<Vec<u8>>, NetError> {
         let mut encoder = FecEncoder::default();
+
         let result = encoder.encode(&block, refs)?;
 
         Ok(result.recovery_iter().map(<[u8]>::to_vec).collect())
@@ -254,6 +259,7 @@ mod tests {
                 assert_eq!(u32::from(block.first_fragment), next);
                 assert!((1..=16).contains(&block.data_shards));
                 assert!(block.parity_shards >= 1);
+
                 next += u32::from(block.data_shards);
             }
 
@@ -282,6 +288,7 @@ mod tests {
         let block = block(4, 2);
         let data = shards(4, 7);
         let refs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+
         let parity = parity_of(block, &refs).unwrap();
 
         for lost_mask in 0u32..(1 << 6) {
@@ -306,6 +313,7 @@ mod tests {
             for (index, shard) in &restored {
                 assert_eq!(shard, &data[*index]);
             }
+
             assert_eq!(restored.len(), missing_data);
         }
     }
@@ -315,6 +323,7 @@ mod tests {
         let block = block(4, 2);
         let data = shards(4, 11);
         let refs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+
         let parity = parity_of(block, &refs).unwrap();
 
         let result = block.recover(

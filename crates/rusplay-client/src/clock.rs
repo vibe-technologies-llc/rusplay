@@ -50,7 +50,7 @@ impl HostClock {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Sample {
     round_trip_micros: i64,
     offset_micros: i64,
@@ -89,6 +89,7 @@ impl ClockSync {
         } else {
             interval
         };
+
         self.next_ping = now + wait;
     }
 
@@ -140,6 +141,7 @@ mod tests {
         let mut sync = ClockSync::new(1_000, Instant::now());
 
         sync.record(0, 10_000 + 5_000, 10_000);
+
         let best = sync.record(100_000, 100_000 + 20_000 + 500, 101_000);
         let later = sync.record(200_000, 200_000 + 20_000 + 9_000, 218_000);
 
@@ -150,11 +152,14 @@ mod tests {
     #[test]
     fn old_samples_age_out_of_the_window() {
         let mut sync = ClockSync::new(1_000, Instant::now());
+
         sync.record(0, 90, 100);
 
         let mut latest = None;
+
         for step in 1..=window_samples() {
             let sent = step * 10_000;
+
             latest = sync.record(sent, sent + 1_000 + 500, sent + 1_000);
         }
 
@@ -174,12 +179,16 @@ mod tests {
         let mut sync = ClockSync::new(1_000, start);
 
         assert!(sync.ping_due(start));
+
         sync.pinged(start);
+
         let warming = sync.next_ping().unwrap() - start;
+
         for index in 0..window_samples() {
             sync.record(index, index, index + 2);
         }
         sync.pinged(start);
+
         let settled = sync.next_ping().unwrap() - start;
 
         assert_eq!(warming, WARMUP_INTERVAL);
@@ -190,6 +199,7 @@ mod tests {
     fn a_zero_interval_turns_syncing_off() {
         let start = Instant::now();
         let mut sync = ClockSync::new(0, start);
+
         sync.pinged(start);
 
         assert!(!sync.ping_due(start + Duration::from_secs(60)));
@@ -203,7 +213,9 @@ mod tests {
         let host_when_local_zero = 1_000_000;
 
         let unknown = clock.since_capture(0, later);
+
         clock.set_offset(host_when_local_zero);
+
         let behind = clock.since_capture(host_when_local_zero.cast_unsigned() + 10_000_000, later);
         let measured = clock
             .since_capture(host_when_local_zero.cast_unsigned(), later)

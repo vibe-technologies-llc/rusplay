@@ -1,6 +1,6 @@
 use crate::LockState;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct GamepadButton(pub u16);
 
 impl GamepadButton {
@@ -22,7 +22,7 @@ impl GamepadButton {
     pub const TOUCHPAD: Self = Self(15);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct GamepadAxis(pub u8);
 
 impl GamepadAxis {
@@ -34,13 +34,13 @@ impl GamepadAxis {
     pub const RIGHT_TRIGGER: Self = Self(5);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SensorKind {
     Gyro,
     Accel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GamepadEvent {
     Connected,
     Disconnected,
@@ -73,7 +73,7 @@ pub enum GamepadEvent {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TouchEvent {
     Down { x: f64, y: f64 },
     Motion { x: f64, y: f64 },
@@ -81,7 +81,7 @@ pub enum TouchEvent {
     Cancel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InputEvent {
     Key { keycode: u32, pressed: bool },
     PointerMotion { dx: f64, dy: f64 },

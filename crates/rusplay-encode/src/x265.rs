@@ -22,13 +22,13 @@ use crate::{
 };
 
 #[allow(
+    clippy::all,
+    clippy::pedantic,
+    dead_code,
     non_camel_case_types,
     non_snake_case,
     non_upper_case_globals,
-    dead_code,
-    unsafe_op_in_unsafe_fn,
-    clippy::all,
-    clippy::pedantic
+    unsafe_op_in_unsafe_fn
 )]
 mod sys {
     include!(concat!(env!("OUT_DIR"), "/x265.rs"));
@@ -125,6 +125,7 @@ impl Api {
         let incompatible = EncodeError::LibraryIncompatible { backend: BACKEND };
 
         let mut status: c_int = 0;
+
         let raw = unsafe {
             sys::x265_api_query(c_int::from(depth.bits()), sys::X265_BUILD, &raw mut status)
         };
@@ -137,6 +138,7 @@ impl Api {
             .is_ok_and(|size| size == mem::size_of::<sys::x265_param>())
             && usize::try_from(raw.sizeof_picture)
                 .is_ok_and(|size| size == mem::size_of::<sys::x265_picture>());
+
         if !sizes_match {
             return Err(incompatible);
         }
@@ -287,6 +289,7 @@ impl Settings {
         };
 
         let api = Api::load(settings.pixel_format.depth)?;
+
         settings.param(api, VALIDATION_RESOLUTION)?;
 
         Ok(settings)
@@ -303,6 +306,7 @@ impl Settings {
                 tune.map_or(ptr::null(), CStr::as_ptr),
             )
         };
+
         if status != 0 {
             return Err(EncodeError::TuneRejected {
                 backend: BACKEND,
@@ -313,9 +317,11 @@ impl Settings {
         for (key, value) in LOW_LATENCY_DEFAULTS {
             param.parse(key, value)?;
         }
+
         let bitrate = self.bitrate_kbps.to_string();
         let buffer =
             vbv_buffer_kbit(self.bitrate_kbps, self.frame_rate, self.vbv_frames).to_string();
+
         param.parse("vbv-maxrate", &bitrate)?;
         param.parse("vbv-bufsize", &buffer)?;
 
@@ -360,6 +366,7 @@ impl Settings {
         param.parse("chromaloc", &self.siting.vui_chroma_location().to_string())?;
 
         let hdr = &self.color.hdr;
+
         if let Some(display) = &hdr.mastering {
             param.parse("master-display", &St2086::of(display).x265_string())?;
         }
@@ -475,6 +482,7 @@ impl Session {
 
         let units = unsafe { slice::from_raw_parts(first.as_ptr(), nal_count as usize) };
         let mut data = Vec::with_capacity(units.iter().map(|unit| unit.sizeBytes as usize).sum());
+
         for unit in units {
             data.extend_from_slice(unsafe {
                 slice::from_raw_parts(unit.payload, unit.sizeBytes as usize)
@@ -482,6 +490,7 @@ impl Session {
         }
 
         let output = unsafe { self.output.raw.as_ref() };
+
         reconstruction.fill(|| self.reconstruction(output));
 
         Ok(Some(EncodedFrame {
@@ -496,7 +505,9 @@ impl Session {
         let sample = if output.bitDepth > 8 { 2 } else { 1 };
         let width = self.resolution.width as usize;
         let height = self.resolution.height as usize;
+
         let (chroma_width, chroma_height) = chroma_size((width, height), self.format.chroma);
+
         if !matches!(
             output.colorSpace,
             sys::X265_CSP_I420 | sys::X265_CSP_I422 | sys::X265_CSP_I444
@@ -620,6 +631,7 @@ impl VideoEncoder for X265Encoder {
             self.keyframe_pending,
             &mut self.reconstruction,
         )?;
+
         self.keyframe_pending = false;
 
         Ok(encoded)
@@ -769,6 +781,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.stream_pixel_format().depth).unwrap();
 
@@ -808,6 +821,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.stream_pixel_format().depth).unwrap();
 
@@ -824,6 +838,7 @@ mod tests {
         let VideoEncoderConfig::X265(x265) = &config.encoder else {
             return;
         };
+
         let settings = Settings::new(&config, x265, ChromaSiting::default()).unwrap();
         let api = Api::load(config.stream_pixel_format().depth).unwrap();
 

@@ -3,7 +3,7 @@ use std::{fmt, sync::Arc};
 use parking_lot::Mutex;
 use rusplay_core::{FrameRate, Resolution};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputRequest {
     pub resolution: Resolution,
     pub frame_rate: FrameRate,
@@ -30,7 +30,7 @@ impl fmt::Debug for OutputOffer {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct SourceRefresh(Arc<Mutex<Option<FrameRate>>>);
 
 impl SourceRefresh {

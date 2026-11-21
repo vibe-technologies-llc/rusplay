@@ -9,13 +9,13 @@ use crate::stats::{
     StreamRates, bitrate_text, fps_text, millis, millis_text, quality_rows, rate_text,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reading {
     Value(String),
     Waiting,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub label: &'static str,
     pub value: Reading,
@@ -51,7 +51,7 @@ impl Row {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SectionKind {
     Connection,
     Stream,
@@ -76,26 +76,26 @@ impl SectionKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Section {
     pub kind: SectionKind,
     pub rows: Vec<Row>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Figure {
     pub label: &'static str,
     pub value: Option<String>,
     pub unit: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Readout {
     pub figures: [Figure; 3],
     pub sections: Vec<Section>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Sources<'a> {
     pub host: &'a str,
     pub address: SocketAddr,
@@ -213,6 +213,7 @@ impl Sources<'_> {
                 }),
             ),
         ];
+
         if let Some(format) = format.filter(StreamDescription::is_fallback) {
             rows.push(Row {
                 attention: true,
@@ -379,6 +380,7 @@ impl Sources<'_> {
         }
         if input.hotkeys {
             let chord = chord_label(input.hotkey_chord);
+
             rows.extend([
                 Row::value(
                     "Fullscreen",

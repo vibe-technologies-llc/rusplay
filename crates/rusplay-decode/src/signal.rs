@@ -16,7 +16,7 @@ const AV1_METADATA_MASTERING_DISPLAY: u64 = 2;
 const AV1_MASTERING_LEN: usize = 24;
 const AV1_CONTENT_LIGHT_LEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Hdr {
     mastering: Option<MasteringDisplay>,
     content_light: Option<ContentLightLevel>,
@@ -93,6 +93,7 @@ impl HdrTracker {
 
     pub(crate) fn resolve(&mut self, base: SignalledColor, random_access: bool) -> SignalledColor {
         let pending = std::mem::take(&mut self.pending);
+
         if random_access {
             self.current = pending;
         } else {
@@ -115,6 +116,7 @@ fn vui_color(
     chroma_location: Option<u32>,
 ) -> SignalledColor {
     let mut color = SignalledColor::default();
+
     if let Some(location) = chroma_location {
         color = color.with_vui_chroma_location(location);
     }
@@ -125,6 +127,7 @@ fn vui_color(
     color = color.with_full_range(full_range);
     if description_present {
         let [primaries, transfer, matrix] = codes.map(|code| u8::try_from(code).unwrap_or(0));
+
         color = color.with_h273_codes(primaries, transfer, matrix);
     }
 
@@ -170,6 +173,7 @@ pub(crate) fn av1_color(sequence: &SequenceHeaderObu) -> SignalledColor {
     let signalled = SignalledColor::default()
         .with_full_range(color.color_range)
         .with_av1_chroma_position(color.chroma_sample_position as u32);
+
     if !color.color_description_present_flag {
         return signalled;
     }
@@ -200,6 +204,7 @@ pub(crate) fn unescape(payload: &[u8]) -> Vec<u8> {
 
 fn sei_number(bytes: &[u8]) -> Option<(u32, &[u8])> {
     let mut value = 0_u32;
+
     for (index, &byte) in bytes.iter().enumerate() {
         value = value.checked_add(u32::from(byte))?;
         if byte != 0xff {
@@ -212,6 +217,7 @@ fn sei_number(bytes: &[u8]) -> Option<(u32, &[u8])> {
 
 fn leb128(bytes: &[u8]) -> Option<(u64, &[u8])> {
     let mut value = 0_u64;
+
     for (index, &byte) in bytes.iter().enumerate().take(8) {
         value |= u64::from(byte & 0x7f) << (7 * index);
         if byte & 0x80 == 0 {
@@ -276,6 +282,7 @@ mod tests {
 
     fn bt2020_mastering_sei() -> Vec<u8> {
         let mut message = Vec::new();
+
         for value in [
             8_500_u16, 39_850, 6_550, 2_300, 35_400, 14_600, 15_635, 16_450,
         ] {
@@ -288,6 +295,7 @@ mod tests {
 
     fn sei(messages: &[(u8, Vec<u8>)]) -> Vec<u8> {
         let mut payload = Vec::new();
+
         for (kind, body) in messages {
             payload.push(*kind);
             payload.push(u8::try_from(body.len()).unwrap());
@@ -305,9 +313,11 @@ mod tests {
             (137, bt2020_mastering_sei()),
             (144, vec![3, 232, 0, 200]),
         ]));
+
         let color = tracker.resolve(SignalledColor::default(), true);
 
         let mastering = color.mastering.unwrap();
+
         assert_eq!(mastering.primaries, ColorPrimaries::Bt2020);
         assert_eq!(
             mastering.max_nits,
@@ -329,6 +339,7 @@ mod tests {
         let mut tracker = HdrTracker::default();
 
         tracker.read_sei(&sei(&[(144, vec![3, 232, 0, 200])]));
+
         let keyframe = tracker.resolve(SignalledColor::default(), true);
         let inter = tracker.resolve(SignalledColor::default(), false);
         let next_keyframe = tracker.resolve(SignalledColor::default(), true);
@@ -342,6 +353,7 @@ mod tests {
     fn av1_metadata_obus_carry_hdr_metadata() {
         let mut tracker = HdrTracker::default();
         let mut mastering = vec![2];
+
         for value in [
             45_875_u16, 21_627, 8_847, 45_220, 4_260, 1_507, 20_493, 21_561,
         ] {
@@ -352,9 +364,11 @@ mod tests {
 
         tracker.read_av1_metadata(&mastering);
         tracker.read_av1_metadata(&[1, 0x05, 0xdc, 0x01, 0x90]);
+
         let color = tracker.resolve(SignalledColor::default(), true);
 
         let display = color.mastering.unwrap();
+
         assert_eq!(display.max_nits, Luminance::from_whole_nits(1000).unwrap());
         assert_eq!(display.min_nits, Luminance::from_whole_nits(1).unwrap());
         assert_eq!(color.content_light, Some(content_light(1500, 400)));

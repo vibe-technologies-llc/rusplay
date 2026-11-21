@@ -14,7 +14,7 @@ const FORMATS_PER_CODEC: usize = CHROMAS.len() * DEPTHS.len();
 const FORMAT_COUNT: usize = CODECS.len() * FORMATS_PER_CODEC;
 const KNOWN_BITS: u32 = (1 << FORMAT_COUNT) - 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct CodecFormat {
     pub codec: Codec,
     pub format: PixelFormat,
@@ -77,13 +77,13 @@ impl CodecFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum DepthPreference {
     Pinned(BitDepth),
     Auto(BitDepth),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct FormatPreference {
     pub codec: Option<Codec>,
     pub chroma: Option<ChromaSubsampling>,
@@ -137,7 +137,7 @@ impl fmt::Display for CodecFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum AxisRank {
     Same,
     Above(usize),
@@ -154,7 +154,7 @@ impl AxisRank {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PreferenceRank {
     pinned_codec: usize,
     pinned_chroma: AxisRank,
@@ -164,7 +164,7 @@ struct PreferenceRank {
     auto_codec: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct FormatSet(u32);
 
 impl FormatSet {
@@ -217,6 +217,7 @@ impl FormatSet {
 impl FromIterator<CodecFormat> for FormatSet {
     fn from_iter<I: IntoIterator<Item = CodecFormat>>(formats: I) -> Self {
         let mut set = Self::EMPTY;
+
         for format in formats {
             set.insert(format);
         }
@@ -343,7 +344,9 @@ mod tests {
             let mut ranks: Vec<_> = CodecFormat::all()
                 .map(|candidate| candidate.rank(preference))
                 .collect();
+
             let count = ranks.len();
+
             ranks.sort();
             ranks.dedup();
 
@@ -606,6 +609,7 @@ mod tests {
                 .map(|candidate| candidate.rank(FormatPreference::pinned(preferred)))
                 .collect::<Vec<_>>();
             let mut sorted = ranks.clone();
+
             sorted.sort();
             sorted.dedup();
 

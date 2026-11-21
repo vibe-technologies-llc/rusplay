@@ -9,7 +9,7 @@ const BT2446A_LINEAR_END: f64 = 0.7399;
 const BT2446A_QUADRATIC_END: f64 = 0.9909;
 const SPLINE_PIVOT: f64 = 0.7;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DynamicPeak {
     pub percentile: f64,
     pub smoothing_frames: u32,
@@ -48,13 +48,13 @@ impl Default for DynamicPeak {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ToneMapping {
     pub operator: ToneMapOperator,
     pub dynamic_peak: Option<DynamicPeak>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToneCurve {
     pub operator: ToneMapOperator,
     pub source_peak_nits: f64,
@@ -125,6 +125,7 @@ impl ToneCurve {
     fn spline(&self, normalized: f64) -> f64 {
         let max_lum = self.max_lum();
         let pivot = SPLINE_PIVOT * max_lum;
+
         if max_lum >= 1.0 || normalized <= pivot {
             return normalized;
         }
@@ -141,6 +142,7 @@ impl ToneCurve {
 
     fn bt2446a(&self, nits: f64) -> f64 {
         let (source, target) = (self.source_peak_nits, self.target_peak_nits);
+
         if source <= target {
             return nits.min(target);
         }
@@ -148,6 +150,7 @@ impl ToneCurve {
         let rho = |peak: f64| 1.0 + BT2446A_RHO_GAIN * (peak / 10_000.0).powf(1.0 / BT2446A_GAMMA);
         let (source_rho, display_rho) = (rho(source), rho(target));
         let encoded = (nits / source).clamp(0.0, 1.0).powf(1.0 / BT2446A_GAMMA);
+
         let perceptual = (1.0 + (source_rho - 1.0) * encoded).ln() / source_rho.ln();
         let toned = if perceptual <= BT2446A_LINEAR_END {
             1.077 * perceptual
@@ -164,6 +167,7 @@ impl ToneCurve {
     fn reinhard(&self, nits: f64) -> f64 {
         let target = self.target_peak_nits;
         let white = self.source_peak_nits / target;
+
         if white <= 1.0 {
             return nits.min(target);
         }

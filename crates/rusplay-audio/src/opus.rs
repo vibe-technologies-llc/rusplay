@@ -53,6 +53,7 @@ impl OpusAudioEncoder {
             let mut encoder =
                 OpusEncoder::new(OPUS_SAMPLE_RATE, channels, Application::RestrictedLowDelay)
                     .map_err(AudioError::OpusEncoderInit)?;
+
             encoder.bitrate_bps = bitrate_bps(config);
             encoder.use_inband_fec = config.opus.inband_fec;
             EncoderEngine::Single(Box::new(encoder))
@@ -73,6 +74,7 @@ impl AudioEncoder for OpusAudioEncoder {
 
     fn encode(&mut self, pcm: &[f32], out: &mut [u8]) -> Result<usize, AudioError> {
         let expected = self.frame_samples * self.channels;
+
         if pcm.len() != expected {
             return Err(AudioError::FrameLengthMismatch {
                 expected,
@@ -143,12 +145,14 @@ impl AudioDecoder for OpusAudioDecoder {
             DecoderEngine::Multistream(_) => {
                 let expected = self.frame_samples * self.channels;
                 let capacity = pcm.len();
+
                 let silence = pcm
                     .get_mut(..expected)
                     .ok_or(AudioError::FrameLengthMismatch {
                         expected,
                         found: capacity,
                     })?;
+
                 silence.fill(0.0);
                 Ok(self.frame_samples)
             }
@@ -197,9 +201,11 @@ mod tests {
         hot: usize,
     ) -> Vec<f32> {
         let mut input = vec![0.0; frame_samples * channels];
+
         for frame in 0..frame_samples {
             let position = u16::try_from(frame_index * frame_samples + frame).unwrap_or(0);
             let phase = TAU * 997.0 * f32::from(position) / 48_000.0;
+
             input[frame * channels + hot] = 0.5 * phase.sin();
         }
         input
@@ -221,6 +227,7 @@ mod tests {
 
             let written = encoder.encode(&input, &mut packet).unwrap();
             let produced = decoder.decode(&packet[..written], &mut output).unwrap();
+
             assert_eq!(produced, frame_samples);
 
             if frame_index >= FRAMES_PER_RUN / 2 {
@@ -298,6 +305,7 @@ mod tests {
             for frame_index in 0..FRAMES_PER_RUN {
                 let input = tone_frame(frame_index, frame_samples, 2, 0);
                 let written = encoder.encode(&input, &mut packet).unwrap();
+
                 decoder.decode(&packet[..written], &mut output).unwrap();
             }
 
@@ -323,6 +331,7 @@ mod tests {
             for frame_index in 0..FRAMES_PER_RUN {
                 let input = tone_frame(frame_index, frame_samples, 2, 0);
                 let written = encoder.encode(&input, &mut packet).unwrap();
+
                 decoder.decode(&packet[..written], &mut output).unwrap();
             }
 
@@ -341,6 +350,7 @@ mod tests {
             let mut decoder = OpusAudioDecoder::new(&config).unwrap();
 
             let mut output = vec![1.0; decoder.frame_samples * 6];
+
             let produced = decoder.conceal(&mut output).unwrap();
 
             assert_eq!(produced, decoder.frame_samples);

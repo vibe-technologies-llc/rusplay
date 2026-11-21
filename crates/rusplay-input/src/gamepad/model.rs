@@ -5,7 +5,7 @@ use crate::gamepad::{
     dualshock4,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PadModel {
     DualSense,
     DualShock4,
@@ -113,8 +113,10 @@ mod tests {
         assert!(PadModel::DualShock4.feature_report(0x05, mac).is_none());
 
         let mut report = vec![0; 63];
+
         report[0] = 0x02;
         report[1] = 0x01;
+
         assert!(PadModel::DualSense.parse_output(&report).is_some());
         assert!(PadModel::DualShock4.parse_output(&report).is_none());
     }

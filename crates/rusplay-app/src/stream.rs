@@ -41,7 +41,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const DIVIDER_HEIGHT: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 40.0;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StreamEvent {
     Paired {
         host: HostId,
@@ -53,7 +53,7 @@ pub enum StreamEvent {
     Ended(Notice),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Connecting,
     Streaming,
@@ -131,6 +131,7 @@ impl Live {
 
     fn stop(&mut self) -> Result<(), ClientError> {
         self.connect.cancel();
+
         let input = self
             .window
             .as_mut()
@@ -221,6 +222,7 @@ impl StreamView {
                     .ok();
                 return;
             };
+
             this.update_in(cx, |this, window, cx| this.connected(result, window, cx))
                 .ok();
         });
@@ -315,6 +317,7 @@ impl StreamView {
         let stats = (self.stats_overlay && self.show_stats)
             .then(|| self.rates.as_ref().map(StreamRates::overlay))
             .flatten();
+
         let separator = (!hint.is_empty() && stats.is_some()).then(String::new);
         let lines: Vec<String> = hint
             .into_iter()
@@ -342,6 +345,7 @@ impl StreamView {
     fn follow_fullscreen(&mut self, fullscreen: bool, now: Instant) {
         let hint = Duration::from_millis(u64::from(self.input.fullscreen_hint_ms));
         let previous = self.screen;
+
         self.screen = previous.follow(fullscreen, now, hint);
 
         if previous.shows_hint() != self.screen.shows_hint() {
@@ -409,6 +413,7 @@ impl StreamView {
 
         let captured = {
             let mut live = self.live.borrow_mut();
+
             let captured = match &mut live.window {
                 Some(window) => {
                     window.follow_cursor(&stream.cursor());
@@ -416,9 +421,11 @@ impl StreamView {
                 }
                 None => Ok(()),
             };
+
             live.stream = Some(stream);
             captured
         };
+
         if let Err(error) = captured {
             cx.emit(StreamEvent::Notice(Notice::Failure(format!(
                 "Streaming without input: {}",
@@ -429,6 +436,7 @@ impl StreamView {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL_INTERVAL).await;
+
                 let running = this.update_in(cx, Self::poll).unwrap_or(false);
                 if !running {
                     break;
@@ -448,6 +456,7 @@ impl StreamView {
         let Some(handle) = &mut self.clipboard else {
             return;
         };
+
         if !handle.reads_on_focus() {
             return;
         }
@@ -503,6 +512,7 @@ impl StreamView {
             .window
             .as_ref()
             .map_or_else(Vec::new, StreamWindow::take_actions);
+
         for action in actions {
             self.run_action(action, window, cx);
         }
@@ -519,6 +529,7 @@ impl StreamView {
             .as_ref()
             .and_then(ClientStream::stream_format)
             .map(|format| format.generation);
+
         if generation != self.format_generation {
             self.format_generation = generation;
             cx.notify();
@@ -530,6 +541,7 @@ impl StreamView {
             .window
             .as_ref()
             .is_some_and(StreamWindow::is_engaged);
+
         if engaged != self.engaged {
             self.engaged = engaged;
             cx.notify();
@@ -541,12 +553,14 @@ impl StreamView {
             .window
             .as_ref()
             .and_then(|window| window.pointer_mode().zip(window.active_pointer()));
+
         if pointer != self.pointer {
             self.pointer = pointer;
             cx.notify();
         }
 
         let stats = self.live.borrow().stream.as_ref().map(ClientStream::stats);
+
         if let (Some(reporter), Some(stats)) = (&mut self.json_reporter, &stats) {
             reporter.report_if_due(Instant::now(), stats);
         }
@@ -564,6 +578,7 @@ impl StreamView {
                 Some(presentation) => rates.with_presentation(&presentation),
                 None => rates,
             };
+
             self.rates = Some(rates);
             self.sync_overlay();
             cx.notify();
@@ -578,6 +593,7 @@ impl StreamView {
         }
 
         let last = self.live.borrow().stream.as_ref().map(ClientStream::stats);
+
         if let (Some(_), Some(stats)) = (&self.json_reporter, &last) {
             JsonReporter::report_final(stats);
         }
@@ -585,6 +601,7 @@ impl StreamView {
         self.clipboard = None;
 
         let result = self.live.borrow_mut().stop();
+
         self.phase = Phase::Ended;
 
         let notice = match result {
@@ -595,6 +612,7 @@ impl StreamView {
                 error_chain(&error)
             )),
         };
+
         cx.emit(StreamEvent::Ended(notice));
     }
 
@@ -670,6 +688,7 @@ impl<T> HeldOnce<T> {
 
     fn offer(&self, value: T) -> bool {
         let mut slot = self.value.lock();
+
         if self.cancelled.load(Ordering::Relaxed) || slot.is_some() {
             return false;
         }
@@ -681,12 +700,14 @@ impl<T> HeldOnce<T> {
 
     fn cancel(&self) {
         let _slot = self.value.lock();
+
         self.cancelled.store(true, Ordering::Relaxed);
         self.ready.notify_one();
     }
 
     fn wait(&self) -> Option<T> {
         let mut slot = self.value.lock();
+
         while slot.is_none() && !self.cancelled.load(Ordering::Relaxed) {
             self.ready.wait(&mut slot);
         }
@@ -728,7 +749,7 @@ impl Drop for CanvasConnect {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
     Windowed,
     Fullscreen { hint_until: Option<Instant> },
@@ -915,6 +936,7 @@ impl Render for StreamView {
         let picture = canvas(
             move |bounds, window, cx| {
                 let display = window.refresh_interval(cx);
+
                 live.borrow_mut()
                     .apply_layout(bounds, window.scale_factor(), display);
             },
@@ -1025,6 +1047,7 @@ mod tests {
         let gate = HeldOnce::new();
         let waiting = Arc::clone(&gate);
         let thread = std::thread::spawn(move || waiting.wait());
+
         gate.cancel();
 
         assert_eq!(thread.join().unwrap(), None);

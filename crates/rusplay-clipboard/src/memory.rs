@@ -12,7 +12,7 @@ struct MemoryState {
     polls: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MemoryClipboard {
     state: Arc<Mutex<MemoryState>>,
 }

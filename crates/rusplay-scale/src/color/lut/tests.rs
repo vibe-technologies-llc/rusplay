@@ -199,6 +199,7 @@ pub(in crate::color) fn saturated_codes(transfer: TransferFunction) -> Vec<[f64;
 
 pub(in crate::color) fn random_codes(count: usize) -> Vec<[f64; 3]> {
     let mut state = RANDOM_SEED;
+
     let mut next = move || {
         state ^= state << 13;
         state ^= state >> 7;
@@ -257,6 +258,7 @@ fn frame_bytes(converter: &RgbConverter, codes: &[[f64; 3]]) -> Vec<u8> {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let code = sample.round().clamp(0.0, f64::from(quantization.max_code)) as u16;
             let start = usize::try_from(plane.offset).unwrap() + y * plane.stride as usize + 2 * x;
+
             bytes[start..start + 2].copy_from_slice(&code.to_le_bytes());
         }
     }
@@ -273,6 +275,7 @@ fn analytic(gpu: &Gpu, case: &Case, converter: &mut RgbConverter, frame: &YuvFra
         matrix: MATRIX,
         output: OutputLight::Linear,
     };
+
     let mut lineariser = Lineariser::new(&pipelines, &gpu.device, linearise).unwrap();
     let mut mapper = case
         .map
@@ -310,6 +313,7 @@ fn fused(
         map: case.map,
         size,
     };
+
     let mut lut = ColorLut::new(&pipelines, &gpu.device, settings).unwrap();
     let target = testing::storage_target(gpu, resolution.width, resolution.height);
 
@@ -375,7 +379,9 @@ pub(in crate::color) struct Accuracy {
 impl Accuracy {
     fn of(errors: &[f64], codes: &[[f64; 3]]) -> Self {
         let mut sorted = errors.to_vec();
+
         sorted.sort_by(f64::total_cmp);
+
         let (worst, max) = errors
             .iter()
             .copied()
@@ -402,16 +408,19 @@ pub(in crate::color) fn measure_against_analytic(
 ) -> Accuracy {
     let pipelines = ScalePipelines::new(&gpu.device);
     let rows = u32::try_from(codes.len().div_ceil(WIDTH as usize)).unwrap();
+
     let mut converter = RgbConverter::new(
         &pipelines,
         &gpu.device,
         unpack_settings(rows, case.transfer),
     )
     .unwrap();
+
     let frame = converter.create_frame(&gpu.device);
 
     gpu.queue
         .write_buffer(frame.buffer(), 0, &frame_bytes(&converter, codes));
+
     let expected = analytic(gpu, case, &mut converter, &frame);
     let found = candidate(&mut converter, &frame);
     let errors: Vec<f64> = expected
@@ -446,7 +455,9 @@ fn lut_matches_the_analytic_passes() {
 
     for case in cases() {
         let mut codes = random_codes(RANDOM_CODES);
+
         codes.extend(saturated_codes(case.transfer));
+
         let all = measure(gpu, &case, DEFAULT_LUT_SIZE, &lit(codes));
         let greys = measure(gpu, &case, DEFAULT_LUT_SIZE, &lit(grey_codes()));
 
@@ -454,6 +465,7 @@ fn lut_matches_the_analytic_passes() {
             "{}: delta e itp mean {:.3}, p99 {:.3}, max {:.3} at {:?}, greys max {:.3}",
             case.name, all.mean, all.p99, all.max, all.worst, greys.max
         );
+
         assert!(
             greys.max <= TIGHT_DELTA_E,
             "{}: greys {}",
@@ -500,6 +512,7 @@ fn unbakeable_settings_are_refused() {
         ..map
     };
     let highlight = mapping(map.source, map.target, GamutMapMode::Highlight);
+
     let refused = |settings| ColorLut::new(&pipelines, &gpu.device, settings).err();
 
     assert_eq!(
@@ -535,6 +548,7 @@ fn a_lut_is_rebuilt_only_when_its_settings_change_and_must_match_the_frame() {
         map: None,
         size: DEFAULT_LUT_SIZE,
     };
+
     let mut lut = ColorLut::new(&pipelines, &gpu.device, settings).unwrap();
     let mut hlg = RgbConverter::new(
         &pipelines,

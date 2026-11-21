@@ -48,6 +48,7 @@ impl fmt::Debug for Exporter {
 impl Exporter {
     pub fn new(device: &wgpu::Device, handle: MemoryHandle) -> Result<Self, ScaleError> {
         let unavailable = ScaleError::MemoryExportUnavailable(handle);
+
         if handle == MemoryHandle::DmaBuf
             && !device
                 .features()
@@ -58,6 +59,7 @@ impl Exporter {
 
         let hal =
             unsafe { device.as_hal::<Vulkan>() }.ok_or(ScaleError::MemoryExportNeedsVulkan)?;
+
         if !hal
             .enabled_device_extensions()
             .contains(&khr::external_memory_fd::NAME)
@@ -68,10 +70,13 @@ impl Exporter {
 
         let instance = hal.shared_instance().raw_instance().clone();
         let physical = hal.raw_physical_device();
+
         let properties = unsafe { instance.get_physical_device_properties(physical) };
+
         if properties.api_version < vk::API_VERSION_1_1 {
             return Err(unavailable);
         }
+
         let raw = hal.raw_device().clone();
         let memory_fd = khr::external_memory_fd::Device::new(&instance, &raw);
 
@@ -89,6 +94,7 @@ impl Exporter {
             .usage(BUFFER_USAGE)
             .handle_type(handle_type(self.handle));
         let mut properties = vk::ExternalBufferProperties::default();
+
         unsafe {
             self.instance
                 .get_physical_device_external_buffer_properties(
@@ -111,6 +117,7 @@ impl Exporter {
 
         let handle = handle_type(self.handle);
         let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
+
         let info = vk::BufferCreateInfo::default()
             .size(size)
             .usage(BUFFER_USAGE)
@@ -130,11 +137,13 @@ impl Exporter {
             .ok_or(ScaleError::MemoryExportNoMemoryType)?;
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(handle);
         let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+
         let allocate = vk::MemoryAllocateInfo::default()
             .allocation_size(requirements.size)
             .memory_type_index(memory_type)
             .push_next(&mut export)
             .push_next(&mut dedicated);
+
         pending.memory = unsafe { self.device.allocate_memory(&allocate, None) }
             .map_err(ScaleError::MemoryExportAllocate)?;
         unsafe { self.device.bind_buffer_memory(buffer, pending.memory, 0) }
@@ -148,6 +157,7 @@ impl Exporter {
         let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
 
         let (buffer, memory) = pending.release();
+
         let hal_buffer =
             unsafe { hal::vulkan::Buffer::from_raw_managed(buffer, memory, 0, requirements.size) };
         let wrapped = unsafe {
@@ -201,6 +211,7 @@ struct PendingBuffer<'a> {
 impl PendingBuffer<'_> {
     fn release(mut self) -> (vk::Buffer, vk::DeviceMemory) {
         let parts = (self.buffer, self.memory);
+
         self.buffer = vk::Buffer::null();
         self.memory = vk::DeviceMemory::null();
         parts

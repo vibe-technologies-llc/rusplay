@@ -68,7 +68,7 @@ const WANTED_PACKED_HEADERS: u32 = ffi::VA_ENC_PACKED_HEADER_SEQUENCE
     | ffi::VA_ENC_PACKED_HEADER_SLICE
     | ffi::VA_ENC_PACKED_HEADER_RAW_DATA;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct StreamInfo {
     resolution: Resolution,
     format: PixelFormat,
@@ -80,7 +80,7 @@ struct StreamInfo {
     long_term_references: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Picture {
     keyframe: bool,
     index: u64,
@@ -114,7 +114,7 @@ fn sequence_buffer<T: Copy>(
         .map_err(EncodeError::from)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackedKind {
     Sequence,
     Picture,
@@ -148,6 +148,7 @@ fn packed_buffers<const N: usize>(
     headers: [(PackedKind, Option<PackedHeader>); N],
 ) -> Result<Vec<Buffer>, EncodeError> {
     let mut buffers = Vec::new();
+
     for (kind, header) in headers {
         if let Some(header) = header.filter(|_| picture.packed_headers & kind.flag() != 0) {
             buffers.extend(context.packed_header(kind.va(), &header)?);
@@ -172,7 +173,7 @@ fn codec_buffers<P: Copy, S: Copy>(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CodecProfile {
     H264(H264Profile),
     Hevc(HevcProfile),
@@ -231,7 +232,7 @@ fn candidates(codec: Codec, format: PixelFormat) -> Vec<CodecProfile> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Selection {
     profile: CodecProfile,
     entrypoint: Entrypoint,
@@ -303,13 +304,13 @@ const fn rate_control_mode(rate_control: RateControl) -> u32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RefreshDirection {
     Rows,
     Columns,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IntraRefresh {
     direction: RefreshDirection,
     period: u32,
@@ -380,6 +381,7 @@ impl Device {
         )?;
 
         let mode = rate_control_mode(vaapi.rate_control);
+
         if rate_controls.unwrap_or(0) & mode == 0 {
             return Err(EncodeError::RateControlUnsupported {
                 backend: BACKEND,
@@ -424,6 +426,7 @@ impl Device {
         )?;
 
         let mut limits = config.size_limits()?;
+
         if let Some(width) = max_width {
             limits.max.width = limits.max.width.min(width);
         }
@@ -453,7 +456,7 @@ fn default_refresh_period(frame_rate: FrameRate) -> u32 {
         .max(1)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Settings {
     codec: Codec,
     format: PixelFormat,
@@ -572,7 +575,7 @@ impl Stream {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ImportKey {
     device: u64,
     inode: u64,
@@ -616,6 +619,7 @@ impl Session {
 
         let aligned = coded_extent(resolution);
         let format = surface_format(settings.format);
+
         let recon = (0..Stream::reconstructed_surfaces(device.selection.profile))
             .map(|_| encoder_surface(&device.display, format, aligned))
             .collect::<Result<Vec<_>, _>>()?;
@@ -623,6 +627,7 @@ impl Session {
         let context = Context::new(&device.config, aligned.width, aligned.height, &ids)?;
         let capacity = aligned.pixel_count() * coded_bytes_per_pixel_x2(settings.format) / 2
             + CODED_BUFFER_HEADROOM;
+
         let coded = context.coded(usize::try_from(capacity).unwrap_or(usize::MAX))?;
 
         Ok(Self {
@@ -655,6 +660,7 @@ impl Session {
         let Some(surface) = self.recon.iter().find(|surface| surface.id() == recon) else {
             return Err(EncodeError::ReconstructionSurfaceMissing);
         };
+
         display.sync(recon)?;
 
         let mut image = Image::new(
@@ -662,6 +668,7 @@ impl Session {
             surface_format(settings.format).va_fourcc,
             self.resolution,
         )?;
+
         let bytes = image.get(surface)?;
 
         format::unpack(settings.format, &bytes, image.layout(), self.resolution).map_err(|source| {
@@ -682,6 +689,7 @@ impl Session {
             empty => {
                 let format = surface_format(view.format);
                 let extent = coded_extent(view.resolution);
+
                 let image = Image::new(display, format.va_fourcc, extent)?;
                 let surface = encoder_surface(display, format, extent)?;
                 empty.insert(Upload { image, surface })
@@ -689,6 +697,7 @@ impl Session {
         };
 
         let extent = coded_extent(view.resolution);
+
         upload
             .image
             .write(|data, layout| format::pack(view, data, layout, extent))?;
@@ -714,6 +723,7 @@ impl Session {
         };
 
         let expected_fourcc = dma_buf_fourcc(format);
+
         if frame.format != expected_fourcc {
             return Err(EncodeError::FrameFormatMismatch {
                 backend: BACKEND,
@@ -721,7 +731,9 @@ impl Session {
                 actual: frame.format,
             });
         }
+
         let expected_planes = dma_buf_planes(format);
+
         if planes.len() != expected_planes {
             return Err(EncodeError::DmaBufPlaneCount {
                 fourcc: expected_fourcc,
@@ -731,8 +743,10 @@ impl Session {
         }
 
         let mut file = File::from(fd.try_clone().map_err(EncodeError::DmaBufInspect)?);
+
         let metadata = file.metadata().map_err(EncodeError::DmaBufInspect)?;
         let extent = coded_extent(frame.resolution);
+
         let key = ImportKey {
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -744,6 +758,7 @@ impl Session {
         if let Some(position) = self.imports.iter().position(|(cached, _)| *cached == key) {
             let entry = self.imports.remove(position);
             let id = entry.1.id();
+
             self.imports.push(entry);
             return Ok(id);
         }
@@ -758,6 +773,7 @@ impl Session {
                 pitch: plane.stride,
             })
             .collect();
+
         let surface = imported_surface(
             display,
             surface_format(format),
@@ -773,7 +789,9 @@ impl Session {
         if self.imports.len() >= IMPORT_CACHE_CAPACITY {
             self.imports.remove(0);
         }
+
         let id = surface.id();
+
         self.imports.push((key, surface));
 
         Ok(id)
@@ -798,12 +816,14 @@ impl VaapiEncoder {
         siting: ChromaSiting,
     ) -> Result<Self, EncodeError> {
         let params = VaapiParams::parse(&vaapi.params)?;
+
         if video.color.primaries.h273_code().is_none() {
             return Err(EncodeError::ColorPrimariesUnsignalable {
                 backend: BACKEND,
                 primaries: video.color.primaries,
             });
         }
+
         let device = Device::open(video, vaapi, &params)?;
 
         let settings = Settings {
@@ -854,6 +874,7 @@ fn rate_buffers(settings: &Settings, context: &Context) -> Result<Vec<Buffer>, E
         window_size: u32::try_from(window_ms.max(1)).unwrap_or(u32::MAX),
         ..Default::default()
     };
+
     unsafe { rate_control.rc_flags.bits.set_disable_bit_stuffing(1) };
 
     let hrd = ffi::VAEncMiscParameterHRD {
@@ -890,6 +911,7 @@ fn sequence_misc_buffers(
             quality_level,
             ..Default::default()
         };
+
         buffers.push(context.misc(
             ffi::VAEncMiscParameterType_VAEncMiscParameterTypeQualityLevel,
             &quality,
@@ -904,6 +926,7 @@ fn refresh_parameters(
     region: Option<RefreshRegion>,
 ) -> ffi::VAEncMiscParameterRIR {
     let mut parameters = ffi::VAEncMiscParameterRIR::default();
+
     if let Some(region) = region {
         parameters.rir_flags.value = refresh.flags();
         parameters.intra_insertion_location = u16::try_from(region.location).unwrap_or(0);
@@ -951,6 +974,7 @@ fn session_for<'a>(
 fn packed_frame_rate(frame_rate: FrameRate) -> u32 {
     let mut numerator = frame_rate.numerator.max(1);
     let mut denominator = frame_rate.denominator.max(1);
+
     while numerator > 0xffff || denominator > 0xffff {
         numerator = (numerator / 2).max(1);
         denominator = (denominator / 2).max(1);
@@ -994,12 +1018,14 @@ impl VaapiEncoder {
 
         let requested = std::mem::take(keyframe_requested);
         let keyframe = session.needs_keyframe || requested;
+
         if keyframe {
             session.index = 0;
             if let Some(cadence) = &mut session.refresh {
                 cadence.restart();
             }
         }
+
         let picture = Picture {
             keyframe,
             index: session.index,
@@ -1019,6 +1045,7 @@ impl VaapiEncoder {
         let codec_buffers = session.stream.buffers(&session.context, &picture)?;
         let context = &session.context;
         let mut buffers = Vec::new();
+
         buffers.extend(codec_buffers.sequence);
         if std::mem::take(rate_changed) || keyframe {
             buffers.extend(rate_buffers(settings, context)?);
@@ -1039,9 +1066,11 @@ impl VaapiEncoder {
 
         context.render(input, &buffers)?;
         device.display.sync(input)?;
+
         let data = session
             .coded
             .read(settings.codec == Codec::Av1, session.pool.take())?;
+
         drop(buffers);
         reconstruction
             .fill(|| session.read_reconstruction(&device.display, settings, picture.recon));

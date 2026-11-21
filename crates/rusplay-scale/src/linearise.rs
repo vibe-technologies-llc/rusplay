@@ -17,7 +17,7 @@ const TRANSFER_PQ: u32 = 3;
 const TRANSFER_HLG: u32 = 4;
 const TRANSFER_GAMMA22: u32 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum ChannelOrder {
     #[default]
     Rgba,
@@ -37,14 +37,14 @@ impl ChannelOrder {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum TexelPacking {
     #[default]
     Float,
     Rgb10Alpha2Low,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct SourceChannels {
     pub packing: TexelPacking,
     pub order: ChannelOrder,
@@ -89,7 +89,7 @@ impl SourceChannels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineariseSettings {
     pub channels: SourceChannels,
     pub transfer: TransferFunction,
@@ -236,6 +236,7 @@ impl Lineariser {
         target: &wgpu::TextureView,
     ) -> Result<(), ScaleError> {
         let format = source.texture().format();
+
         if !self
             .settings
             .channels
@@ -249,6 +250,7 @@ impl Lineariser {
 
         let pipelines = &self.pipelines;
         let passes = &pipelines.linearise;
+
         let (layout, pass) = match self.settings.channels.packing {
             TexelPacking::Float => (&pipelines.source_layout, &passes.float),
             TexelPacking::Rgb10Alpha2Low => (&passes.packed_source_layout, &passes.packed),

@@ -89,6 +89,7 @@ fn manage_config(path: Option<PathBuf>, action: ConfigAction) -> Result<(), Host
         ConfigAction::Check => {
             let source =
                 discovery::resolve(path, &ConfigEnvironment::from_process(), Path::is_file);
+
             println!("{}", config::check(&source)?);
         }
     }
@@ -99,6 +100,7 @@ fn manage_config(path: Option<PathBuf>, action: ConfigAction) -> Result<(), Host
 fn show_pin(config: &Config) -> Result<(), HostdError> {
     let runtime_dir = pin_file::runtime_dir_from_process();
     let path = pin_file::resolve(&config.peers, runtime_dir.as_deref())?;
+
     println!("{}", pin_file::read(&path)?);
 
     Ok(())
@@ -107,6 +109,7 @@ fn show_pin(config: &Config) -> Result<(), HostdError> {
 fn send_request(config: &Config, request: &Request) -> Result<(), HostdError> {
     let runtime_dir = pin_file::runtime_dir_from_process();
     let path = control::resolve(&config.peers, runtime_dir.as_deref())?;
+
     print!("{}", control::send(&path, request)?);
 
     Ok(())
@@ -158,6 +161,7 @@ fn load_config(explicit: Option<PathBuf>) -> Result<Config, ConfigError> {
 
 fn manage_peers(config: &Config, action: &PeersAction) -> Result<(), HostdError> {
     let mut store = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
+
     warn_if_exposed(&store);
 
     match action {
@@ -165,6 +169,7 @@ fn manage_peers(config: &Config, action: &PeersAction) -> Result<(), HostdError>
         PeersAction::Forget { target } => {
             let id = resolve(&store, target)?;
             let name = store.get(&id).map(|record| record.name().to_owned());
+
             store.forget(&id).map_err(HostError::from)?;
             println!("forgot {id} {}", name.unwrap_or_default());
         }
@@ -184,11 +189,14 @@ fn warn_if_exposed(store: &PeerStore) {
 
 fn serve(config: &Config) -> Result<(), HostdError> {
     let store = PeerStore::open_host(&config.peers).map_err(HostError::from)?;
+
     warn_if_exposed(&store);
+
     let pin_file = PinFile::open(
         &config.peers,
         pin_file::runtime_dir_from_process().as_deref(),
     )?;
+
     if let Some(file) = &pin_file {
         eprintln!(
             "rusplay-hostd: writing the pairing pin to {}",
@@ -199,10 +207,12 @@ fn serve(config: &Config) -> Result<(), HostdError> {
     let peers = Arc::new(RwLock::new(store));
     let service = HostService::start(config.clone(), &peers)?;
     let address = service.address();
+
     eprintln!("rusplay-hostd: listening on {address}");
 
     let phase = SharedPhase::new();
     let renewer = service.pin_renewer();
+
     let _control = start_control(
         config,
         &peers,

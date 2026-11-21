@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ShmFallback {
     requested: Arc<AtomicBool>,
 }
@@ -28,6 +28,7 @@ mod tests {
         let seen = fallback.clone();
 
         let before = seen.is_requested();
+
         fallback.request();
 
         assert!(!before);

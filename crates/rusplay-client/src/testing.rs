@@ -99,6 +99,7 @@ pub(crate) fn submit(gpu: &Gpu, record: impl FnOnce(&mut wgpu::CommandEncoder)) 
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     record(&mut encoder);
     gpu.queue.submit([encoder.finish()]);
 }
@@ -106,6 +107,7 @@ pub(crate) fn submit(gpu: &Gpu, record: impl FnOnce(&mut wgpu::CommandEncoder)) 
 pub(crate) fn read_bytes(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
     let (width, height) = (texture.width(), texture.height());
     let texel = texture.format().block_copy_size(None).unwrap_or(4);
+
     let tight_row = (width * texel) as usize;
     let row_bytes = (width * texel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -141,6 +143,7 @@ pub(crate) fn read_bytes(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u8> {
         .flat_map(|row| &row[..tight_row])
         .copied()
         .collect();
+
     staging.unmap();
     bytes
 }

@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostLaunchPreference(pub bool);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -65,6 +65,7 @@ impl HostPageView {
             transition: None,
             _poller: poller,
         };
+
         view.reopen_clients();
         view.reload_launch_preference();
 
@@ -126,7 +127,9 @@ impl HostPageView {
                 return;
             }
         };
+
         config.peers.host_on_launch = enabled;
+
         let written = self
             .environment
             .config_path(ConfigRole::Host)
@@ -182,6 +185,7 @@ impl HostPageView {
             Err(error) => {
                 let message = format!("Paired clients are unavailable: {}", error_chain(&error));
                 let changed = self.clients_error.as_deref() != Some(&message);
+
                 self.clients_error = Some(message);
                 changed
             }
@@ -195,6 +199,7 @@ impl HostPageView {
 
         let environment = self.environment.clone();
         let choose_display = std::mem::take(&mut self.choose_display_on_start);
+
         let starting = cx.background_spawn(async move {
             if choose_display {
                 hosting::start_choosing_display(&environment)
@@ -202,8 +207,10 @@ impl HostPageView {
                 hosting::start(&environment)
             }
         });
+
         self.transition = Some(cx.spawn(async move |this, cx| {
             let result = starting.await;
+
             this.update(cx, |this, cx| this.started(result, cx)).ok();
         }));
         cx.notify();
@@ -251,14 +258,17 @@ impl HostPageView {
         let Some(handle) = self.handle.take() else {
             return;
         };
+
         if !self.model.begin_stop() {
             self.handle = Some(handle);
             return;
         }
 
         let stopping = cx.background_spawn(async move { handle.stop() });
+
         self.transition = Some(cx.spawn(async move |this, cx| {
             let events = stopping.await;
+
             this.update(cx, |this, cx| this.stopped(&events, cx)).ok();
         }));
         cx.notify();
@@ -269,13 +279,16 @@ impl HostPageView {
 
         let now = Instant::now();
         let mut failed = false;
+
         for event in events {
             if let Some(notice) = self.model.apply(event, now) {
                 failed |= matches!(notice, Notice::Failure(_));
                 cx.emit(NoticeRaised(notice));
             }
         }
+
         let restart = self.restart_when_stopped && !failed;
+
         self.restart_when_stopped = false;
         self.choose_display_on_start &= restart;
         self.model.stopped();
@@ -340,6 +353,7 @@ impl HostPageView {
                 Notice::Failure(format!("Could not revoke {name}: {}", error_chain(&error)))
             }
         };
+
         cx.emit(NoticeRaised(notice));
         self.reload_paired();
         cx.notify();
@@ -351,6 +365,7 @@ impl HostPageView {
 
         if let Some(handle) = &self.handle {
             let mut ended = false;
+
             for event in handle.poll_events() {
                 ended |= matches!(event, HostEvent::Stopped(_));
                 write_json_line(self.json.as_mut(), handle, &event, now);
@@ -361,6 +376,7 @@ impl HostPageView {
             }
 
             let stream = handle.stream();
+
             if let Some(line) = self
                 .json
                 .as_mut()
@@ -444,6 +460,7 @@ impl HostPageView {
                             .child(toggle("host-on-launch", self.launch_on_start).on_click(
                                 cx.listener(|this, _, _, cx| {
                                     let enabled = !this.launch_on_start;
+
                                     this.set_launch_on_start(enabled, cx);
                                 }),
                             ))
@@ -573,12 +590,14 @@ impl HostPageView {
             client.address.to_string(),
             theme::text(),
         )];
+
         if let Some(format) = self.model.format_line() {
             let color = if self.model.format_is_fallback() {
                 theme::warning()
             } else {
                 theme::text()
             };
+
             rows.push(value_row("Stream", format, color));
         }
         if let Some(rates) = self.model.rates() {

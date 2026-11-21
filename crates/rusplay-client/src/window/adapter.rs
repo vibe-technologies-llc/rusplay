@@ -9,7 +9,7 @@ use crate::ClientError;
 
 const DRM_CLASS_DIRECTORY: &str = "/sys/class/drm";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pick {
     Preferred,
     Candidate(usize),
@@ -171,6 +171,7 @@ mod tests {
         let pci = root.join("devices/pci0000:00/0000:00:01.1/0000:03:00.A");
         let class = root.join("class/drm/renderD128");
         let node = root.join("dev/renderD128");
+
         fs::create_dir_all(&pci).unwrap();
         fs::create_dir_all(&class).unwrap();
         fs::create_dir_all(root.join("dev")).unwrap();
@@ -179,6 +180,7 @@ mod tests {
 
         let address = pci_address_of(&node, &root.join("class/drm"));
         let missing = pci_address_of(&root.join("dev/renderD999"), &root.join("class/drm"));
+
         fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(address.as_deref(), Some("0000:03:00.a"));

@@ -77,6 +77,7 @@ fn gradients() -> Vec<([f64; 3], [f64; 3])> {
         [GRAZING_BLUE[0], 0.2, GRAZING_BLUE[2]],
         [GRAZING_BLUE[0], 0.27, GRAZING_BLUE[2]],
     )];
+
     for level in [0.35, 0.45, 0.55, 0.65, 0.75] {
         lines.push(([0.0, 0.0, level], [level, 0.0, level]));
         lines.push((
@@ -156,6 +157,7 @@ fn perceptual_mapping_is_continuous_along_saturated_gradients() {
                 .collect();
 
             let (step, _) = largest_step(&refined);
+
             assert!(
                 step <= worst.step / SHRINK,
                 "{:?} {line:?}: a step of {} near {:?} only refines to {step}",
@@ -216,6 +218,7 @@ fn mapped_chroma_grows_steadily_through_the_fold() {
                     mapped_chroma - previous < MAX_CHROMA_STEP,
                     "{lightness} {angle}: {previous} -> {mapped_chroma} at {chroma}"
                 );
+
                 previous = mapped_chroma;
             }
         }
@@ -249,6 +252,7 @@ fn gpu_mapping_follows_the_reference_along_saturated_gradients() {
         ),
     ] {
         let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();
+
         let plan = mapper.plan().clone();
         let quantum = f64::from(RGBA16F_TOLERANCE) * plan.target_peak().max(1.0);
         let image = Image::from_fn(width, u32::try_from(lines.len()).unwrap(), |x, y| {
@@ -301,6 +305,7 @@ fn gpu_maps_neighbouring_grazing_codes_alike() {
         return;
     };
     let pipelines = ScalePipelines::new(&gpu.device);
+
     let mut mapper = ColorMapper::new(
         &pipelines,
         &gpu.device,
@@ -311,6 +316,7 @@ fn gpu_maps_neighbouring_grazing_codes_alike() {
         ),
     )
     .unwrap();
+
     let plan = mapper.plan().clone();
     let codes = [
         GRAZING_BLUE,
@@ -320,6 +326,7 @@ fn gpu_maps_neighbouring_grazing_codes_alike() {
             GRAZING_BLUE[2],
         ],
     ];
+
     let image = Image::from_fn(2, 1, |x, _| {
         #[allow(clippy::cast_possible_truncation)]
         let rgb = linear(&plan, codes[x as usize]).map(|channel| channel as f32);
@@ -351,6 +358,7 @@ fn the_boundary_table_tracks_the_exact_boundary() {
             .map(|index| {
                 let lightness = plan.boundary_lightness * unit_hash(index, 0);
                 let angle = std::f64::consts::TAU * unit_hash(index, 1);
+
                 let [table, _] = reference::boundary_limits(&plan, lightness, angle);
                 let exact = reference::chroma_boundary(
                     &plan,
@@ -362,10 +370,12 @@ fn the_boundary_table_tracks_the_exact_boundary() {
                 (table - exact) / plan.target_chroma_limit
             })
             .collect();
+
         errors.sort_by(|a, b| a.abs().total_cmp(&b.abs()));
 
         let p99 = errors[errors.len() * 99 / 100].abs();
         let outside = errors.iter().copied().fold(0.0, f64::max);
+
         assert!(
             p99 <= MAX_TABLE_P99,
             "{:?}: p99 {p99} of the chroma limit",
@@ -394,6 +404,7 @@ fn blue_to_magenta_gradients_step_gently_through_the_fold() {
                 .collect();
 
             let (step, red) = largest_step(&outputs);
+
             assert!(
                 step / peak <= MAX_FOLD_CODE_STEP,
                 "{:?} blue {blue}: {} of the peak from red {red}",

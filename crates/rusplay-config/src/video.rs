@@ -19,7 +19,7 @@ const MAX_DISPLAY_DEBOUNCE_MS: u32 = 5_000;
 const MAX_QUALITY_INTERVAL_MS: u32 = 60_000;
 const MAX_AUTO_DETECT_WAIT_MS: u32 = 10_000;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VideoConfig {
     pub resolution: Option<Resolution>,
@@ -118,6 +118,7 @@ impl VideoConfig {
         }
 
         let hdr = self.color.hdr;
+
         if !hdr.reference_white_in_range() {
             return Err(ConfigError::ReferenceWhiteOutOfRange(
                 hdr.reference_white_nits,
@@ -175,7 +176,7 @@ impl VideoConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PresentMode {
     #[default]
@@ -184,7 +185,7 @@ pub enum PresentMode {
     Fifo,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PresentPacing {
     #[default]
@@ -193,7 +194,7 @@ pub enum PresentPacing {
     Smooth,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "backend", rename_all = "kebab-case")]
 pub enum VideoEncoderConfig {
     Auto(AutoEncoderConfig),
@@ -240,7 +241,7 @@ impl VideoEncoderConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum RateControl {
     #[default]
@@ -267,7 +268,7 @@ impl RateControl {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AutoEncoderConfig {
     pub rate_control: RateControl,
@@ -276,7 +277,7 @@ pub struct AutoEncoderConfig {
 
 pub const LEGACY_DEFAULT_RENDER_NODE: &str = "/dev/dri/renderD128";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VaapiConfig {
     pub device: PathBuf,
@@ -296,7 +297,7 @@ impl Default for VaapiConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NvencPreset {
     #[default]
@@ -309,7 +310,7 @@ pub enum NvencPreset {
     P7,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NvencTuning {
     #[default]
@@ -318,7 +319,7 @@ pub enum NvencTuning {
     HighQuality,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NvencConfig {
     pub gpu_index: u32,
@@ -328,7 +329,7 @@ pub struct NvencConfig {
     pub params: EncoderParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SoftwarePreset {
     Ultrafast,
@@ -344,7 +345,7 @@ pub enum SoftwarePreset {
     Placebo,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum X264Tune {
     #[default]
@@ -358,7 +359,7 @@ pub enum X264Tune {
     Fastdecode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct X264Config {
     pub preset: SoftwarePreset,
@@ -378,7 +379,7 @@ impl Default for X264Config {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum X265Tune {
     #[default]
@@ -390,7 +391,7 @@ pub enum X265Tune {
     Fastdecode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct X265Config {
     pub preset: SoftwarePreset,
@@ -399,7 +400,7 @@ pub struct X265Config {
     pub params: EncoderParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SvtAv1LogLevel {
     Off,
@@ -411,7 +412,7 @@ pub enum SvtAv1LogLevel {
     Debug,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SvtAv1Config {
     pub preset: u8,
@@ -458,21 +459,25 @@ mod tests {
     #[test]
     fn present_frame_latency_is_range_checked() {
         let mut config = VideoConfig::default();
+
         assert_eq!(config.present_frame_latency, 1);
 
         config.present_frame_latency = 0;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::PresentFrameLatencyOutOfRange(0))
         ));
 
         config.present_frame_latency = 4;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::PresentFrameLatencyOutOfRange(4))
         ));
 
         config.present_frame_latency = 3;
+
         assert!(config.validate().is_ok());
     }
 
@@ -491,12 +496,14 @@ mod tests {
         assert_eq!(config.display_debounce_ms, 200);
 
         config.display_debounce_ms = MAX_DISPLAY_DEBOUNCE_MS + 1;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::DisplayDebounceOutOfRange(5_001))
         ));
 
         config.display_debounce_ms = 0;
+
         assert!(config.validate().is_ok());
     }
 
@@ -507,12 +514,14 @@ mod tests {
         assert_eq!(config.quality_interval_ms, 1_000);
 
         config.quality_interval_ms = MAX_QUALITY_INTERVAL_MS + 1;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::QualityIntervalOutOfRange(60_001))
         ));
 
         config.quality_interval_ms = 0;
+
         assert!(config.validate().is_ok());
     }
 
@@ -523,12 +532,14 @@ mod tests {
         assert_eq!(config.auto_detect_wait_ms, 500);
 
         config.auto_detect_wait_ms = MAX_AUTO_DETECT_WAIT_MS + 1;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::AutoDetectWaitOutOfRange(10_001))
         ));
 
         config.auto_detect_wait_ms = 0;
+
         assert!(config.validate().is_ok());
     }
 
@@ -546,6 +557,7 @@ mod tests {
 
         config.present_margin_us = MAX_PRESENT_MARGIN_US;
         config.present_jitter_us = MAX_PRESENT_JITTER_US + 1;
+
         assert!(matches!(
             config.validate(),
             Err(ConfigError::PresentJitterOutOfRange(100_001))
@@ -553,6 +565,7 @@ mod tests {
 
         config.present_jitter_us = 0;
         config.present_margin_us = 0;
+
         assert!(config.validate().is_ok());
     }
 

@@ -23,7 +23,7 @@ const HANDOFF_DEPTH: usize = 2;
 const FENCE_TIMEOUT: Duration = Duration::from_secs(2);
 const REPORTED_MISMATCHES: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Direct,
     Fenced,
@@ -91,6 +91,7 @@ fn packets(name: &str, records: &[Record]) -> Vec<EncodedFrame> {
         .enumerate()
         .map(|(index, (length, _))| {
             let data = encoded[offset..offset + length].to_vec().into();
+
             offset += length;
             EncodedFrame {
                 codec: Codec::Hevc,
@@ -302,6 +303,7 @@ fn read_frame(
         })
         .collect();
     let mut late_fences = 0;
+
     if mode == Mode::Fenced {
         for plane in &planes {
             let fence = rusplay_scale::wait_for_writes(plane.fd, Duration::ZERO).unwrap();
@@ -311,6 +313,7 @@ fn read_frame(
             }
         }
     }
+
     let surface = importer
         .import_external(&DmaBuf {
             fourcc: image.fourcc.as_u32(),
@@ -322,6 +325,7 @@ fn read_frame(
         .unwrap();
     let luma = surface.texture(0).unwrap();
     let chroma = surface.texture(1).unwrap();
+
     let owned = staged.get_or_insert_with(|| {
         [
             owned_copy(&gpu.device, luma),
@@ -338,6 +342,7 @@ fn read_frame(
         read_plane(gpu, &mut encoder, chroma, &owned[1]),
     ];
     let release = surface.release(&gpu.device, &mut encoder).unwrap();
+
     gpu.queue
         .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
 
@@ -355,6 +360,7 @@ fn run(
     let packets = packets(name, &records);
     let (sender, receiver) = mpsc::sync_channel(HANDOFF_DEPTH);
     let thread_config = config.clone();
+
     let worker = thread::spawn(move || decoder_thread(&thread_config, &packets, &sender));
 
     let mut in_flight: VecDeque<Pending> = VecDeque::new();
@@ -363,14 +369,17 @@ fn run(
     let mut wrong = 0_usize;
     let mut late_fences = 0_usize;
     let mut described = false;
+
     let mut check = |pending: Pending| {
         let actual = checksums(gpu, &pending);
         let expected = records[pending.index].1;
+
         compared += 1;
         if actual != expected {
             wrong += 1;
             if wrong <= REPORTED_MISMATCHES {
                 let planes: Vec<_> = (0..3).filter(|&p| actual[p] != expected[p]).collect();
+
                 eprintln!(
                     "{name} {mode:?} output {compared} frame {}: planes {planes:?} differ",
                     pending.index
@@ -385,7 +394,9 @@ fn run(
             describe(&frame);
             described = true;
         }
+
         let (reads, late) = read_frame(gpu, importer, &mut staged, &frame, mode);
+
         late_fences += late;
 
         let resolution = frame.resolution;
@@ -395,6 +406,7 @@ fn run(
             rusplay_scale::release_after_submission(&gpu.queue, frame);
             None
         };
+
         in_flight.push_back(Pending {
             index,
             resolution,
@@ -414,6 +426,7 @@ fn run(
     if let Some(error) = worker.join().unwrap() {
         panic!("{name}: {error}");
     }
+
     assert_eq!(compared, records.len() * REPEATS, "{name}");
 
     (compared, wrong, late_fences)
@@ -423,17 +436,20 @@ fn run(
 #[ignore = "takes minutes; run on a client that shows corruption"]
 fn pipelined_hevc_import_matches_software_reference() {
     let mut config = VaapiDecoderConfig::default();
+
     if let Some(device) = env::var_os("RUSPLAY_VAAPI_DEVICE") {
         config.device = PathBuf::from(device);
     }
     if !hardware::device_present(&config.device) {
         return;
     }
+
     let Some(gpu) = gpu() else {
         hardware::missing("a DMA-BUF capable Vulkan adapter");
         return;
     };
     let mut importer = DmaBufImporter::new(&gpu.device).unwrap();
+
     eprintln!(
         "vaapi device {}, vulkan adapter {} ({}, {})",
         config.device.display(),
@@ -443,9 +459,11 @@ fn pipelined_hevc_import_matches_software_reference() {
     );
 
     let mut failures = 0;
+
     for case in CASES {
         for mode in MODES {
             let (compared, wrong, late_fences) = run(&gpu, &mut importer, &config, case, mode);
+
             eprintln!(
                 "{} {mode:?}: {compared} frames, {wrong} wrong, {late_fences} fences still busy",
                 case.0

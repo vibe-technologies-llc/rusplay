@@ -44,6 +44,7 @@ fn ordered(mut candidates: Vec<Candidate>, preferred_gpu: Option<&str>) -> Vec<V
 
 fn hardware(auto: &AutoEncoderConfig) -> Vec<Candidate> {
     let mut candidates = vaapi(auto);
+
     candidates.extend(nvenc(auto));
     candidates
 }
@@ -158,6 +159,7 @@ mod tests {
         let resolved = resolve(&VideoEncoderConfig::default(), None);
 
         eprintln!("auto encoder resolved to {resolved:?}");
+
         assert!(!matches!(resolved, VideoEncoderConfig::Auto(_)));
         assert!(can_encode(&resolved));
     }
@@ -172,6 +174,7 @@ mod tests {
     #[test]
     fn the_software_fallbacks_carry_the_auto_parameters() {
         let mut auto = AutoEncoderConfig::default();
+
         auto.params.insert("keyint".to_owned(), "120".to_owned());
 
         assert!(software(&auto).iter().all(|config| match config {

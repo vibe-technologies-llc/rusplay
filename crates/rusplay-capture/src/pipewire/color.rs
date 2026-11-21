@@ -6,7 +6,7 @@ use rusplay_core::{
 
 use crate::CaptureError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SpaColorimetry {
     pub range: u32,
     pub matrix: u32,
@@ -196,6 +196,7 @@ mod tests {
                 assert_eq!((space.transfer, space.primaries), (transfer, primaries));
             }
         }
+
         assert_eq!(
             spa_primaries_for(ColorPrimaries::Custom(Chromaticities::ADOBE_RGB)),
             None

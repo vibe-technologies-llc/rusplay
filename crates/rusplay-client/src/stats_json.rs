@@ -195,6 +195,7 @@ mod tests {
                 other if other.starts_with("capture_to_") => format!("{other}_us"),
                 other => other.to_owned(),
             };
+
             assert!(
                 emitted.contains(&name.as_str()),
                 "{name} is missing from the line"

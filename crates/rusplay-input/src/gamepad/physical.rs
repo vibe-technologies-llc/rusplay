@@ -39,7 +39,7 @@ const EVENT_PREFIX: &str = "event";
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const VENDOR_SONY: u16 = 0x054c;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PhysicalOptions {
     pub max_gamepads: u8,
     pub deadzone: f32,
@@ -97,6 +97,7 @@ struct Sibling {
 impl Sibling {
     fn read(&mut self, slot: u8, out: &mut Vec<InputEvent>) -> io::Result<()> {
         let mut events = Vec::new();
+
         let result = drain(&mut self.device, |raw| {
             self.translator.translate(raw, &mut events);
         });
@@ -111,6 +112,7 @@ impl Sibling {
 
     fn release(&mut self, slot: u8, out: &mut Vec<InputEvent>) {
         let mut events = Vec::new();
+
         self.translator.release(&mut events);
 
         out.extend(
@@ -190,7 +192,7 @@ pub struct PhysicalGamepads {
     next_scan: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Source {
     pad: usize,
     sibling: Option<usize>,
@@ -253,6 +255,7 @@ impl PhysicalGamepads {
 
     pub fn poll(&mut self, timeout: Duration, out: &mut Vec<InputEvent>) -> Result<(), InputError> {
         let now = Instant::now();
+
         if now >= self.next_scan {
             self.scan(out);
             self.next_scan = now + SCAN_INTERVAL;
@@ -263,6 +266,7 @@ impl PhysicalGamepads {
 
         let mut gone_pads = Vec::new();
         let mut gone_siblings = Vec::new();
+
         for source in ready {
             let pad = &mut self.pads[source.pad];
             match source.sibling {
@@ -392,6 +396,7 @@ impl PhysicalGamepads {
     fn wait(&mut self, timeout: Duration) -> Result<Vec<Source>, InputError> {
         let mut sources = Vec::new();
         let mut fds = Vec::new();
+
         for (pad_index, pad) in self.pads.iter().enumerate() {
             sources.push(Source {
                 pad: pad_index,
@@ -429,6 +434,7 @@ impl PhysicalGamepads {
 
     fn remove(&mut self, index: usize, out: &mut Vec<InputEvent>) {
         let pad = self.pads.remove(index);
+
         self.slots.release(&pad.path);
 
         out.push(InputEvent::Gamepad {
@@ -446,6 +452,7 @@ impl PhysicalGamepads {
 
     fn scan(&mut self, out: &mut Vec<InputEvent>) {
         let present = event_nodes(&self.root);
+
         self.rejected.retain(|path| present.contains(path));
         self.known.retain(|path, _| present.contains(path));
 
@@ -456,6 +463,7 @@ impl PhysicalGamepads {
             .filter(|(_, pad)| !present.contains(&pad.path))
             .map(|(index, _)| index)
             .collect();
+
         for index in gone.into_iter().rev() {
             self.remove(index, out);
         }
@@ -469,6 +477,7 @@ impl PhysicalGamepads {
             let settled = self.known.get(&path).is_some_and(|node| {
                 node.role != NodeRole::Pad || self.slots.slot_of(&path).is_some()
             });
+
             if settled {
                 continue;
             }
@@ -481,6 +490,7 @@ impl PhysicalGamepads {
                 continue;
             };
             let role = description.role;
+
             self.known.insert(path.clone(), description);
 
             if role == NodeRole::Pad && !self.connect(path, device, out) {
@@ -499,6 +509,7 @@ impl PhysicalGamepads {
         let Some(slot) = self.slots.assign(path.clone()) else {
             return false;
         };
+
         if device.set_nonblocking(true).is_err() {
             self.slots.release(&path);
             return true;
@@ -507,6 +518,7 @@ impl PhysicalGamepads {
         let rumble_capable = device
             .supported_ff()
             .is_some_and(|ff| ff.contains(FFEffectCode::FF_RUMBLE));
+
         self.pads.push(Pad {
             path,
             slot,
@@ -626,11 +638,13 @@ fn led_write(directory: &Path, file: &str, value: &str) -> io::Result<()> {
 
 fn write_lightbar(leds: &Path, input: &str, [red, green, blue]: [u8; 3]) -> io::Result<()> {
     let directory = leds.join(format!("{input}:{LIGHTBAR_SUFFIX}"));
+
     if !directory.is_dir() {
         return Ok(());
     }
 
     let lit = red | green | blue != 0;
+
     led_write(
         &directory,
         "multi_intensity",
@@ -650,6 +664,7 @@ fn write_player_leds(leds: &Path, input: &str, mask: u8) -> io::Result<()> {
         let directory = leds.join(format!("{input}:{PLAYER_LED_SUFFIX}{}", index + 1));
         if directory.is_dir() {
             let value = if mask & (1 << index) != 0 { "1" } else { "0" };
+
             result = result.and(led_write(&directory, "brightness", value));
         }
     }
@@ -676,6 +691,7 @@ fn write_trigger(
     };
 
     let report = hidraw::trigger_report(bus, right, effect, *sequence);
+
     hidraw::send(&hidraw_node, &report)?;
     *sequence = sequence.wrapping_add(1);
 
@@ -692,6 +708,7 @@ fn open_sibling(path: PathBuf, role: NodeRole) -> Option<Sibling> {
         }
         NodeRole::Pad => return None,
     };
+
     device.set_nonblocking(true).ok()?;
 
     Some(Sibling {
@@ -750,9 +767,11 @@ fn touchpad_ranges(device: &Device) -> Option<(TouchpadRange, TouchpadRange)> {
 fn gamepad_caps(device: &Device) -> Option<PadCaps> {
     let keys = device.supported_keys()?;
     let axes = device.supported_absolute_axes()?;
+
     let is_gamepad = keys.contains(KeyCode::BTN_SOUTH)
         && axes.contains(AbsoluteAxisCode::ABS_X)
         && axes.contains(AbsoluteAxisCode::ABS_Y);
+
     if !is_gamepad {
         return None;
     }
@@ -847,6 +866,7 @@ mod tests {
 
     fn led_tree(directory: &Path, names: &[&str]) -> PathBuf {
         let leds = directory.join("leds");
+
         for name in names {
             fs::create_dir_all(leds.join(name)).unwrap();
         }
@@ -862,8 +882,11 @@ mod tests {
     fn the_input_name_is_the_directory_the_device_link_points_at() {
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("hid/input/input9");
+
         fs::create_dir_all(&input).unwrap();
+
         let class = directory.path().join("class");
+
         fs::create_dir_all(class.join("event7")).unwrap();
         symlink(&input, class.join("event7/device")).unwrap();
 
@@ -881,10 +904,12 @@ mod tests {
         let bar = leds.join("input9:rgb:indicator");
 
         write_lightbar(&leds, "input9", [1, 20, 255]).unwrap();
+
         assert_eq!(read(&bar.join("multi_intensity")), "1 20 255");
         assert_eq!(read(&bar.join("brightness")), "255");
 
         write_lightbar(&leds, "input9", [0, 0, 0]).unwrap();
+
         assert_eq!(read(&bar.join("multi_intensity")), "0 0 0");
         assert_eq!(read(&bar.join("brightness")), "0");
     }
@@ -906,6 +931,7 @@ mod tests {
             .map(|n| format!("input9:white:player-{n}"))
             .collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
+
         let leds = led_tree(directory.path(), &names);
 
         write_player_leds(&leds, "input9", 0b10101).unwrap();
@@ -914,6 +940,7 @@ mod tests {
             .iter()
             .map(|name| read(&leds.join(name).join("brightness")))
             .collect();
+
         assert_eq!(lit, ["1", "0", "1", "0", "1"]);
     }
 
@@ -921,6 +948,7 @@ mod tests {
     fn a_failed_led_write_is_reported_after_the_other_leds_were_tried() {
         let directory = tempfile::tempdir().unwrap();
         let leds = led_tree(directory.path(), &["input9:white:player-2"]);
+
         fs::create_dir_all(leds.join("input9:white:player-1/brightness")).unwrap();
 
         let result = write_player_leds(&leds, "input9", 0b11);
@@ -968,6 +996,7 @@ mod tests {
         let input = hid.join("input3");
         let sysfs = directory.path().join("class");
         let dev = directory.path().join("dev");
+
         fs::create_dir_all(&input).unwrap();
         fs::create_dir_all(&dev).unwrap();
         fs::create_dir_all(sysfs.join("event9")).unwrap();
@@ -995,6 +1024,7 @@ mod tests {
         let outcome = write_trigger(&pad.sysfs, &pad.dev, &pad.node, true, EFFECT, &mut sequence);
 
         let written = fs::read(pad.dev.join("hidraw4")).unwrap();
+
         assert!(matches!(outcome, Ok(FeedbackOutcome::Applied)));
         assert_eq!(written.len(), 63);
         assert_eq!(&written[..2], &[0x02, 0x04]);
@@ -1056,8 +1086,10 @@ mod tests {
     #[test]
     fn a_node_that_exists_but_cannot_be_written_is_an_error() {
         let pad = fake_pad("0003:054C:0CE6.0005", Some("hidraw4"));
+
         fs::remove_file(pad.dev.join("hidraw4")).unwrap();
         fs::create_dir(pad.dev.join("hidraw4")).unwrap();
+
         let mut sequence = 0;
 
         let result = write_trigger(&pad.sysfs, &pad.dev, &pad.node, true, EFFECT, &mut sequence);
@@ -1087,6 +1119,7 @@ mod tests {
         let hid = directory.path().join("devices/hid0");
         let input = hid.join("input3");
         let class = directory.path().join("class");
+
         fs::create_dir_all(&input).unwrap();
         fs::create_dir_all(class.join("event9")).unwrap();
         symlink(&input, class.join("event9/device")).unwrap();
@@ -1110,9 +1143,12 @@ mod tests {
     #[ignore = "needs write access to /dev/uinput and /dev/input"]
     fn live_virtual_pad_round_trips_input_and_rumble() {
         let mut host = UinputGamepad::create(0).unwrap();
+
         let node = event_node(&mut host);
         let directory = tempfile::tempdir().unwrap();
+
         symlink(&node, directory.path().join("event7")).unwrap();
+
         let mut pads = PhysicalGamepads::in_directory(options(), directory.path());
         let mut events = Vec::new();
 
@@ -1158,6 +1194,7 @@ mod tests {
             let stop = Arc::clone(&stop);
             thread::spawn(move || {
                 let mut commands = Vec::new();
+
                 while !stop.load(Ordering::Relaxed) {
                     host.poll_rumble(&mut commands).unwrap();
                     thread::sleep(Duration::from_millis(2));
@@ -1174,11 +1211,14 @@ mod tests {
             delay_ms: 0,
             duration_ms: 400,
         };
+
         pads.rumble(&start).unwrap();
         pads.rumble(&RumbleCommand::stop(0)).unwrap();
         thread::sleep(Duration::from_millis(50));
         stop.store(true, Ordering::Relaxed);
+
         let (host, commands) = serving.join().unwrap();
+
         drop(host);
 
         assert_eq!(commands, vec![start, RumbleCommand::stop(0)]);
@@ -1210,6 +1250,7 @@ mod tests {
 
     fn readable_soon(node: &Path) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
+
         while Instant::now() < deadline {
             if Device::open(node).is_ok() {
                 return true;
@@ -1234,10 +1275,13 @@ mod tests {
 
     fn virtual_motion() -> evdev::uinput::VirtualDevice {
         let mut properties = evdev::AttributeSet::<PropType>::new();
+
         properties.insert(PropType::ACCELEROMETER);
+
         let mut builder = sibling_builder("rusplay test motion")
             .with_properties(&properties)
             .unwrap();
+
         for (axis, resolution) in [
             (AbsoluteAxisCode::ABS_X, 8192),
             (AbsoluteAxisCode::ABS_Y, 8192),
@@ -1256,10 +1300,13 @@ mod tests {
 
     fn virtual_touchpad() -> evdev::uinput::VirtualDevice {
         let mut keys = evdev::AttributeSet::<KeyCode>::new();
+
         keys.insert(KeyCode::BTN_LEFT);
+
         let mut builder = sibling_builder("rusplay test touchpad")
             .with_keys(&keys)
             .unwrap();
+
         for (axis, max) in [
             (AbsoluteAxisCode::ABS_MT_SLOT, 1),
             (AbsoluteAxisCode::ABS_MT_TRACKING_ID, 65535),
@@ -1286,6 +1333,7 @@ mod tests {
         let nodes = directory.path().join("dev");
         let sysfs = directory.path().join("class");
         let hid = directory.path().join("devices/hid0");
+
         fs::create_dir_all(&nodes).unwrap();
         for (index, device) in [pad.device_mut(), &mut touchpad, &mut motion]
             .into_iter()
@@ -1293,10 +1341,13 @@ mod tests {
         {
             let name = format!("event{}", 10 + index);
             let input = hid.join(format!("input{index}"));
+
             fs::create_dir_all(&input).unwrap();
             fs::create_dir_all(sysfs.join(&name)).unwrap();
             symlink(&input, sysfs.join(&name).join("device")).unwrap();
+
             let node = first_node(device);
+
             if index > 0 && !readable_soon(&node) {
                 eprintln!(
                     "skipped live_motion_and_touchpad_nodes_pair_with_their_pad: {} is not readable, sibling nodes need their own uaccess rule",
@@ -1306,11 +1357,14 @@ mod tests {
             }
             symlink(node, nodes.join(name)).unwrap();
         }
+
         let mut pads = PhysicalGamepads::with_roots(options(), &nodes, Some(sysfs));
         let mut events = Vec::new();
 
         poll_until(&mut pads, &mut events, |events| !events.is_empty());
+
         let deadline = Instant::now() + Duration::from_secs(5);
+
         while pads.siblings(0) < 2 && Instant::now() < deadline {
             pads.next_scan = Instant::now();
             pads.poll(Duration::from_millis(20), &mut events).unwrap();
@@ -1319,6 +1373,7 @@ mod tests {
         assert_eq!(pads.siblings(0), 2);
 
         events.clear();
+
         let emit = |device: &mut evdev::uinput::VirtualDevice, codes: &[(u16, i32)]| {
             let mut batch: Vec<_> = codes
                 .iter()
@@ -1326,6 +1381,7 @@ mod tests {
                     evdev::InputEvent::new(evdev::EventType::ABSOLUTE.0, *code, *value)
                 })
                 .collect();
+
             batch.push(evdev::InputEvent::new(
                 evdev::EventType::SYNCHRONIZATION.0,
                 0,
@@ -1333,6 +1389,7 @@ mod tests {
             ));
             device.emit(&batch).unwrap();
         };
+
         emit(
             &mut motion,
             &[

@@ -64,6 +64,7 @@ fn reference(display: &Rc<Display>, frame: &DecodedFrame) -> Vec<Vec<u8>> {
             pitch: u32::try_from(plane.pitch).unwrap(),
         })
         .collect();
+
     let imported = Surface::import(
         display,
         rt_format,
@@ -79,6 +80,7 @@ fn reference(display: &Rc<Display>, frame: &DecodedFrame) -> Vec<Vec<u8>> {
     )
     .unwrap();
     let mut cpu = Image::new(display, image.fourcc.as_u32(), frame.resolution).unwrap();
+
     let bytes = cpu.get(&imported).unwrap();
     let layout = cpu.layout();
     let width = usize::try_from(frame.resolution.width).unwrap() * if wide { 2 } else { 1 };
@@ -111,6 +113,7 @@ fn download(
     let texture = imported.texture(plane).unwrap();
     let row_bytes =
         (texture.width() * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("decoded-plane-readback"),
         size: u64::from(row_bytes) * u64::from(texture.height()),
@@ -121,6 +124,7 @@ fn download(
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     let acquire = imported.acquire(&gpu.device).unwrap();
+
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -133,13 +137,16 @@ fn download(
         },
         texture.size(),
     );
+
     let release = imported.release(&gpu.device, &mut encoder).unwrap();
+
     gpu.queue
         .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
     buffer.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
+
     let mapped = buffer.get_mapped_range(..).unwrap();
     let width = usize::try_from(visible.width * texel_bytes).unwrap();
 
@@ -153,9 +160,11 @@ fn download(
 #[test]
 fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(&config.device) {
         return;
     }
+
     let Some(gpu) = gpu() else {
         hardware::missing("a DMA-BUF capable Vulkan adapter");
         return;
@@ -200,6 +209,7 @@ fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
                     stride: plane.pitch,
                 })
                 .collect();
+
             let texture = importer
                 .import_external(&DmaBuf {
                     fourcc: image.fourcc.as_u32(),
@@ -210,6 +220,7 @@ fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
                 })
                 .unwrap();
             let bytes_per_sample = if frame.format.depth.bits() > 8 { 2 } else { 1 };
+
             let actual: Vec<_> = (0..2)
                 .map(|plane| {
                     let size = if plane == 0 {
@@ -233,6 +244,7 @@ fn decoded_hevc_planes_survive_vulkan_import_and_surface_reuse() {
 
             for (plane, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
                 let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
+
                 assert_eq!(
                     differences, 0,
                     "{name} frame {index} plane {plane}, modifier {:#x}",
@@ -260,6 +272,7 @@ fn indexed_packets(name: &str) -> Vec<rusplay_core::EncodedFrame> {
                 keyframe: index == 0,
                 data: encoded[offset..offset + length].to_vec().into(),
             };
+
             offset += length;
             packet
         })
@@ -269,9 +282,11 @@ fn indexed_packets(name: &str) -> Vec<rusplay_core::EncodedFrame> {
 #[test]
 fn motion_hevc_planes_survive_vulkan_import() {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(&config.device) {
         return;
     }
+
     let Some(gpu) = gpu() else {
         hardware::missing("a DMA-BUF capable Vulkan adapter");
         return;
@@ -316,6 +331,7 @@ fn motion_hevc_planes_survive_vulkan_import() {
                     stride: plane_layout.pitch,
                 })
                 .collect();
+
             let texture = importer
                 .import_external(&DmaBuf {
                     fourcc: image.fourcc.as_u32(),
@@ -326,6 +342,7 @@ fn motion_hevc_planes_survive_vulkan_import() {
                 })
                 .unwrap();
             let bytes_per_sample = if frame.format.depth.bits() > 8 { 2 } else { 1 };
+
             let actual: Vec<_> = (0..2)
                 .map(|plane| {
                     let size = if plane == 0 {
@@ -349,6 +366,7 @@ fn motion_hevc_planes_survive_vulkan_import() {
 
             for (plane, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
                 let differences = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
+
                 assert_eq!(
                     differences,
                     0,
@@ -367,9 +385,11 @@ fn motion_hevc_planes_survive_vulkan_import() {
 #[test]
 fn copied_hevc_output_matches_native_luma_and_chroma() {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(&config.device) {
         return;
     }
+
     let display = Display::open(&config.device).unwrap();
     let copied_config = VaapiDecoderConfig {
         copy_output: true,
@@ -430,6 +450,7 @@ fn copied_hevc_output_matches_native_luma_and_chroma() {
                 let step = sample * if index == 0 { 1 } else { 2 };
                 let offset = usize::from(index == 2) * sample;
                 let source = &expected[usize::from(index > 0)];
+
                 let expected: Vec<_> = source
                     .chunks_exact(step)
                     .flat_map(|pixel| {

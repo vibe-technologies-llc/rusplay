@@ -13,6 +13,7 @@ const COUNT: u32 = 64;
 
 fn config(depth: BitDepth, handoff: bool) -> Config {
     let mut config = vaapi_config(Codec::Hevc, depth, handoff);
+
     config.video.encoder = VideoEncoderConfig::Vaapi(VaapiConfig {
         low_power: false,
         rate_control: RateControl::ConstantQuality { qp: 20 },
@@ -24,6 +25,7 @@ fn config(depth: BitDepth, handoff: bool) -> Config {
 fn stream(config: Config, size: Resolution) -> Option<(Vec<EncodedFrame>, bool)> {
     let mut pipeline = pipeline(config)?;
     let mut packets = Vec::new();
+
     for index in 0..COUNT {
         packets.extend(
             pipeline
@@ -80,8 +82,10 @@ fn decode(depth: BitDepth, packets: &[EncodedFrame]) -> Option<Vec<u8>> {
         .flat_map(|packet| packet.data.iter().copied())
         .collect();
     let mut input = child.stdin.take().unwrap();
+
     let writer = thread::spawn(move || input.write_all(&bytes));
     let result = child.wait_with_output().unwrap();
+
     writer.join().unwrap().unwrap();
 
     assert!(
@@ -104,6 +108,7 @@ fn hevc_handoff_and_readback_match_in_luma_and_chroma() {
             if !supported(&config(depth, true)) {
                 continue;
             }
+
             let Some((packets, handed_off)) = stream(config(depth, true), size) else {
                 return;
             };

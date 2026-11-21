@@ -50,6 +50,7 @@ impl AudioOutput for Capture {
 impl Capture {
     fn wait_for_frames(&self, count: usize) -> bool {
         let deadline = Instant::now() + WAIT;
+
         while self.frames.lock().len() < count {
             if Instant::now() >= deadline {
                 return false;
@@ -73,6 +74,7 @@ fn factory(capture: &Capture, opened: &Arc<AtomicUsize>) -> MicrophoneOutputFact
     let opened = Arc::clone(opened);
     Arc::new(move |config| {
         assert_eq!(config.channels.channel_count(), 1);
+
         opened.fetch_add(1, Ordering::Relaxed);
         Ok(Box::new(capture.clone()) as Box<dyn AudioOutput>)
     })
@@ -80,6 +82,7 @@ fn factory(capture: &Capture, opened: &Arc<AtomicUsize>) -> MicrophoneOutputFact
 
 fn microphone_config(enabled: bool) -> Config {
     let mut config = host_config();
+
     config.audio.microphone = MicrophoneConfig {
         enabled,
         ..MicrophoneConfig::default()
@@ -100,6 +103,7 @@ fn tone_packets(config: &AudioConfig, count: u32) -> Vec<Vec<u8>> {
         .stack_size(CODEC_THREAD_STACK_BYTES)
         .spawn(move || {
             let mut encoder = OpusAudioEncoder::new(&stream).unwrap();
+
             let samples = encoder.frame_samples();
             (0..count as usize)
                 .map(|number| {
@@ -111,7 +115,9 @@ fn tone_packets(config: &AudioConfig, count: u32) -> Vec<Vec<u8>> {
                         })
                         .collect();
                     let mut packet = vec![0; PACKET_BUFFER];
+
                     let written = encoder.encode(&tone, &mut packet).unwrap();
+
                     packet.truncate(written);
                     packet
                 })
@@ -143,14 +149,19 @@ fn microphone_packets_after_the_hello_play_into_the_output() {
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(true);
     let packets = tone_packets(&config.audio, PACKETS);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.hello();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     send_packets(&client, &packets, FecScheme::None);
 
     let played = capture.wait_for_frames(PACKETS as usize);
@@ -168,6 +179,7 @@ fn microphone_packets_after_the_hello_play_into_the_output() {
     );
     assert!(stats.microphone_packets_received >= u64::from(PACKETS));
     assert_eq!(stats.microphone_packets_lost, 0);
+
     stream.stop().unwrap();
 }
 
@@ -181,14 +193,19 @@ fn microphone_packets_with_fec_still_play() {
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(true);
     let packets = tone_packets(&config.audio, PACKETS);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.hello();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     send_packets(
         &client,
         &packets,
@@ -200,6 +217,7 @@ fn microphone_packets_with_fec_still_play() {
 
     assert!(capture.wait_for_frames(PACKETS as usize));
     assert_eq!(stream.stats().microphone_packets_lost, 0);
+
     stream.stop().unwrap();
 }
 
@@ -209,24 +227,35 @@ fn a_takeover_restarts_the_microphone_numbering() {
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(true);
     let packets = tone_packets(&config.audio, PACKETS);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(2_000), fake_factory(&bitrate));
 
     let (mut first, record) = TestClient::pair(fixture.address);
+
     first.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(first.pump_until(TestClient::has_hello));
+
     send_packets(&first, &packets, FecScheme::None);
+
     assert!(capture.wait_for_frames(PACKETS as usize));
 
     let mut second = TestClient::reconnect(fixture.address, &record);
+
     second.hello();
+
     assert!(second.pump_until(TestClient::has_hello));
+
     send_packets(&second, &packets, FecScheme::None);
 
     assert!(capture.wait_for_frames(2 * PACKETS as usize));
     assert_eq!(stream.stats().sessions_taken_over, 1);
+
     stream.stop().unwrap();
 }
 
@@ -236,17 +265,21 @@ fn microphone_packets_before_the_hello_are_ignored() {
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(true);
     let packets = tone_packets(&config.audio, 4);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     send_packets(&client, &packets, FecScheme::None);
     thread::sleep(Duration::from_millis(150));
 
     assert!(capture.frames.lock().is_empty());
     assert_eq!(stream.stats().microphone_packets_received, 0);
+
     stream.stop().unwrap();
 }
 
@@ -256,19 +289,25 @@ fn a_disabled_microphone_opens_nothing_and_drops_the_packets() {
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(false);
     let packets = tone_packets(&config.audio, 4);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.hello();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     send_packets(&client, &packets, FecScheme::None);
     thread::sleep(Duration::from_millis(150));
 
     assert_eq!(opened.load(Ordering::Relaxed), 0);
     assert!(capture.frames.lock().is_empty());
+
     stream.stop().unwrap();
 }
 
@@ -278,6 +317,7 @@ fn an_enabled_microphone_without_an_output_refuses_the_session() {
         session.without_audio().without_microphone()
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (_client, _) = TestClient::pair(fixture.address);
@@ -289,18 +329,25 @@ fn an_enabled_microphone_without_an_output_refuses_the_session() {
 #[test]
 fn a_failing_microphone_output_ends_the_session() {
     let capture = Capture::default();
+
     capture.broken.store(true, Ordering::Relaxed);
+
     let opened = Arc::new(AtomicUsize::new(0));
     let config = microphone_config(true);
     let packets = tone_packets(&config.audio, 2);
+
     let fixture = fixture(config, &capture, &opened);
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
     let (_, stream) = serving.join().unwrap().unwrap();
+
     client.hello();
+
     assert!(client.pump_until(TestClient::has_hello));
+
     send_packets(&client, &packets, FecScheme::None);
 
     assert!(matches!(

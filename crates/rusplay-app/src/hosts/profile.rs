@@ -19,7 +19,7 @@ const POINTER_MODES: [(PointerMode, &str); 3] = [
 ];
 const UNLISTED_VALUE: &str = "custom";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Global,
     Override,
@@ -34,14 +34,14 @@ impl Source {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileChoice {
     pub label: &'static str,
     pub selected: bool,
     pub result: HostProfile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileRow {
     pub label: &'static str,
     pub source: Source,
@@ -119,6 +119,7 @@ fn row<T: Copy + PartialEq>(
         selected: overridden.is_none(),
         result: with_field(profile, field, None),
     }];
+
     choices.extend(values.iter().map(|&(value, name)| ProfileChoice {
         label: name,
         selected: overridden == Some(value),
@@ -145,6 +146,7 @@ fn decoder_row(profile: &HostProfile, global: &Config) -> ProfileRow {
             ..profile.clone()
         },
     }];
+
     choices.extend(
         decoder_backends(global_decoder)
             .into_iter()
@@ -205,6 +207,7 @@ fn with_field<T>(
     value: Option<T>,
 ) -> HostProfile {
     let mut result = profile.clone();
+
     *field(&mut result) = value;
 
     result
@@ -259,7 +262,9 @@ mod tests {
     #[test]
     fn an_override_is_in_effect_over_the_global_value() {
         let mut global = Config::default();
+
         global.video.present_mode = PresentMode::Immediate;
+
         let profile = HostProfile {
             present_mode: Some(PresentMode::Fifo),
             gamepads: Some(false),
@@ -269,6 +274,7 @@ mod tests {
         let rows = rows(&profile, &global);
 
         let present = find(&rows, "Present mode");
+
         assert_eq!(present.source, Source::Override);
         assert_eq!(present.effective, "Fifo");
         assert!(pick(present, "Fifo").selected);
@@ -280,6 +286,7 @@ mod tests {
     #[test]
     fn global_follows_the_global_config_when_it_changes() {
         let mut global = Config::default();
+
         global.input.keyboard = false;
 
         let rows = rows(&HostProfile::default(), &global);
@@ -294,6 +301,7 @@ mod tests {
             pointer: Some(false),
             ..HostProfile::default()
         };
+
         let rows = rows(&profile, &global);
 
         let chosen = pick(find(&rows, "Present mode"), "Immediate")
@@ -320,6 +328,7 @@ mod tests {
     #[test]
     fn choosing_the_global_decoder_backend_keeps_its_settings() {
         let mut global = Config::default();
+
         global.video.decoder = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
             device: PathBuf::from("/dev/dri/renderD129"),
             ..VaapiDecoderConfig::default()

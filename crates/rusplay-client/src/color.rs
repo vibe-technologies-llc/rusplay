@@ -3,7 +3,7 @@ use rusplay_scale::{ColorVolume, OutputLight};
 
 use crate::present::whole_nits;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameColor {
     pub space: ColorSpace,
     pub matrix: MatrixCoefficients,

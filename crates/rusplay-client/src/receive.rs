@@ -55,19 +55,19 @@ pub(crate) enum DecodeInput {
 
 pub(crate) type SharedFormat = Arc<Mutex<Option<StreamDescription>>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Feedback {
     Decoded { frame: u32 },
     DecodeFailed { frame: u32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flow {
     Continue,
     Ended,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Timing {
     peer_timeout: Duration,
     keyframe_interval: Duration,
@@ -125,6 +125,7 @@ impl Resync {
         };
 
         let distance = frame.wrapping_sub(last);
+
         if distance.cast_signed() <= 0 {
             return 0;
         }
@@ -163,6 +164,7 @@ impl Acks {
     ) -> Option<Instant> {
         let interval = interval?;
         let good = last_good?;
+
         if self.sent == Some(good) {
             return None;
         }
@@ -317,6 +319,7 @@ impl ReceiveStage {
 
     pub(crate) fn run(mut self) -> Result<(), ClientError> {
         let result = self.serve();
+
         self.links.stop.store(true, Ordering::Relaxed);
 
         result
@@ -333,9 +336,11 @@ impl ReceiveStage {
             },
             Instant::now(),
         )?;
+
         let announced = self
             .control
             .send(ControlMessage::Display(self.links.display), Instant::now())?;
+
         self.announcer.sent(self.links.display, announced);
         self.control.flush(&self.transport, self.host)?;
 
@@ -348,7 +353,9 @@ impl ReceiveStage {
             let wait = self
                 .next_wake(Instant::now())
                 .saturating_duration_since(Instant::now());
+
             self.transport.recv_batch_timeout(&mut batch, wait)?;
+
             let now = Instant::now();
 
             for (datagram, from) in batch.iter() {
@@ -365,8 +372,10 @@ impl ReceiveStage {
 
             self.handle_audio(&mut pending.audio);
             self.handle_cursor(&mut pending.cursor);
+
             let control = self.handle_control(&mut pending.control, now)?;
             let reassembly = self.handle_reassembly(&mut pending.video, now)?;
+
             if control == Flow::Ended {
                 return Ok(());
             }
@@ -480,6 +489,7 @@ impl ReceiveStage {
             };
 
             self.links.counters.audio_packets_received.increment();
+
             let packet = EncodedAudio {
                 number: frame.frame,
                 data: frame.data.into_vec(),
@@ -526,6 +536,7 @@ impl ReceiveStage {
                 }
                 ReassemblyEvent::FrameLost { frame } => {
                     let unseen = self.resync.advance_to(frame);
+
                     counters.frames_lost.add(1 + u64::from(unseen));
                     self.congested(now);
                     if !self.resync.predates_last_keyframe(frame) {
@@ -548,6 +559,7 @@ impl ReceiveStage {
 
     fn forward(&mut self, frame: ReassembledFrame, now: Instant) -> Result<Flow, ClientError> {
         let skipped = self.resync.advance_to(frame.frame);
+
         if skipped > 0 {
             self.links.counters.frames_lost.add(u64::from(skipped));
             self.congested(now);
@@ -728,6 +740,7 @@ impl ReceiveStage {
         if !self.handshake_done {
             return;
         }
+
         let Some(link) = &mut self.links.clipboard else {
             return;
         };
@@ -743,6 +756,7 @@ impl ReceiveStage {
         if !self.handshake_done {
             return;
         }
+
         let Some(link) = &mut self.links.clipboard else {
             return;
         };
@@ -761,6 +775,7 @@ impl ReceiveStage {
         }
 
         self.clock_sync.pinged(now);
+
         let sent_micros = self.links.counters.clock.local_micros(now).unsigned_abs();
         match self
             .control
@@ -898,6 +913,7 @@ impl ReceiveStage {
 
     fn request_refresh(&mut self, frame: u32, now: Instant) -> Result<(), ClientError> {
         let already_waiting = self.resync.awaiting_keyframe;
+
         self.resync.awaiting_keyframe = true;
         self.resync.missing_frame = frame;
 
@@ -913,6 +929,7 @@ impl ReceiveStage {
         let recovery = self.resync.last_good.filter(|_| {
             self.timing.loss_recovery == LossRecovery::Reference && !self.resync.recovery_tried
         });
+
         let request = match recovery {
             Some(last_good) => ControlMessage::RequestRecovery { frame, last_good },
             None => ControlMessage::RequestKeyframe { frame },
@@ -938,6 +955,7 @@ impl ReceiveStage {
         let Some(frame) = self.resync.last_good else {
             return Ok(());
         };
+
         if self
             .acks
             .next_due(now, self.timing.ack_interval, Some(frame))
@@ -993,14 +1011,17 @@ impl ReceiveStage {
 
         loop {
             let now = Instant::now();
+
             if goodbye.is_none() {
                 goodbye = self.control.send(ControlMessage::Goodbye, now).ok();
             }
             if self.control.flush(&self.transport, self.host).is_err() {
                 return;
             }
+
             let acknowledged =
                 goodbye.is_some_and(|id| events.contains(&ControlEvent::Acked { id }));
+
             if now >= deadline || acknowledged {
                 return;
             }
@@ -1011,6 +1032,7 @@ impl ReceiveStage {
                 .unwrap_or(deadline)
                 .min(deadline)
                 .saturating_duration_since(now);
+
             if self.transport.recv_batch_timeout(&mut batch, wait).is_err() {
                 return;
             }
@@ -1115,6 +1137,7 @@ mod tests {
                 counters: Arc::clone(&counters),
             };
             let bitrate = BitrateSettings::from_config(&network, CLIENT_KBPS);
+
             let stage = ReceiveStage::new(
                 Arc::new(transport),
                 host_address,
@@ -1160,6 +1183,7 @@ mod tests {
 
         fn control(&self, id: u32, message: ControlMessage) {
             let packet = ControlPacket::Message { id, message };
+
             self.send(&[packet.to_datagram().unwrap()]);
         }
 
@@ -1193,6 +1217,7 @@ mod tests {
             let deadline = Instant::now() + span;
             let mut buf = vec![0; usize::from(self.host.mtu())];
             let mut messages = Vec::new();
+
             while Instant::now() < deadline {
                 let Some((len, _)) = self
                     .host
@@ -1234,6 +1259,7 @@ mod tests {
         fn next_control_message(&self) -> Option<ControlMessage> {
             let deadline = Instant::now() + WAIT;
             let mut buf = vec![0; usize::from(self.host.mtu())];
+
             while Instant::now() < deadline {
                 let Some((len, _)) = self
                     .host
@@ -1252,6 +1278,7 @@ mod tests {
 
         fn wait_until(&self, condition: impl Fn(&Self) -> bool) -> bool {
             let deadline = Instant::now() + WAIT;
+
             while Instant::now() < deadline {
                 if condition(self) {
                     return true;
@@ -1297,6 +1324,7 @@ mod tests {
         seed: u8,
     ) -> Vec<u8> {
         let mut frame = Vec::new();
+
         VideoFrameHeader {
             captured_micros,
             recovers_from,
@@ -1313,7 +1341,9 @@ mod tests {
                     .packetize(frame, frame == 0, &video_frame(0, 64, 0))
                     .unwrap(),
             );
+
             let video = rig.next_video();
+
             rig.feedback
                 .send(Feedback::Decoded {
                     frame: video.number,
@@ -1331,6 +1361,7 @@ mod tests {
 
     fn cursor_bytes(message: &CursorMessage) -> Vec<u8> {
         let mut bytes = Vec::new();
+
         message.encode(&mut bytes).unwrap();
         bytes
     }
@@ -1360,11 +1391,14 @@ mod tests {
     #[test]
     fn an_unacknowledged_goodbye_is_sent_again_until_the_linger_ends() {
         let mut rig = Rig::start(None);
+
         let mut buf = vec![0; usize::from(rig.host.mtu())];
         let mut goodbyes = 0;
 
         rig.stop.store(true, Ordering::Relaxed);
+
         let deadline = Instant::now() + WAIT;
+
         while goodbyes < 2 && Instant::now() < deadline {
             let Some((len, _)) = rig
                 .host
@@ -1381,6 +1415,7 @@ mod tests {
                 goodbyes += 1;
             }
         }
+
         let ended = rig.stage.take().unwrap().join().unwrap();
 
         assert_eq!(goodbyes, 2);
@@ -1390,16 +1425,20 @@ mod tests {
     #[test]
     fn a_closed_decode_queue_ends_the_stage_with_a_goodbye() {
         let mut rig = Rig::start(None);
+
         let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
 
         rig.describe(0, description(1, 1280));
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 1));
+
         rig.close_decode_queue();
         rig.send(
             &packetizer
                 .packetize(0, true, &video_frame(0, 64, 0))
                 .unwrap(),
         );
+
         let farewell = next_message_matching(&rig, |message| *message == ControlMessage::Goodbye);
 
         assert_eq!(farewell, Some(ControlMessage::Goodbye));
@@ -1416,23 +1455,32 @@ mod tests {
                 .packetize(0, true, &video_frame(0, 64, 0))
                 .unwrap(),
         );
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().frames_skipped == 1));
+
         rig.describe(0, description(7, 1280));
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 1));
+
         rig.send(
             &packetizer
                 .packetize(1, true, &video_frame(1_000, 64, 1))
                 .unwrap(),
         );
+
         let first = rig.next_video();
+
         rig.describe(1, description(6, 640));
         rig.describe(2, description(8, 1920));
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().stream_formats_received == 2));
+
         rig.send(
             &packetizer
                 .packetize(2, false, &video_frame(2_000, 64, 2))
                 .unwrap(),
         );
+
         let second = rig.next_video();
 
         assert_eq!(first.number, 1);
@@ -1450,11 +1498,14 @@ mod tests {
         let mut packetizer = rig.packetizer(StreamKind::Video, FecScheme::None);
 
         assert_eq!(rig.counters.snapshot().bitrate_target_kbps, None);
+
         rig.describe(0, description(1, 1280));
         rig.announce_ceiling(1, CLIENT_KBPS);
+
         assert!(
             rig.wait_until(|rig| rig.counters.snapshot().bitrate_target_kbps == Some(CLIENT_KBPS))
         );
+
         rig.lose_a_frame(&mut packetizer);
 
         let hint = rig.next_hint();
@@ -1473,8 +1524,11 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         rig.lose_a_frame(&mut packetizer);
+
         assert!(rig.loss_noticed());
+
         let unsteered = rig.counters.snapshot();
+
         rig.announce_ceiling(1, 150_000);
 
         let hint = rig.next_hint();
@@ -1503,8 +1557,11 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         rig.announce_ceiling(1, 40_000);
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().bitrate_target_kbps == Some(40_000)));
+
         let before_loss = rig.counters.snapshot();
+
         rig.lose_a_frame(&mut packetizer);
 
         let hint = rig.next_hint();
@@ -1525,6 +1582,7 @@ mod tests {
         rig.describe(0, description(1, 1280));
         rig.announce_ceiling(1, 0);
         rig.lose_a_frame(&mut packetizer);
+
         assert!(rig.loss_noticed());
 
         let sent = rig.control_messages_for(QUIET);
@@ -1546,7 +1604,9 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         decoded_through(&rig, &mut packetizer, 3);
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+
         packetizer
             .packetize(3, false, &video_frame(0, 64, 3))
             .unwrap();
@@ -1555,12 +1615,14 @@ mod tests {
                 .packetize(4, false, &video_frame(0, 64, 4))
                 .unwrap(),
         );
+
         let request = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestRecovery { .. })
         });
         let Some(ControlMessage::RequestRecovery { frame, last_good }) = request else {
             panic!("no recovery request in {request:?}");
         };
+
         rig.send(
             &packetizer
                 .packetize(5, false, &recovery_frame(0, Some(3), 64, 5))
@@ -1571,6 +1633,7 @@ mod tests {
                 .packetize(6, false, &recovery_frame(0, Some(last_good), 64, 6))
                 .unwrap(),
         );
+
         let recovered = rig.next_video();
         let skipped = rig.decode.recv_timeout(Duration::from_millis(100));
         let stats = rig.counters.snapshot();
@@ -1602,11 +1665,15 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         decoded_through(&rig, &mut packetizer, 2);
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+
         let datagrams = packetizer
             .packetize(2, false, &video_frame(0, 4_000, 2))
             .unwrap();
+
         rig.send(&datagrams[2..]);
+
         let request = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestRecovery { .. })
         });
@@ -1629,17 +1696,23 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         decoded_through(&rig, &mut packetizer, 2);
+
         assert!(rig.wait_until(|rig| rig.counters.snapshot().frame_acks_sent >= 1));
+
         let cut_short = packetizer
             .packetize(2, false, &video_frame(0, 4_000, 2))
             .unwrap();
         let next = packetizer
             .packetize(3, false, &video_frame(0, 4_000, 3))
             .unwrap();
+
         rig.send(&cut_short[..1]);
+
         let premature = rig.decode.recv_timeout(Duration::from_millis(100));
         let lost_while_unfinished = rig.counters.snapshot().frames_lost;
+
         rig.send(&next[..1]);
+
         let request = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestRecovery { .. })
         });
@@ -1662,6 +1735,7 @@ mod tests {
 
         rig.describe(0, description(1, 1280));
         decoded_through(&rig, &mut packetizer, 1);
+
         let ack = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::AcknowledgeFrame { .. })
         });
@@ -1685,6 +1759,7 @@ mod tests {
                 .packetize(3, false, &video_frame(0, 64, 3))
                 .unwrap(),
         );
+
         let retry = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestKeyframe { .. })
         });
@@ -1711,23 +1786,28 @@ mod tests {
                 .packetize(3, false, &video_frame(0, 64, 3))
                 .unwrap(),
         );
+
         let recovery = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestRecovery { .. })
         });
         let Some(ControlMessage::RequestRecovery { last_good, .. }) = recovery else {
             panic!("no recovery request in {recovery:?}");
         };
+
         rig.send(
             &packetizer
                 .packetize(4, false, &recovery_frame(0, Some(last_good), 64, 4))
                 .unwrap(),
         );
+
         let rejected = rig.next_video();
+
         rig.feedback
             .send(Feedback::DecodeFailed {
                 frame: rejected.number,
             })
             .unwrap();
+
         let keyframe = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestKeyframe { .. })
         });
@@ -1752,9 +1832,11 @@ mod tests {
         rig.feedback
             .send(Feedback::DecodeFailed { frame: 1 })
             .unwrap();
+
         let keyframe = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::RequestKeyframe { .. })
         });
+
         rig.send(
             &packetizer
                 .packetize(2, false, &recovery_frame(0, Some(1), 64, 2))
@@ -1770,6 +1852,7 @@ mod tests {
                 .packetize(4, true, &video_frame(0, 64, 4))
                 .unwrap(),
         );
+
         let resumed = rig.next_video();
         let stats = rig.counters.snapshot();
 
@@ -1814,6 +1897,7 @@ mod tests {
         let mut fragments = packetizer
             .packetize(1, false, &video_frame(0, 4_000, 1))
             .unwrap();
+
         fragments.remove(1);
         rig.send(&fragments);
         rig.send(
@@ -1843,9 +1927,11 @@ mod tests {
         packetizer
             .packetize(1, false, &video_frame(0, 64, 1))
             .unwrap();
+
         let mut fragments = packetizer
             .packetize(2, false, &video_frame(0, 4_000, 2))
             .unwrap();
+
         fragments.remove(1);
         rig.send(&fragments);
         rig.send(
@@ -1870,6 +1956,7 @@ mod tests {
                 .packetize(0, true, &video_frame(123_456, 64, 3))
                 .unwrap(),
         );
+
         let video = rig.next_video();
 
         assert_eq!(video.captured_micros, 123_456);
@@ -1905,7 +1992,9 @@ mod tests {
         rig.send(&[pong.to_datagram().unwrap()]);
 
         assert!(rig.wait_until(|rig| rig.counters.snapshot().clock_offset_micros.is_some()));
+
         let offset = rig.counters.snapshot().clock_offset_micros.unwrap();
+
         assert!((4_000_000..=5_000_000).contains(&offset));
         assert!(rig.finish().is_ok());
     }
@@ -1920,10 +2009,12 @@ mod tests {
         };
 
         rig.describe(0, description(1, 1280));
+
         assert!(matches!(rig.next_input(), DecodeInput::Open(Codec::Hevc)));
 
         rig.describe(1, description(2, 1920));
         rig.describe(2, av1);
+
         assert!(matches!(rig.next_input(), DecodeInput::Open(Codec::Av1)));
 
         rig.send(
@@ -1931,6 +2022,7 @@ mod tests {
                 .packetize(0, true, &video_frame(0, 64, 0))
                 .unwrap(),
         );
+
         assert!(matches!(rig.next_input(), DecodeInput::Video(_)));
         assert!(rig.decode.try_recv().is_err());
         assert!(rig.finish().is_ok());
@@ -1945,14 +2037,17 @@ mod tests {
             let datagrams = packetizer
                 .packetize(number, false, &payload(160, u8::try_from(number).unwrap()))
                 .unwrap();
+
             rig.send(&datagrams);
         }
 
         for number in 0..5_u32 {
             let packet = rig.next_audio();
+
             assert_eq!(packet.number, number);
             assert_eq!(packet.data, payload(160, u8::try_from(number).unwrap()));
         }
+
         assert_eq!(rig.counters.snapshot().audio_packets_received, 5);
         assert!(rig.finish().is_ok());
     }
@@ -1971,6 +2066,7 @@ mod tests {
         }
 
         let numbers: Vec<u32> = (0..4).map(|_| rig.next_audio().number).collect();
+
         assert_eq!(numbers, [0, 1, 3, 4]);
         assert!(rig.finish().is_ok());
     }
@@ -1982,7 +2078,9 @@ mod tests {
             data_shards: 4,
             parity_shards: 1,
         };
+
         let mut packetizer = rig.packetizer(StreamKind::Audio, scheme);
+
         let data = payload(4 * packetizer.shard_len(), 9);
 
         let datagrams = packetizer.packetize(0, false, &data).unwrap();
@@ -1992,6 +2090,7 @@ mod tests {
             .filter(|(index, _)| *index != 1)
             .map(|(_, datagram)| datagram.clone())
             .collect();
+
         rig.send(&kept);
 
         assert_eq!(rig.next_audio().data, data);
@@ -2024,6 +2123,7 @@ mod tests {
         let mut cursor = rig.packetizer(StreamKind::Cursor, FecScheme::None);
 
         rig.send(&packetizer.packetize(0, false, &payload(64, 0)).unwrap());
+
         let position = CursorMessage {
             x: 1,
             y: 2,
@@ -2031,6 +2131,7 @@ mod tests {
             visible: true,
             image: None,
         };
+
         rig.send(
             &cursor
                 .packetize(0, false, &cursor_bytes(&position))
@@ -2038,7 +2139,9 @@ mod tests {
         );
 
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 1));
+
         let stats = rig.counters.snapshot();
+
         assert_eq!(stats.audio_packets_received, 0);
         assert_eq!(stats.malformed_datagrams, 0);
         assert!(rig.finish().is_ok());
@@ -2075,7 +2178,9 @@ mod tests {
         );
 
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 2));
+
         let latest = rig.cursor.latest().unwrap();
+
         assert_eq!((latest.x, latest.y, latest.visible), (30, 40, false));
         assert_eq!(latest.image.unwrap().rgba, vec![5; 16]);
         assert_eq!(rig.counters.snapshot().cursor_updates, 2);
@@ -2094,12 +2199,15 @@ mod tests {
             image: Some(cursor_image(48, 7)),
         };
         let bytes = cursor_bytes(&message);
+
         assert!(bytes.len() > packetizer.shard_len());
 
         rig.send(&packetizer.packetize(0, false, &bytes).unwrap());
 
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 1));
+
         let image = rig.cursor.latest().unwrap().image.unwrap();
+
         assert_eq!((image.width, image.height), (48, 48));
         assert_eq!(image.rgba, vec![7; 48 * 48 * 4]);
         assert!(rig.finish().is_ok());
@@ -2134,7 +2242,9 @@ mod tests {
                 .packetize(5, false, &cursor_bytes(&at(50)))
                 .unwrap(),
         );
+
         assert!(rig.wait_until(|rig| rig.cursor.updates() == 1));
+
         rig.send(
             &packetizer
                 .packetize(4, false, &cursor_bytes(&at(40)))
@@ -2180,15 +2290,18 @@ mod tests {
         }
         .to_datagram()
         .unwrap()]);
+
         let request = next_message_matching(&rig, |message| {
             matches!(message, ControlMessage::QualityRequest { .. })
         });
+
         rig.send(&[ControlPacket::Message {
             id: 1,
             message: ControlMessage::QualityReport(report),
         }
         .to_datagram()
         .unwrap()]);
+
         let reported =
             rig.wait_until(|rig| rig.counters.snapshot().quality == crate::QualityState::Reported);
         let stats = rig.counters.snapshot();
@@ -2200,6 +2313,7 @@ mod tests {
         assert!(reported);
         assert_eq!(stats.quality_report, Some(report));
         assert!(stats.quality_age.is_some());
+
         rig.finish().unwrap();
     }
 
@@ -2250,6 +2364,7 @@ mod tests {
         rig.send(&clipboard_datagrams(1, 0, &text));
 
         assert!(rig.wait_until(|_| board.contents().as_deref() == Some(text.as_str())));
+
         rig.finish().unwrap();
     }
 
@@ -2260,18 +2375,22 @@ mod tests {
         let text = "hello ".repeat(300);
 
         board.copy(text.clone());
+
         let mut reassembler = rusplay_protocol::ClipboardReassembler::new(4096);
         let mut received = None;
+
         while received.is_none() {
             let Some(ControlMessage::Clipboard(chunk)) = next_message_matching(&rig, |message| {
                 matches!(message, ControlMessage::Clipboard(_))
             }) else {
                 break;
             };
+
             received = reassembler.push(&chunk).unwrap();
         }
 
         assert_eq!(received.as_deref(), Some(text.as_str()));
+
         rig.finish().unwrap();
     }
 
@@ -2284,6 +2403,7 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         assert_eq!(board.writes(), 0);
+
         rig.finish().unwrap();
     }
 
@@ -2302,6 +2422,7 @@ mod tests {
 
         assert!(rig.wait_until(|rig| rig.counters.snapshot().malformed_datagrams >= 1));
         assert_eq!(board.writes(), 0);
+
         rig.finish().unwrap();
     }
 
@@ -2330,6 +2451,7 @@ mod tests {
                 id: u32::try_from(id).unwrap(),
                 message,
             };
+
             rig.send(&[packet.to_datagram().unwrap()]);
         }
 
@@ -2340,6 +2462,7 @@ mod tests {
                     .expect("a rumble command arrives")
             })
             .collect();
+
         assert_eq!(
             commands,
             vec![
@@ -2379,12 +2502,14 @@ mod tests {
                 id: u32::try_from(id).unwrap(),
                 message,
             };
+
             rig.send(&[packet.to_datagram().unwrap()]);
         }
 
         let received: Vec<_> = (0..3)
             .map(|_| rig.rumble.recv_timeout(WAIT).expect("feedback arrives"))
             .collect();
+
         assert_eq!(
             received,
             vec![

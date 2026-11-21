@@ -1,6 +1,6 @@
 use crate::{Geometry, Kernel};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Taps {
     pub first: i64,
     pub anchor: i64,

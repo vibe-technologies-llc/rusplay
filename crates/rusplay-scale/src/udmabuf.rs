@@ -55,6 +55,7 @@ pub fn create(bytes: &[u8]) -> Option<OwnedFd> {
         MemfdFlags::ALLOW_SEALING | MemfdFlags::CLOEXEC,
     )
     .ok()?;
+
     rustix::fs::ftruncate(&memfd, u64::try_from(size).ok()?).ok()?;
     File::from(memfd.try_clone().ok()?).write_all(bytes).ok()?;
     rustix::fs::fcntl_add_seals(&memfd, SealFlags::SHRINK).ok()?;

@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use rusplay_config::InputConfig;
 use rusplay_protocol::{ClipboardChunk, ClipboardReassembler, ProtocolError};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClipboardPolicy {
     pub send: bool,
     pub receive: bool,
@@ -36,7 +36,7 @@ impl ClipboardPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Disposition {
     Queued,
     SendDisabled,
@@ -103,6 +103,7 @@ impl ClipboardSync {
         let Some(text) = self.reassembler.push(chunk)? else {
             return Ok(None);
         };
+
         if self.last_synced.as_deref() == Some(text.as_str()) {
             return Ok(None);
         }
@@ -185,6 +186,7 @@ mod tests {
         let text = "héllo ".repeat(250);
 
         assert_eq!(sender.local_changed(text.clone()), Disposition::Queued);
+
         let chunks = drain(&mut sender);
 
         assert!(chunks.len() > 1);
@@ -206,6 +208,7 @@ mod tests {
     fn nothing_is_applied_when_receiving_is_disabled() {
         let mut sender = ClipboardSync::new(policy(true, false));
         let mut receiver = ClipboardSync::new(policy(true, false));
+
         sender.local_changed("pushed at you".to_owned());
 
         let applied = deliver(&mut receiver, &drain(&mut sender));
@@ -230,6 +233,7 @@ mod tests {
             max_bytes: 100_000,
         });
         let mut small = ClipboardSync::new(policy(false, true));
+
         big.local_changed("a".repeat(50_000));
 
         let first = big.pop_chunk().unwrap();
@@ -246,6 +250,7 @@ mod tests {
         let mut client = ClipboardSync::new(policy(true, true));
 
         client.local_changed("copied on the client".to_owned());
+
         let applied = deliver(&mut host, &drain(&mut client));
 
         assert_eq!(applied.as_deref(), Some("copied on the client"));
@@ -262,7 +267,9 @@ mod tests {
         let mut client = ClipboardSync::new(policy(true, true));
 
         host.local_changed("from the host".to_owned());
+
         let host_chunks = drain(&mut host);
+
         deliver(&mut client, &host_chunks);
 
         assert_eq!(
@@ -290,6 +297,7 @@ mod tests {
         sync.local_changed("a".repeat(1500));
         sync.pop_chunk();
         sync.local_changed("fresh".to_owned());
+
         let chunks = drain(&mut sync);
 
         assert_eq!(chunks.len(), 1);
@@ -299,6 +307,7 @@ mod tests {
     #[test]
     fn reset_forgets_the_last_value_and_the_queue() {
         let mut sync = ClipboardSync::new(policy(true, true));
+
         sync.local_changed("one".to_owned());
 
         sync.reset();

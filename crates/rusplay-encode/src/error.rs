@@ -175,7 +175,7 @@ pub enum EncodeError {
     OpaqueFdTooShort { needed: u64, actual: u64 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ApiVersion {
     pub major: u32,
     pub minor: u32,
@@ -187,7 +187,7 @@ impl fmt::Display for ApiVersion {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NvencCall {
     CreateInstance,
     GetMaxSupportedVersion,
@@ -230,7 +230,7 @@ impl fmt::Display for NvencCall {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NvencStatus(pub i32);
 
 impl NvencStatus {

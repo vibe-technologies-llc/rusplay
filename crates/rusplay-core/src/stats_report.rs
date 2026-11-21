@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatsPhase {
     Interval,
     Final,
@@ -18,7 +18,7 @@ impl StatsPhase {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JsonLine(String);
 
 impl JsonLine {
@@ -57,7 +57,7 @@ pub fn unix_millis_now() -> u128 {
         .map_or(0, |elapsed| elapsed.as_millis())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatsSchedule {
     interval: Option<Duration>,
     next: Instant,
@@ -77,6 +77,7 @@ impl StatsSchedule {
         let Some(interval) = self.interval else {
             return false;
         };
+
         if now < self.next {
             return false;
         }

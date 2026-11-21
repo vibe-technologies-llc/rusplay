@@ -14,7 +14,7 @@ const DEBAND_THRESHOLD_RANGE: RangeInclusive<f32> = 0.0..=16.0;
 const DEBAND_LIMIT_RANGE: RangeInclusive<f32> = 0.0..=16.0;
 pub(crate) const LEGACY_DEBAND_THRESHOLD: f32 = 3.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScalingConfig {
     pub chroma_siting: ChromaSiting,
@@ -48,7 +48,7 @@ impl ScalingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DebandConfig {
     pub enabled: bool,
@@ -96,7 +96,7 @@ impl Default for DebandConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DownscaleConfig {
     pub filter: ScaleFilter,
@@ -114,7 +114,7 @@ impl Default for DownscaleConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UpscaleConfig {
     pub filter: ScaleFilter,

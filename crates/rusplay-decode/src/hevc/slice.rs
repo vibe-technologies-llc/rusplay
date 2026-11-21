@@ -51,9 +51,11 @@ struct References {
 
 pub(super) fn picture_parameter_set_id(bits: &mut Bits, irap: bool) -> Result<(bool, u8), Stop> {
     let first_slice_segment_in_picture = bits.bit()?;
+
     if irap {
         bits.skip(1)?;
     }
+
     let id = bits.unsigned_max(MAX_PICTURE_PARAMETER_SET_ID)?;
 
     Ok((
@@ -71,6 +73,7 @@ pub(super) fn scan_slice_header(
     let sequence = &*pictures.sequence;
 
     let mut dependent = false;
+
     if !first_slice_segment_in_picture {
         if pictures.dependent_slice_segments_enabled {
             dependent = bits.bit()?;
@@ -93,7 +96,9 @@ fn scan_independent_fields(
     let sequence = &*pictures.sequence;
 
     bits.skip(pictures.extra_slice_header_bits)?;
+
     let slice_type = SliceType::from_code(bits.unsigned()?)?;
+
     if pictures.output_flag_present {
         bits.skip(1)?;
     }
@@ -114,11 +119,13 @@ fn scan_independent_fields(
 
     if !nalu_type.is_idr() {
         bits.skip(sequence.pic_order_count_lsb_bits)?;
+
         let from_sequence = bits.bit()?;
 
         if from_sequence {
             let declared = sequence.short_term_sets.len();
             let mut index = 0;
+
             if declared > 1 {
                 index = count(bits.bits(ceil_log2(u32::try_from(declared).unwrap_or(u32::MAX)))?);
                 if index >= declared {
@@ -132,6 +139,7 @@ fn scan_independent_fields(
                 declared: sequence.short_term_sets.len(),
                 max_dec_pic_buffering_minus1: sequence.max_dec_pic_buffering_minus1,
             };
+
             references = scan_short_term_set(bits, &sets, sequence.short_term_sets.len())?;
         }
 
@@ -159,6 +167,7 @@ fn scan_independent_fields(
                 .ok_or(Stop::ParserRejects)?,
             None => &references,
         };
+
         scan_inter_fields(bits, pictures, &header, set, &long_term_used)?;
     }
 
@@ -177,6 +186,7 @@ fn scan_independent_fields(
     }
 
     let override_flag = pictures.deblocking_filter_override_enabled && bits.bit()?;
+
     if override_flag {
         header.deblocking_filter_disabled = bits.bit()?;
         if !header.deblocking_filter_disabled {
@@ -209,11 +219,13 @@ fn scan_long_term_pictures(
         0
     };
     let signalled = bits.unsigned()?;
+
     if count(from_sequence) + count(signalled) > count(MAX_LONG_TERM_PICTURES) {
         return Err(Stop::LongTermPictureCount);
     }
 
     let mut used = Vec::new();
+
     for index in 0..from_sequence + signalled {
         if index < from_sequence {
             let entry = if sps_entries > 1 {
@@ -225,6 +237,7 @@ fn scan_long_term_pictures(
                 .long_term_used_by_current
                 .get(count(entry))
                 .ok_or(Stop::ParserRejects)?;
+
             used.push(*flag);
         } else {
             bits.skip(sequence.pic_order_count_lsb_bits)?;
@@ -250,12 +263,14 @@ fn scan_inter_fields(
         l0_minus1: pictures.default_l0_references_minus1,
         l1_minus1: pictures.default_l1_references_minus1,
     };
+
     if bits.bit()? {
         references.l0_minus1 = bits.unsigned_max(MAX_REFERENCES_MINUS1)?;
         if header.slice_type == SliceType::B {
             references.l1_minus1 = bits.unsigned_max(MAX_REFERENCES_MINUS1)?;
         }
     }
+
     let is_b = header.slice_type == SliceType::B;
 
     let current_pictures = short_term.used_count()
@@ -264,6 +279,7 @@ fn scan_inter_fields(
 
     if pictures.lists_modification_present && current_pictures > 1 {
         let entry_bits = ceil_log2(u32::try_from(current_pictures).unwrap_or(u32::MAX));
+
         if bits.bit()? {
             bits.skip((count(references.l0_minus1) + 1) * entry_bits)?;
         }
@@ -293,6 +309,7 @@ fn scan_inter_fields(
 
     let weighted = (pictures.weighted_prediction && header.slice_type == SliceType::P)
         || (pictures.weighted_bi_prediction && is_b);
+
     if weighted {
         scan_prediction_weights(bits, pictures, &references, is_b)?;
     }
@@ -322,6 +339,7 @@ fn scan_prediction_weights(
 
     let l0_chroma_flags = sequence.chroma_array_type != 0;
     let l1_chroma_flags = sequence.chroma_format_idc != 0;
+
     scan_weight_list(bits, references.l0_minus1, l0_chroma_flags)?;
     if is_b {
         scan_weight_list(bits, references.l1_minus1, l1_chroma_flags)?;
@@ -338,10 +356,13 @@ fn scan_weight_list(
     let entries = count(references_minus1) + 1;
 
     let mut luma = Vec::with_capacity(entries);
+
     for _ in 0..entries {
         luma.push(bits.bit()?);
     }
+
     let mut chroma = vec![false; entries];
+
     if chroma_flags {
         for flag in &mut chroma {
             *flag = bits.bit()?;

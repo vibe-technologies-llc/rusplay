@@ -99,6 +99,7 @@ impl Shared {
 
     fn arrive(&self, frame: PresentedFrame) -> Option<PresentedFrame> {
         let replaced = self.pending.lock().frame.replace(frame);
+
         self.wake.notify_one();
 
         replaced
@@ -106,6 +107,7 @@ impl Shared {
 
     fn set_overlay(&self, overlay: Option<OverlayText>) {
         let mut pending = self.pending.lock();
+
         if pending.overlay.as_deref() == overlay.as_ref() {
             return;
         }
@@ -118,7 +120,9 @@ impl Shared {
 
     fn update<R>(&self, change: impl FnOnce(&mut Pending) -> R) -> R {
         let mut pending = self.pending.lock();
+
         let result = change(&mut pending);
+
         pending.dirty = true;
         drop(pending);
         self.wake.notify_one();
@@ -153,7 +157,7 @@ impl CursorWatcher for PointerFollower {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct WindowSink {
     shared: Arc<Shared>,
 }
@@ -187,6 +191,7 @@ fn spawn_presenter(
         .name(format!("rusplay-client-{}", Stage::Window))
         .spawn(move || {
             let refused = tuning.apply(role).len() as u64;
+
             worker.tuning_refusals.add(refused);
             tuned.send(()).ok();
 
@@ -196,6 +201,7 @@ fn spawn_presenter(
             stage: Stage::Window,
             source,
         })?;
+
     tuning_done.recv().ok();
 
     Ok(thread)
@@ -241,16 +247,19 @@ impl StreamWindow {
             "rusplay-client",
         ))
         .map_err(ClientError::WindowDevice)?;
+
         let gpu = Gpu::new(device, queue);
 
         let display = display_for(config)?;
         let options = SurfaceOptions::choose(&surface, &adapter, config, &display)?;
         let shared = Arc::new(Shared::new(options.output.encoding.target));
         let pacing = PacingOptions::from(&config.video);
+
         shared
             .presentation
             .set_feedback(child.has_presentation_feedback());
         shared.presentation.set_margin(pacing.margin);
+
         let presenter = Presenter {
             composer: Composer::new(&gpu.device, &gpu.queue, &options.output.encoding),
             cursor_layer: CursorLayer::new(
@@ -336,7 +345,9 @@ impl StreamWindow {
 
     pub fn follow_cursor(&self, cursor: &LatestCursor) {
         let watcher: Arc<dyn CursorWatcher> = Arc::clone(&self.shared) as Arc<dyn CursorWatcher>;
+
         cursor.watch(watcher);
+
         let cursor = cursor.clone();
 
         self.shared.update(|pending| pending.cursor = Some(cursor));
@@ -362,6 +373,7 @@ impl StreamWindow {
                 },
             )
         }?;
+
         capture.set_region(self.layout.map(WindowLayout::region));
 
         let follower = Arc::new(PointerFollower {
@@ -369,6 +381,7 @@ impl StreamWindow {
             observer: capture.host_cursor_observer(),
             last_visible: Mutex::new(None),
         });
+
         stream
             .cursor()
             .watch(Arc::clone(&follower) as Arc<dyn CursorWatcher>);
@@ -508,7 +521,7 @@ fn display_for(config: &Config) -> Result<Display, ClientError> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct SurfaceOptions {
     output: SurfaceOutput,
     present_mode: wgpu::PresentMode,
@@ -531,11 +544,13 @@ impl SurfaceOptions {
             config.color.output,
         )?;
         let present_mode = wgpu_present_mode(config.video.present_mode);
+
         if !capabilities.present_modes.contains(&present_mode) {
             return Err(ClientError::PresentModeUnsupported {
                 mode: config.video.present_mode,
             });
         }
+
         let alpha_mode = if capabilities
             .alpha_modes
             .contains(&wgpu::CompositeAlphaMode::Opaque)
@@ -623,12 +638,16 @@ impl Presenter {
                 && self.choice.accepts(frame.color)
             {
                 let slot = self.pacer.schedule(Instant::now(), frame.captured_at);
+
                 shared.presentation.coalesced(self.paced.push(slot, frame));
             }
 
             let (due, skipped) = self.paced.take_due(Instant::now());
+
             shared.presentation.coalesced(skipped);
+
             let drawn = due.is_some();
+
             if let Some((slot, frame)) = due {
                 self.frame = Some(frame);
                 self.fresh = true;
@@ -640,6 +659,7 @@ impl Presenter {
             }
             if wake.changed || drawn {
                 let gpu = self.gpu.clone();
+
                 gpu.guard(|| self.draw(wake.layout))?;
             }
         }
@@ -721,6 +741,7 @@ impl Presenter {
         let Some(frame) = self.frame.as_ref() else {
             return Ok(());
         };
+
         if frame.resolution() != layout.pixels {
             return Ok(());
         }
@@ -804,6 +825,7 @@ impl Presenter {
         );
 
         let destination = (layout.width, layout.height);
+
         if self.destination != Some(destination) {
             self.child.set_destination(layout.width, layout.height);
             self.destination = Some(destination);
@@ -884,10 +906,12 @@ mod tests {
 
         let presenter = spawn_presenter(tuning(TEST_NICE), ThreadRole::Frame, &shared, move |_| {
             let thread = thread::current().name().map(str::to_owned);
+
             observed.send((thread, current_thread_nice())).ok();
             Ok(())
         })
         .unwrap();
+
         presenter.join().unwrap().unwrap();
 
         assert_eq!(
@@ -916,6 +940,7 @@ mod tests {
         )
         .unwrap();
         let counted = sink_of(&shared).thread_priority_failures();
+
         release.send(()).unwrap();
         presenter.join().unwrap().unwrap();
 

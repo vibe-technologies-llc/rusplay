@@ -22,6 +22,7 @@ struct Endpoint {
 impl Endpoint {
     fn new() -> Self {
         let transport = Transport::bind(LOOPBACK, TransportOptions::default()).unwrap();
+
         transport.set_nonblocking(true).unwrap();
 
         Self {
@@ -62,6 +63,7 @@ impl Endpoint {
 fn control_message_survives_a_dropped_first_datagram() {
     let mut a = Endpoint::new();
     let mut b = Endpoint::new();
+
     let (addr_a, addr_b) = (a.addr(), b.addr());
 
     let id = a
@@ -72,15 +74,19 @@ fn control_message_survives_a_dropped_first_datagram() {
         )
         .unwrap();
     let mut dropped = Vec::new();
+
     a.channel.take_transmits(&mut dropped);
+
     assert_eq!(dropped.len(), 1);
 
     let deadline = Instant::now() + Duration::from_secs(5);
+
     while a.channel.in_flight() > 0 {
         assert!(
             Instant::now() < deadline,
             "control message never acknowledged"
         );
+
         a.pump(addr_b, Instant::now());
         b.pump(addr_a, Instant::now());
         thread::sleep(Duration::from_millis(2));
@@ -99,6 +105,7 @@ fn control_message_survives_a_dropped_first_datagram() {
 fn control_traffic_shares_the_socket_with_media() {
     let mut a = Endpoint::new();
     let mut b = Endpoint::new();
+
     let (addr_a, addr_b) = (a.addr(), b.addr());
     let mut packetizer = Packetizer::new(
         StreamKind::Video,
@@ -118,17 +125,20 @@ fn control_traffic_shares_the_socket_with_media() {
     }
 
     let deadline = Instant::now() + Duration::from_secs(5);
+
     while a.channel.in_flight() > 0 {
         assert!(
             Instant::now() < deadline,
             "control message never acknowledged"
         );
+
         a.pump(addr_b, Instant::now());
         b.pump(addr_a, Instant::now());
         thread::sleep(Duration::from_millis(2));
     }
 
     let mut events = Vec::new();
+
     for datagram in &b.media {
         reassembler
             .push(datagram, Instant::now(), &mut events)

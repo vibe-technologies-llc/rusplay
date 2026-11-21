@@ -7,7 +7,7 @@ use rusplay_protocol::ClientDisplay;
 
 const MILLIHERTZ_PER_HERTZ: u32 = 1000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct VirtualOutput {
     pub limits: CaptureConfig,
     pub offer: Option<OutputOffer>,
@@ -16,6 +16,7 @@ pub(crate) struct VirtualOutput {
 impl VirtualOutput {
     pub(crate) fn select(&self, display: &ClientDisplay) -> OutputRequest {
         let request = select_output(display, &self.limits);
+
         self.offer(request);
 
         request
@@ -31,6 +32,7 @@ impl VirtualOutput {
 pub(crate) fn select_output(display: &ClientDisplay, limits: &CaptureConfig) -> OutputRequest {
     let min = limits.virtual_min_resolution;
     let max = limits.virtual_max_resolution;
+
     let fitted = fit_within(grow_to(display.resolution(), min), max);
 
     OutputRequest {
@@ -42,7 +44,7 @@ pub(crate) fn select_output(display: &ClientDisplay, limits: &CaptureConfig) -> 
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ResizeGate {
     min_interval: Duration,
     last_applied: Option<Instant>,
@@ -64,6 +66,7 @@ impl ResizeGate {
 
     pub(crate) fn due(&mut self, now: Instant) -> Option<ClientDisplay> {
         let display = self.pending?;
+
         if self.next_allowed().is_some_and(|allowed| now < allowed) {
             return None;
         }
@@ -312,8 +315,11 @@ mod tests {
         let mut gate = ResizeGate::new(INTERVAL);
 
         gate.submit(display(1000, 700, 60_000));
+
         let first = gate.due(start);
+
         gate.submit(display(1100, 700, 60_000));
+
         let early = gate.due(start + 249 * MS);
         let on_time = gate.due(start + 250 * MS);
 
@@ -331,6 +337,7 @@ mod tests {
 
         for step in 0..10_000u32 {
             let now = start + MS * (step / 10);
+
             replaced += usize::from(gate.submit(display(1000 + step % 5000, 700, 60_000)));
             if let Some(display) = gate.due(now) {
                 applied.push((now, display));
@@ -365,6 +372,7 @@ mod tests {
     fn a_reset_forgets_the_pending_display_and_applies_the_next_at_once() {
         let start = Instant::now();
         let mut gate = ResizeGate::new(INTERVAL);
+
         gate.submit(display(1000, 700, 60_000));
         gate.due(start);
         gate.submit(display(1100, 700, 60_000));

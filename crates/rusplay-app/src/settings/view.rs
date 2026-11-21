@@ -78,7 +78,7 @@ enum ScrollTo {
     Field(usize),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct HostSettingsSaved;
 
 pub struct SettingsView {
@@ -150,11 +150,13 @@ impl SettingsView {
 
         let color_defaults = DisplayColorDefaults::query();
         let search = cx.new(|cx| TextField::new("", SEARCH_PLACEHOLDER, cx));
+
         subscriptions.push(cx.subscribe(&search, |this, input, event, cx| {
             if *event == TextFieldEvent::Changed {
                 this.search_edited(&input, cx);
             }
         }));
+
         let mut view = Self {
             environment,
             role: ConfigRole::Client,
@@ -191,6 +193,7 @@ impl SettingsView {
                         TextFieldEvent::Changed => this.text_edited(index, &input, cx),
                         TextFieldEvent::Submitted => this.save(cx),
                     });
+
                 subscriptions.push(subscription);
                 view.inputs.push(Some(input));
             } else {
@@ -206,12 +209,14 @@ impl SettingsView {
             _subscriptions: subscriptions,
             ..view
         };
+
         view.sync_hardware(cx);
         view
     }
 
     fn text_edited(&mut self, index: usize, input: &Entity<TextField>, cx: &mut Context<Self>) {
         let text = input.read(cx).text().to_owned();
+
         self.form.set_text(index, text);
         self.mark_edited(index);
         self.sync_hardware(cx);
@@ -307,6 +312,7 @@ impl SettingsView {
         } else {
             option.to_owned()
         };
+
         if let Some(Some(input)) = self.inputs.get(index) {
             input.update(cx, |input, cx| input.set_text(&text, cx));
         }
@@ -320,6 +326,7 @@ impl SettingsView {
 
     fn flip(&mut self, index: usize, cx: &mut Context<Self>) {
         let flag = matches!(self.form.value(index), Value::Flag(true));
+
         self.form.set_flag(index, !flag);
         self.mark_edited(index);
         self.sync_hardware(cx);
@@ -432,6 +439,7 @@ impl SettingsView {
         if self.section_is_default() {
             return;
         }
+
         let Some(defaults) = &self.defaults else {
             return;
         };
@@ -456,11 +464,13 @@ impl SettingsView {
         for (index, input) in self.inputs.iter().enumerate() {
             if let Some(input) = input {
                 let text = self.form.text(index).to_owned();
+
                 input.update(cx, |input, cx| input.set_text(&text, cx));
             }
         }
 
         let pair_fields: Vec<usize> = self.pair_inputs.keys().copied().collect();
+
         for index in pair_fields {
             self.rebuild_pairs(index, cx);
         }
@@ -529,6 +539,7 @@ impl SettingsView {
             Ok(config) => config,
             Err(issues) => {
                 let mut unplaced = Vec::new();
+
                 for issue in &issues {
                     match issue.field() {
                         Some(field) => {
@@ -546,6 +557,7 @@ impl SettingsView {
                 }
 
                 let mut message = format!("{} setting(s) need attention", issues.len());
+
                 for text in unplaced {
                     message.push_str(": ");
                     message.push_str(&text);
@@ -714,6 +726,7 @@ impl SettingsView {
         };
 
         let invalid = self.errors.contains_key(&index);
+
         input.update(cx, |input, cx| input.set_invalid(invalid, cx));
 
         div().w(px(INPUT_WIDTH)).child(input).into_any_element()
@@ -750,6 +763,7 @@ impl SettingsView {
             && let Some(input) = self.inputs[index].clone()
         {
             let invalid = self.errors.contains_key(&index);
+
             input.update(cx, |input, cx| input.set_invalid(invalid, cx));
             row = row.child(div().w(px(PRIMARIES_INPUT_WIDTH)).child(input));
         }
@@ -821,6 +835,7 @@ impl SettingsView {
     ) -> AnyElement {
         let current = self.selected_choice(index);
         let unset = self.unset_label(index);
+
         let shown = if current.is_empty() {
             unset.clone()
         } else {
@@ -829,6 +844,7 @@ impl SettingsView {
         let open = self.open_choice == Some(index);
 
         let mut entries: Vec<&'static str> = Vec::with_capacity(options.len() + 1);
+
         if optional {
             entries.push("");
         }
@@ -1164,16 +1180,20 @@ impl SettingsView {
             ConfigRole::Host => DeviceKey::Encoder(config.video.encoder.clone()),
             ConfigRole::Client => DeviceKey::Decoder(config.video.decoder.clone()),
         };
+
         if self.probe.as_ref().is_some_and(|probe| probe.key == key) {
             return;
         }
 
         self.probe_generation = self.probe_generation.wrapping_add(1);
+
         let generation = self.probe_generation;
+
         self.probe = Some(HardwareProbe {
             key: key.clone(),
             formats: None,
         });
+
         let pending = cx.background_spawn(async move {
             match key {
                 DeviceKey::Encoder(encoder) => {
@@ -1204,8 +1224,10 @@ impl SettingsView {
                 }
             }
         });
+
         self.probe_task = Some(cx.spawn(async move |this, cx| {
             let formats = pending.await;
+
             this.update(cx, |this, cx| {
                 if this.probe_generation == generation
                     && let Some(probe) = &mut this.probe
@@ -1220,6 +1242,7 @@ impl SettingsView {
 
     fn outlook_lines(&self) -> Vec<OutlookLine> {
         let mut lines = Vec::new();
+
         if let Some(text) = outlook::audio_gap(
             self.form.text(field_index("audio.codec")).trim(),
             cfg!(feature = "flac"),
@@ -1240,6 +1263,7 @@ impl SettingsView {
         let Some(probe) = &self.probe else {
             return lines;
         };
+
         if probe.key != key {
             lines.push(checking_line(self.role));
             return lines;
@@ -1275,6 +1299,7 @@ impl SettingsView {
 
     fn render_outlook(&self) -> AnyElement {
         let lines = self.outlook_lines();
+
         if lines.is_empty() {
             return div().into_any_element();
         }
@@ -1426,11 +1451,13 @@ impl Render for SettingsView {
             .overflow_y_scroll()
             .px_6()
             .pb_8();
+
         fields = if children.is_empty() {
             fields.child(empty_results(searching))
         } else {
             fields.children(children)
         };
+
         let sidebar = self.render_sidebar(cx);
         let outlook = self.render_outlook();
         let footer = self.render_footer(cx);

@@ -1,13 +1,13 @@
 use crate::ProtocolError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(pub u16);
 
 impl ProtocolVersion {
     pub const CURRENT: Self = Self(28);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[repr(u8)]
 pub enum StreamKind {
     Video = 0,
@@ -42,7 +42,7 @@ impl TryFrom<u8> for StreamKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct PacketFlags(u8);
 
 impl PacketFlags {
@@ -72,7 +72,7 @@ impl PacketFlags {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct PacketHeader {
     pub version: ProtocolVersion,
     pub stream: StreamKind,
@@ -114,6 +114,7 @@ impl PacketHeader {
         };
 
         let version = ProtocolVersion(u16::from_be_bytes([bytes[0], bytes[1]]));
+
         if version != ProtocolVersion::CURRENT {
             return Err(ProtocolError::VersionMismatch {
                 expected: ProtocolVersion::CURRENT,
@@ -194,6 +195,7 @@ mod tests {
         }
 
         let first_unknown = u8::try_from(kinds.len()).unwrap();
+
         assert_eq!(
             StreamKind::try_from(first_unknown),
             Err(ProtocolError::UnknownStreamKind(first_unknown))
@@ -203,6 +205,7 @@ mod tests {
     #[test]
     fn parse_splits_header_from_payload() {
         let mut datagram = vec![0; PacketHeader::SIZE];
+
         sample().write(&mut datagram).unwrap();
         datagram.extend_from_slice(b"payload");
 
@@ -215,8 +218,11 @@ mod tests {
     #[test]
     fn fragment_index_beyond_count_is_rejected() {
         let mut header = sample();
+
         header.fragment_index = header.fragment_count;
+
         let mut buf = [0; PacketHeader::SIZE];
+
         header.write(&mut buf).unwrap();
 
         assert_eq!(
@@ -228,9 +234,12 @@ mod tests {
     #[test]
     fn zero_fragment_count_is_rejected() {
         let mut header = sample();
+
         header.fragment_index = 0;
         header.fragment_count = 0;
+
         let mut buf = [0; PacketHeader::SIZE];
+
         header.write(&mut buf).unwrap();
 
         assert!(matches!(
@@ -255,6 +264,7 @@ mod tests {
     #[test]
     fn foreign_version_is_rejected() {
         let mut buf = [0; PacketHeader::SIZE];
+
         sample().write(&mut buf).unwrap();
 
         buf[1] = 0xFF;
@@ -268,6 +278,7 @@ mod tests {
     #[test]
     fn every_strict_prefix_of_a_header_is_rejected() {
         let mut buf = [0; PacketHeader::SIZE];
+
         sample().write(&mut buf).unwrap();
 
         for cut in 0..PacketHeader::SIZE {
@@ -285,6 +296,7 @@ mod tests {
     #[test]
     fn every_prefix_with_a_complete_header_parses_with_the_payload_it_has() {
         let mut datagram = vec![0; PacketHeader::SIZE];
+
         sample().write(&mut datagram).unwrap();
         datagram.extend_from_slice(&[1, 2, 3, 4]);
 

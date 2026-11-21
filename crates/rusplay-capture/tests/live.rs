@@ -72,6 +72,7 @@ fn portal_stream_delivers_a_frame() {
     let mut capture =
         PipeWireCapture::from_portal(session, StreamOptions::new(&config.capture, &config.video))
             .unwrap();
+
     let frame = capture.next_frame_timeout(FRAME_WAIT).unwrap().unwrap();
 
     assert!(frame.resolution.pixel_count() > 0);
@@ -86,15 +87,18 @@ fn local_source_delivers_shared_memory_frames() {
     let options = StreamOptions::new(&config.capture, &config.video);
 
     let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+
     let frame = capture.next_frame().unwrap();
 
     assert_eq!(frame.resolution, SOURCE_SIZE);
     assert_eq!(frame.format, DrmFourcc::from_code(*b"XR24"));
     assert_eq!(frame.color.transfer, TransferFunction::Srgb);
     assert_eq!(frame.color.primaries, ColorPrimaries::Bt709);
+
     let FrameBuffer::Shm { data, stride } = frame.buffer else {
         panic!("expected a shared-memory frame");
     };
+
     assert_eq!(stride, SOURCE_STRIDE);
     assert!(data.iter().all(|byte| *byte == SOURCE_FILL));
 }
@@ -113,6 +117,7 @@ fn a_source_describing_hdr_is_captured_with_its_description() {
     let options = StreamOptions::new(&config.capture, &config.video);
 
     let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+
     let frame = capture.next_frame().unwrap();
 
     assert_eq!(frame.color.transfer, TransferFunction::Pq);
@@ -136,6 +141,7 @@ fn local_source_negotiates_a_dmabuf_modifier() {
         else {
             panic!("expected a dma-buf frame");
         };
+
         assert_eq!(modifier, DRM_FORMAT_MOD_LINEAR);
         assert_eq!(planes.len(), 1);
         assert_eq!(planes[0].stride, SOURCE_STRIDE);
@@ -148,9 +154,11 @@ fn dmabuf_off_falls_back_to_shared_memory() {
     let source = TestSource::spawn(SourceMemory::Shared);
     let config = Config::default();
     let mut options = StreamOptions::new(&config.capture, &config.video);
+
     options.prefer_dmabuf = false;
 
     let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+
     let frame = capture.next_frame().unwrap();
 
     assert!(matches!(frame.buffer, FrameBuffer::Shm { .. }));
@@ -164,26 +172,34 @@ fn local_source_forwards_cursor_metadata_once_per_bitmap() {
     let options = StreamOptions::new(&config.capture, &config.video);
 
     let mut capture = PipeWireCapture::connect(pipewire_socket(), source.node_id, options).unwrap();
+
     let feed = capture.cursor_feed().unwrap();
+
     for _ in 0..FRAMES_TO_CYCLE {
         capture.next_frame().unwrap();
     }
+
     let first = feed.recv_timeout(FRAME_WAIT);
+
     capture.next_frame().unwrap();
+
     let later = feed.recv_timeout(FRAME_WAIT);
 
     let Received::Value(first) = first else {
         panic!("expected a cursor update, got {first:?}");
     };
     let bitmap = first.bitmap.unwrap();
+
     assert_eq!((bitmap.width, bitmap.height), (CURSOR_EDGE, CURSOR_EDGE));
     assert_eq!((bitmap.hotspot_x, bitmap.hotspot_y), (1, 0));
     assert_eq!(bitmap.rgba, CURSOR_PIXELS);
     assert!(first.visible);
     assert_eq!(first.y, 10);
+
     let Received::Value(later) = later else {
         panic!("expected a cursor update, got {later:?}");
     };
+
     assert!(later.x > first.x);
     assert_eq!(later.bitmap, None);
 }
@@ -194,13 +210,13 @@ fn pipewire_socket() -> OwnedFd {
     OwnedFd::from(UnixStream::connect(path).unwrap())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Colorimetry {
     transfer: u32,
     primaries: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceMemory {
     Shared,
     DmaBuf,
@@ -290,6 +306,7 @@ fn source_format(memory: SourceMemory, colorimetry: Option<Colorimetry>) -> Vec<
             Value::Fraction(Fraction { num: 60, denom: 1 }),
         ),
     ];
+
     if let Some(colorimetry) = colorimetry {
         properties.push(Property::new(
             FormatProperties::VideoTransferFunction.as_raw(),
@@ -302,6 +319,7 @@ fn source_format(memory: SourceMemory, colorimetry: Option<Colorimetry>) -> Vec<
     }
     if memory == SourceMemory::DmaBuf {
         let modifiers = vec![DRM_FORMAT_MOD_LINEAR.cast_signed(), AMD_TILED.cast_signed()];
+
         properties.push(Property {
             key: FormatProperties::VideoModifier.as_raw(),
             flags: PropertyFlags::MANDATORY | PropertyFlags::DONT_FIXATE,
@@ -371,6 +389,7 @@ fn on_source_format(stream: &Stream, state: &SourceState, format: &Pod) {
 
     let buffers = source_buffers(state.memory);
     let cursor = source_cursor_meta();
+
     stream
         .update_params(&mut [
             Pod::from_bytes(&buffers).unwrap(),
@@ -383,10 +402,13 @@ fn back_with_memory(state: &mut SourceState, buffer: *mut pw_sys::pw_buffer) {
     if state.memory != SourceMemory::DmaBuf {
         return;
     }
+
     let file = tempfile::tempfile().unwrap();
+
     file.set_len(u64::from(SOURCE_BYTES)).unwrap();
 
     let data = unsafe { &mut *(*(*buffer).buffer).datas };
+
     data.type_ = sys::SPA_DATA_DmaBuf;
     data.flags = sys::SPA_DATA_FLAG_READABLE;
     data.fd = i64::from(file.as_raw_fd());
@@ -423,6 +445,7 @@ fn write_cursor(buffer: *mut sys::spa_buffer, x: i32) {
     let cursor =
         unsafe { sys::spa_buffer_find_meta_data(buffer, sys::SPA_META_Cursor, cursor_meta_size()) }
             .cast::<sys::spa_meta_cursor>();
+
     if cursor.is_null() {
         return;
     }
@@ -437,6 +460,7 @@ fn write_cursor(buffer: *mut sys::spa_buffer, x: i32) {
         (*cursor).bitmap_offset = u32::try_from(cursor_size).unwrap();
 
         let bitmap = cursor.add(1).cast::<sys::spa_meta_bitmap>();
+
         (*bitmap).format = VideoFormat::RGBA.as_raw();
         (*bitmap).size = sys::spa_rectangle {
             width: CURSOR_EDGE,
@@ -453,12 +477,14 @@ fn write_cursor(buffer: *mut sys::spa_buffer, x: i32) {
 
 fn produce(stream: &Stream, state: &mut SourceState) {
     let raw = unsafe { stream.dequeue_raw_buffer() };
+
     if raw.is_null() {
         return;
     }
 
     let buffer = unsafe { (*raw).buffer };
     let data = unsafe { &mut *(*buffer).datas };
+
     if !data.data.is_null() {
         unsafe {
             data.data
@@ -466,7 +492,9 @@ fn produce(stream: &Stream, state: &mut SourceState) {
                 .write_bytes(SOURCE_FILL, usize::try_from(SOURCE_BYTES).unwrap());
         }
     }
+
     let chunk = unsafe { &mut *data.chunk };
+
     chunk.offset = 0;
     chunk.size = SOURCE_BYTES;
     chunk.stride = i32::try_from(SOURCE_STRIDE).unwrap();
@@ -511,6 +539,7 @@ fn run_source(
         .state_changed(|stream, state, _, new| {
             if !state.announced && new == StreamState::Paused {
                 state.announced = true;
+
                 let _ = state.ready.send(stream.node_id());
             }
         })
@@ -529,6 +558,7 @@ fn run_source(
         SourceMemory::DmaBuf => StreamFlags::ALLOC_BUFFERS,
     };
     let format = source_format(memory, colorimetry);
+
     stream
         .connect(
             Direction::Output,

@@ -9,7 +9,7 @@ const AV1_MAX_LUMINANCE_UNITS: u64 = 1 << 8;
 #[cfg(any(feature = "software", feature = "vaapi", feature = "nvdec"))]
 const AV1_MIN_LUMINANCE_UNITS: u64 = 1 << 14;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Primaries {
     pub red: [u16; 2],
     pub green: [u16; 2],

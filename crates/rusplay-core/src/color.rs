@@ -19,7 +19,7 @@ pub use crate::color::{
     transfer::{TransferFunction, pq_from_nits, pq_to_nits},
 };
 
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Clone, Debug, PartialEq, Error)]
 pub enum ColorError {
     #[error("chromaticity ({x}, {y}) is outside 0..=1 or has y = 0")]
     ChromaticityOutOfRange { x: f64, y: f64 },
@@ -29,7 +29,7 @@ pub enum ColorError {
     LuminanceOutOfRange(f64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MatrixCoefficients {
     #[default]
@@ -79,6 +79,7 @@ impl MatrixCoefficients {
 
     pub fn rows(self) -> [[f64; 3]; 3] {
         let (red, blue) = self.red_blue_coefficients();
+
         let green = 1.0 - red - blue;
         let blue_scale = 2.0 * (1.0 - blue);
         let red_scale = 2.0 * (1.0 - red);
@@ -92,6 +93,7 @@ impl MatrixCoefficients {
 
     pub fn inverse_rows(self) -> [[f64; 3]; 3] {
         let (red, blue) = self.red_blue_coefficients();
+
         let green = 1.0 - red - blue;
         let blue_scale = 2.0 * (1.0 - blue);
         let red_scale = 2.0 * (1.0 - red);
@@ -114,7 +116,7 @@ impl fmt::Display for MatrixCoefficients {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorRange {
     Limited,
@@ -122,7 +124,7 @@ pub enum ColorRange {
     Full,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ColorSpace {
     pub primaries: ColorPrimaries,

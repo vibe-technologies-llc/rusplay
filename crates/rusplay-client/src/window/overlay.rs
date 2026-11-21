@@ -16,7 +16,7 @@ const REFERENCE_HEIGHT: u32 = 540;
 const INK: u8 = 255;
 const OVERLAY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OverlayText {
     lines: Vec<String>,
 }
@@ -53,7 +53,7 @@ impl OverlayText {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Mask {
     pub width: u32,
     pub height: u32,
@@ -78,7 +78,9 @@ pub(crate) fn rasterize(text: &OverlayText, scale: u32) -> Option<Mask> {
     let scale = usize::try_from(scale).ok()?;
     let columns = PADDING * 2 + text.columns() * CELL_WIDTH;
     let rows = PADDING * 2 + text.lines.len() * CELL_HEIGHT;
+
     let (width, height) = (columns * scale, rows * scale);
+
     let mut coverage = vec![0u8; width * height];
 
     for (line_index, line) in text.lines.iter().enumerate() {
@@ -90,6 +92,7 @@ pub(crate) fn rasterize(text: &OverlayText, scale: u32) -> Option<Mask> {
                     let y = (PADDING + line_index * CELL_HEIGHT + row) * scale;
                     for dy in 0..scale {
                         let start = (y + dy) * width + x;
+
                         coverage[start..start + scale].fill(INK);
                     }
                 }
@@ -135,6 +138,7 @@ impl OverlayLayer {
             .uploaded
             .as_ref()
             .is_some_and(|uploaded| uploaded.scale == scale && uploaded.text == *text);
+
         if !current {
             self.uploaded = upload(device, queue, text, scale);
         }
@@ -159,6 +163,7 @@ fn upload(
 ) -> Option<Uploaded> {
     let mask = rasterize(text, scale)?;
     let limit = device.limits().max_texture_dimension_2d;
+
     if mask.width > limit || mask.height > limit {
         return None;
     }
@@ -177,6 +182,7 @@ fn upload(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+
     queue.write_texture(
         texture.as_image_copy(),
         &mask.coverage,

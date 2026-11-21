@@ -29,7 +29,7 @@ const TRANSFER_SRGB: u32 = 1;
 const TRANSFER_BT709: u32 = 2;
 const TRANSFER_GAMMA22: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum OutputLight {
     Linear,
     Encoded,
@@ -47,7 +47,7 @@ impl OutputLight {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RgbConvertSettings {
     pub resolution: Resolution,
     pub format: PixelFormat,
@@ -198,6 +198,7 @@ impl RgbConverter {
         settings: RgbConvertSettings,
     ) -> Result<Self, ScaleError> {
         settings.validate()?;
+
         let layout = settings.frame_layout()?;
 
         Ok(Self {
@@ -251,6 +252,7 @@ impl RgbConverter {
             return Ok(Reconfigured::Unchanged);
         }
         settings.validate()?;
+
         let layout = settings.frame_layout()?;
 
         self.plan = UnpackPlan::new(&self.pipelines, device, &settings, &layout)?;
@@ -371,11 +373,13 @@ impl RgbConverter {
             format: self.settings.format,
             layout: self.settings.layout,
         };
+
         if source.format().pixel_format() != Some(self.settings.format)
             || self.settings.layout != PlaneLayout::SemiPlanar
         {
             return Err(mismatch);
         }
+
         let (Some(luma_texture), Some(chroma_texture)) = (source.texture(0), source.texture(1))
         else {
             return Err(mismatch);
@@ -386,6 +390,7 @@ impl RgbConverter {
 
         let found = source.resolution();
         let needed = self.settings.resolution;
+
         if found.width < needed.width || found.height < needed.height {
             return Err(ScaleError::DmaBufTooSmall { found, needed });
         }
@@ -439,7 +444,9 @@ impl RgbConverter {
                 if self.settings.output != OutputLight::Encoded {
                     return Err(ScaleError::LutInputNotEncoded);
                 }
+
                 let baked_for = lut.settings().transfer;
+
                 if baked_for != self.settings.transfer {
                     return Err(ScaleError::LutTransferMismatch {
                         lut: baked_for,
@@ -448,6 +455,7 @@ impl RgbConverter {
                 }
 
                 lut.encode_bake(encoder);
+
                 let key = (target.clone(), lut.view().clone());
                 Ok(Output::Lut(self.lut_targets.get_or_create(&key, || {
                     lut_target_group(device, &pipelines.unpack.lut.target_layout, target, lut)
@@ -457,7 +465,9 @@ impl RgbConverter {
                 if self.settings.output != OutputLight::Encoded {
                     return Err(ScaleError::ChainInputNotEncoded);
                 }
+
                 let decodes = chain.settings().transfer;
+
                 if decodes != self.settings.transfer {
                     return Err(ScaleError::ChainTransferMismatch {
                         chain: decodes,
@@ -466,6 +476,7 @@ impl RgbConverter {
                 }
 
                 chain.encode_tables(encoder);
+
                 let key = (target.clone(), chain.identity().clone());
                 Ok(Output::Chain(
                     self.chain_targets.get_or_create(&key, || {
@@ -560,8 +571,11 @@ fn stage_plane(
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
             encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), size);
+
             let stored = view.clone();
+
             *staged = Some(PlaneCopy {
                 texture,
                 view,
@@ -716,7 +730,7 @@ fn views_group(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChromaFilterPass {
     Direct,
     Separable,
@@ -747,6 +761,7 @@ impl UnpackPlan {
         let chroma_filter = ChromaFilterPass::of(settings);
         let polar = (chroma_filter == ChromaFilterPass::Polar)
             .then(|| PhaseKernels::build(settings, gpu::POLAR_CHROMA_WORKGROUP));
+
         let chroma_pass_size = match chroma_filter {
             ChromaFilterPass::Polar => size,
             ChromaFilterPass::Direct | ChromaFilterPass::Separable => {
@@ -1030,6 +1045,7 @@ mod tests {
         let pipelines = ScalePipelines::new(&gpu.device);
         let mut converter =
             ColorConverter::new(&pipelines, &gpu.device, host_settings(settings)).unwrap();
+
         let frame = converter.create_frame(&gpu.device);
         let source = testing::upload(gpu, image);
 
@@ -1044,8 +1060,10 @@ mod tests {
     fn unpack_on_gpu(gpu: &testing::Gpu, bytes: &[u8], settings: RgbConvertSettings) -> Image {
         let pipelines = ScalePipelines::new(&gpu.device);
         let mut converter = RgbConverter::new(&pipelines, &gpu.device, settings).unwrap();
+
         let frame = converter.create_frame(&gpu.device);
         let (width, height) = resolution_pair(settings.resolution);
+
         let target = testing::storage_target(gpu, width, height);
 
         gpu.queue.write_buffer(frame.buffer(), 0, bytes);
@@ -1071,6 +1089,7 @@ mod tests {
         let bytes = encode_on_gpu(gpu, image, &settings);
         let actual = unpack_on_gpu(gpu, &bytes, settings);
         let expected = reference::unpack_rgb(&bytes, &settings);
+
         let difference = actual.max_difference(&expected);
 
         assert!(
@@ -1425,7 +1444,9 @@ mod tests {
             },
             ..eight
         };
+
         let mut converter = RgbConverter::new(&pipelines, &gpu.device, eight).unwrap();
+
         let stale = converter.create_frame(&gpu.device);
         let target = testing::storage_target(gpu, 16, 16);
 
@@ -1433,6 +1454,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         let result = converter.encode(&gpu.device, &mut encoder, &stale, &testing::view(&target));
 
         assert_eq!(reconfigured, Reconfigured::Tables);

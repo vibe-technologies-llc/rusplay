@@ -22,20 +22,20 @@ const POWER_CURVE_UNITS_PER_ONE: f64 = 10_000.0;
 const GAMMA22_RANGE: RangeInclusive<f64> = 2.1..=2.3;
 const NITS_RANGE: RangeInclusive<f64> = 1.0..=HdrLevels::MAX_NITS as f64;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Luminances {
     pub min_nits: f64,
     pub max_nits: f64,
     pub reference_nits: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LuminanceRange {
     pub min_nits: f64,
     pub max_nits: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct DisplayImage {
     pub primaries: Option<ColorPrimaries>,
     pub target_primaries: Option<ColorPrimaries>,
@@ -62,6 +62,7 @@ pub fn resolve_target(
         .map(f64::from)
         .or(image.luminances.map(|levels| levels.reference_nits))
         .unwrap_or(ColorVolume::SDR_REFERENCE_WHITE_NITS);
+
     let peak_nits = overrides
         .peak_nits
         .map(f64::from)

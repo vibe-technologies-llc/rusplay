@@ -54,7 +54,7 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextFieldEvent {
     Changed,
     Submitted,
@@ -168,6 +168,7 @@ impl TextField {
         cx: &mut Context<Self>,
     ) {
         self.is_selecting = true;
+
         let offset = self.index_for_mouse_position(event.position);
 
         if event.modifiers.shift {
@@ -335,6 +336,7 @@ impl EntityInputHandler for TextField {
         _cx: &mut Context<Self>,
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
+
         actual_range.replace(self.range_to_utf16(&range));
 
         Some(self.content[range].to_string())
@@ -412,6 +414,7 @@ impl EntityInputHandler for TextField {
 
         let insertion_start = self.offset_to_utf16(range.start);
         let inserted_length = new_text.encode_utf16().count();
+
         self.selected_range = new_selected_range_utf16.map_or_else(
             || range.start + new_text.len()..range.start + new_text.len(),
             |selected| {
@@ -498,6 +501,7 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let mut style = Style::default();
+
         style.size.width = relative(1.).into();
         style.size.height = window.line_height().into();
 
@@ -610,6 +614,7 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
+
         window.handle_input(
             &focus_handle,
             ElementInputHandler::new(bounds, self.input.clone()),

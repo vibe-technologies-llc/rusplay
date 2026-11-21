@@ -11,7 +11,7 @@ const CHROMAS: [ChromaSubsampling; 3] = [
 ];
 const DEPTHS: [BitDepth; 3] = [BitDepth::Eight, BitDepth::Ten, BitDepth::Twelve];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Capabilities {
     backend: Backend,
     formats: Vec<(Codec, PixelFormat)>,
@@ -23,6 +23,7 @@ impl Capabilities {
         mut supports: impl FnMut(Codec, PixelFormat) -> Result<bool, EncodeError>,
     ) -> Result<Self, EncodeError> {
         let mut formats = Vec::new();
+
         for codec in CODECS {
             for chroma in CHROMAS {
                 for depth in DEPTHS {
@@ -70,6 +71,7 @@ impl Capabilities {
 pub fn capabilities(config: &VideoEncoderConfig) -> Result<Capabilities, EncodeError> {
     if matches!(config, VideoEncoderConfig::Auto(_)) {
         let resolved = crate::resolve(config, None);
+
         if matches!(resolved, VideoEncoderConfig::Auto(_)) {
             return Err(EncodeError::NoEncoderAvailable);
         }
@@ -157,6 +159,7 @@ mod tests {
         use crate::{open, testing::TEST_RESOLUTION};
 
         let mut encoders = Vec::new();
+
         #[cfg(feature = "x264")]
         encoders.push(VideoEncoderConfig::X264(
             rusplay_config::X264Config::default(),

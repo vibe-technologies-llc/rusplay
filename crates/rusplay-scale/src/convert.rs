@@ -30,26 +30,26 @@ pub(crate) const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
 pub(crate) const HLG_REFERENCE_GAMMA: f64 = 1.2;
 pub(crate) const HLG_GAMMA_PER_DECADE: f64 = 0.42;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PlaneLayout {
     Planar,
     PlanarHigh,
     SemiPlanar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum InputLight {
     Linear,
     Encoded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SampleAlignment {
     Low,
     High,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum PlaneContent {
     Luma,
     Cb,
@@ -66,7 +66,7 @@ impl PlaneContent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConvertSettings {
     pub resolution: Resolution,
     pub format: PixelFormat,
@@ -208,7 +208,7 @@ impl ConvertSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quantization {
     pub luma: (f64, f64),
     pub chroma: (f64, f64),
@@ -256,7 +256,7 @@ pub(crate) fn chroma_size(resolution: Resolution, chroma: ChromaSubsampling) -> 
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct Plane {
     pub content: PlaneContent,
     pub offset: u64,
@@ -272,13 +272,13 @@ impl Plane {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct PlaneShape {
     visible: (u32, u32),
     padded: (u32, u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FrameLayout {
     pub planes: Vec<Plane>,
     pub size: u64,
@@ -335,6 +335,7 @@ impl FrameLayout {
 
         let mut planes = Vec::with_capacity(shapes.len());
         let mut size = 0_u64;
+
         for &(content, shape) in shapes {
             let ((plane_width, plane_height), (columns, rows)) = (shape.visible, shape.padded);
             let row_bytes = u64::from(columns)
@@ -342,6 +343,7 @@ impl FrameLayout {
                 * u64::from(bytes_per_sample);
             let stride = u32::try_from(row_bytes.next_multiple_of(u64::from(alignment)))
                 .map_err(|_| ScaleError::FrameTooLarge { bytes: row_bytes })?;
+
             let plane = Plane {
                 content,
                 offset: size,
@@ -350,6 +352,7 @@ impl FrameLayout {
                 height: plane_height,
                 rows,
             };
+
             size += plane.size();
             planes.push(plane);
         }
@@ -382,7 +385,7 @@ impl FrameLayout {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct YuvFrame {
     buffer: wgpu::Buffer,
     layout: FrameLayout,
@@ -419,6 +422,7 @@ impl ColorConverter {
         settings: ConvertSettings,
     ) -> Result<Self, ScaleError> {
         settings.validate()?;
+
         let layout = FrameLayout::new(&settings)?;
 
         Ok(Self {
@@ -467,6 +471,7 @@ impl ColorConverter {
             return Ok(Reconfigured::Unchanged);
         }
         settings.validate()?;
+
         let layout = FrameLayout::new(&settings)?;
 
         self.plan = ConvertPlan::new(&self.pipelines, device, &settings, &layout)?;
@@ -606,6 +611,7 @@ impl ConvertPlan {
     ) -> Result<Self, ScaleError> {
         let (horizontal, vertical) = settings.chroma_tables();
         let luma = layout.planes[0];
+
         let params = uniform_buffer(
             device,
             "rusplay-convert-params",
@@ -873,6 +879,7 @@ mod tests {
 
         let pipelines = ScalePipelines::new(&gpu.device);
         let mut converter = ColorConverter::new(&pipelines, &gpu.device, settings).unwrap();
+
         let frame = converter.create_frame(&gpu.device);
         let source = testing::upload(gpu, image);
 
@@ -881,6 +888,7 @@ mod tests {
                 .encode(&gpu.device, encoder, &testing::view(&source), &frame)
                 .unwrap();
         });
+
         let bytes = testing::download_buffer(gpu, frame.buffer());
 
         Some((bytes, frame.layout().clone()))
@@ -1480,6 +1488,7 @@ mod tests {
         let extent = settings.extent();
         let (chroma_columns, _) = chroma_size(extent, settings.format.chroma);
         let mut whole = layout.clone();
+
         for plane in &mut whole.planes {
             plane.width = match plane.content {
                 PlaneContent::Luma => extent.width,
@@ -1542,6 +1551,7 @@ mod tests {
                 return;
             };
             let (bytes, frame_layout) = convert_bytes_on_gpu(&image, padded).unwrap();
+
             let visible = reference::unpack(&bytes, &frame_layout);
             let whole = reference::unpack(&bytes, &whole_extent(&frame_layout, &padded));
 
@@ -1722,7 +1732,9 @@ mod tests {
             },
             ..eight
         };
+
         let mut converter = ColorConverter::new(&pipelines, &gpu.device, eight).unwrap();
+
         let stale = converter.create_frame(&gpu.device);
         let source = testing::view(&testing::upload(gpu, &Image::pattern(16, 16, 0)));
 
@@ -1730,6 +1742,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         let result = converter.encode(&gpu.device, &mut encoder, &source, &stale);
 
         assert_eq!(reconfigured, Reconfigured::Tables);

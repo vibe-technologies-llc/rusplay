@@ -29,6 +29,7 @@ fn lattice(x: usize, y: usize, seed: u64) -> u64 {
     let mut value = (x as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
         ^ (y as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)
         ^ seed.wrapping_mul(0x1656_67b1_9e37_79f9);
+
     value ^= value >> 29;
     value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value ^= value >> 32;
@@ -93,7 +94,7 @@ fn orbit(radius: usize, step: usize) -> (usize, usize) {
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Layer {
     Hud,
     Object {
@@ -149,6 +150,7 @@ impl Scene {
     fn object_corner(&self, number: usize, index: usize) -> (usize, usize) {
         let (width, height) = self.size();
         let (reach, speed, phase) = [(2, 1, 8), (1, 2, 0), (3, 1, 4)][number];
+
         let (across, down) = orbit(reach * self.radius, index * speed + phase);
 
         (
@@ -190,6 +192,7 @@ impl Scene {
     fn luma_at(&self, x: usize, y: usize, index: usize) -> u64 {
         let (width, height) = self.size();
         let (pan_across, pan_down) = orbit(self.radius, index);
+
         let ground = self.luma.at(x + pan_across, y + pan_down);
         let grained = |value: u64| value + lattice(x, y, GRAIN_SEED + index as u64) % GRAIN_LEVELS;
 
@@ -207,6 +210,7 @@ impl Scene {
             }
             Layer::Veil => {
                 let (drift_across, drift_down) = orbit(self.radius, index + LOOP_FRAMES / 2);
+
                 let veil = self.luma.at(width - 1 - x + drift_across, y + drift_down);
                 grained(ground.midpoint(veil))
             }
@@ -216,6 +220,7 @@ impl Scene {
 
     fn chroma_at(&self, canvas: &Canvas, tint: u64, x: usize, y: usize, index: usize) -> u64 {
         let (pan_across, pan_down) = orbit(self.radius, index);
+
         let ground = canvas.at(x + pan_across / 2, y + pan_down / 2);
 
         match self.layer(2 * x, 2 * y, index) {
@@ -229,6 +234,7 @@ impl Scene {
     fn frame(&self, index: usize) -> Frame {
         let (width, height) = self.size();
         let sample = |value: u64| u8::try_from(value).unwrap_or(u8::MAX);
+
         let luma =
             (0..height).flat_map(|y| (0..width).map(move |x| sample(self.luma_at(x, y, index))));
         let chroma = [(&self.cb, 96), (&self.cr, 104)]
@@ -261,12 +267,14 @@ struct Source {
 fn source(display: &Rc<Display>, scene: &Scene, index: usize) -> Source {
     let format = yuv420(BitDepth::Eight);
     let planar = scene.frame(index);
+
     let view = YuvFrame::from_frame(&planar, crate::Backend::Vaapi, format).unwrap();
     let surface_format = surface_format(format);
     let extent = coded_extent(scene.resolution);
 
     let surface = exportable_surface(display, surface_format, extent).unwrap();
     let mut image = Image::new(display, surface_format.va_fourcc, extent).unwrap();
+
     image
         .write(|data, layout| pack(&view, data, layout, extent))
         .unwrap();
@@ -339,6 +347,7 @@ fn count(value: usize) -> f64 {
 impl Tally {
     fn percentile_ms(&self, percent: usize) -> f64 {
         let mut times = self.times.clone();
+
         times.sort_unstable();
 
         times[(times.len() - 1) * percent / 100].as_secs_f64() * 1000.0
@@ -372,8 +381,10 @@ impl Shuffler {
 
     fn order(&mut self, count: usize) -> Vec<usize> {
         let mut order: Vec<usize> = (0..count).collect();
+
         for last in (1..count).rev() {
             let pick = usize::try_from(self.next() % (last as u64 + 1)).unwrap();
+
             order.swap(last, pick);
         }
 
@@ -407,6 +418,7 @@ fn compare(codec: Codec, resolution: Resolution, bitrate_kbps: u32, variants: &[
     if !device_present() {
         return;
     }
+
     let Some(mut encoders) = variants
         .iter()
         .map(|variant| try_open(&variant.config(codec, resolution, bitrate_kbps)))
@@ -416,6 +428,7 @@ fn compare(codec: Codec, resolution: Resolution, bitrate_kbps: u32, variants: &[
     };
     let display = Display::open(&VaapiConfig::default().device).unwrap();
     let scene = Scene::new(resolution);
+
     let sources: Vec<Source> = (0..LOOP_FRAMES)
         .map(|index| source(&display, &scene, index))
         .collect();
@@ -431,9 +444,11 @@ fn compare(codec: Codec, resolution: Resolution, bitrate_kbps: u32, variants: &[
 
         for &variant in &order {
             let encoder = &mut encoders[variant];
+
             if sampled {
                 assert!(encoder.capture_reconstruction());
             }
+
             let started = Instant::now();
             let packet = encoder.encode(&current.frame).unwrap().unwrap();
             let elapsed = started.elapsed();
@@ -536,6 +551,7 @@ fn refresh_variants(codec: Codec, resolution: Resolution) -> Vec<Variant> {
     let block = if codec == Codec::H264 { 16 } else { 64 };
     let rows = resolution.height.div_ceil(block);
     let rows_per_frame = rows.div_ceil(FRAME_RATE);
+
     let former_sweep = rows.div_ceil(rows_per_frame);
     let named = |name: String, frames: Option<u32>| Variant {
         name,

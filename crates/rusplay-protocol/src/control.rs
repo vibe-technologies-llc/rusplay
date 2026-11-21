@@ -29,7 +29,7 @@ const TAG_QUALITY_UNAVAILABLE: u8 = 23;
 
 pub const TRIGGER_EFFECT_LEN: usize = 11;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlMessage {
     Hello {
         version: ProtocolVersion,
@@ -345,6 +345,7 @@ fn write_word(out: &mut [u8], tag: u8, word: u32) {
 
 fn write_tagged(out: &mut [u8], tag: u8, write: impl FnOnce(&mut Vec<u8>)) {
     let mut body = Vec::with_capacity(out.len());
+
     body.push(tag);
     write(&mut body);
     out.copy_from_slice(&body);
@@ -355,6 +356,7 @@ fn read_whole<'a, T>(
     read: impl FnOnce(&mut Reader<'a>) -> Result<T, ProtocolError>,
 ) -> Result<T, ProtocolError> {
     let mut reader = Reader::new(body, 1);
+
     let value = read(&mut reader)?;
 
     match reader.remaining() {
@@ -455,6 +457,7 @@ impl ControlMessage {
             other => return Err(ProtocolError::UnknownTriggerSide(other)),
         };
         let mut effect = [0; TRIGGER_EFFECT_LEN];
+
         effect.copy_from_slice(&body[2..]);
 
         Ok(Self::TriggerEffect {
@@ -465,7 +468,7 @@ impl ControlMessage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum ControlPacket {
     Message { id: u32, message: ControlMessage },
@@ -507,6 +510,7 @@ impl ControlPacket {
 
     pub fn to_datagram(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut buf = [0; Self::MAX_ENCODED_LEN];
+
         let len = self.write(&mut buf)?;
 
         Ok(buf[..len].to_vec())
@@ -630,11 +634,13 @@ mod tests {
         let request = ControlMessage::QualityRequest { enabled: true }
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(&buf[..request], [21, 1]);
 
         let report = ControlMessage::QualityReport(quality_report())
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(
             &buf[..report],
             [
@@ -647,6 +653,7 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(&buf[..unavailable], [23, 1]);
     }
 
@@ -734,11 +741,13 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(&buf[..lightbar], [12, 1, 2, 3, 4]);
 
         let leds = ControlMessage::PlayerLeds { slot: 5, mask: 6 }
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(&buf[..leds], [13, 5, 6]);
 
         let trigger = ControlMessage::TriggerEffect {
@@ -748,6 +757,7 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(&buf[..trigger], [14, 7, 0, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]);
     }
 
@@ -761,6 +771,7 @@ mod tests {
         );
 
         bytes[2] = 1;
+
         assert!(ControlMessage::decode(&bytes).is_ok());
     }
 
@@ -785,6 +796,7 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(&buf[..request_len], [8, 1, 2, 3, 4, 5, 6, 7, 8]);
 
         let reply_len = ControlMessage::ClockPong {
@@ -793,6 +805,7 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(
             &buf[..reply_len],
             [9, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2]
@@ -806,6 +819,7 @@ mod tests {
         let ack_len = ControlMessage::AcknowledgeFrame { frame: 0x0102_0304 }
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(&buf[..ack_len], [10, 1, 2, 3, 4]);
 
         let request_len = ControlMessage::RequestRecovery {
@@ -814,6 +828,7 @@ mod tests {
         }
         .encode(&mut buf)
         .unwrap();
+
         assert_eq!(&buf[..request_len], [11, 5, 6, 7, 8, 1, 2, 3, 4]);
     }
 
@@ -824,11 +839,13 @@ mod tests {
         let steered = ControlMessage::BitrateCeiling { kbps: 0x0102_0304 }
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(&buf[..steered], [16, 1, 2, 3, 4]);
 
         let unsteered = ControlMessage::BitrateCeiling { kbps: 0 }
             .encode(&mut buf)
             .unwrap();
+
         assert_eq!(&buf[..unsteered], [16, 0, 0, 0, 0]);
         assert_eq!(
             ControlMessage::decode(&buf[..unsteered]),
@@ -895,6 +912,7 @@ mod tests {
     fn truncated_input_is_rejected_for_every_message() {
         for message in every_message() {
             let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
             let len = message.encode(&mut buf).unwrap();
 
             for cut in 0..len {
@@ -971,6 +989,7 @@ mod tests {
     #[test]
     fn ack_with_payload_is_rejected() {
         let mut datagram = ControlPacket::Ack { id: 1 }.to_datagram().unwrap();
+
         datagram.push(0);
 
         assert_eq!(
@@ -991,6 +1010,7 @@ mod tests {
             fragment_count: 1,
         };
         let mut datagram = [0; PacketHeader::SIZE];
+
         header.write(&mut datagram).unwrap();
 
         assert_eq!(
@@ -1010,6 +1030,7 @@ mod tests {
         }
         .to_datagram()
         .unwrap();
+
         datagram.pop();
 
         assert!(matches!(
@@ -1024,15 +1045,18 @@ mod tests {
             .into_iter()
             .map(|message| ControlPacket::Message { id: 7, message })
             .collect();
+
         packets.push(ControlPacket::Ack { id: 7 });
 
         for packet in packets {
             let mut buf = [0; ControlPacket::MAX_ENCODED_LEN];
+
             let len = packet.write(&mut buf).unwrap();
 
             for cut in 0..len {
                 assert!(ControlPacket::read(&buf[..cut]).is_err());
             }
+
             assert_eq!(ControlPacket::read(&buf[..len]), Ok(packet));
         }
     }

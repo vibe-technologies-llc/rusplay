@@ -27,13 +27,13 @@ pub(super) const KEYS: [KeyCode; 11] = [
     KeyCode::BTN_THUMBR,
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Report {
     Key { code: u16, value: i32 },
     Abs { code: u16, value: i32 },
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Dpad(u8);
 
 impl Dpad {
@@ -63,7 +63,7 @@ impl Dpad {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Xbox360Mapper {
     dpad: Dpad,
 }
@@ -88,6 +88,7 @@ impl Xbox360Mapper {
 
     fn map_button(&mut self, button: GamepadButton, pressed: bool) -> Result<Report, InputError> {
         let dpad = &mut self.dpad;
+
         match button {
             GamepadButton::DPAD_UP => dpad.set(Dpad::UP, pressed),
             GamepadButton::DPAD_DOWN => dpad.set(Dpad::DOWN, pressed),

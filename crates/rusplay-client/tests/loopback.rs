@@ -40,7 +40,7 @@ const MICROPHONE_PACKETS: usize = 20;
 const MICROPHONE_LEVEL: f32 = 0.25;
 const MICROPHONE_INTERVAL: Duration = Duration::from_millis(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Seen {
     frame: u32,
     keyframe: bool,
@@ -93,7 +93,9 @@ fn the_stage_threads_take_the_configured_nice_value() {
         ..HostOptions::default()
     });
     let mut config = common::client_config();
+
     config.network.frame_thread_nice = TEST_NICE;
+
     let session = ClientSession::new(config);
     let present_nice = Arc::new(Mutex::new(None));
     let (seen, mut recording) = recorder();
@@ -143,7 +145,9 @@ fn the_refused_tuning_of_a_sinks_own_thread_counts_in_the_stream_stats() {
         ..HostOptions::default()
     });
     let mut config = common::client_config();
+
     config.network.frame_thread_nice = TEST_NICE;
+
     let session = ClientSession::new(config);
     let (seen, recording) = recorder();
 
@@ -194,7 +198,9 @@ fn frames_arrive_decoded_at_the_source_resolution() {
     assert!(first_is_keyframe_or_was_superseded(&seen, &stats));
     assert!(seen.iter().all(|frame| frame.resolution == source));
     assert!(seen.windows(2).all(|pair| pair[0].frame < pair[1].frame));
+
     let described = common::stream_description();
+
     assert_eq!(
         seen[0].color,
         FrameColor::of_stream(
@@ -270,6 +276,7 @@ fn presented_texture_holds_the_picture() {
     .unwrap();
     let frame = latest.wait(STREAM_TIMEOUT).unwrap();
     let texels = common::download(&gpu, &frame.texture);
+
     stream.stop().unwrap();
 
     let distinct: std::collections::BTreeSet<[u16; 4]> = texels.iter().copied().collect();
@@ -287,6 +294,7 @@ fn frames_are_scaled_to_the_requested_target() {
     };
     let frames = 48;
     let gate = Arc::new(AtomicBool::new(false));
+
     let host = TestHost::start(HostOptions {
         frames,
         goodbye: false,
@@ -305,6 +313,7 @@ fn frames_are_scaled_to_the_requested_target() {
         sink,
     )
     .unwrap();
+
     stream.set_target(Some(upscaled));
     gate.store(true, Ordering::Release);
     settle(stream, &seen, frames - 1);
@@ -343,17 +352,21 @@ fn a_target_change_rescales_the_last_frame_without_new_video() {
     let presented = latest.presented();
 
     stream.set_target(Some(upscaled));
+
     let up = wait_for_frame(&latest, |frame| frame.resolution() == upscaled);
     let texels = common::download(&gpu, &up.texture);
     let distinct: std::collections::BTreeSet<[u16; 4]> = texels.iter().copied().collect();
 
     stream.set_target(Some(downscaled));
+
     let down = wait_for_frame(&latest, |frame| frame.resolution() == downscaled);
 
     stream.set_target(Some(native));
+
     let back = wait_for_frame(&latest, |frame| frame.resolution() == native);
     let restored = common::download(&gpu, &back.texture);
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert_eq!(last.resolution(), native);
@@ -438,6 +451,7 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
             lost.load(Ordering::Acquire) == outgoing.frame
         }
     };
+
     let host = TestHost::start(HostOptions {
         frames,
         drop: Box::new(drop_rule),
@@ -456,10 +470,12 @@ fn an_unrecoverable_frame_requests_a_recovery_and_the_stream_resumes() {
     )
     .unwrap();
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while seen.lock().len() < FRAMES_BEFORE_LOSS && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
     armed.store(true, Ordering::Release);
+
     let stats = settle(stream, &seen, frames - 1);
 
     let seen = seen.lock().clone();
@@ -512,6 +528,7 @@ fn stream_with_one_lost_frame(
             lost.load(Ordering::Acquire) == outgoing.frame
         }
     };
+
     let host = TestHost::start(HostOptions {
         frames,
         drop: Box::new(drop_rule),
@@ -520,7 +537,9 @@ fn stream_with_one_lost_frame(
         ..HostOptions::default()
     });
     let mut config = common::client_config();
+
     config.video.bitrate_kbps = client_kbps;
+
     let session = ClientSession::new(config);
     let (seen, sink) = recorder();
 
@@ -533,10 +552,12 @@ fn stream_with_one_lost_frame(
     )
     .unwrap();
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while seen.lock().len() < FRAMES_BEFORE_LOSS && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
     armed.store(true, Ordering::Release);
+
     let stats = settle(stream, &seen, frames - 1);
 
     assert_ne!(lost.load(Ordering::Acquire), UNARMED);
@@ -614,7 +635,9 @@ fn an_unrecoverable_last_frame_requests_a_recovery_while_no_frame_follows_it() {
         ..HostOptions::default()
     });
     let mut config = common::client_config();
+
     config.network.reassembly_timeout_ms = u16::MAX;
+
     let session = ClientSession::new(config);
 
     let stream = common::connect_silent(
@@ -633,6 +656,7 @@ fn an_unrecoverable_last_frame_requests_a_recovery_while_no_frame_follows_it() {
         )
     });
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert!(requested);
@@ -701,13 +725,17 @@ fn the_hello_names_what_the_client_decodes_and_a_fallback_is_visible() {
     )
     .unwrap();
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while stream.stream_format().is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
+
     let format = stream.stream_format();
+
     stream.stop().unwrap();
 
     let format = format.expect("the host's stream format never arrived");
+
     assert!(format.is_fallback());
     assert_eq!(format.coded().codec, Codec::Av1);
     assert_eq!(
@@ -752,6 +780,7 @@ fn the_hello_is_followed_by_the_display_the_client_was_given() {
     )
     .unwrap();
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while !host.messages().contains(&ControlMessage::Display(display))
         && std::time::Instant::now() < deadline
     {
@@ -790,7 +819,9 @@ fn a_resize_drag_announces_only_the_size_it_settles_on() {
         .unwrap()
     };
     let mut config = common::client_config();
+
     config.video.display_debounce_ms = 1000;
+
     let session = ClientSession::new(config).with_display(announce(1280, 720));
 
     let stream = common::connect_silent(
@@ -801,6 +832,7 @@ fn a_resize_drag_announces_only_the_size_it_settles_on() {
         LatestFrame::new(),
     )
     .unwrap();
+
     assert!(host.wait_for(STREAM_TIMEOUT, |message| matches!(
         message,
         ControlMessage::Display(_)
@@ -809,16 +841,20 @@ fn a_resize_drag_announces_only_the_size_it_settles_on() {
     for step in 0..30 {
         stream.announce_display(announce(1300 + step, 720));
     }
+
     let settled = announce(1329, 720);
     let settled_arrived = host.wait_for(STREAM_TIMEOUT, |message| {
         *message == ControlMessage::Display(settled)
     });
     let marker = announce(1600, 900);
+
     stream.announce_display(marker);
+
     let marker_arrived = host.wait_for(STREAM_TIMEOUT, |message| {
         *message == ControlMessage::Display(marker)
     });
     let sent = stream.stats().display_updates_sent;
+
     stream.stop().unwrap();
 
     assert!(settled_arrived);
@@ -879,13 +915,17 @@ fn audio_is_decoded_and_a_lost_packet_is_concealed() {
         .unwrap();
     let expected = AUDIO_PACKETS as usize * SAMPLES_PER_PACKET;
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while captured.samples.lock().len() < expected && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
+
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     let samples = captured.samples.lock();
+
     assert_eq!(stats.audio_packets_received, u64::from(AUDIO_PACKETS - 1));
     assert_eq!(stats.audio_packets_lost, 1);
     assert_eq!(stats.audio_frames_recovered, 1);
@@ -903,6 +943,7 @@ impl AudioInput for ConstantMicrophone {
         let wait = self
             .next
             .saturating_duration_since(std::time::Instant::now());
+
         if wait > timeout {
             std::thread::sleep(timeout);
             return Ok(false);
@@ -918,12 +959,14 @@ impl AudioInput for ConstantMicrophone {
 
 fn microphone_config(enabled: bool) -> rusplay_config::Config {
     let mut config = common::client_config();
+
     config.audio.microphone.enabled = enabled;
     config
 }
 
 fn wait_until(timeout: Duration, condition: impl Fn() -> bool) -> bool {
     let deadline = std::time::Instant::now() + timeout;
+
     while std::time::Instant::now() < deadline {
         if condition() {
             return true;
@@ -959,9 +1002,11 @@ fn the_microphone_is_encoded_numbered_and_sent_to_the_host() {
     let counted = wait_until(STREAM_TIMEOUT, || {
         stream.stats().microphone_packets_sent >= MICROPHONE_PACKETS as u64
     });
+
     stream.stop().unwrap();
 
     let frames = host.microphone_frames();
+
     assert!(arrived);
     assert!(counted);
     assert!(
@@ -997,6 +1042,7 @@ fn a_disabled_microphone_sends_nothing() {
     .unwrap();
     let arrived = host.wait_for_microphone(Duration::from_millis(300), 1);
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert!(!arrived);
@@ -1024,7 +1070,9 @@ fn cursor_position_and_image_reach_the_app() {
             image: None,
         })
         .collect();
+
     cursor[0].image = Some(image.clone());
+
     let host = TestHost::start(HostOptions {
         cursor,
         goodbye: false,
@@ -1042,14 +1090,18 @@ fn cursor_position_and_image_reach_the_app() {
     .unwrap();
     let latest = stream.cursor();
     let mut seen = 0;
+
     while seen < 10 {
         let Some(_) = latest.wait_after(seen, STREAM_TIMEOUT) else {
             break;
         };
+
         seen = latest.updates();
     }
+
     let cursor_now = latest.latest().unwrap();
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert_eq!((cursor_now.x, cursor_now.y), (90, 45));
@@ -1067,6 +1119,7 @@ fn input_events_reach_the_host_in_order() {
         ..HostOptions::default()
     });
     let session = ClientSession::new(common::client_config());
+
     let stream = common::connect_silent(
         &session,
         host.address,
@@ -1084,12 +1137,16 @@ fn input_events_reach_the_host_in_order() {
     input.send(key(true));
     input.send(InputEvent::PointerMotion { dx: 3.0, dy: -2.0 });
     input.send(key(false));
+
     let delivered = host.wait_for_input(STREAM_TIMEOUT, 3);
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while stream.stats().input_packets_sent == 0 && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
+
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert!(delivered);
@@ -1114,7 +1171,9 @@ fn held_state_snapshots_reach_the_host() {
         ..HostOptions::default()
     });
     let mut config = common::client_config();
+
     config.input.snapshot_interval_ms = SNAPSHOT_INTERVAL_MS;
+
     let session = ClientSession::new(config);
     let stream = common::connect_silent(
         &session,
@@ -1129,11 +1188,13 @@ fn held_state_snapshots_reach_the_host() {
         keycode: HELD_KEY,
         pressed: true,
     });
+
     let held = host.wait_for_state(
         STREAM_TIMEOUT,
         |record| matches!(record, StateRecord::Keys(keys) if keys.contains(HELD_KEY)),
     );
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert!(held);
@@ -1146,12 +1207,15 @@ fn settle(
     last_frame: u32,
 ) -> rusplay_client::ClientStats {
     let deadline = std::time::Instant::now() + STREAM_TIMEOUT;
+
     while !seen.lock().iter().any(|frame| frame.frame == last_frame)
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(Duration::from_millis(5));
     }
+
     let stats = stream.stats();
+
     stream.stop().unwrap();
 
     assert!(

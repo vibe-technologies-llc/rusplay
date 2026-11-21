@@ -50,6 +50,7 @@ fn hevc_and_av1_signal_their_limited_range() {
 fn hevc_mastering_sei_holds_until_the_next_irap() {
     let frames = common::annexb_access_units(Codec::Hevc, &common::fixture("hevc-420-8bit.hevc"));
     let mut sei = vec![0, 0, 0, 1, 0x4e, 0x01, 137, 24];
+
     for value in [
         8_500_u16, 39_850, 6_550, 2_300, 35_400, 14_600, 15_635, 16_450,
     ] {
@@ -58,18 +59,27 @@ fn hevc_mastering_sei_holds_until_the_next_irap() {
     sei.extend_from_slice(&10_000_000_u32.to_be_bytes());
     sei.extend_from_slice(&50_u32.to_be_bytes());
     sei.push(0x80);
+
     let mut keyframe = frames[0].data.to_vec();
+
     keyframe.extend_from_slice(&sei);
+
     let mut reader = ColorReader::new(Codec::Hevc);
 
     reader.read(&keyframe).unwrap();
+
     let first = reader.current();
+
     reader.read(&frames[1].data).unwrap();
+
     let second = reader.current();
+
     reader.read(&frames[0].data).unwrap();
+
     let next_irap = reader.current();
 
     let mastering = first.mastering.unwrap();
+
     assert_eq!(mastering.primaries, ColorPrimaries::Bt2020);
     assert_eq!(
         mastering.max_nits,

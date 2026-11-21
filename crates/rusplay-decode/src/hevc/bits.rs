@@ -37,6 +37,7 @@ impl<'a> Bits<'a> {
 
     fn raw_byte(&mut self) -> Result<u8, Stop> {
         let byte = *self.data.get(self.next).ok_or(Stop::ParserRejects)?;
+
         self.next += 1;
 
         Ok(byte)
@@ -44,6 +45,7 @@ impl<'a> Bits<'a> {
 
     fn load_byte(&mut self) -> Result<(), Stop> {
         let mut byte = self.raw_byte()?;
+
         if self.window == 0 && byte == EMULATION_PREVENTION_BYTE {
             byte = self.raw_byte()?;
             self.window = NO_ZEROS;
@@ -70,6 +72,7 @@ impl<'a> Bits<'a> {
         }
 
         let mut value = 0;
+
         for _ in 0..count {
             value = (value << 1) | u32::from(self.bit()?);
         }
@@ -87,6 +90,7 @@ impl<'a> Bits<'a> {
 
     pub(super) fn unsigned(&mut self) -> Result<u32, Stop> {
         let mut zeros = 0;
+
         while !self.bit()? {
             zeros += 1;
             if zeros > MAX_ZERO_PREFIX {
@@ -99,6 +103,7 @@ impl<'a> Bits<'a> {
 
     pub(super) fn unsigned_max(&mut self, max: u32) -> Result<u32, Stop> {
         let value = self.unsigned()?;
+
         if value > max {
             return Err(Stop::ParserRejects);
         }

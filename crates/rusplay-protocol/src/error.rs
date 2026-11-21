@@ -2,7 +2,7 @@ use thiserror::Error;
 
 use crate::{ProtocolVersion, StreamKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ProtocolError {
     #[error("buffer holds {available} bytes but {needed} are required")]
     BufferTooShort { needed: usize, available: usize },

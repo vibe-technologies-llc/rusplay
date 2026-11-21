@@ -16,13 +16,13 @@ pub enum HostingError {
     Peers(#[from] NetError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairedClient {
     pub id: PeerId,
     pub name: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LiveStream {
     pub client: SocketAddr,
     pub stats: HostStats,
@@ -39,7 +39,7 @@ impl From<StreamSnapshot> for LiveStream {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PairedClients {
     store: Arc<RwLock<PeerStore>>,
 }
@@ -147,6 +147,7 @@ pub fn start(environment: &ConfigEnvironment) -> Result<(HostHandle, PairedClien
     let config = load_host_config(environment)?;
     let clients = PairedClients::open(&config)?;
     let network = config.network;
+
     let service = HostService::start(config, &clients.store)?;
 
     Ok((HostHandle { service, network }, clients))
@@ -158,6 +159,7 @@ pub fn start_choosing_display(
     let config = load_host_config(environment)?;
     let clients = PairedClients::open(&config)?;
     let network = config.network;
+
     let service = HostService::start_choosing_display(config, &clients.store)?;
 
     Ok((HostHandle { service, network }, clients))
@@ -175,6 +177,7 @@ mod tests {
     fn scratch(name: &str) -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("rusplay-app-hosting-{}-{name}", std::process::id()));
+
         fs::remove_dir_all(&root).ok();
         fs::create_dir_all(&root).unwrap();
 
@@ -194,6 +197,7 @@ mod tests {
     fn remember(clients: &PairedClients, name: &str, byte: u8) -> PeerId {
         let record = PeerRecord::new(name, PeerSecret::from_bytes([byte; 32])).unwrap();
         let id = record.id();
+
         clients.store.write().remember(record).unwrap();
 
         id
@@ -205,6 +209,7 @@ mod tests {
         let clients = PairedClients::open(&config_with_store(&root)).unwrap();
 
         assert_eq!(clients.list().unwrap(), Vec::new());
+
         fs::remove_dir_all(root).ok();
     }
 
@@ -222,6 +227,7 @@ mod tests {
                 name: "laptop".to_owned()
             }]
         );
+
         fs::remove_dir_all(root).ok();
     }
 
@@ -241,7 +247,9 @@ mod tests {
             .into_iter()
             .map(|client| client.id)
             .collect();
+
         assert_eq!(names, vec![second]);
+
         fs::remove_dir_all(root).ok();
     }
 
@@ -258,15 +266,18 @@ mod tests {
             viewer.list().unwrap().first().map(|client| client.id),
             Some(id)
         );
+
         fs::remove_dir_all(root).ok();
     }
 
     #[test]
     fn the_host_config_comes_from_host_toml_and_not_client_toml() {
         let root = scratch("config");
+
         fs::create_dir_all(root.join("rusplay")).unwrap();
         fs::write(root.join("rusplay/client.toml"), "[network]\nport = 4242\n").unwrap();
         fs::write(root.join("rusplay/host.toml"), "[network]\nport = 5151\n").unwrap();
+
         let environment = ConfigEnvironment {
             xdg_config_home: Some(root.clone()),
             home: None,
@@ -275,6 +286,7 @@ mod tests {
         let config = load_host_config(&environment).unwrap();
 
         assert_eq!(config.network.port, 5151);
+
         fs::remove_dir_all(root).ok();
     }
 }

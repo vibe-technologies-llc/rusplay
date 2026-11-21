@@ -5,7 +5,7 @@ use rusplay_scale::{ChannelOrder, FrameLayout, SourceChannels};
 
 use crate::HostError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UploadFormat {
     pub texture: wgpu::TextureFormat,
     pub srgb_view: Option<wgpu::TextureFormat>,
@@ -95,11 +95,13 @@ pub(crate) fn check_shm_frame(
     height: u32,
 ) -> Result<(), HostError> {
     let row_bytes = width as usize * UPLOAD_BYTES_PER_PIXEL as usize;
+
     if (stride as usize) < row_bytes {
         return Err(HostError::CaptureStrideTooSmall { stride, width });
     }
 
     let needed = (height as usize).saturating_sub(1) * stride as usize + row_bytes;
+
     if data.len() < needed {
         return Err(HostError::CaptureBufferTooShort {
             found: data.len(),
@@ -110,7 +112,7 @@ pub(crate) fn check_shm_frame(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EncoderPlanes {
     pub luma_stride: usize,
     pub chroma_stride: usize,
@@ -121,6 +123,7 @@ impl EncoderPlanes {
     pub(crate) fn of(layout: &FrameLayout, chroma: ChromaSubsampling) -> Self {
         let sample = layout.bytes_per_sample as usize;
         let luma = &layout.planes[0];
+
         let luma_stride = (luma.width as usize).next_multiple_of(2) * sample;
         let chroma_stride = match chroma {
             ChromaSubsampling::Yuv444 => luma_stride,
@@ -147,6 +150,7 @@ impl EncoderPlanes {
         let plane = |index: usize| {
             let plane = &layout.planes[index];
             let start = usize::try_from(plane.offset).unwrap_or(usize::MAX);
+
             let end = start.saturating_add(plane.stride as usize * plane.height as usize);
 
             YuvPlane {
@@ -185,6 +189,7 @@ impl EncoderPlanes {
             for row in 0..plane.height as usize {
                 let from = offset + row * plane.stride as usize;
                 let to = destination + row * stride;
+
                 out[to..to + row_bytes].copy_from_slice(&source[from..from + row_bytes]);
             }
             destination += stride * plane.height as usize;
@@ -239,6 +244,7 @@ mod tests {
                     let mut packed = Vec::new();
 
                     planes.repack(&layout, &source, &mut packed);
+
                     let frame = Frame {
                         resolution,
                         format: fourcc_for(format),
@@ -254,12 +260,14 @@ mod tests {
                     for (plane, expected) in yuv.planes.iter().zip(&layout.planes) {
                         let sample = layout.bytes_per_sample as usize;
                         let offset = usize::try_from(expected.offset).unwrap();
+
                         assert_eq!(plane.width, expected.width as usize);
                         assert_eq!(plane.rows, expected.height as usize);
                         for row in 0..plane.rows {
                             let got = &plane.data[row * plane.stride..][..plane.width * sample];
                             let want = &source[offset + row * expected.stride as usize..]
                                 [..plane.width * sample];
+
                             assert_eq!(got, want, "{format:?} {resolution} row {row}");
                         }
                     }
@@ -288,6 +296,7 @@ mod tests {
                     for (plane, expected) in view.planes.iter().zip(&layout.planes) {
                         let sample = layout.bytes_per_sample as usize;
                         let offset = usize::try_from(expected.offset).unwrap();
+
                         assert_eq!(plane.stride, expected.stride as usize);
                         assert_eq!(plane.width, expected.width as usize);
                         assert_eq!(plane.rows, expected.height as usize);
@@ -295,6 +304,7 @@ mod tests {
                             let got = &plane.data[row * plane.stride..][..plane.width * sample];
                             let want = &source[offset + row * expected.stride as usize..]
                                 [..plane.width * sample];
+
                             assert_eq!(got, want, "{format:?} {resolution} row {row}");
                         }
                     }

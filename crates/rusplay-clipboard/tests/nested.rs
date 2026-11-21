@@ -38,6 +38,7 @@ impl NestedCompositor {
             std::process::id(),
             NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
         );
+
         let socket = runtime.join(&name);
 
         let spawned = Command::new("dbus-run-session")
@@ -59,6 +60,7 @@ impl NestedCompositor {
 
         let compositor = Self { child, socket };
         let deadline = Instant::now() + STARTUP;
+
         while !compositor.socket.exists() {
             if Instant::now() >= deadline {
                 hardware::missing("a nested kwin_wayland that opens its socket");
@@ -125,9 +127,11 @@ fn text_over_the_limit_is_dropped_and_the_next_selection_still_arrives() {
     let mut watcher = compositor.open(16, true);
 
     setter.set_text(&"x".repeat(100)).unwrap();
+
     assert_eq!(next_change(&mut watcher, QUIET), None);
 
     setter.set_text("short").unwrap();
+
     assert_eq!(next_change(&mut watcher, WAIT).as_deref(), Some("short"));
 }
 
@@ -150,6 +154,7 @@ fn the_selection_in_place_before_the_connection_opened_is_not_reported() {
         return;
     };
     let mut setter = compositor.open(1024, false);
+
     setter.set_text("already there").unwrap();
     thread::sleep(QUIET);
 
@@ -168,7 +173,9 @@ fn replacing_a_selection_cancels_the_old_source_and_serves_the_new_text() {
     let mut watcher = compositor.open(1024, true);
 
     first.set_text("one").unwrap();
+
     assert_eq!(next_change(&mut watcher, WAIT).as_deref(), Some("one"));
+
     second.set_text("two").unwrap();
 
     assert_eq!(next_change(&mut watcher, WAIT).as_deref(), Some("two"));

@@ -2,7 +2,7 @@ use crate::InputError;
 
 pub const MAX_RUMBLE_EFFECTS: u8 = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RumbleCommand {
     pub slot: u8,
     pub strong: u16,
@@ -29,7 +29,7 @@ impl RumbleCommand {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RumbleEffect {
     pub strong: u16,
     pub weak: u16,
@@ -37,7 +37,7 @@ pub struct RumbleEffect {
     pub delay_ms: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RumbleTracker {
     slot: u8,
     effects: [Option<RumbleEffect>; MAX_RUMBLE_EFFECTS as usize],
@@ -59,6 +59,7 @@ impl RumbleTracker {
         effect: RumbleEffect,
     ) -> Result<Option<RumbleCommand>, InputError> {
         let id = self.checked(i64::from(id))?;
+
         self.effects[usize::from(id)] = Some(effect);
 
         Ok((self.active == Some(id)).then(|| self.command(effect, 1)))
@@ -66,6 +67,7 @@ impl RumbleTracker {
 
     pub fn erase(&mut self, id: u32) -> Result<Option<RumbleCommand>, InputError> {
         let id = self.checked(i64::from(id))?;
+
         self.effects[usize::from(id)] = None;
 
         Ok(self.deactivate(id))
@@ -138,6 +140,7 @@ mod tests {
     #[test]
     fn play_starts_the_effect_with_its_timing() {
         let mut tracker = RumbleTracker::new(3);
+
         tracker.upload(0, effect(0xC000, 0x4000, 250)).unwrap();
 
         let command = tracker.play(0, 1).unwrap().unwrap();
@@ -157,6 +160,7 @@ mod tests {
     #[test]
     fn repeat_count_multiplies_the_duration_and_saturates() {
         let mut tracker = RumbleTracker::new(0);
+
         tracker.upload(0, effect(1, 1, 300)).unwrap();
         tracker.upload(1, effect(1, 1, 0)).unwrap();
 
@@ -174,6 +178,7 @@ mod tests {
     #[test]
     fn stopping_the_active_effect_emits_a_stop() {
         let mut tracker = RumbleTracker::new(1);
+
         tracker.upload(2, effect(9, 9, 100)).unwrap();
         tracker.play(2, 1).unwrap();
 
@@ -187,6 +192,7 @@ mod tests {
     #[test]
     fn stopping_an_inactive_effect_is_silent() {
         let mut tracker = RumbleTracker::new(1);
+
         tracker.upload(0, effect(9, 9, 100)).unwrap();
         tracker.upload(1, effect(1, 1, 100)).unwrap();
         tracker.play(0, 1).unwrap();
@@ -199,6 +205,7 @@ mod tests {
     #[test]
     fn erasing_the_active_effect_stops_it() {
         let mut tracker = RumbleTracker::new(1);
+
         tracker.upload(0, effect(9, 9, 100)).unwrap();
         tracker.play(0, 1).unwrap();
 
@@ -214,6 +221,7 @@ mod tests {
     #[test]
     fn uploading_over_the_active_effect_restarts_it_with_the_new_strength() {
         let mut tracker = RumbleTracker::new(1);
+
         tracker.upload(4, effect(100, 100, 400)).unwrap();
         tracker.play(4, 1).unwrap();
 

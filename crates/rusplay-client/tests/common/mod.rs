@@ -109,6 +109,7 @@ pub fn stream_description() -> StreamDescription {
 
 pub fn client_config() -> Config {
     let mut config = Config::default();
+
     config.video.codec = rusplay_config::CodecChoice::pinned(Codec::H264);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.video.decode_queue_frames = TEST_DECODE_QUEUE_FRAMES;
@@ -127,14 +128,18 @@ pub fn fixture_frames() -> Vec<Vec<u8>> {
         .join("../rusplay-decode/tests/data/av1-420-8bit.ivf");
     let file =
         fs::read(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+
     assert_eq!(&file[..4], b"DKIF");
 
     let mut frames = Vec::new();
     let mut cursor = IVF_HEADER_LEN;
+
     while cursor + IVF_FRAME_HEADER_LEN <= file.len() {
         let size = u32::from_le_bytes(file[cursor..cursor + 4].try_into().unwrap());
         let start = cursor + IVF_FRAME_HEADER_LEN;
+
         let end = start + usize::try_from(size).unwrap();
+
         frames.push(file[start..end].to_vec());
         cursor = end;
     }
@@ -142,7 +147,7 @@ pub fn fixture_frames() -> Vec<Vec<u8>> {
     frames
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Outgoing {
     pub frame: u32,
     pub index: usize,
@@ -217,6 +222,7 @@ impl TestHost {
                     input: &input,
                     microphone: &microphone,
                 };
+
                 serve(&transport, &network, &options, &sinks, &stop);
             })
         };
@@ -249,6 +255,7 @@ impl TestHost {
     pub fn microphone_frames(&self) -> Vec<ReassembledFrame> {
         let mut reassembler = Reassembler::new(StreamKind::Microphone, ReassemblyLimits::default());
         let mut events = Vec::new();
+
         for datagram in self.microphone.lock().iter() {
             reassembler
                 .push(datagram, Instant::now(), &mut events)
@@ -266,6 +273,7 @@ impl TestHost {
 
     pub fn wait_for_microphone(&self, timeout: Duration, count: usize) -> bool {
         let deadline = Instant::now() + timeout;
+
         while Instant::now() < deadline {
             if self.microphone.lock().len() >= count {
                 return true;
@@ -288,6 +296,7 @@ impl TestHost {
 
     pub fn wait_for_state(&self, timeout: Duration, wanted: impl Fn(&StateRecord) -> bool) -> bool {
         let deadline = Instant::now() + timeout;
+
         while Instant::now() < deadline {
             if self.state_records().iter().any(&wanted) {
                 return true;
@@ -299,6 +308,7 @@ impl TestHost {
 
     pub fn wait_for_input(&self, timeout: Duration, count: usize) -> bool {
         let deadline = Instant::now() + timeout;
+
         while Instant::now() < deadline {
             if self.input_events().len() >= count {
                 return true;
@@ -321,6 +331,7 @@ impl TestHost {
 
     pub fn wait_for(&self, timeout: Duration, matches: impl Fn(&ControlMessage) -> bool) -> bool {
         let deadline = Instant::now() + timeout;
+
         while Instant::now() < deadline {
             if self.received.lock().iter().any(&matches) {
                 return true;
@@ -380,6 +391,7 @@ impl Extras {
 
         if self.audio_index < options.audio.len() && now >= self.audio_next_send {
             let number = u32::try_from(self.audio_index).unwrap();
+
             if !(options.audio_drop)(number) {
                 let datagrams = self
                     .audio
@@ -395,10 +407,13 @@ impl Extras {
 
         if self.cursor_index < options.cursor.len() && now >= self.cursor_next_send {
             let mut encoded = Vec::new();
+
             options.cursor[self.cursor_index]
                 .encode(&mut encoded)
                 .unwrap();
+
             let number = u32::try_from(self.cursor_index).unwrap();
+
             for datagram in self.cursor.packetize(number, false, &encoded).unwrap() {
                 transport.send_to(&datagram, client).unwrap();
             }
@@ -468,6 +483,7 @@ fn answer_ping(control: &mut ControlChannel, sent_micros: u64, host_micros: u64)
         sent_micros,
         host_micros,
     };
+
     control.send(pong, Instant::now()).ok();
 }
 
@@ -487,12 +503,14 @@ fn send_datagrams(
         } else {
             &mut data_index
         };
+
         let outgoing = Outgoing {
             frame,
             index: *index,
             parity,
             frames_to_keyframe,
         };
+
         *index += 1;
         if !drop(outgoing) {
             transport.send_to(datagram, client).unwrap();
@@ -527,11 +545,13 @@ fn serve(
     stop: &AtomicBool,
 ) {
     let mut responder = PairingResponder::new(pin(), network.pairing_max_attempts);
+
     let Ok((client, outcome)) =
         pair_as_host(transport, &mut responder, PairingTiming::from(network))
     else {
         return;
     };
+
     transport.install_session(&outcome.keys);
 
     let fixture = fixture_frames();
@@ -574,6 +594,7 @@ fn serve(
             let ControlEvent::Received(message) = event else {
                 continue;
             };
+
             sinks.received.lock().push(message);
             match message {
                 ControlMessage::Hello { .. } => {
@@ -597,6 +618,7 @@ fn serve(
 
         if live && next_frame < options.frames && Instant::now() >= next_send {
             let keyframe = fixture_index == 0;
+
             payload.clear();
             VideoFrameHeader {
                 captured_micros: host_micros(),
@@ -604,10 +626,12 @@ fn serve(
             }
             .write(&mut payload);
             payload.extend_from_slice(&fixture[fixture_index]);
+
             let datagrams = packetizer
                 .packetize(next_frame, keyframe, &payload)
                 .unwrap();
             let at = (next_frame, fixture.len() - fixture_index);
+
             send_datagrams(transport, client, &datagrams, at, &options.drop);
 
             next_frame += 1;
@@ -620,6 +644,7 @@ fn serve(
         }
 
         let media_done = next_frame == options.frames && extras.done(options);
+
         if media_done && options.goodbye && finished_at.is_none() {
             control.send(ControlMessage::Goodbye, Instant::now()).ok();
             finished_at = Some(Instant::now());
@@ -636,6 +661,7 @@ fn serve(
 pub fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[u16; 4]> {
     let (width, height) = (texture.width(), texture.height());
     let texel_bytes = 8;
+
     let row_bytes = (width * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("rusplay-client-test-readback"),
@@ -647,6 +673,7 @@ pub fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[u16; 4]> {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -671,6 +698,7 @@ pub fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[u16; 4]> {
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("device finishes the readback");
+
     let bytes = staging
         .get_mapped_range(..)
         .expect("mapped range is readable")
@@ -698,6 +726,7 @@ pub fn opus_packets(count: u32) -> Vec<Vec<u8>> {
         .spawn(move || {
             let config = rusplay_config::AudioConfig::default();
             let mut encoder = OpusAudioEncoder::new(&config).unwrap();
+
             let samples = encoder.frame_samples() * usize::from(config.channels.channel_count());
 
             (0..count)
@@ -710,7 +739,9 @@ pub fn opus_packets(count: u32) -> Vec<Vec<u8>> {
                         })
                         .collect();
                     let mut packet = vec![0; AUDIO_PACKET_BUFFER];
+
                     let written = encoder.encode(&tone, &mut packet).unwrap();
+
                     packet.truncate(written);
                     packet
                 })

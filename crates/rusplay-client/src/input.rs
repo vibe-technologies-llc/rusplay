@@ -25,7 +25,7 @@ const MAX_RECORD_LEN: usize = StateRecord::MAX_ENCODED_LEN + 1;
 const FOLLOW_UP_RESEND_DELAYS: u32 = 4;
 const FOLLOW_UP_BACKOFF: u32 = 4;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct InputHandle {
     sender: Sender<InputEvent>,
 }
@@ -115,6 +115,7 @@ impl InputPacketer {
 
     pub(crate) fn repeat(&mut self, out: &mut Vec<Vec<u8>>) -> Result<(), ClientError> {
         let mut datagram = Vec::new();
+
         InputPacket {
             sequence: self.sequence,
             current: &[],
@@ -136,6 +137,7 @@ impl InputPacketer {
         out: &mut Vec<Vec<u8>>,
     ) -> Result<(), ClientError> {
         let mut datagram = Vec::new();
+
         InputPacket {
             sequence: self.sequence,
             current: &current,
@@ -176,7 +178,7 @@ pub(crate) struct InputLinks {
     pub counters: Arc<Counters>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct InputTiming {
     pub resend_delay: Duration,
     pub snapshot_interval: Duration,
@@ -210,6 +212,7 @@ impl SnapshotSchedule {
         let Some(due) = self.due else {
             return;
         };
+
         if self.first_follow_up.is_zero() {
             return;
         }
@@ -248,6 +251,7 @@ impl InputStage {
 
     pub(crate) fn run(self) -> Result<(), ClientError> {
         let result = self.serve();
+
         self.links.stop.store(true, Ordering::Relaxed);
 
         result
@@ -283,6 +287,7 @@ impl InputStage {
                 Err(RecvTimeoutError::Timeout) => false,
                 Err(RecvTimeoutError::Disconnected) => true,
             };
+
             while let Ok(event) = self.links.events.try_recv() {
                 coalescer.push(event);
             }
@@ -298,7 +303,9 @@ impl InputStage {
                     .counters
                     .input_events_sent
                     .add(u64::try_from(events.len()).unwrap_or(u64::MAX));
+
                 let changed_at = packeter.needs_repeat().then(Instant::now);
+
                 repeat_at = changed_at
                     .filter(|_| !self.timing.resend_delay.is_zero())
                     .map(|at| at + self.timing.resend_delay);
@@ -311,6 +318,7 @@ impl InputStage {
             }
 
             let now = Instant::now();
+
             if snapshots.due().is_some_and(|due| now >= due) {
                 records.clear();
                 held.snapshot(&mut records);
@@ -387,6 +395,7 @@ pub(crate) fn run_gamepads(options: PhysicalOptions, links: &GamepadLinks) {
     while !links.stop.load(Ordering::Relaxed) {
         while let Ok(feedback) = links.pad_feedback.try_recv() {
             let result = pads.apply(&feedback);
+
             count_feedback(&links.counters, &feedback, &result);
         }
 
@@ -498,6 +507,7 @@ mod tests {
             if lose.contains(&index) {
                 continue;
             }
+
             let (number, current, previous) = decode(datagram);
             match sequence.admit(number) {
                 InputAdmission::Stale => {}
@@ -554,6 +564,7 @@ mod tests {
     fn a_lost_datagram_is_recovered_from_the_next_one() {
         let mut packeter = InputPacketer::new(BUDGET);
         let mut out = Vec::new();
+
         for code in 1..=4 {
             packeter.pack(&[key(code, true)], &mut out).unwrap();
         }
@@ -570,10 +581,12 @@ mod tests {
     fn the_tail_repeat_recovers_the_final_datagram() {
         let mut packeter = InputPacketer::new(BUDGET);
         let mut out = Vec::new();
+
         packeter.pack(&[key(30, true)], &mut out).unwrap();
         packeter.pack(&[key(30, false)], &mut out).unwrap();
 
         assert!(packeter.needs_repeat());
+
         packeter.repeat(&mut out).unwrap();
 
         assert!(!packeter.needs_repeat());
@@ -676,7 +689,9 @@ mod tests {
             if lose.contains(&index) {
                 continue;
             }
+
             let (number, current, previous) = decode_records(datagram);
+
             let records: Vec<_> = match sequence.admit(number) {
                 InputAdmission::Stale => Vec::new(),
                 InputAdmission::Current => current,
@@ -685,6 +700,7 @@ mod tests {
 
             for record in records {
                 let mut events = Vec::new();
+
                 match record {
                     InputRecord::Event(event) => events.push(event),
                     InputRecord::State(state) => host.reconcile(&state, &mut events),
@@ -700,6 +716,7 @@ mod tests {
 
     fn snapshot_of(client: &HeldInput, packeter: &mut InputPacketer, out: &mut Vec<Vec<u8>>) {
         let mut records = Vec::new();
+
         client.snapshot(&mut records);
         packeter.pack_state(&records, out).unwrap();
     }
@@ -708,14 +725,18 @@ mod tests {
     fn a_snapshot_is_one_datagram_of_state_records() {
         let mut packeter = InputPacketer::new(BUDGET);
         let mut client = HeldInput::new();
+
         client.observe(&key(30, true));
+
         let mut out = Vec::new();
 
         snapshot_of(&client, &mut packeter, &mut out);
 
         let (sequence, current, previous) = decode_records(&out[0]);
         let mut expected = Vec::new();
+
         client.snapshot(&mut expected);
+
         assert_eq!(out.len(), 1);
         assert_eq!(sequence, 0);
         assert_eq!(
@@ -734,6 +755,7 @@ mod tests {
         let mut packeter = InputPacketer::new(BUDGET);
         let mut client = HeldInput::new();
         let mut out = Vec::new();
+
         for events in [vec![key(30, true)], vec![key(30, false)], vec![motion(1.0)]] {
             for event in &events {
                 client.observe(event);
@@ -759,6 +781,7 @@ mod tests {
             caps: true,
             num: false,
         });
+
         client.observe(&locks);
         packeter.pack(&[locks], &mut out).unwrap();
         packeter.pack(&[motion(1.0)], &mut out).unwrap();
@@ -777,6 +800,7 @@ mod tests {
         let mut packeter = InputPacketer::new(BUDGET);
         let mut client = HeldInput::new();
         let mut out = Vec::new();
+
         client.observe(&key(30, true));
         packeter.pack(&[key(30, true)], &mut out).unwrap();
         snapshot_of(&client, &mut packeter, &mut out);
@@ -790,6 +814,7 @@ mod tests {
     fn many_pads_split_a_snapshot_across_datagrams_within_budget() {
         let mut packeter = InputPacketer::new(SMALL_BUDGET);
         let mut client = HeldInput::new();
+
         for slot in 0..8 {
             client.observe(&InputEvent::Gamepad {
                 slot,
@@ -803,6 +828,7 @@ mod tests {
                 },
             });
         }
+
         let mut out = Vec::new();
 
         snapshot_of(&client, &mut packeter, &mut out);
@@ -826,6 +852,7 @@ mod tests {
             .map(|_| {
                 let due = schedule.due().unwrap();
                 let delay = due.duration_since(last);
+
                 schedule.sent(due);
                 last = due;
 
@@ -867,6 +894,7 @@ mod tests {
         assert_eq!(snapshot_delays(&mut schedule, start, 3), [8, 32, 128]);
 
         let third_change = start + Duration::from_millis(200);
+
         schedule.state_changed(third_change);
 
         assert_eq!(

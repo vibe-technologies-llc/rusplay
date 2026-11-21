@@ -21,7 +21,7 @@ const BITS_PER_BYTE: u128 = 8;
 const PERCENT: u32 = 100;
 const CADENCE_SMOOTHING: u32 = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Pacing {
     pub frame_interval: Duration,
     pub window_percent: u8,
@@ -69,7 +69,7 @@ impl Pacing {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FramePacing {
     window: Duration,
     rate_kbps: Option<u32>,
@@ -107,7 +107,7 @@ impl FrameCadence {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SendOptions {
     pub fec: FecScheme,
     pub pacing: Option<Pacing>,
@@ -121,6 +121,7 @@ pub(crate) struct SendLinks {
 
 pub(crate) fn run(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
     let result = serve(options, links);
+
     links.shared.stop();
 
     result
@@ -146,13 +147,16 @@ fn serve(options: SendOptions, links: &SendLinks) -> Result<(), HostError> {
             }
             Ok(outgoing) => {
                 cadence.observe(outgoing.captured_micros);
+
                 let agreed = links.shared.agreed_rate();
                 let stream_kbps = links.shared.counters.bitrate_target();
+
                 let pacing = options.pacing.map(|pacing| {
                     pacing
                         .following(agreed)
                         .for_frame(cadence.smoothed, stream_kbps)
                 });
+
                 send_frame(
                     &mut packetizer,
                     &mut arena,
@@ -198,6 +202,7 @@ fn send_frame(
     };
 
     let counters = &links.shared.counters;
+
     counters.datagrams_sent.add(sent as u64);
     if sent != arena.len() {
         counters.frames_dropped.increment();
@@ -234,6 +239,7 @@ fn send_paced(
 
         let burst = first..count.min(first + plan.datagrams_per_burst);
         let progress = send_all(arena, burst.clone(), suspensions, links)?;
+
         sent += progress;
         if progress != burst.len() {
             return Ok(sent);
@@ -254,11 +260,13 @@ fn send_all(
 
     while sent < range.end {
         let client = links.shared.client.address();
+
         if links.shared.stopped() || links.shared.mailbox.suspensions() != suspensions {
             return Ok(sent - range.start);
         }
 
         let progress = links.transport.send_arena(arena, sent..range.end, client)?;
+
         if progress == 0 {
             thread::sleep(SEND_RETRY_WAIT);
         }
@@ -268,7 +276,7 @@ fn send_all(
     Ok(sent - range.start)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BurstPlan {
     datagrams_per_burst: usize,
     pacer: Pacer,
@@ -317,9 +325,13 @@ mod tests {
         let mut cadence = FrameCadence::default();
 
         cadence.observe(1_000);
+
         let first = cadence.smoothed;
+
         cadence.observe(8_000);
+
         let second = cadence.smoothed;
+
         for step in 2..200 {
             cadence.observe(1_000 + step * 8_000);
         }

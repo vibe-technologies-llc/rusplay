@@ -94,7 +94,7 @@ pub(super) const AV1_COLOR_RANGE_FULL: u32 = 1;
 pub(super) const CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD: u32 = 1;
 pub(super) const CUDA_EXTERNAL_MEMORY_DEDICATED: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct Guid {
     pub data1: u32,
@@ -229,7 +229,7 @@ pub(super) trait Plain: Sized {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct BitField {
     pub offset: u32,
     pub width: u32,
@@ -246,6 +246,7 @@ impl BitField {
 
     pub(super) fn set(self, word: &mut u32, value: u32) {
         let mask = self.mask() << self.offset;
+
         *word = (*word & !mask) | ((value << self.offset) & mask);
     }
 
@@ -312,7 +313,7 @@ pub(super) mod initialize_bits {
     };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct Qp {
     pub inter_p: u32,
@@ -355,7 +356,7 @@ pub(super) struct RcParams {
     pub reserved1: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct VuiParameters {
     pub overscan_info_present_flag: u32,
@@ -653,14 +654,14 @@ pub(super) struct LockBitstream {
     pub reserved_internal: [u32; 8],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct ChromaPoints {
     pub x: u16,
     pub y: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct MasteringDisplayInfo {
     pub g: ChromaPoints,
@@ -671,14 +672,14 @@ pub(super) struct MasteringDisplayInfo {
     pub min_luma: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub(super) struct ContentLightLevel {
     pub max_content_light_level: u16,
     pub max_pic_average_light_level: u16,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(super) struct SeiPayload {
     pub payload_size: u32,
@@ -1229,9 +1230,12 @@ mod tests {
     #[test]
     fn sdk_13_0_hdr_flags_sit_after_the_mv_hevc_and_svc_bits() {
         let mut hevc = 0;
+
         hevc_bits::OUTPUT_MAX_CLL.set(&mut hevc, 1);
         hevc_bits::OUTPUT_MASTERING_DISPLAY.set(&mut hevc, 1);
+
         let mut av1 = 0;
+
         av1_bits::OUTPUT_MAX_CLL.set(&mut av1, 1);
         av1_bits::OUTPUT_MASTERING_DISPLAY.set(&mut av1, 1);
 
@@ -1242,12 +1246,14 @@ mod tests {
     #[test]
     fn bit_fields_set_only_their_own_bits() {
         let mut word = u32::MAX;
+
         hevc_bits::CHROMA_FORMAT_IDC.set(&mut word, CHROMA_FORMAT_IDC_420);
 
         assert_eq!(hevc_bits::CHROMA_FORMAT_IDC.get(word), 1);
         assert_eq!(word, !(0b10 << 9));
 
         let mut word = 0;
+
         rc_bits::AQ_STRENGTH.set(&mut word, 0xff);
         av1_bits::CHROMA_FORMAT_IDC.set(&mut word, CHROMA_FORMAT_IDC_444);
 

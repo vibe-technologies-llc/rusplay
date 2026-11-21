@@ -60,6 +60,7 @@ fn store(dpb: &mut Dpb, decoded: &Decoded<'_>) {
 
 fn store_plain(dpb: &mut Dpb, id: u32, frame_num: u32, poc: i32) {
     let marking = RefPicMarking::default();
+
     store(dpb, &picture(&marking, id, frame_num, poc));
 }
 
@@ -211,6 +212,7 @@ fn the_sliding_window_drops_the_oldest_short_term_frame() {
             max_num_ref_frames: 2,
             ..picture(&marking, id, frame_num, 0)
         };
+
         store(&mut dpb, &decoded);
     }
 
@@ -292,6 +294,7 @@ fn mmco_3_turns_a_short_term_frame_into_a_long_term_one() {
     store(&mut dpb, &picture(&marking, 103, 3, 6));
 
     let converted = dpb.find_surface(102).unwrap();
+
     assert_eq!(converted.marking_of(Structure::Frame), Marking::LongTerm);
     assert_eq!(converted.long_term_frame_idx, 2);
     assert_eq!(marking_of(&dpb, 101), Marking::ShortTerm);
@@ -351,6 +354,7 @@ fn mmco_5_clears_the_buffer_and_restarts_the_counters() {
     store(&mut dpb, &picture(&marking, 103, 3, 10));
 
     let current = dpb.find_surface(103).unwrap();
+
     assert_eq!(surfaces(&dpb), [103]);
     assert_eq!(current.frame_num, 0);
     assert_eq!(current.fields[0].poc, Some(0));
@@ -368,6 +372,7 @@ fn mmco_6_marks_the_current_picture_long_term() {
     store(&mut dpb, &picture(&marking, 103, 3, 6));
 
     let current = dpb.find_surface(103).unwrap();
+
     assert_eq!(current.marking_of(Structure::Frame), Marking::LongTerm);
     assert_eq!(current.long_term_frame_idx, 3);
     assert_eq!(surfaces(&dpb), [100, 101, 102, 103]);
@@ -393,6 +398,7 @@ fn the_buffer_never_holds_more_than_sixteen_frames() {
             max_num_ref_frames: 16,
             ..picture(&marking, id, id % MAX_FRAME_NUM, 0)
         };
+
         store(&mut dpb, &decoded);
     }
 
@@ -501,6 +507,7 @@ fn consecutive_frames() -> Dpb {
 fn a_subtract_modification_moves_the_named_frame_to_the_front() {
     let dpb = consecutive_frames();
     let mut slice = header(SliceType::P, 3);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(0, 2, 0)];
 
@@ -513,6 +520,7 @@ fn a_subtract_modification_moves_the_named_frame_to_the_front() {
 fn successive_modifications_continue_from_the_predicted_number() {
     let dpb = consecutive_frames();
     let mut slice = header(SliceType::P, 3);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(0, 2, 0), modification(1, 0, 0)];
 
@@ -528,6 +536,7 @@ fn a_modification_wraps_below_zero_into_the_previous_frame_num_cycle() {
         reference(2, 0, 0, Marking::ShortTerm, 4),
     ]);
     let mut slice = header(SliceType::P, 2);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(0, 1, 0)];
 
@@ -544,6 +553,7 @@ fn a_long_term_modification_selects_by_long_term_pic_num() {
         long_term(3, 1),
     ]);
     let mut slice = header(SliceType::P, 3);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(2, 0, 1)];
 
@@ -556,6 +566,7 @@ fn a_long_term_modification_selects_by_long_term_pic_num() {
 fn a_modification_naming_a_missing_frame_leaves_an_empty_entry() {
     let dpb = consecutive_frames();
     let mut slice = header(SliceType::P, 3);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(0, 5, 0)];
 
@@ -568,6 +579,7 @@ fn a_modification_naming_a_missing_frame_leaves_an_empty_entry() {
 fn modification_stops_at_the_end_marker() {
     let dpb = consecutive_frames();
     let mut slice = header(SliceType::P, 3);
+
     slice.ref_pic_list_modification_flag_l0 = true;
     slice.ref_pic_list_modification_l0 = vec![modification(3, 0, 0), modification(0, 2, 0)];
 
@@ -606,7 +618,9 @@ fn field_lists_alternate_parity_starting_with_the_current_one() {
 #[test]
 fn field_lists_fall_back_to_the_remaining_parity_when_one_runs_out() {
     let mut half = reference(2, 2, 2, Marking::ShortTerm, 4);
+
     half.fields[1].marking = Marking::Unused;
+
     let dpb = dpb_of(vec![reference(1, 1, 1, Marking::ShortTerm, 2), half]);
 
     let [list0, _] = dpb.reference_lists(
@@ -651,6 +665,7 @@ fn field_pic_nums_double_and_the_same_parity_is_odd() {
 #[test]
 fn a_frame_with_one_unmarked_field_is_not_a_short_term_frame() {
     let mut half = reference(1, 1, 1, Marking::ShortTerm, 2);
+
     half.fields[1].marking = Marking::Unused;
 
     assert_eq!(half.marking_of(Structure::Frame), Marking::Unused);
@@ -711,11 +726,17 @@ fn order_count_type_0_unwraps_the_least_significant_bits() {
     let mut dpb = Dpb::default();
 
     let first = order_of(&dpb, &sps, 0, 0, 1, true);
+
     follow(&mut dpb, first, 0, 0);
+
     let second = order_of(&dpb, &sps, 1, 6, 1, false);
+
     follow(&mut dpb, second, 1, 6);
+
     let third = order_of(&dpb, &sps, 2, 12, 1, false);
+
     follow(&mut dpb, third, 2, 12);
+
     let fourth = order_of(&dpb, &sps, 3, 2, 1, false);
 
     assert_eq!(first.poc(), 0);
@@ -730,7 +751,9 @@ fn order_count_type_0_unwraps_backwards_too() {
     let mut dpb = Dpb::default();
 
     let first = order_of(&dpb, &sps, 0, 0, 1, true);
+
     follow(&mut dpb, first, 0, 0);
+
     let behind = order_of(&dpb, &sps, 1, 14, 1, false);
 
     assert_eq!(behind.poc(), -2);
@@ -742,9 +765,12 @@ fn a_non_reference_picture_does_not_advance_the_order_count_reference() {
     let mut dpb = Dpb::default();
 
     let first = order_of(&dpb, &sps, 0, 0, 1, true);
+
     follow(&mut dpb, first, 0, 0);
+
     let skipped = order_of(&dpb, &sps, 1, 14, 0, false);
     let marking = RefPicMarking::default();
+
     store(
         &mut dpb,
         &Decoded {
@@ -754,6 +780,7 @@ fn a_non_reference_picture_does_not_advance_the_order_count_reference() {
             ..picture(&marking, 1, 1, 0)
         },
     );
+
     let next = order_of(&dpb, &sps, 2, 2, 1, false);
 
     assert_eq!(next.poc(), 2);
@@ -782,7 +809,9 @@ fn order_count_type_2_follows_decoding_order_across_frame_num_wraps() {
     let mut dpb = Dpb::default();
 
     let first = order_of(&dpb, &sps, 15, 0, 1, true);
+
     follow(&mut dpb, first, 15, 0);
+
     let wrapped = order_of(&dpb, &sps, 0, 0, 1, false);
     let non_reference = order_of(&dpb, &sps, 0, 0, 0, false);
 
@@ -794,10 +823,12 @@ fn order_count_type_2_follows_decoding_order_across_frame_num_wraps() {
 #[test]
 fn order_count_type_1_walks_the_expected_cycle() {
     let mut sps = sps(1);
+
     sps.num_ref_frames_in_pic_order_cnt_cycle = 1;
     sps.offset_for_ref_frame[0] = 2;
     sps.expected_delta_per_pic_order_cnt_cycle = 2;
     sps.offset_for_non_ref_pic = -1;
+
     let dpb = Dpb::default();
 
     let reference = order_of(&dpb, &sps, 3, 0, 1, false);
@@ -824,6 +855,7 @@ fn an_mmco_5_picture_restarts_the_frame_num_offset() {
     let marking = adaptive(vec![operation(5)]);
 
     store(&mut dpb, &picture(&marking, 103, 3, 6));
+
     let next = order_of(&dpb, &sps, 1, 0, 1, false);
 
     assert_eq!(next.poc(), 2);

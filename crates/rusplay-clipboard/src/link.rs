@@ -85,6 +85,7 @@ mod tests {
 
     fn carry(from: &mut ClipboardLink, to: &mut ClipboardLink) {
         let mut chunks = Vec::new();
+
         from.service(|chunk| {
             chunks.push(chunk);
             true
@@ -119,7 +120,9 @@ mod tests {
         let mut link = link(&board, true, false);
 
         board.copy("a".repeat(2000));
+
         let mut accepted = 0;
+
         link.service(|_| {
             accepted += 1;
             accepted <= 2
@@ -129,6 +132,7 @@ mod tests {
         assert!(link.has_pending());
 
         let mut rest = 0;
+
         link.service(|_| {
             rest += 1;
             true

@@ -14,13 +14,13 @@ const STANDARD_GRAVITY: f64 = 9.80665;
 const RADIANS_PER_DEGREE: f64 = std::f64::consts::PI / 180.0;
 const AXES: usize = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MotionCaps {
     pub accel_units_per_g: Option<u32>,
     pub gyro_units_per_degree_second: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Channel {
     sensor: SensorKind,
     scale: f64,
@@ -57,6 +57,7 @@ impl Channel {
 
         if self.seen.iter().all(|seen| *seen) {
             let [x, y, z] = self.raw.map(|raw| (f64::from(raw) * self.scale) as f32);
+
             out.push(GamepadEvent::Sensor {
                 sensor: self.sensor,
                 x,
@@ -67,7 +68,7 @@ impl Channel {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct MotionTranslator {
     accel: Option<Channel>,
     gyro: Option<Channel>,
@@ -110,7 +111,7 @@ impl MotionTranslator {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchpadRange {
     pub min: i32,
     pub max: i32,
@@ -120,6 +121,7 @@ impl TouchpadRange {
     #[allow(clippy::cast_possible_truncation)]
     fn normalise(self, value: i32) -> f32 {
         let span = f64::from(self.max) - f64::from(self.min);
+
         if span <= 0.0 {
             return 0.0;
         }
@@ -128,7 +130,7 @@ impl TouchpadRange {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Pending {
     #[default]
     Nothing,
@@ -137,7 +139,7 @@ enum Pending {
     Replace,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Contact {
     down: bool,
     moved: bool,
@@ -146,7 +148,7 @@ struct Contact {
     y: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct TouchpadTranslator {
     x: TouchpadRange,
     y: TouchpadRange,
@@ -267,7 +269,7 @@ impl TouchpadTranslator {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum SiblingTranslator {
     Motion(MotionTranslator),
     Touchpad(TouchpadTranslator),
@@ -309,6 +311,7 @@ mod tests {
 
     fn run(translator: &mut TouchpadTranslator, raws: &[RawEvent]) -> Vec<GamepadEvent> {
         let mut out = Vec::new();
+
         for raw in raws {
             translator.translate(*raw, &mut out);
         }
@@ -368,6 +371,7 @@ mod tests {
         let [GamepadEvent::Sensor { sensor, x, y, z }] = out[..] else {
             panic!("expected one sensor event, got {out:?}");
         };
+
         assert_eq!(sensor, SensorKind::Gyro);
         assert!((x - 1.0f32.to_radians()).abs() < 1e-6);
         assert!((y + 2.0f32.to_radians()).abs() < 1e-6);
@@ -440,6 +444,7 @@ mod tests {
         let [GamepadEvent::Sensor { x, y, z, .. }] = out[..] else {
             panic!("expected one sensor event, got {out:?}");
         };
+
         assert!(x.is_finite() && y.is_finite() && z.is_finite());
     }
 
@@ -522,6 +527,7 @@ mod tests {
     #[test]
     fn a_new_tracking_id_in_a_down_slot_lifts_then_touches() {
         let mut translator = touchpad();
+
         run(
             &mut translator,
             &[
@@ -613,6 +619,7 @@ mod tests {
     #[test]
     fn releasing_lifts_every_finger_and_the_click() {
         let mut translator = touchpad();
+
         run(
             &mut translator,
             &[
@@ -626,6 +633,7 @@ mod tests {
                 RawEvent::Sync,
             ],
         );
+
         let mut out = Vec::new();
 
         translator.release(&mut out);

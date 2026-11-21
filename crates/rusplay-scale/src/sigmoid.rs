@@ -5,7 +5,7 @@ use crate::ScaleError;
 const CENTER_RANGE: RangeInclusive<f32> = 0.0..=1.0;
 const SLOPE_RANGE: RangeInclusive<f32> = 1.0..=20.0;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sigmoid {
     pub center: f32,
     pub slope: f32,

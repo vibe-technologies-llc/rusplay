@@ -30,6 +30,7 @@ pub(crate) fn unsupported(what: impl Display) {
 
 pub(crate) fn has_module(name: &str) -> bool {
     let present = Path::new("/sys/module").join(name).exists();
+
     if !present {
         missing(format_args!("the {name} kernel module"));
     }

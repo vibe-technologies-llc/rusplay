@@ -25,7 +25,7 @@ const PAD_TOUCHPAD_HEADER_LEN: usize = 1 + 1;
 const FINGER_LEN: usize = 2 * F32_LEN;
 const PAD_LEN: usize = 1 + size_of::<u16>() + PAD_AXES * size_of::<f32>();
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StateRecord {
     Keys(KeySet),
     Buttons(KeySet),
@@ -132,6 +132,7 @@ impl StateRecord {
                     buttons: reader.u16()?,
                     ..PadState::default()
                 };
+
                 for axis in &mut state.axes {
                     *axis = finite(reader.f32()?)?;
                 }
@@ -156,11 +157,13 @@ impl StateRecord {
             TAG_PAD_TOUCHPAD => {
                 let slot = pad_slot(reader.u8()?)?;
                 let mask = reader.u8()?;
+
                 if u32::from(mask) >> MAX_PAD_FINGERS != 0 {
                     return Err(InputError::PadFingerOutOfRange(highest_bit(mask)));
                 }
 
                 let mut fingers = PadFingers::default();
+
                 for (index, finger) in fingers.iter_mut().enumerate() {
                     if mask & (1 << index) != 0 {
                         *finger = Some((finite(reader.f32()?)?, finite(reader.f32()?)?));
@@ -177,8 +180,10 @@ impl StateRecord {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, InputError> {
         let mut reader = Reader::new(bytes);
+
         let tag = reader.u8()?;
         let record = Self::decode_body(tag, &mut reader)?;
+
         reader.finish()?;
 
         Ok(record)
@@ -204,6 +209,7 @@ fn finite(value: f32) -> Result<f32, InputError> {
 const fn finger_count(fingers: &PadFingers) -> usize {
     let mut count = 0;
     let mut index = 0;
+
     while index < MAX_PAD_FINGERS {
         if fingers[index].is_some() {
             count += 1;
@@ -232,6 +238,7 @@ fn encode_key_set(keys: &KeySet, out: &mut Vec<u8>) {
 
 fn decode_key_set(reader: &mut Reader<'_>) -> Result<KeySet, InputError> {
     let mut words = [0u64; KeySet::WORDS];
+
     for word in &mut words {
         *word = reader.u64()?;
     }
@@ -239,7 +246,7 @@ fn decode_key_set(reader: &mut Reader<'_>) -> Result<KeySet, InputError> {
     Ok(KeySet::from_words(words))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum InputRecord {
     Event(InputEvent),
     State(StateRecord),
@@ -287,6 +294,7 @@ mod tests {
 
     fn round_trip(record: StateRecord) -> Vec<u8> {
         let mut bytes = Vec::new();
+
         record.encode_into(&mut bytes);
 
         assert_eq!(bytes.len(), record.encoded_len());
@@ -300,6 +308,7 @@ mod tests {
 
     fn keys(codes: &[u32]) -> KeySet {
         let mut set = KeySet::default();
+
         for code in codes {
             set.insert(*code);
         }
@@ -362,6 +371,7 @@ mod tests {
             fingers: [None, Some((0.1, 0.2)), None, Some((0.3, 0.4))],
         };
         let mut bytes = Vec::new();
+
         two.encode_into(&mut bytes);
 
         assert_eq!(bytes.len(), 3 + 2 * 8);
@@ -371,6 +381,7 @@ mod tests {
     #[test]
     fn malformed_sensor_and_touchpad_records_are_rejected() {
         let mut sensor = Vec::new();
+
         StateRecord::PadSensor {
             slot: 1,
             sensor: SensorKind::Gyro,
@@ -379,18 +390,28 @@ mod tests {
         .encode_into(&mut sensor);
 
         let mut bad_slot = sensor.clone();
+
         bad_slot[1] = 16;
+
         let mut bad_kind = sensor.clone();
+
         bad_kind[2] = 9;
+
         let mut not_finite = sensor.clone();
+
         not_finite[7..11].copy_from_slice(&f32::INFINITY.to_le_bytes());
 
         let mut touchpad = vec![TAG_PAD_TOUCHPAD, 0, 0b0001_0000];
+
         touchpad.extend_from_slice(&[0; 8]);
+
         let mut touchpad_nan = vec![TAG_PAD_TOUCHPAD, 0, 0b0001];
+
         touchpad_nan.extend_from_slice(&f32::NAN.to_le_bytes());
         touchpad_nan.extend_from_slice(&[0; 4]);
+
         let mut touchpad_cut = vec![TAG_PAD_TOUCHPAD, 0, 0b0011];
+
         touchpad_cut.extend_from_slice(&[0; 8]);
 
         assert!(matches!(
@@ -439,6 +460,7 @@ mod tests {
 
         for record in records {
             let mut bytes = Vec::new();
+
             record.encode_into(&mut bytes);
 
             for length in 0..bytes.len() {
@@ -457,6 +479,7 @@ mod tests {
             event: GamepadEvent::Connected,
         };
         let mut bytes = Vec::new();
+
         InputRecord::Event(event).encode_into(&mut bytes);
 
         assert_eq!(bytes.len(), InputRecord::Event(event).encoded_len());
@@ -469,6 +492,7 @@ mod tests {
     #[test]
     fn malformed_state_records_are_rejected_with_their_reason() {
         let mut pad = Vec::new();
+
         StateRecord::Pad {
             slot: 1,
             state: PadState::default(),
@@ -476,10 +500,15 @@ mod tests {
         .encode_into(&mut pad);
 
         let mut bad_slot = pad.clone();
+
         bad_slot[1] = 16;
+
         let mut not_finite = pad.clone();
+
         not_finite[4..8].copy_from_slice(&f32::NAN.to_le_bytes());
+
         let mut trailing = pad.clone();
+
         trailing.push(0);
 
         assert!(matches!(

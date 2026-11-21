@@ -29,19 +29,19 @@ const ABS_HAT0Y: u16 = 0x11;
 
 const AXIS_COUNT: usize = 6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawAxis {
     pub min: i32,
     pub max: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaceLayout {
     Xpad,
     Positional,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PadCaps {
     pub layout: FaceLayout,
     pub axes: Vec<(u16, RawAxis)>,
@@ -55,14 +55,14 @@ impl PadCaps {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RawEvent {
     Key { code: u16, value: i32 },
     Abs { code: u16, value: i32 },
     Sync,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PadTranslator {
     caps: PadCaps,
     deadzone: f32,
@@ -86,6 +86,7 @@ impl PadTranslator {
 
     pub fn translate(&mut self, slot: u8, raw: RawEvent, out: &mut Vec<InputEvent>) {
         let mut events = Vec::new();
+
         match raw {
             RawEvent::Key { code, value } => self.key(code, value, &mut events),
             RawEvent::Abs { code, value } => self.abs(code, value, &mut events),
@@ -103,6 +104,7 @@ impl PadTranslator {
         if value > 1 {
             return;
         }
+
         let pressed = value == 1;
 
         if self.trigger_buttons {
@@ -113,6 +115,7 @@ impl PadTranslator {
             };
             if let Some(axis) = trigger {
                 let value = if pressed { 1.0 } else { 0.0 };
+
                 self.emit_axis(axis, value, out);
                 return;
             }
@@ -130,6 +133,7 @@ impl PadTranslator {
             ABS_X | ABS_Y | ABS_RX | ABS_RY => {
                 if let (Some(range), Some(axis)) = (self.caps.range(code), stick_axis(code)) {
                     let normalised = self.dead(centred(value, range));
+
                     self.emit_axis(axis, normalised, out);
                 }
             }
@@ -145,6 +149,7 @@ impl PadTranslator {
     fn hat_x(&mut self, value: i32, out: &mut Vec<GamepadEvent>) {
         let value = value.signum();
         let previous = std::mem::replace(&mut self.hat.0, value);
+
         dpad_change(
             previous,
             value,
@@ -157,6 +162,7 @@ impl PadTranslator {
     fn hat_y(&mut self, value: i32, out: &mut Vec<GamepadEvent>) {
         let value = value.signum();
         let previous = std::mem::replace(&mut self.hat.1, value);
+
         dpad_change(
             previous,
             value,
@@ -236,6 +242,7 @@ fn trigger_axis(code: u16) -> Option<GamepadAxis> {
 fn centred(value: i32, range: RawAxis) -> f32 {
     let centre = f64::midpoint(f64::from(range.min), f64::from(range.max));
     let half = (f64::from(range.max) - f64::from(range.min)) / 2.0;
+
     if half <= 0.0 {
         return 0.0;
     }
@@ -246,6 +253,7 @@ fn centred(value: i32, range: RawAxis) -> f32 {
 #[allow(clippy::cast_possible_truncation)]
 fn unsigned(value: i32, range: RawAxis) -> f32 {
     let span = f64::from(range.max) - f64::from(range.min);
+
     if span <= 0.0 {
         return 0.0;
     }
@@ -309,6 +317,7 @@ mod tests {
 
     fn run(translator: &mut PadTranslator, raw: RawEvent) -> Vec<GamepadEvent> {
         let mut out = Vec::new();
+
         translator.translate(2, raw, &mut out);
 
         out.into_iter()
@@ -548,6 +557,7 @@ mod tests {
                 value: 1000,
             },
         );
+
         let again = run(
             &mut pad,
             RawEvent::Abs {
@@ -557,6 +567,7 @@ mod tests {
         );
         let drift_inside_deadzone = {
             let mut pad = translator(0.5);
+
             run(
                 &mut pad,
                 RawEvent::Abs {

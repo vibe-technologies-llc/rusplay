@@ -1,6 +1,6 @@
 use crate::{Kernel, Taps};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TapTable {
     pub taps_per_pixel: u32,
     pub firsts: Vec<i32>,

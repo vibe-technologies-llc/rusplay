@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use rusplay_protocol::{QualityReport, QualityUnavailableReason};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QualityState {
     #[default]
     Off,
@@ -27,7 +27,7 @@ impl QualityState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct QualitySnapshot {
     pub state: QualityState,
     pub report: Option<QualityReport>,
@@ -49,6 +49,7 @@ pub(crate) struct QualityLink {
 impl QualityLink {
     pub(crate) fn want(&self, enabled: bool) {
         let mut inner = self.inner.lock();
+
         inner.wanted = enabled;
         if !enabled {
             inner.state = QualityState::Off;
@@ -90,13 +91,13 @@ impl QualityLink {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InFlight {
     id: u32,
     enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct QualityRequester {
     told: bool,
     in_flight: Option<InFlight>,
@@ -159,9 +160,13 @@ mod tests {
         let mut requester = QualityRequester::default();
 
         requester.sent(true, 7);
+
         let while_in_flight = requester.ready(false);
+
         requester.acked(7);
+
         let after = requester.ready(false);
+
         requester.sent(false, 8);
         requester.acked(8);
 
@@ -187,12 +192,18 @@ mod tests {
         let now = Instant::now();
 
         let off = link.snapshot(now);
+
         link.want(true);
+
         let waiting = link.snapshot(now);
+
         link.report(report(5), now);
+
         let reported = link.snapshot(now + Duration::from_millis(300));
+
         link.want(false);
         link.report(report(6), now);
+
         let turned_off = link.snapshot(now);
 
         assert_eq!(off.state, QualityState::Off);
@@ -211,6 +222,7 @@ mod tests {
         link.want(true);
         link.report(report(1), now);
         link.unavailable(QualityUnavailableReason::MeasurementFailed);
+
         let snapshot = link.snapshot(now);
 
         assert_eq!(

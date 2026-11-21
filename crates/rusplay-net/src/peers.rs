@@ -47,6 +47,7 @@ impl PeerSecret {
             .finalize();
 
         let mut id = [0; PeerId::LEN];
+
         id.copy_from_slice(&digest[..PeerId::LEN]);
         PeerId(id)
     }
@@ -76,7 +77,7 @@ impl fmt::Debug for PeerSecret {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PeerRecord {
     id: PeerId,
     name: String,
@@ -120,7 +121,7 @@ impl PeerRecord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PeerRole {
     Host,
     Client,
@@ -135,7 +136,7 @@ impl PeerRole {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileStamp {
     Missing,
     Present {
@@ -159,7 +160,7 @@ impl FileStamp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreExposure {
     ReadableByOthers { mode: u32 },
     OwnedByAnotherUser { uid: u32 },
@@ -181,6 +182,7 @@ impl fmt::Display for StoreExposure {
 impl StoreExposure {
     fn of(metadata: &fs::Metadata) -> Option<Self> {
         let uid = metadata.uid();
+
         if uid != rustix::process::geteuid().as_raw() {
             return Some(Self::OwnedByAnotherUser { uid });
         }
@@ -196,7 +198,7 @@ struct Loaded {
     exposure: Option<StoreExposure>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct PeerStore {
     path: PathBuf,
     records: Vec<PeerRecord>,
@@ -230,6 +232,7 @@ impl PeerStore {
         }
 
         let loaded = load(&self.path)?;
+
         self.records = loaded.records;
         self.stamp = loaded.stamp;
         self.exposure = loaded.exposure;
@@ -301,6 +304,7 @@ impl PeerStore {
             .filter(|existing| existing.id != record.id)
             .cloned()
             .collect();
+
         records.push(record);
 
         self.persist(&records)?;
@@ -329,7 +333,9 @@ impl PeerStore {
 
     fn persist(&self, records: &[PeerRecord]) -> Result<(), NetError> {
         let mut text = render(records);
+
         let written = write_owner_only(&self.path, &text);
+
         text.zeroize();
 
         written.map_err(|source| NetError::PeerStoreWrite {
@@ -348,6 +354,7 @@ fn load(path: &Path) -> Result<Loaded, NetError> {
     let records = match fs::read_to_string(path) {
         Ok(mut text) => {
             let parsed = parse(&text, path);
+
             text.zeroize();
             parsed?
         }
@@ -375,6 +382,7 @@ fn tighten_owned_directory(directory: &Path) -> io::Result<()> {
     };
 
     let owned = metadata.uid() == rustix::process::geteuid().as_raw();
+
     if metadata.is_dir() && owned && metadata.mode() & GROUP_AND_OTHER_BITS != 0 {
         fs::set_permissions(directory, fs::Permissions::from_mode(OWNER_ONLY_DIRECTORY))?;
     }
@@ -431,9 +439,11 @@ fn decode_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
 
     let mut out = [0; N];
     let (pairs, _) = text.as_bytes().as_chunks::<2>();
+
     for (slot, pair) in out.iter_mut().zip(pairs) {
         let high = char::from(pair[0]).to_digit(16)?;
         let low = char::from(pair[1]).to_digit(16)?;
+
         *slot = u8::try_from(high << 4 | low).ok()?;
     }
 
@@ -457,6 +467,7 @@ fn parse(text: &str, path: &Path) -> Result<Vec<PeerRecord>, NetError> {
         };
 
         let mut fields = line.splitn(3, ' ');
+
         let (Some(id), Some(secret), Some(name)) = (fields.next(), fields.next(), fields.next())
         else {
             return Err(corrupt());
@@ -466,8 +477,11 @@ fn parse(text: &str, path: &Path) -> Result<Vec<PeerRecord>, NetError> {
             .map(PeerId)
             .ok_or_else(corrupt)?;
         let mut secret_bytes = decode_hex::<PEER_SECRET_LEN>(secret).ok_or_else(corrupt)?;
+
         let secret = PeerSecret::from_bytes(secret_bytes);
+
         secret_bytes.zeroize();
+
         let record = PeerRecord::new(name, secret).map_err(|_| corrupt())?;
 
         if record.id != id || records.iter().any(|existing| existing.id == id) {
@@ -496,6 +510,7 @@ mod tests {
         (0..count)
             .map(|index| {
                 let mut bytes = [0; PEER_SECRET_LEN];
+
                 bytes[..8].copy_from_slice(&(index as u64).to_be_bytes());
                 render(&[PeerRecord::new("peer", PeerSecret::from_bytes(bytes)).unwrap()])
             })
@@ -506,7 +521,9 @@ mod tests {
     fn a_full_store_refuses_a_new_peer_but_keeps_updating_known_ones() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
+
         fs::write(&path, store_text(MAX_PEERS)).unwrap();
+
         let mut store = PeerStore::open(path).unwrap();
 
         let known = store.iter().next().unwrap().clone();
@@ -527,6 +544,7 @@ mod tests {
     fn a_store_file_beyond_the_capacity_is_refused() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
+
         fs::write(&path, store_text(MAX_PEERS + 1)).unwrap();
 
         assert!(matches!(
@@ -583,12 +601,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
         let mut running = PeerStore::open(path.clone()).unwrap();
+
         running.remember(record("laptop", 1)).unwrap();
         running.remember(record("desk", 2)).unwrap();
 
         let unchanged = running.refresh().unwrap();
         let mut other = PeerStore::open(path).unwrap();
+
         other.forget(&secret(1).id()).unwrap();
+
         let stale = running.is_stale();
         let changed = running.refresh().unwrap();
 
@@ -606,10 +627,13 @@ mod tests {
         let path = directory.path().join("peers");
         let mut running = PeerStore::open(path.clone()).unwrap();
         let mut writer = PeerStore::open(path.clone()).unwrap();
+
         writer.remember(record("laptop", 1)).unwrap();
 
         let created = running.refresh().unwrap();
+
         fs::remove_file(&path).unwrap();
+
         let removed = running.refresh().unwrap();
 
         assert!(created);
@@ -622,9 +646,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
         let mut running = PeerStore::open(path.clone()).unwrap();
+
         running.remember(record("laptop", 1)).unwrap();
 
         fs::write(&path, "garbage line\n").unwrap();
+
         let result = running.refresh();
 
         assert!(matches!(result, Err(NetError::PeerStoreCorrupt { .. })));
@@ -639,6 +665,7 @@ mod tests {
 
         store.remember(record("laptop", 1)).unwrap();
         store.remember(record("desk pc with spaces", 2)).unwrap();
+
         let reloaded = PeerStore::open(path).unwrap();
 
         let ids = |store: &PeerStore| -> Vec<(PeerId, String)> {
@@ -674,11 +701,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
         let mut store = PeerStore::open(path.clone()).unwrap();
+
         store.remember(record("laptop", 1)).unwrap();
         store.remember(record("phone", 2)).unwrap();
 
         assert!(store.forget(&secret(1).id()).unwrap());
         assert!(!store.forget(&secret(1).id()).unwrap());
+
         let reloaded = PeerStore::open(path).unwrap();
 
         assert!(reloaded.get(&secret(1).id()).is_none());
@@ -700,6 +729,7 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
+
         assert_eq!(file_mode, OWNER_ONLY_FILE);
         assert_eq!(directory_mode, OWNER_ONLY_DIRECTORY);
         assert!(!path.with_extension(STAGING_SUFFIX).exists());
@@ -710,13 +740,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
         let staging = path.with_extension(STAGING_SUFFIX);
+
         fs::write(&staging, "junk").unwrap();
         fs::set_permissions(&staging, fs::Permissions::from_mode(0o666)).unwrap();
+
         let mut store = PeerStore::open(path.clone()).unwrap();
 
         store.remember(record("laptop", 1)).unwrap();
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+
         assert_eq!(mode, OWNER_ONLY_FILE);
     }
 
@@ -724,7 +757,9 @@ mod tests {
     fn a_failed_write_leaves_the_store_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
+
         fs::create_dir(path.with_extension(STAGING_SUFFIX)).unwrap();
+
         let mut store = PeerStore::open(path).unwrap();
 
         let result = store.remember(record("laptop", 1));
@@ -740,6 +775,7 @@ mod tests {
         let good = render(&[record("laptop", 1)]);
         let id = secret(3).id();
         let mismatched = format!("{id} {} phone\n", "02".repeat(PEER_SECRET_LEN));
+
         let cases = [
             "garbage\n".to_owned(),
             format!("{good}short line\n"),
@@ -761,6 +797,7 @@ mod tests {
         }
 
         fs::write(&path, format!("{good}oops\n")).unwrap();
+
         assert!(matches!(
             PeerStore::open(path),
             Err(NetError::PeerStoreCorrupt { line: 2, .. })
@@ -799,6 +836,7 @@ mod tests {
     fn an_existing_permissive_state_directory_is_tightened_on_open() {
         let directory = tempfile::tempdir().unwrap();
         let state = directory.path().join("rusplay");
+
         fs::create_dir(&state).unwrap();
         fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -810,6 +848,7 @@ mod tests {
         .unwrap();
 
         let mode = fs::metadata(&state).unwrap().permissions().mode() & 0o777;
+
         assert_eq!(mode, OWNER_ONLY_DIRECTORY);
     }
 
@@ -833,10 +872,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("peers");
         let mut store = PeerStore::open(path.clone()).unwrap();
+
         store.remember(record("laptop", 1)).unwrap();
+
         let private = PeerStore::open(path.clone()).unwrap().exposure();
 
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
         let shared = PeerStore::open(path).unwrap().exposure();
 
         assert_eq!(private, None);

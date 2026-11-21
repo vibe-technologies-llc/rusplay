@@ -132,6 +132,7 @@ fn obus(packet: &[u8]) -> Vec<Obu> {
 
         for shift in (0..).step_by(7) {
             let byte = packet[position];
+
             position += 1;
             size |= usize::from(byte & 0x7f) << shift;
             if byte & 0x80 == 0 {
@@ -156,6 +157,7 @@ fn leb128(mut value: usize) -> Vec<u8> {
 
     loop {
         let low = u8::try_from(value & 0x7f).unwrap();
+
         value >>= 7;
         if value == 0 {
             bytes.push(low);
@@ -171,6 +173,7 @@ fn with_tile_data_cut_short(packet: &[u8], cut: usize) -> Vec<u8> {
     for obu in obus(packet) {
         if obu.kind == OBU_FRAME {
             let kept = obu.payload.start..obu.payload.end - cut;
+
             rebuilt.extend_from_slice(&packet[obu.start..obu.start + obu.header_len]);
             rebuilt.extend(leb128(kept.len()));
             rebuilt.extend_from_slice(&packet[kept]);
@@ -189,11 +192,13 @@ fn tile_data_cut_short_is_an_error_and_the_decoder_decodes_on() {
     for broken_index in 0..frames.len() {
         for cut in [1, 8, 64] {
             let mut decoder = Rav1dDecoder::new(&SoftwareDecoderConfig::default()).unwrap();
+
             for frame in &frames[..broken_index] {
                 decoder.decode(frame).unwrap();
             }
 
             let mut broken = frames[broken_index].clone();
+
             broken.data = with_tile_data_cut_short(&frames[broken_index].data, cut).into();
 
             assert!(

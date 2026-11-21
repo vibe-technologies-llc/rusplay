@@ -21,7 +21,7 @@ pub(crate) fn is_shareable(mimes: &[String]) -> bool {
         && !mimes.iter().any(|mime| mime == PASSWORD_HINT_MIME)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadStep {
     Pending,
     Done,
@@ -45,6 +45,7 @@ impl ReadJob {
 
     pub(crate) fn from_fd(fd: OwnedFd, max_bytes: usize, now: Instant) -> io::Result<Self> {
         let flags = fcntl_getfl(&fd)?;
+
         fcntl_setfl(&fd, flags | OFlags::NONBLOCK)?;
 
         Ok(Self {
@@ -93,7 +94,9 @@ impl ReadJob {
 
 pub(crate) fn write_all(fd: &OwnedFd, mut bytes: &[u8], timeout: Duration) -> io::Result<()> {
     let flags = fcntl_getfl(fd)?;
+
     fcntl_setfl(fd, flags | OFlags::NONBLOCK)?;
+
     let deadline = Instant::now() + timeout;
 
     while !bytes.is_empty() {
@@ -102,9 +105,11 @@ pub(crate) fn write_all(fd: &OwnedFd, mut bytes: &[u8], timeout: Duration) -> io
             Err(Errno::INTR) => {}
             Err(Errno::AGAIN) => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
+
                 if remaining.is_zero() {
                     return Err(io::ErrorKind::TimedOut.into());
                 }
+
                 let limit = Timespec {
                     tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
                     tv_nsec: i64::from(remaining.subsec_nanos()),
@@ -128,6 +133,7 @@ mod tests {
 
     fn feed(max_bytes: usize, payload: &[u8]) -> (ReadJob, OwnedFd) {
         let (job, writer) = ReadJob::open(max_bytes, Instant::now()).unwrap();
+
         write_all(&writer, payload, Duration::from_secs(1)).unwrap();
 
         (job, writer)
@@ -161,6 +167,7 @@ mod tests {
     #[test]
     fn a_closed_pipe_yields_its_text() {
         let (job, writer) = feed(100, "héllo".as_bytes());
+
         drop(writer);
 
         let (step, job) = finish(job);
@@ -183,6 +190,7 @@ mod tests {
     #[test]
     fn more_than_the_limit_is_abandoned_without_buffering_it_all() {
         let (job, writer) = feed(10, &[b'a'; 11]);
+
         drop(writer);
 
         let (step, _) = finish(job);
@@ -193,8 +201,11 @@ mod tests {
     #[test]
     fn invalid_utf8_and_empty_selections_are_not_text() {
         let (bad, writer) = feed(100, &[0xFF, 0xFE]);
+
         drop(writer);
+
         let (empty, writer) = feed(100, b"");
+
         drop(writer);
 
         let (_, bad) = finish(bad);
@@ -211,12 +222,14 @@ mod tests {
         let result = write_all(&writer, &vec![b'a'; 1 << 20], Duration::from_millis(100));
 
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+
         drop(job);
     }
 
     #[test]
     fn writing_to_a_closed_pipe_fails_instead_of_blocking() {
         let (job, writer) = ReadJob::open(10, Instant::now()).unwrap();
+
         drop(job);
 
         let result = write_all(&writer, b"x", Duration::from_millis(50));

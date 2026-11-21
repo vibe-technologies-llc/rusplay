@@ -63,7 +63,7 @@ pub use crate::{
     resolve::resolve,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Backend {
     Vaapi,
     Nvdec,

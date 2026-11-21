@@ -10,7 +10,7 @@ const MAX_FEC_OVERHEAD_PERCENT: u8 = 100;
 const MICROPHONE_CHANNELS: ChannelLayout = ChannelLayout::Mono;
 const FLAC_BLOCK_SIZES: std::ops::RangeInclusive<u16> = 32..=32767;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioConfig {
     pub codec: AudioCodec,
@@ -117,7 +117,7 @@ impl AudioConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MicrophoneConfig {
     pub enabled: bool,
@@ -163,7 +163,7 @@ impl MicrophoneConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub enum OpusFrameDuration {
     #[serde(rename = "2.5ms")]
     Ms2_5,
@@ -188,7 +188,7 @@ impl OpusFrameDuration {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpusConfig {
     pub bitrate_kbps: u32,
@@ -206,7 +206,7 @@ impl Default for OpusConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FlacConfig {
     pub compression_level: u8,

@@ -24,6 +24,7 @@ pub(crate) fn run(
     frame_rate: FrameRate,
 ) -> Result<(), HostError> {
     let result = capture(feed, shared, frame_rate);
+
     shared.stop();
 
     result
@@ -39,26 +40,32 @@ fn capture(feed: &CaptureFeed, shared: &Shared, frame_rate: FrameRate) -> Result
     }
 
     let mut pending = None;
+
     while !shared.stopped() {
         let wait = if pending.is_some() {
             cadence.wait(Instant::now()).min(CAPTURE_POLL)
         } else {
             CAPTURE_POLL
         };
+
         if let Some(frame) = source.next_frame(wait)? {
             shared.counters.frames_captured.increment();
+
             let captured = Captured {
                 frame,
                 captured_micros: shared.clock.micros(),
             };
+
             cadence.arrive(Instant::now());
             if pending.replace(captured).is_some() {
                 shared.counters.frames_superseded.increment();
             }
         }
+
         let interval = shared.frame_rate(frame_rate).frame_interval();
         if pending.is_some() && cadence.admit(Instant::now(), interval) {
             let captured = pending.take().unwrap();
+
             feed.observe(&captured.frame);
             if let Ok(Some(_)) = shared.mailbox.put(captured) {
                 shared.counters.frames_superseded.increment();
@@ -71,6 +78,7 @@ fn capture(feed: &CaptureFeed, shared: &Shared, frame_rate: FrameRate) -> Result
 
 fn offer(feed: &CaptureFeed, shared: &Shared, frame: Frame) {
     feed.observe(&frame);
+
     let captured = Captured {
         frame,
         captured_micros: shared.clock.micros(),
@@ -80,7 +88,7 @@ fn offer(feed: &CaptureFeed, shared: &Shared, frame: Frame) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Spacing {
     shortest: Duration,
     longest: Duration,
@@ -128,6 +136,7 @@ impl Cadence {
             self.slot = None;
             self.interval = interval;
         }
+
         let Some(interval) = interval.filter(|interval| !interval.is_zero()) else {
             return true;
         };
@@ -135,6 +144,7 @@ impl Cadence {
             self.slot = Some(now + interval);
             return true;
         };
+
         if now < self.release_time(slot, interval) {
             return false;
         }
@@ -163,6 +173,7 @@ impl Cadence {
             return slot;
         };
         let spacing = self.arrivals.spacing(interval);
+
         let successor_after_slot = arrival + spacing.shortest >= slot;
         let successor_before_slot = arrival + spacing.longest < slot;
 
@@ -182,7 +193,7 @@ mod tests {
 
     const SIXTY_HZ: Duration = Duration::from_nanos(16_666_667);
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     struct Release {
         arrived: Duration,
         released: Duration,
@@ -219,6 +230,7 @@ mod tests {
 
         fn after_a_retained_frame(interval: Duration) -> Self {
             let mut simulation = Self::new(interval);
+
             let start = simulation.start;
 
             assert!(simulation.cadence.admit(start, simulation.interval));
@@ -231,6 +243,7 @@ mod tests {
                 return;
             };
             let due = self.clock + self.cadence.wait(self.start + self.clock);
+
             if due > limit {
                 return;
             }
@@ -332,6 +345,7 @@ mod tests {
     fn a_source_slightly_faster_than_the_cap_drops_a_frame_instead_of_holding_every_one() {
         let period = Duration::from_micros(16_600);
         let frames = 3_000;
+
         let simulation = Simulation::after_a_retained_frame(SIXTY_HZ).run(every(
             period,
             Duration::from_millis(3),
@@ -390,6 +404,7 @@ mod tests {
     fn rate_changes_take_effect_immediately_and_stalls_do_not_burst() {
         let start = Instant::now();
         let mut cadence = Cadence::default();
+
         assert!(cadence.admit(start, Some(Duration::from_millis(20))));
         assert!(!cadence.admit(
             start + Duration::from_millis(5),
@@ -420,6 +435,7 @@ mod tests {
         ] {
             let period = Duration::from_nanos(period_nanos);
             let spread = Duration::from_micros(spread_micros);
+
             let arrivals = (0..frames).map(|frame| period * frame + jitter(frame, spread));
             let simulation = Simulation::after_a_retained_frame(SIXTY_HZ).run(arrivals);
             let slots = slots_within(period * frames);

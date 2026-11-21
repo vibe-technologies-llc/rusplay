@@ -17,6 +17,7 @@ const REORDER_DELAY_LIMIT: usize = 3;
 
 fn open(codec: Codec) -> Option<VaapiDecoder> {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(Path::new(&config.device)) {
         return None;
     }
@@ -44,6 +45,7 @@ fn decode_every_packet(
     assert_eq!(frames.len(), FIXTURE_FRAMES);
 
     let mut held = Vec::new();
+
     for frame in frames {
         let output = match decoder.decode(frame) {
             Ok(Some(output)) => output,
@@ -71,6 +73,7 @@ fn decode_every_packet(
         assert!(image.width >= FIXTURE_RESOLUTION.width);
         assert!(image.height >= FIXTURE_RESOLUTION.height);
         assert_eq!(image.planes.len(), 2);
+
         for (plane, layout) in image.planes.iter().enumerate() {
             assert!(image.plane_fd(plane).is_some());
             assert!(layout.pitch >= u64::from(FIXTURE_RESOLUTION.width));
@@ -210,13 +213,17 @@ fn every_packet_comes_out_once_after_a_flush(codec: Codec, name: &str, frames: u
         return;
     };
     let packets = common::annexb_access_units(codec, &common::fixture(name));
+
     assert_eq!(packets.len(), frames);
 
     let mut outputs = Vec::new();
+
     for packet in &packets {
         outputs.extend(decoder.decode(packet).unwrap());
     }
+
     let before_flush = outputs.len();
+
     outputs.extend(decoder.flush().unwrap());
 
     assert!(before_flush < frames);
@@ -224,9 +231,13 @@ fn every_packet_comes_out_once_after_a_flush(codec: Codec, name: &str, frames: u
     assert!(decoder.flush().unwrap().is_empty());
 
     let mut timestamps: Vec<_> = outputs.iter().map(|output| output.timestamp).collect();
+
     timestamps.sort_unstable();
+
     let mut expected: Vec<_> = packets.iter().map(|packet| packet.timestamp).collect();
+
     expected.sort_unstable();
+
     assert_eq!(timestamps, expected);
 }
 
@@ -245,6 +256,7 @@ fn streams_without_reordering_flush_nothing() {
     let Some(mut decoder) = open(Codec::H264) else {
         return;
     };
+
     for packet in common::annexb_access_units(Codec::H264, &common::fixture("h264-420-8bit.h264")) {
         assert!(decoder.decode(&packet).unwrap().is_some());
     }

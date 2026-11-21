@@ -18,7 +18,7 @@ const FIXED_LEN: usize = 4 + 1 + 8 + 2 + 1 + 1 + 1 + 1 + 8 + 1 + CONFIGURED_LEN 
 const MASTERING_FIXED_LEN: usize = 1 + 8;
 const CONTENT_LIGHT_LEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct StreamDescription {
     pub generation: u32,
     pub codec: Codec,
@@ -89,6 +89,7 @@ impl StreamDescription {
         out.extend_from_slice(&hdr.peak_nits.to_be_bytes());
 
         let mut flags = 0;
+
         if hdr.mastering.is_some() {
             flags |= HAS_MASTERING;
         }
@@ -133,12 +134,15 @@ impl StreamDescription {
         };
         let reference_white_nits = reader.u32()?;
         let peak_nits = reader.u32()?;
+
         read_levels(reference_white_nits, peak_nits)?;
 
         let flags = reader.u8()?;
+
         if flags & !KNOWN_HDR_FLAGS != 0 {
             return Err(ProtocolError::UnknownHdrFlags(flags));
         }
+
         let mastering = if flags & HAS_MASTERING == 0 {
             None
         } else {
@@ -210,6 +214,7 @@ impl<'a> Reader<'a> {
                 needed: self.offset + self.at + N,
                 available: self.offset + self.buf.len(),
             })?;
+
         self.at += N;
 
         Ok(bytes)
@@ -340,6 +345,7 @@ fn read_mastering(reader: &mut Reader<'_>) -> Result<MasteringDisplay, ProtocolE
     let primaries = read_primaries(reader)?;
     let max_units = reader.u32()?;
     let min_units = reader.u32()?;
+
     let mastering = MasteringDisplay {
         primaries,
         max_nits: read_luminance(max_units)?,
@@ -371,6 +377,7 @@ pub(crate) fn write_primaries(primaries: ColorPrimaries, out: &mut Vec<u8>) {
                 chromaticities.white(),
             ] {
                 let (x, y) = point.to_units();
+
                 out.extend_from_slice(&x.to_be_bytes());
                 out.extend_from_slice(&y.to_be_bytes());
             }
@@ -381,6 +388,7 @@ pub(crate) fn write_primaries(primaries: ColorPrimaries, out: &mut Vec<u8>) {
 
 pub(crate) fn read_primaries(reader: &mut Reader<'_>) -> Result<ColorPrimaries, ProtocolError> {
     let code = reader.u8()?;
+
     if code != CUSTOM_PRIMARIES {
         return ColorPrimaries::from_h273_code(code)
             .ok_or(ProtocolError::UnknownColorPrimaries(code));
@@ -390,6 +398,7 @@ pub(crate) fn read_primaries(reader: &mut Reader<'_>) -> Result<ColorPrimaries, 
         let (x, y) = (reader.u16()?, reader.u16()?);
         Chromaticity::from_units(x, y).ok_or(ProtocolError::ChromaticityOutOfRange { x, y })
     };
+
     let (red, green, blue, white) = (point()?, point()?, point()?, point()?);
 
     Chromaticities::new(red, green, blue, white)
@@ -466,11 +475,15 @@ pub(crate) mod tests {
 
     fn round_trip(description: &StreamDescription) -> StreamDescription {
         let mut out = Vec::new();
+
         description.write(&mut out);
+
         assert_eq!(out.len(), description.encoded_len());
 
         let mut reader = Reader::new(&out, 0);
+
         let decoded = StreamDescription::read(&mut reader).unwrap();
+
         assert_eq!(reader.remaining(), 0);
 
         decoded
@@ -487,6 +500,7 @@ pub(crate) mod tests {
     fn every_named_primaries_round_trips() {
         for primaries in ColorPrimaries::NAMED {
             let mut description = sdr_description();
+
             description.color.primaries = primaries;
 
             assert_eq!(round_trip(&description), description);
@@ -517,9 +531,12 @@ pub(crate) mod tests {
     #[test]
     fn unknown_codes_are_rejected() {
         let mut out = Vec::new();
+
         sdr_description().write(&mut out);
+
         let corrupt = |at: usize, value: u8| {
             let mut bytes = out.clone();
+
             bytes[at] = value;
             StreamDescription::read(&mut Reader::new(&bytes, 0))
         };
@@ -543,9 +560,12 @@ pub(crate) mod tests {
     #[test]
     fn a_resolution_outside_the_bounds_is_rejected() {
         let mut out = Vec::new();
+
         sdr_description().write(&mut out);
+
         let with = |width: u32, height: u32| {
             let mut bytes = out.clone();
+
             bytes[5..9].copy_from_slice(&width.to_be_bytes());
             bytes[9..13].copy_from_slice(&height.to_be_bytes());
             StreamDescription::read(&mut Reader::new(&bytes, 0))
@@ -566,6 +586,7 @@ pub(crate) mod tests {
                 })
             );
         }
+
         assert!(
             with(
                 StreamDescription::MAX_DIMENSION,
@@ -578,9 +599,12 @@ pub(crate) mod tests {
     #[test]
     fn luminance_levels_outside_the_bounds_are_rejected() {
         let mut out = Vec::new();
+
         sdr_description().write(&mut out);
+
         let with = |white: u32, peak: u32| {
             let mut bytes = out.clone();
+
             bytes[19..23].copy_from_slice(&white.to_be_bytes());
             bytes[23..27].copy_from_slice(&peak.to_be_bytes());
             StreamDescription::read(&mut Reader::new(&bytes, 0))
@@ -605,12 +629,15 @@ pub(crate) mod tests {
     #[test]
     fn an_inverted_mastering_range_is_rejected() {
         let mut description = hdr_description();
+
         description.color.hdr.mastering = Some(MasteringDisplay {
             primaries: ColorPrimaries::NAMED[0],
             max_nits: Luminance::from_units(50).unwrap(),
             min_nits: Luminance::from_units(4000).unwrap(),
         });
+
         let mut out = Vec::new();
+
         description.write(&mut out);
 
         assert_eq!(
@@ -625,10 +652,13 @@ pub(crate) mod tests {
     #[test]
     fn the_configured_format_precedes_the_siting_and_is_validated() {
         let mut out = Vec::new();
+
         sdr_description().write(&mut out);
+
         let configured_at = out.len() - CONFIGURED_LEN - SITING_LEN;
         let corrupt = |offset: usize, value: u8| {
             let mut bytes = out.clone();
+
             bytes[configured_at + offset] = value;
             StreamDescription::read(&mut Reader::new(&bytes, 0))
         };
@@ -647,6 +677,7 @@ pub(crate) mod tests {
                 ..sdr_description()
             };
             let mut out = Vec::new();
+
             description.write(&mut out);
 
             assert_eq!(round_trip(&description).siting, siting);
@@ -657,8 +688,11 @@ pub(crate) mod tests {
     #[test]
     fn an_unknown_siting_tag_is_rejected() {
         let mut out = Vec::new();
+
         sdr_description().write(&mut out);
+
         let last = out.len() - 1;
+
         out[last] = 2;
 
         assert_eq!(
@@ -676,6 +710,7 @@ pub(crate) mod tests {
     #[test]
     fn a_gamut_without_its_white_point_is_rejected() {
         let mut out = Vec::new();
+
         hdr_description().write(&mut out);
         out[16..20].copy_from_slice(&[0x3a, 0x98, 0x3a, 0x98]);
         out[20..24].copy_from_slice(&[0x1d, 0x4c, 0x1d, 0x4c]);
@@ -690,6 +725,7 @@ pub(crate) mod tests {
     fn every_strict_prefix_of_a_description_is_rejected() {
         for description in [hdr_description(), sdr_description()] {
             let mut out = Vec::new();
+
             description.write(&mut out);
 
             for cut in 0..out.len() {

@@ -165,6 +165,7 @@ fn store_all<S: Sample, const N: usize>(out: &mut [u8], values: [u16; N], shift:
 
 fn store_y410(out: &mut [u8], [luma, u, v]: [u16; 3]) {
     let word = (3_u32 << 30) | (u32::from(v) << 20) | (u32::from(luma) << 10) | u32::from(u);
+
     out[..4].copy_from_slice(&word.to_le_bytes());
 }
 
@@ -186,6 +187,7 @@ fn pack_luma<S: Sample>(out: &mut [u8], luma: Row<'_>, shift: u32) {
 fn pack_chroma_pairs<S: Sample>(out: &mut [u8], cb: Row<'_>, cr: Row<'_>, shift: u32) {
     let unit = 2 * S::SIZE;
     let main = (out.len() / unit).min(cb.len::<S>()).min(cr.len::<S>());
+
     let (head, tail) = out.split_at_mut(main * unit);
 
     for ((slot, u), v) in head
@@ -197,6 +199,7 @@ fn pack_chroma_pairs<S: Sample>(out: &mut [u8], cb: Row<'_>, cr: Row<'_>, shift:
     }
     for (x, slot) in tail.chunks_exact_mut(unit).enumerate() {
         let x = main + x;
+
         store_all::<S, 2>(slot, [cb.at::<S>(x), cr.at::<S>(x)], shift);
     }
 }
@@ -207,6 +210,7 @@ fn pack_pairs<S: Sample>(out: &mut [u8], luma: Row<'_>, cb: Row<'_>, cr: Row<'_>
         .min(luma.len::<S>() / 2)
         .min(cb.len::<S>())
         .min(cr.len::<S>());
+
     let (head, tail) = out.split_at_mut(main * unit);
 
     for (((slot, y), u), v) in head
@@ -216,7 +220,9 @@ fn pack_pairs<S: Sample>(out: &mut [u8], luma: Row<'_>, cb: Row<'_>, cr: Row<'_>
         .zip(cr.bytes.chunks_exact(S::SIZE))
     {
         let (left, right) = y.split_at(S::SIZE);
+
         let quad = [S::load(left), S::load(u), S::load(right), S::load(v)];
+
         store_all::<S, 4>(slot, quad, shift);
     }
     for (pair, slot) in tail.chunks_exact_mut(unit).enumerate() {
@@ -227,6 +233,7 @@ fn pack_pairs<S: Sample>(out: &mut [u8], luma: Row<'_>, cb: Row<'_>, cr: Row<'_>
             luma.at::<S>(2 * pair + 1),
             cr.at::<S>(pair),
         ];
+
         store_all::<S, 4>(slot, quad, shift);
     }
 }
@@ -255,6 +262,7 @@ fn pack_triples<S: Sample>(
     }
     for (x, slot) in tail.chunks_exact_mut(unit).enumerate() {
         let x = main + x;
+
         store(slot, [luma.at::<S>(x), cb.at::<S>(x), cr.at::<S>(x)]);
     }
 }
@@ -278,12 +286,14 @@ fn pack_rows<S: Sample>(
             for y in 0..rows {
                 let start = layout.offsets[0] + y * layout.pitches[0];
                 let out = &mut data[start..start + width * S::SIZE];
+
                 pack_luma::<S>(out, Row::of::<S>(luma, y), shift);
             }
             for y in 0..chroma_rows {
                 let start = layout.offsets[1] + y * layout.pitches[1];
                 let out = &mut data[start..start + chroma_width * 2 * S::SIZE];
                 let (u, v) = (Row::of::<S>(cb, y), Row::of::<S>(cr, y));
+
                 pack_chroma_pairs::<S>(out, u, v, shift);
             }
         }
@@ -296,6 +306,7 @@ fn pack_rows<S: Sample>(
                     Row::of::<S>(cb, y),
                     Row::of::<S>(cr, y),
                 );
+
                 pack_pairs::<S>(out, l, u, v, shift);
             }
         }
@@ -361,7 +372,9 @@ fn unpack_rows<S: Sample>(
     let shift = 16 - u32::from(format.depth.bits());
     let width = resolution.width as usize;
     let rows = resolution.height as usize;
+
     let (chroma_width, chroma_rows) = chroma_size((width, rows), format.chroma);
+
     let mut out = Unpacked {
         width,
         planes: [
@@ -383,6 +396,7 @@ fn unpack_rows<S: Sample>(
                 let start = layout.offsets[1] + y * layout.pitches[1];
                 for x in 0..chroma_width {
                     let pair = start + 2 * x * S::SIZE;
+
                     out.push(1, load_at::<S>(data, pair, shift));
                     out.push(2, load_at::<S>(data, pair + S::SIZE, shift));
                 }
@@ -394,6 +408,7 @@ fn unpack_rows<S: Sample>(
                 for x in 0..width {
                     let quad = start + (x / 2) * 4 * S::SIZE;
                     let luma = quad + (x % 2) * 2 * S::SIZE;
+
                     out.push(0, load_at::<S>(data, luma, shift));
                     if x % 2 == 0 {
                         out.push(1, load_at::<S>(data, quad + S::SIZE, shift));
@@ -427,6 +442,7 @@ fn unpack_rows<S: Sample>(
                             [at + 2, at, at + 4].map(|offset| load_at::<S>(data, offset, shift))
                         }
                     };
+
                     out.push(0, luma);
                     out.push(1, u);
                     out.push(2, v);
@@ -451,6 +467,7 @@ pub(super) fn unpack(
     };
     let width = unpacked.width;
     let height = resolution.height as usize;
+
     let (chroma_width, chroma_height) = chroma_size((width, height), format.chroma);
     let [luma, cb, cr] = unpacked.planes;
 

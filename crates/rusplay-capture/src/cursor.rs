@@ -1,6 +1,6 @@
 const BYTES_PER_PIXEL: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorPixelOrder {
     Rgba,
     Bgra,
@@ -19,7 +19,7 @@ impl CursorPixelOrder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorBitmap {
     pub width: u32,
     pub height: u32,
@@ -28,7 +28,7 @@ pub struct CursorBitmap {
     pub rgba: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CursorPixels<'a> {
     pub order: CursorPixelOrder,
     pub width: u32,
@@ -42,12 +42,14 @@ impl CursorBitmap {
         let width = usize::try_from(pixels.width).ok()?;
         let height = usize::try_from(pixels.height).ok()?;
         let row_bytes = width.checked_mul(BYTES_PER_PIXEL)?;
+
         if pixels.stride < row_bytes {
             return None;
         }
 
         let indices = pixels.order.rgba_indices();
         let mut rgba = Vec::with_capacity(row_bytes.checked_mul(height)?);
+
         for row in 0..height {
             let start = row.checked_mul(pixels.stride)?;
             let source = pixels.data.get(start..start.checked_add(row_bytes)?)?;
@@ -74,7 +76,7 @@ impl CursorBitmap {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CursorShape {
     Unchanged,
     Hidden,
@@ -82,14 +84,14 @@ pub enum CursorShape {
     Bitmap(CursorBitmap),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorObservation {
     pub x: i32,
     pub y: i32,
     pub shape: CursorShape,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorUpdate {
     pub x: i32,
     pub y: i32,
@@ -107,7 +109,7 @@ impl CursorUpdate {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CursorTracker {
     position: Option<(i32, i32)>,
     sprite_hidden: bool,
@@ -121,7 +123,9 @@ impl CursorTracker {
 
         if observation.shape == CursorShape::Absent {
             self.absent = true;
+
             let (x, y) = self.position?;
+
             return (was_visible != self.visible()).then_some(CursorUpdate {
                 x,
                 y,
@@ -132,6 +136,7 @@ impl CursorTracker {
 
         let position = (observation.x, observation.y);
         let moved = self.position != Some(position);
+
         self.position = Some(position);
         self.absent = false;
 
@@ -263,6 +268,7 @@ mod tests {
         let mut tracker = CursorTracker::default();
 
         tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
+
         let repeat = tracker.observe(observation(1, CursorShape::Unchanged));
 
         assert_eq!(repeat, None);
@@ -271,6 +277,7 @@ mod tests {
     #[test]
     fn hiding_and_showing_are_reported() {
         let mut tracker = CursorTracker::default();
+
         tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
 
         let hidden = tracker
@@ -288,6 +295,7 @@ mod tests {
     #[test]
     fn an_absent_cursor_is_hidden_until_the_next_valid_observation() {
         let mut tracker = CursorTracker::default();
+
         tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
 
         let absent = tracker
@@ -307,6 +315,7 @@ mod tests {
     #[test]
     fn a_hidden_sprite_stays_hidden_while_the_cursor_moves() {
         let mut tracker = CursorTracker::default();
+
         tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
         tracker.observe(observation(1, CursorShape::Hidden));
 
@@ -320,6 +329,7 @@ mod tests {
     #[test]
     fn a_transparent_sprite_hides_the_cursor() {
         let mut tracker = CursorTracker::default();
+
         tracker.observe(observation(1, CursorShape::Bitmap(bitmap(1))));
 
         let transparent = CursorBitmap {

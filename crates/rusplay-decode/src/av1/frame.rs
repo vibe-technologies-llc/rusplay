@@ -99,7 +99,9 @@ pub(super) fn parse(
             if unit.kind == ObuKind::Frame {
                 return Err(Av1SyntaxError::ShowExistingFrameInFrameObu);
             }
+
             let slot = r.bits(3)?;
+
             if let Some(length) = presentation_time_length {
                 r.bits(length)?;
             }
@@ -130,7 +132,9 @@ pub(super) fn parse(
     let allow_screen_content_tools = adaptive(r, sequence.force_screen_content_tools)?;
     let signalled_integer_mv =
         allow_screen_content_tools && adaptive(r, sequence.force_integer_mv)?;
+
     let force_integer_mv = intra || signalled_integer_mv;
+
     if let Some(lengths) = sequence.frame_id_lengths {
         r.bits(lengths.frame_id)?;
     }
@@ -163,6 +167,7 @@ pub(super) fn parse(
         };
 
     let mut invalidated = 0u8;
+
     if (!intra || refresh_frame_flags != ALL_FRAMES)
         && error_resilient_mode
         && sequence.enable_order_hint
@@ -187,9 +192,11 @@ pub(super) fn parse(
         }
     } else {
         let short_signaling = sequence.enable_order_hint && r.bit()?;
+
         if short_signaling {
             let last = r.bits(3)?;
             let golden = r.bits(3)?;
+
             ref_frame_idx = context.short_signalled_refs(last, golden, order_hint)?;
         }
         for index in &mut ref_frame_idx {
@@ -205,6 +212,7 @@ pub(super) fn parse(
             context.frame_size_with_refs(r, ref_frame_idx)?
         } else {
             let size = frame_size(r, sequence, frame_size_override)?;
+
             render_size(r)?;
             size
         };
@@ -230,6 +238,7 @@ pub(super) fn parse(
     let alt_q = context.segmentation_params(r, primary_ref_frame, ref_frame_idx)?;
 
     let delta_q_present = quantizer.base_q_idx > 0 && r.bit()?;
+
     if delta_q_present {
         r.bits(2)?;
         if !allow_intrabc && r.bit()? {
@@ -258,6 +267,7 @@ pub(super) fn parse(
     }
 
     let reference_select = !intra && r.bit()?;
+
     if reference_select
         && sequence.enable_order_hint
         && context.skip_mode_allowed(ref_frame_idx, order_hint)
@@ -339,6 +349,7 @@ fn superres_params(
 
     let denominator = r.bits(3)? + SUPERRES_DENOM_MIN;
     let frame_width = (upscaled_width * SUPERRES_NUM + denominator / 2) / denominator;
+
     if frame_width == upscaled_width {
         return Err(Av1SyntaxError::SuperresWithoutDownscale {
             width: upscaled_width,
@@ -376,11 +387,13 @@ impl Context<'_> {
         for slot in ref_frame_idx {
             if r.bit()? {
                 let frame = self.known(slot)?;
+
                 return superres_params(r, self.sequence, frame.upscaled_width, frame.frame_height);
             }
         }
 
         let size = frame_size(r, self.sequence, true)?;
+
         render_size(r)?;
         Ok(size)
     }
@@ -402,6 +415,7 @@ impl Context<'_> {
 
         let last = usize::try_from(last).unwrap_or_default();
         let golden = usize::try_from(golden).unwrap_or_default();
+
         for slot in [last, golden] {
             if shifted[slot] >= current {
                 return Err(Av1SyntaxError::ShortSignalledReferenceNotPast {
@@ -412,6 +426,7 @@ impl Context<'_> {
 
         let mut refs: [Option<usize>; REFS_PER_FRAME] = [None; REFS_PER_FRAME];
         let mut used = [false; REFERENCE_SLOTS];
+
         refs[0] = Some(last);
         refs[GOLDEN] = Some(golden);
         used[last] = true;
@@ -419,6 +434,7 @@ impl Context<'_> {
 
         let pick = |used: &[bool; REFERENCE_SLOTS], backward: bool, latest: bool| {
             let mut chosen: Option<(usize, i32)> = None;
+
             for (index, &hint) in shifted.iter().enumerate() {
                 let side = if backward {
                     hint >= current
@@ -450,6 +466,7 @@ impl Context<'_> {
         }
 
         let mut earliest = 0;
+
         for (index, &hint) in shifted.iter().enumerate().skip(1) {
             if hint < shifted[earliest] {
                 earliest = index;
@@ -480,15 +497,18 @@ impl Context<'_> {
 
         if !update_data {
             let primary = usize::try_from(primary_ref_frame).unwrap_or_default();
+
             return Ok(self.known(ref_frame_idx[primary])?.alt_q);
         }
 
         let mut alt_q = [None; SEGMENTS];
+
         for segment in &mut alt_q {
             for (feature, &bits) in SEGMENT_FEATURE_BITS.iter().enumerate() {
                 if !r.bit()? {
                     continue;
                 }
+
                 let limit = SEGMENT_FEATURE_MAX[feature];
                 let value = if feature < SIGNED_SEGMENT_FEATURES {
                     r.signed(bits + 1)?.clamp(-limit, limit)
@@ -511,6 +531,7 @@ impl Context<'_> {
 
         let mut forward: Option<u32> = None;
         let mut backward: Option<u32> = None;
+
         for &hint in &hints {
             let distance = self.relative_distance(hint, order_hint);
             if distance < 0 {
@@ -527,6 +548,7 @@ impl Context<'_> {
         let Some(forward) = forward else {
             return false;
         };
+
         if backward.is_some() {
             return true;
         }
@@ -561,6 +583,7 @@ fn quantization_params(
 
     if sequence.planes() > 1 {
         let separate = sequence.separate_uv_delta_q && r.bit()?;
+
         deltas_zero &= delta_q(r)? == 0;
         deltas_zero &= delta_q(r)? == 0;
         if separate {
@@ -599,6 +622,7 @@ fn segment_q_index(base_q_idx: u32, alt_q: Option<i32>) -> i32 {
 fn loop_filter_params(r: &mut BitReader<'_>, sequence: &Sequence) -> Result<(), Av1SyntaxError> {
     let level_y_vertical = r.bits(6)?;
     let level_y_horizontal = r.bits(6)?;
+
     if sequence.planes() > 1 && (level_y_vertical != 0 || level_y_horizontal != 0) {
         r.bits(6)?;
         r.bits(6)?;
@@ -617,8 +641,10 @@ fn loop_filter_params(r: &mut BitReader<'_>, sequence: &Sequence) -> Result<(), 
 
 fn cdef_params(r: &mut BitReader<'_>, sequence: &Sequence) -> Result<(), Av1SyntaxError> {
     r.bits(2)?;
+
     let strengths = 1 << r.bits(2)?;
     let planes_with_strength = if sequence.planes() > 1 { 2 } else { 1 };
+
     for _ in 0..strengths * planes_with_strength {
         r.bits(4)?;
         r.bits(2)?;
@@ -632,6 +658,7 @@ fn loop_restoration_params(
 ) -> Result<(), Av1SyntaxError> {
     let mut uses_lr = false;
     let mut uses_chroma_lr = false;
+
     for plane in 0..sequence.planes() {
         if r.bits(2)? != 0 {
             uses_lr = true;
@@ -644,6 +671,7 @@ fn loop_restoration_params(
     }
 
     let unit_shift = r.bit()?;
+
     if unit_shift && !sequence.use_128x128_superblock {
         r.bit()?;
     }
@@ -682,11 +710,13 @@ fn global_motion_params(
 
 fn warp_model(r: &mut BitReader<'_>) -> Result<u32, Av1SyntaxError> {
     let is_global = r.bit()?;
+
     if !is_global {
         return Ok(0);
     }
 
     let is_rot_zoom = r.bit()?;
+
     if is_rot_zoom {
         return Ok(ROTZOOM);
     }
@@ -706,6 +736,7 @@ fn subexp(r: &mut BitReader<'_>, symbols: u32) -> Result<(), Av1SyntaxError> {
             SUBEXP_K + index - 1
         };
         let span = 1 << bits;
+
         if symbols <= covered + 3 * span {
             r.non_symmetric(symbols - covered)?;
             return Ok(());
@@ -729,13 +760,16 @@ fn film_grain_params(
     }
 
     r.bits(16)?;
+
     let update_grain = frame_type != INTER_FRAME || r.bit()?;
+
     if !update_grain {
         r.bits(3)?;
         return Ok(());
     }
 
     let luma_points = r.bits(4)?;
+
     for _ in 0..luma_points {
         r.bits(16)?;
     }
@@ -748,10 +782,13 @@ fn film_grain_params(
         (0, 0)
     } else {
         let cb = r.bits(4)?;
+
         for _ in 0..cb {
             r.bits(16)?;
         }
+
         let cr = r.bits(4)?;
+
         for _ in 0..cr {
             r.bits(16)?;
         }
@@ -759,6 +796,7 @@ fn film_grain_params(
     };
 
     r.bits(2)?;
+
     let lag = r.bits(2)?;
     let luma_positions = 2 * lag * (lag + 1);
     let chroma_positions = if luma_points > 0 {
@@ -769,6 +807,7 @@ fn film_grain_params(
     } else {
         luma_positions
     };
+
     for points in [blue_points, red_points] {
         if chroma_from_luma || points > 0 {
             for _ in 0..chroma_positions {

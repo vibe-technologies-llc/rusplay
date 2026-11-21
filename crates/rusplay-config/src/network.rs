@@ -16,7 +16,7 @@ const RTKIT_PRIORITY_MAX: u8 = 99;
 const KBPS_PER_MBPS: u32 = 1_000;
 const BACKOFF_PERCENT_RANGE: RangeInclusive<u8> = 1..=90;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LossRecovery {
     #[default]
@@ -24,7 +24,7 @@ pub enum LossRecovery {
     Keyframe,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NetworkConfig {
     pub bind_address: IpAddr,

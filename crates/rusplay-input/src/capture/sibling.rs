@@ -6,7 +6,7 @@ const ABS_Z: u16 = 0x02;
 const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NodeCaps {
     pub south_button: bool,
     pub accelerometer: bool,
@@ -33,14 +33,14 @@ impl NodeCaps {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NodeRole {
     Pad,
     Motion,
     Touchpad,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NodeIdentity {
     pub vendor: u16,
     pub product: u16,
@@ -76,14 +76,14 @@ pub fn non_empty(text: Option<&str>) -> Option<String> {
     text.filter(|text| !text.is_empty()).map(str::to_owned)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeDescription {
     pub path: PathBuf,
     pub role: NodeRole,
     pub identity: NodeIdentity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairedPad {
     pub pad: PathBuf,
     pub motion: Option<PathBuf>,
@@ -92,6 +92,7 @@ pub struct PairedPad {
 
 pub fn pair_siblings(nodes: &[NodeDescription]) -> Vec<PairedPad> {
     let mut ordered: Vec<&NodeDescription> = nodes.iter().collect();
+
     ordered.sort_by(|left, right| left.path.cmp(&right.path));
 
     let mut claimed: Vec<&PathBuf> = Vec::new();
@@ -111,6 +112,7 @@ pub fn pair_siblings(nodes: &[NodeDescription]) -> Vec<PairedPad> {
 
         let motion = claim(NodeRole::Motion);
         let touchpad = claim(NodeRole::Touchpad);
+
         pairs.push(PairedPad {
             pad: pad.path.clone(),
             motion,
@@ -214,6 +216,7 @@ mod tests {
     #[test]
     fn two_identical_pads_keep_their_own_siblings() {
         let mut nodes = dualsense(10, MAC, PARENT);
+
         nodes.extend(dualsense(
             20,
             "a0:fa:9c:44:55:66",
@@ -287,6 +290,7 @@ mod tests {
     #[test]
     fn a_laptop_touchpad_is_not_taken_for_a_pad_touchpad() {
         let mut nodes = dualsense(10, MAC, PARENT);
+
         nodes.push(node(
             "/dev/input/event3",
             NodeRole::Touchpad,
@@ -325,6 +329,7 @@ mod tests {
     #[test]
     fn one_sibling_is_never_claimed_by_two_pads() {
         let mut nodes = dualsense(10, MAC, PARENT);
+
         nodes.push(node(
             "/dev/input/event30",
             NodeRole::Pad,

@@ -22,7 +22,7 @@ const TILE_GROUP: u8 = 4;
 const REDUNDANT_FRAME_HEADER: u8 = 7;
 const FRAME: u8 = 6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObuKind {
     SequenceHeader,
     TemporalDelimiter,
@@ -47,14 +47,14 @@ impl ObuKind {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Unit<'a> {
     pub(crate) kind: ObuKind,
     pub(crate) layer: Option<Layer>,
     pub(crate) payload: &'a [u8],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Layer {
     pub(crate) temporal_id: u8,
     pub(crate) spatial_id: u8,
@@ -106,6 +106,7 @@ struct UnitLength {
 
 fn unit_length(data: &[u8]) -> Result<UnitLength, DecodeError> {
     let header = data[0];
+
     if header & RESERVED_BIT != 0 {
         return Err(malformed("reserved bit set in the obu header"));
     }
@@ -115,6 +116,7 @@ fn unit_length(data: &[u8]) -> Result<UnitLength, DecodeError> {
 
     let header_length = if header & EXTENSION_FLAG != 0 { 2 } else { 1 };
     let (size, size_length) = leb128(data.get(header_length..).unwrap_or_default())?;
+
     let payload_start = header_length + size_length;
     let remaining = data.len() - payload_start;
 
@@ -134,6 +136,7 @@ fn leb128(data: &[u8]) -> Result<(u64, usize), DecodeError> {
         let byte = *data
             .get(index)
             .ok_or_else(|| malformed("truncated obu size"))?;
+
         value |= u64::from(byte & LEB128_PAYLOAD_MASK) << shift;
         if byte & LEB128_CONTINUATION == 0 {
             return Ok((value, index + 1));

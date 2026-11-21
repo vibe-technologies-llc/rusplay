@@ -54,7 +54,7 @@ fn malformed(unit: BitstreamUnit) -> impl FnOnce(String) -> DecodeError {
     annexb::malformed(CODEC, unit)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Reference {
     surface: PoolSurface,
     poc: i32,
@@ -141,6 +141,7 @@ impl HevcDecoder {
                 }
                 NaluType::SpsNut => {
                     let checked = hevc::check_sequence_parameter_set(nalu.as_ref())?;
+
                     self.parser
                         .parse_sps(&nalu)
                         .map_err(malformed(BitstreamUnit::SequenceParameterSet))?;
@@ -148,6 +149,7 @@ impl HevcDecoder {
                 }
                 NaluType::PpsNut => {
                     let checked = self.checks.check_picture_parameter_set(nalu.as_ref())?;
+
                     self.parser
                         .parse_pps(&nalu)
                         .map_err(malformed(BitstreamUnit::PictureParameterSet))?;
@@ -179,6 +181,7 @@ impl HevcDecoder {
                 | NaluType::CraNut => {
                     self.checks
                         .check_slice_header(nalu.as_ref(), nalu.header.type_)?;
+
                     let mut slice = self
                         .parser
                         .parse_slice_header(nalu)
@@ -195,6 +198,7 @@ impl HevcDecoder {
                                     ),
                                 }
                             })?;
+
                         slice
                             .replace_header(independent)
                             .map_err(malformed(BitstreamUnit::SliceHeader))?;
@@ -241,15 +245,19 @@ impl HevcDecoder {
 
         let format = stream_format(&sps)?;
         let (stream, reopened) = Stream::ensure(&mut self.stream, display, CODEC, format)?;
+
         if reopened {
             self.references.clear();
         }
         self.reorder.configure(reorder_depth(&sps));
 
         let irap = nalu_type.is_irap();
+
         stream.color = self.hdr.resolve(signal::hevc_color(&sps), irap);
+
         let no_rasl_output =
             irap && (nalu_type.is_idr() || nalu_type.is_bla() || self.awaiting_random_access);
+
         if irap {
             self.skip_leading_pictures = no_rasl_output;
             self.awaiting_random_access = false;
@@ -301,6 +309,7 @@ impl HevcDecoder {
             references: va_references(&self.references, &set),
             range_extension: is_range_extension(format.profile),
         };
+
         submit(stream, &picture, slices, &set)?;
 
         let output = if header.pic_output_flag {
@@ -360,6 +369,7 @@ fn va_references(
 
     for (index, (slot, reference)) in frames.iter_mut().zip(references).enumerate() {
         let mut flags = set.flags(index);
+
         if reference.long_term {
             flags |= ffi::VA_PICTURE_HEVC_LONG_TERM_REFERENCE;
         }
@@ -393,12 +403,14 @@ fn submit(
     let base = picture_parameters(picture, &slices[0].header);
 
     let mut buffers = Vec::new();
+
     if picture.range_extension {
         let extension = ffi::VAPictureParameterBufferHEVCExtension {
             base,
             rext: picture_range_extension(picture.sps, picture.pps),
             ..Default::default()
         };
+
         buffers
             .push(session.parameter(ffi::VABufferType_VAPictureParameterBufferType, &extension)?);
     } else {
@@ -412,6 +424,7 @@ fn submit(
     for (position, slice) in slices.iter().enumerate() {
         let last = position + 1 == slices.len();
         let lists = reference_lists(&slice.header, set);
+
         let parameters = slice_parameters(slice, picture.sps, &lists, last);
 
         let buffer = if picture.range_extension {
@@ -423,6 +436,7 @@ fn submit(
         } else {
             session.parameter(ffi::VABufferType_VASliceParameterBufferType, &parameters)?
         };
+
         buffers.push(buffer);
         buffers.push(session.slice_data(slice.nalu.as_ref())?);
     }
@@ -474,12 +488,15 @@ pub(super) fn reference_order_counts(
 
     let long_term_count =
         usize::from(header.num_long_term_sps) + usize::from(header.num_long_term_pics);
+
     for index in 0..long_term_count.min(header.poc_lsb_lt.len()) {
         let mut target = i32::try_from(header.poc_lsb_lt[index]).unwrap_or(0);
         let full = header.delta_poc_msb_present_flag[index];
+
         if full {
             let cycle = i32::try_from(header.delta_poc_msb_cycle_lt[index]).unwrap_or(0);
             let base = poc.wrapping_sub(cycle.wrapping_mul(max_lsb));
+
             target = target.wrapping_add(base.wrapping_sub(poc & (max_lsb - 1)));
         }
         if header.used_by_curr_pic_lt[index] {
@@ -774,6 +791,7 @@ fn picture_parameters(
 
 fn set_picture_fields(parameters: &mut ffi::VAPictureParameterBufferHEVC, sps: &Sps, pps: &Pps) {
     let fields = unsafe { &mut parameters.pic_fields.bits };
+
     fields.set_chroma_format_idc(u32::from(sps.chroma_format_idc));
     fields.set_separate_colour_plane_flag(u32::from(sps.separate_colour_plane_flag));
     fields.set_pcm_enabled_flag(u32::from(sps.pcm_enabled_flag));
@@ -810,6 +828,7 @@ fn set_slice_parsing_fields(
         (NaluType::BlaWLp as u32..=NaluType::CraNut as u32).contains(&(nalu_type as u32));
 
     let parsing = unsafe { &mut parameters.slice_parsing_fields.bits };
+
     parsing.set_lists_modification_present_flag(u32::from(pps.lists_modification_present_flag));
     parsing.set_long_term_ref_pics_present_flag(u32::from(sps.long_term_ref_pics_present_flag));
     parsing.set_sps_temporal_mvp_enabled_flag(u32::from(sps.temporal_mvp_enabled_flag));
@@ -854,6 +873,7 @@ fn picture_range_extension(sps: &Sps, pps: &Pps) -> ffi::VAPictureParameterBuffe
         .unwrap_or(0),
         ..Default::default()
     };
+
     for (target, &offset) in extension
         .cb_qp_offset_list
         .iter_mut()
@@ -870,6 +890,7 @@ fn picture_range_extension(sps: &Sps, pps: &Pps) -> ffi::VAPictureParameterBuffe
     }
 
     let fields = unsafe { &mut extension.range_extension_pic_fields.bits };
+
     fields.set_transform_skip_rotation_enabled_flag(u32::from(
         sequence.transform_skip_rotation_enabled_flag,
     ));
@@ -971,6 +992,7 @@ fn reference_lists(header: &SliceHeader, set: &ReferenceSet) -> [Vec<Option<usiz
                  entries: &[u32]|
      -> Vec<Option<usize>> {
         let candidates: Vec<Option<usize>> = order.into_iter().flatten().copied().collect();
+
         if candidates.is_empty() {
             return vec![None; active];
         }
@@ -1018,6 +1040,7 @@ fn reference_lists(header: &SliceHeader, set: &ReferenceSet) -> [Vec<Option<usiz
 fn chroma_offset(sps: &Sps, denominator: u8, delta_weight: i8, delta_offset: i16) -> i8 {
     let half_range = i32::try_from(sps.wp_offset_half_range_c).unwrap_or(128);
     let weight = (1_i32 << denominator) + i32::from(delta_weight);
+
     let offset = half_range + i32::from(delta_offset) - ((half_range * weight) >> denominator);
     i8::try_from(offset.clamp(-half_range, half_range - 1)).unwrap_or(0)
 }
@@ -1069,6 +1092,7 @@ fn slice_parameters(
     }
 
     let denominator = table.chroma_log2_weight_denom;
+
     for index in 0..MAX_REFERENCE_FRAMES {
         parameters.delta_luma_weight_l0[index] = table.delta_luma_weight_l0[index];
         parameters.luma_offset_l0[index] = table.luma_offset_l0[index];
@@ -1100,6 +1124,7 @@ fn slice_parameters(
     }
 
     let flags = unsafe { &mut parameters.LongSliceFlags.fields };
+
     flags.set_LastSliceOfPic(u32::from(last));
     flags.set_dependent_slice_segment_flag(u32::from(header.dependent_slice_segment_flag));
     flags.set_slice_type(header.type_ as u32);
@@ -1143,6 +1168,7 @@ fn slice_range_extension(
     }
 
     let flags = unsafe { &mut extension.slice_ext_flags.bits };
+
     flags.set_cu_chroma_qp_offset_enabled_flag(u32::from(header.cu_chroma_qp_offset_enabled_flag));
     flags.set_use_integer_mv_flag(u32::from(header.use_integer_mv_flag));
 

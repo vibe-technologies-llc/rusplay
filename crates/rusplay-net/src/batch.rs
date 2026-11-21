@@ -125,6 +125,7 @@ impl RecvBatch {
 impl Transport {
     pub fn send_batch(&self, datagrams: &[Vec<u8>], peer: SocketAddr) -> Result<usize, NetError> {
         let budget = self.max_datagram_len(&peer);
+
         if let Some(oversized) = datagrams.iter().find(|datagram| datagram.len() > budget) {
             return Err(NetError::DatagramTooLarge {
                 size: oversized.len(),
@@ -152,6 +153,7 @@ impl Transport {
         peer: SocketAddr,
     ) -> Result<usize, NetError> {
         let budget = self.max_datagram_len(&peer);
+
         if let Some(oversized) = range
             .clone()
             .map(|index| arena.plain_len(index))
@@ -166,7 +168,9 @@ impl Transport {
         if let Some(cipher) = self.current_cipher() {
             arena.seal(range.clone(), &cipher)?;
         }
+
         let mut sent = 0;
+
         for first in (range.start..range.end).step_by(MAX_MESSAGES_PER_CALL) {
             let count = (range.end - first).min(MAX_MESSAGES_PER_CALL);
             let wire: [[IoSlice<'_>; 2]; MAX_MESSAGES_PER_CALL] = std::array::from_fn(|index| {
@@ -176,7 +180,9 @@ impl Transport {
                     [IoSlice::new(&[]), IoSlice::new(&[])]
                 }
             });
+
             let progress = self.send_wire(&wire[..count], peer)?;
+
             sent += progress;
             if progress < count {
                 break;
@@ -193,7 +199,9 @@ impl Transport {
             let chunk = &wire[sent..wire.len().min(sent + MAX_MESSAGES_PER_CALL)];
             let mut controls: [SendAncillaryBuffer<'_, '_, '_>; MAX_MESSAGES_PER_CALL] =
                 std::array::from_fn(|_| SendAncillaryBuffer::default());
+
             let mut controls = controls.iter_mut();
+
             let mut messages: [MMsgHdr<'_>; MAX_MESSAGES_PER_CALL] = std::array::from_fn(|index| {
                 MMsgHdr::new_with_addr(
                     &address,
@@ -239,6 +247,7 @@ impl Transport {
         }
 
         batch.call.arm(&mut batch.buffers);
+
         let headers = &mut batch.call.headers;
         let count = libc::c_uint::try_from(headers.len()).unwrap_or(libc::c_uint::MAX);
 
@@ -254,6 +263,7 @@ impl Transport {
 
         if received < 0 {
             let error = io::Error::last_os_error();
+
             return if error.kind() == io::ErrorKind::WouldBlock {
                 Ok(0)
             } else {
@@ -262,6 +272,7 @@ impl Transport {
         }
 
         let received = usize::try_from(received).unwrap_or(0);
+
         for index in 0..received {
             let header = &batch.call.headers[index];
             let truncated = header.msg_hdr.msg_flags & libc::MSG_TRUNC != 0;
@@ -275,6 +286,7 @@ impl Transport {
                 }
                 _ => None,
             };
+
             batch.lengths[index] = length.unwrap_or(0);
         }
         batch.filled = received;
@@ -289,6 +301,7 @@ fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
 
     if family == libc::AF_INET {
         let octets: [u8; 4] = bytes[4..8].try_into().ok()?;
+
         return Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port));
     }
 
@@ -296,6 +309,7 @@ fn parse_sockaddr(bytes: &[u8]) -> Option<SocketAddr> {
         let flow_info = u32::from_be_bytes(bytes[4..8].try_into().ok()?);
         let octets: [u8; 16] = bytes[8..24].try_into().ok()?;
         let scope_id = u32::from_ne_bytes(bytes[24..28].try_into().ok()?);
+
         return Some(SocketAddr::V6(SocketAddrV6::new(
             Ipv6Addr::from(octets),
             port,
@@ -345,14 +359,17 @@ mod tests {
 
         first.send_batch(&datagrams(2), peer).unwrap();
         receiver.recv_batch_timeout(&mut batch, timeout).unwrap();
+
         let from_first: Vec<SocketAddr> = batch.iter().map(|(_, from)| from).collect();
 
         second.send_batch(&datagrams(1), peer).unwrap();
         receiver.recv_batch_timeout(&mut batch, timeout).unwrap();
+
         let from_second: Vec<SocketAddr> = batch.iter().map(|(_, from)| from).collect();
 
         let first_addr = first.local_addr().unwrap();
         let second_addr = second.local_addr().unwrap();
+
         assert_eq!(from_first, [first_addr; 2]);
         assert_eq!(from_second, [second_addr]);
     }
@@ -368,10 +385,13 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(60)))
             .unwrap();
         receiver.set_read_timeout_cached(timeout).unwrap();
+
         let skipped = receiver.socket().read_timeout().unwrap();
+
         receiver
             .set_read_timeout_cached(Duration::from_millis(40))
             .unwrap();
+
         let changed = receiver.socket().read_timeout().unwrap();
 
         assert_eq!(skipped, Some(Duration::from_secs(60)));
@@ -389,10 +409,12 @@ mod tests {
 
         let mut batch = RecvBatch::new(16, 2048);
         let mut collected = Vec::new();
+
         while collected.len() < outgoing.len() {
             receiver.recv_batch(&mut batch).unwrap();
             collected.extend(collect(&batch));
         }
+
         assert_eq!(sent, 10);
         assert_eq!(collected, outgoing);
     }
@@ -406,8 +428,11 @@ mod tests {
         sender.send_batch(&datagrams(3), peer).unwrap();
 
         let mut batch = RecvBatch::new(8, 2048);
+
         receiver.recv_batch(&mut batch).unwrap();
+
         let sources: Vec<SocketAddr> = batch.iter().map(|(_, source)| source).collect();
+
         assert_ne!(sources.len(), 0);
         assert!(
             sources
@@ -425,7 +450,9 @@ mod tests {
         sender.send_batch(&datagrams(2), peer).unwrap();
 
         let mut batch = RecvBatch::new(8, 2048);
+
         receiver.recv_batch(&mut batch).unwrap();
+
         assert!(!batch.is_empty());
         assert_eq!(batch.iter().next().unwrap().1, sender.local_addr().unwrap());
     }
@@ -441,17 +468,22 @@ mod tests {
 
         let mut batch = RecvBatch::new(4, 2048);
         let mut collected = Vec::new();
+
         while collected.len() < outgoing.len() {
             assert!(receiver.recv_batch(&mut batch).unwrap() <= 4);
+
             collected.extend(collect(&batch));
         }
+
         assert_eq!(collected, outgoing);
     }
 
     #[test]
     fn nonblocking_receive_without_traffic_returns_zero() {
         let receiver = bind(LOOPBACK_V4);
+
         receiver.set_nonblocking(true).unwrap();
+
         let mut batch = RecvBatch::new(4, 2048);
 
         assert_eq!(receiver.recv_batch(&mut batch).unwrap(), 0);
@@ -463,13 +495,16 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let peer = sender.local_addr().unwrap();
         let mut outgoing = datagrams(3);
+
         outgoing.push(vec![0; 5000]);
 
         assert!(matches!(
             sender.send_batch(&outgoing, peer),
             Err(NetError::DatagramTooLarge { size: 5000, .. })
         ));
+
         sender.set_nonblocking(true).unwrap();
+
         assert!(sender.try_recv_from(&mut [0; 16]).unwrap().is_none());
     }
 
@@ -478,12 +513,14 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
+
         sender
             .send_batch(&[vec![1; 300], vec![2; 50]], peer)
             .unwrap();
 
         let mut batch = RecvBatch::new(4, 100);
         let mut collected = Vec::new();
+
         while collected.is_empty() {
             receiver.recv_batch(&mut batch).unwrap();
             collected.extend(collect(&batch));
@@ -512,6 +549,7 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
+
         let mut packetizer = Packetizer::new(
             StreamKind::Video,
             sender.max_datagram_len(&peer),
@@ -523,11 +561,13 @@ mod tests {
 
         let datagrams = packetizer.packetize(1, true, &data).unwrap();
         let expected = datagrams.len();
+
         sender.send_batch(&datagrams, peer).unwrap();
 
         let mut batch = RecvBatch::new(64, 2048);
         let mut events = Vec::new();
         let mut seen = 0;
+
         while seen < expected {
             receiver.recv_batch(&mut batch).unwrap();
             for (datagram, _) in batch.iter() {
@@ -553,9 +593,12 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
+
         sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
         receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+
         assert!(requires_sealing(StreamKind::Video));
+
         let outgoing: Vec<Vec<u8>> = (0..6u8)
             .map(|index| {
                 let mut tx = crate::Packetizer::new(
@@ -574,16 +617,19 @@ mod tests {
 
         let mut batch = RecvBatch::new(16, 2048);
         let mut collected = Vec::new();
+
         while collected.len() < outgoing.len() {
             receiver.recv_batch(&mut batch).unwrap();
             collected.extend(collect(&batch));
         }
+
         assert_eq!(collected, outgoing);
         assert_eq!(receiver.rejected_datagrams(), 0);
 
         sender.socket().send_to(&outgoing[0], peer).unwrap();
         std::thread::sleep(Duration::from_millis(20));
         receiver.recv_batch(&mut batch).unwrap();
+
         assert_eq!(batch.iter().count(), 0);
         assert_eq!(receiver.rejected_datagrams(), 1);
     }
@@ -608,6 +654,7 @@ mod tests {
         let host = bind(LOOPBACK_V4);
         let sender = bind(LOOPBACK_V4);
         let mut batch = RecvBatch::new(4, 2048);
+
         sender
             .send_batch(&datagrams(2), host.local_addr().unwrap())
             .unwrap();
@@ -624,6 +671,7 @@ mod tests {
         use crate::{FecScheme, Packetizer};
 
         let mut arena = DatagramArena::new();
+
         Packetizer::new(
             StreamKind::Video,
             sender.max_datagram_len(&peer),
@@ -639,6 +687,7 @@ mod tests {
     fn receive_all(receiver: &Transport, expected: usize) -> Vec<Vec<u8>> {
         let mut batch = RecvBatch::new(64, 2048);
         let mut collected = Vec::new();
+
         while collected.len() < expected {
             receiver.recv_batch(&mut batch).unwrap();
             collected.extend(collect(&batch));
@@ -653,7 +702,9 @@ mod tests {
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
         let data: Vec<u8> = (0..=u8::MAX).cycle().take(9_000).collect();
+
         let mut arena = arena_of(&sender, peer, 1, &data);
+
         let expected = arena.to_vecs();
 
         let count = expected.len();
@@ -671,10 +722,13 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
+
         sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
         receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+
         let data: Vec<u8> = (0..=u8::MAX).rev().cycle().take(9_000).collect();
         let mut arena = arena_of(&sender, peer, 1, &data);
+
         let expected = arena.to_vecs();
 
         let count = expected.len();
@@ -693,9 +747,12 @@ mod tests {
         let sender = bind(LOOPBACK_V4);
         let receiver = bind(LOOPBACK_V4);
         let peer = receiver.local_addr().unwrap();
+
         sender.install_session(&SessionKeys::new([1; 32], [2; 32]));
         receiver.install_session(&SessionKeys::new([2; 32], [1; 32]));
+
         let mut arena = arena_of(&sender, peer, 1, &[5; 6_000]);
+
         let expected = arena.to_vecs();
         let split = expected.len() / 2;
 
@@ -723,6 +780,7 @@ mod tests {
             fragment_count: 1,
         };
         let mut arena = DatagramArena::new();
+
         arena
             .push(&header, None, sender.max_datagram_len(&peer))
             .unwrap();

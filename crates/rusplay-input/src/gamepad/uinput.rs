@@ -38,6 +38,7 @@ impl UinputGamepad {
         let create = |source| InputError::UinputCreate { slot, source };
 
         let mut keys = AttributeSet::<evdev::KeyCode>::new();
+
         for key in KEYS {
             keys.insert(key);
         }
@@ -45,6 +46,7 @@ impl UinputGamepad {
         let stick = AbsInfo::new(0, STICK_MIN, STICK_MAX, STICK_FUZZ, STICK_FLAT, 0);
         let trigger = AbsInfo::new(0, 0, TRIGGER_MAX, 0, 0, 0);
         let hat = AbsInfo::new(0, -HAT_MAX, HAT_MAX, 0, 0, 0);
+
         let axes = [
             (AbsoluteAxisCode::ABS_X, stick),
             (AbsoluteAxisCode::ABS_Y, stick),
@@ -57,6 +59,7 @@ impl UinputGamepad {
         ];
 
         let mut effects = AttributeSet::<FFEffectCode>::new();
+
         effects.insert(FFEffectCode::FF_RUMBLE);
 
         let mut builder = VirtualDevice::builder()
@@ -73,6 +76,7 @@ impl UinputGamepad {
             .with_ff(&effects)
             .map_err(create)?
             .with_ff_effects_max(u32::from(MAX_RUMBLE_EFFECTS));
+
         for (code, info) in axes {
             builder = builder
                 .with_absolute_axis(&UinputAbsSetup::new(code, info))
@@ -83,6 +87,7 @@ impl UinputGamepad {
         let flags = fcntl_getfl(&device)
             .map_err(io::Error::from)
             .map_err(create)?;
+
         fcntl_setfl(&device, flags | OFlags::NONBLOCK)
             .map_err(io::Error::from)
             .map_err(create)?;
@@ -106,6 +111,7 @@ impl UinputGamepad {
         match event.destructure() {
             EventSummary::UInput(request, UInputCode::UI_FF_UPLOAD, _) => {
                 let mut upload = self.device.process_ff_upload(request).map_err(feedback)?;
+
                 let accepted = rumble_effect(&upload.effect())
                     .and_then(|effect| self.rumble.upload(upload.effect_id(), effect).ok());
                 match accepted {
@@ -118,6 +124,7 @@ impl UinputGamepad {
             }
             EventSummary::UInput(request, UInputCode::UI_FF_ERASE, _) => {
                 let erase = self.device.process_ff_erase(request).map_err(feedback)?;
+
                 out.extend(self.rumble.erase(erase.effect_id()).ok().flatten());
             }
             EventSummary::ForceFeedback(_, code, count) => {
@@ -160,7 +167,9 @@ impl GamepadDevice for UinputGamepad {
 
     fn poll_feedback(&mut self, out: &mut Vec<PadFeedback>) -> Result<(), InputError> {
         let mut commands = Vec::new();
+
         let result = self.poll_rumble(&mut commands);
+
         out.extend(commands.into_iter().map(PadFeedback::Rumble));
 
         result
@@ -207,7 +216,7 @@ fn rumble_effect(data: &FFEffectData) -> Option<RumbleEffect> {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct UinputFactory;
 
 impl GamepadFactory for UinputFactory {
@@ -239,6 +248,7 @@ mod tests {
                 Ok(device) => return device,
                 Err(error) if Instant::now() < deadline => {
                     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+
                     thread::sleep(Duration::from_millis(50));
                 }
                 Err(error) => panic!("opening {} failed: {error}", node.display()),
@@ -280,6 +290,7 @@ mod tests {
     #[ignore = "needs write access to /dev/uinput"]
     fn live_rumble_requests_reach_the_tracker() {
         let mut gamepad = UinputGamepad::create(0).unwrap();
+
         let node = gamepad
             .device_mut()
             .enumerate_dev_nodes_blocking()
@@ -291,6 +302,7 @@ mod tests {
             })
             .unwrap();
         let mut observed = open_when_permitted(&node);
+
         let game = thread::spawn(move || {
             let mut effect = observed
                 .upload_ff_effect(FFEffectData {
@@ -306,12 +318,14 @@ mod tests {
                     },
                 })
                 .unwrap();
+
             effect.play(1).unwrap();
             thread::sleep(Duration::from_millis(50));
             effect.stop().unwrap();
         });
 
         let mut commands = Vec::new();
+
         while !game.is_finished() {
             gamepad.poll_rumble(&mut commands).unwrap();
             thread::sleep(Duration::from_millis(2));

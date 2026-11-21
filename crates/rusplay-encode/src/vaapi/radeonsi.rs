@@ -11,7 +11,7 @@ pub(super) fn is_radeonsi(vendor: &str) -> bool {
         .is_some_and(|driver| driver.trim() == DRIVER)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Preset {
     Speed,
     Balanced,
@@ -40,7 +40,7 @@ impl Preset {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct QualityModes {
     pub(super) preset: Preset,
     pub(super) pre_encode: bool,
@@ -64,7 +64,7 @@ impl QualityModes {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct QualityOverrides {
     pub(super) preset: Option<Preset>,
     pub(super) pre_encode: Option<bool>,

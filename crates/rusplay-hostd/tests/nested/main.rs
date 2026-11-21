@@ -47,15 +47,18 @@ impl Live {
                 ..DaemonOptions::default()
             },
         );
+
         let daemon = Daemon::start(&stack, config);
 
         let pin_path = Daemon::pin_path(&stack);
         let answered = stack.answer_dialog_until(|| pin_path.exists(), DIALOG_WAIT);
+
         assert!(
             answered,
             "the portal dialog was not answered, hostd said: {:#?}",
             daemon.lines()
         );
+
         let address = daemon.address(LISTEN_WAIT).expect("hostd never listened");
         let painter = Painter::start(&stack, animate);
 
@@ -73,7 +76,7 @@ impl Live {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 struct Seen {
     at: Instant,
     keyframe: bool,
@@ -127,6 +130,7 @@ fn gpu() -> Option<Gpu> {
 
 fn client_config() -> Config {
     let mut config = Config::default();
+
     config.video.codec = rusplay_config::CodecChoice::pinned(Codec::Av1);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
     config.network.bind_address = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
@@ -144,6 +148,7 @@ fn connect(
     sink: impl FnMut(PresentedFrame) + Send + 'static,
 ) -> Result<ClientStream, ClientError> {
     let (width, height, millihertz) = display;
+
     let announced = announced_display(
         Resolution::new(width, height),
         FrameRate::new(millihertz, 1000),
@@ -182,6 +187,7 @@ impl Observation {
             .iter()
             .map(|(at, _)| format!("{at}"))
             .collect();
+
         eprintln!("REPORT asked {:?}", self.asked);
         eprintln!("REPORT sizes {sizes:?}");
         eprintln!("REPORT keyframes at ms {keys:?}");
@@ -236,25 +242,33 @@ fn observe_with(
     let (seen, sink) = recorder();
     let started = Instant::now();
     let stream = connect(&live, gpu, &Credentials::Pin(live.pin()), display, sink).unwrap();
+
     wait_for(FIRST_FRAME_WAIT, || !seen.lock().is_empty());
     std::thread::sleep(Duration::from_secs(seconds));
+
     let client = stream.stats();
+
     stream.stop().unwrap();
 
     let seen = seen.lock().clone();
     let mut sizes: Vec<Resolution> = Vec::new();
+
     for entry in &seen {
         if sizes.last() != Some(&entry.source) {
             sizes.push(entry.source);
         }
     }
+
     let mut colors: Vec<FrameColor> = Vec::new();
+
     for entry in &seen {
         if colors.last() != Some(&entry.color) {
             colors.push(entry.color);
         }
     }
+
     let mut per_second = vec![0; usize::try_from(seconds).unwrap() + 12];
+
     for entry in &seen {
         let bucket = usize::try_from(entry.at.duration_since(started).as_secs()).unwrap();
         if let Some(count) = per_second.get_mut(bucket) {
@@ -270,6 +284,7 @@ fn observe_with(
         .map(|entry| (millis(entry), entry.source))
         .collect();
     let mut size_changes: Vec<(u64, Resolution)> = Vec::new();
+
     for entry in &seen {
         if size_changes.last().map(|(_, size)| size) != Some(&entry.source) {
             size_changes.push((millis(entry), entry.source));

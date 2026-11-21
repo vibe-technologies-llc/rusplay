@@ -23,8 +23,10 @@ impl BitWriter {
             if self.bits.is_multiple_of(8) {
                 self.bytes.push(0);
             }
+
             let bit = u8::try_from((value >> shift) & 1).unwrap();
             let last = self.bytes.last_mut().unwrap();
+
             *last |= bit << (7 - self.bits % 8);
             self.bits += 1;
         }
@@ -72,8 +74,10 @@ impl Shape {
 pub(crate) fn obu(kind: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![(kind << 3) | 0x02];
     let mut size = payload.len();
+
     loop {
         let byte = u8::try_from(size & 0x7f).unwrap();
+
         size >>= 7;
         if size == 0 {
             bytes.push(byte);
@@ -171,7 +175,9 @@ pub(crate) fn explicit_columns(columns: u32) -> impl FnOnce(&mut BitWriter) {
 
 pub(crate) fn tile_group(header: impl FnOnce(&mut BitWriter), tiles: &[&[u8]]) -> Vec<u8> {
     let mut w = BitWriter::default();
+
     header(&mut w);
+
     let mut bytes = w.aligned();
 
     for (index, tile) in tiles.iter().enumerate() {
@@ -196,6 +202,7 @@ pub(crate) fn packet(units: &[(u8, Vec<u8>)]) -> Vec<u8> {
 
 fn started(shape: Shape) -> Av1Syntax {
     let mut syntax = Av1Syntax::default();
+
     syntax
         .check_packet(&packet(&[(SEQUENCE_HEADER, sequence_header(shape))]))
         .unwrap();
@@ -250,6 +257,7 @@ fn the_tiled_fixture_has_four_tiles() {
         .find(|unit| unit.kind == ObuKind::SequenceHeader)
         .unwrap();
     let mut syntax = Av1Syntax::default();
+
     syntax.obu(sequence).unwrap();
 
     let frame = units
@@ -267,6 +275,7 @@ fn the_tiled_fixture_has_four_tiles() {
     let Header::Frame(header) = parsed else {
         panic!("the first frame is shown from a slot");
     };
+
     assert_eq!((header.layout.cols, header.layout.rows), (2, 2));
 }
 
@@ -280,6 +289,7 @@ fn a_valid_two_tile_frame_completes_and_refreshes_every_slot() {
         (FRAME_HEADER, key_frame_header(shape, two_columns)),
         (TILE_GROUP, tile_group(whole_frame, &[&[1, 2], &[3, 4, 5]])),
     ]);
+
     syntax.check_packet(&data).unwrap();
 
     assert!(syntax.frame.is_none());
@@ -296,6 +306,7 @@ fn a_frame_obu_carries_its_tile_group_after_the_header() {
     let mut syntax = started(shape);
 
     let mut payload = key_frame_bits(shape, two_columns).aligned();
+
     payload.extend(tile_group(whole_frame, &[&[9], &[8, 7]]));
     syntax.check_packet(&packet(&[(FRAME, payload)])).unwrap();
 
@@ -325,11 +336,13 @@ fn tile_groups_may_split_a_frame_across_packets() {
             (TILE_GROUP, tile_group(first, &[&[1]])),
         ]))
         .unwrap();
+
     assert!(syntax.frame.is_some());
 
     syntax
         .check_packet(&packet(&[(TILE_GROUP, tile_group(second, &[&[2]]))]))
         .unwrap();
+
     assert!(syntax.frame.is_none());
 }
 
@@ -408,7 +421,9 @@ fn a_tile_size_past_the_tile_group_is_rejected() {
     let mut syntax = started(shape);
 
     let mut tiles = tile_group(whole_frame, &[]);
+
     tiles.extend([0xff, 1, 2, 3]);
+
     let data = packet(&[
         (FRAME_HEADER, key_frame_header(shape, two_columns)),
         (TILE_GROUP, tiles),
@@ -530,7 +545,9 @@ fn a_truncated_frame_header_is_rejected() {
     let mut syntax = started(shape);
 
     let mut header = key_frame_header(shape, one_tile);
+
     header.truncate(2);
+
     let data = packet(&[(FRAME_HEADER, header)]);
 
     assert_eq!(
@@ -547,6 +564,7 @@ fn an_inter_frame_sized_from_an_empty_slot_is_rejected() {
     let mut syntax = started(shape);
 
     let mut w = BitWriter::default();
+
     w.flag(false);
     w.put(1, 2);
     w.flag(true);
@@ -559,6 +577,7 @@ fn an_inter_frame_sized_from_an_empty_slot_is_rejected() {
         w.put(slot, 3);
     }
     w.flag(true);
+
     let data = packet(&[(FRAME_HEADER, w.trailing())]);
 
     assert_eq!(
@@ -572,8 +591,10 @@ fn showing_an_empty_slot_is_rejected() {
     let mut syntax = started(Shape::new(64, 64));
 
     let mut w = BitWriter::default();
+
     w.flag(true);
     w.put(5, 3);
+
     let data = packet(&[(FRAME_HEADER, w.trailing())]);
 
     assert_eq!(
@@ -593,6 +614,7 @@ fn superres_that_does_not_downscale_is_rejected() {
     let mut syntax = started(shape);
 
     let mut w = BitWriter::default();
+
     w.flag(false);
     w.put(0, 2);
     w.flag(true);
@@ -600,6 +622,7 @@ fn superres_that_does_not_downscale_is_rejected() {
     w.flag(false);
     w.flag(true);
     w.put(0, 3);
+
     let data = packet(&[(FRAME_HEADER, w.trailing())]);
 
     assert_eq!(
@@ -614,6 +637,7 @@ fn a_second_frame_header_inside_a_frame_is_rejected_unless_it_repeats_the_first(
     let mut syntax = started(shape);
 
     let header = key_frame_header(shape, two_columns);
+
     syntax
         .check_packet(&packet(&[(FRAME_HEADER, header.clone())]))
         .unwrap();
@@ -626,6 +650,7 @@ fn a_second_frame_header_inside_a_frame_is_rejected_unless_it_repeats_the_first(
         .unwrap();
 
     let other = key_frame_header(Shape::new(128, 64), one_tile);
+
     assert_eq!(
         rejected(syntax.check_packet(&packet(&[(FRAME_HEADER, other)]))),
         Av1SyntaxError::FrameHeaderDuringFrame
@@ -667,11 +692,14 @@ fn a_rejected_packet_leaves_the_state_untouched() {
     let mut syntax = started(shape);
 
     let mut bad = tile_group(whole_frame, &[]);
+
     bad.push(0xff);
+
     let data = packet(&[
         (FRAME_HEADER, key_frame_header(shape, two_columns)),
         (TILE_GROUP, bad),
     ]);
+
     assert!(syntax.check_packet(&data).is_err());
 
     assert!(syntax.frame.is_none());
@@ -688,6 +716,7 @@ fn a_decode_error_forgets_the_references() {
         (TILE_GROUP, vec![1]),
     ]);
     let summary = syntax.check_packet(&data).unwrap();
+
     assert!(syntax.slots[0].frame.is_some());
 
     syntax.forget_after_decode_error(summary);
@@ -762,6 +791,7 @@ fn every_truncation_of_a_fixture_packet_is_handled() {
 
     for length in 0..packet.len() {
         let mut syntax = Av1Syntax::default();
+
         let _ = syntax.check_packet(&packet[..length]);
     }
 }

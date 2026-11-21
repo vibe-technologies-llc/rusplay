@@ -123,6 +123,7 @@ mod tests {
     #[test]
     fn a_fallback_names_both_formats() {
         let mut formats = CodecFormat::all();
+
         let configured = formats.next().unwrap();
         let chosen = formats.next().unwrap();
 

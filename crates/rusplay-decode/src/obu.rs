@@ -67,13 +67,16 @@ impl ObuParser {
             }),
             payload: obu.as_ref(),
         };
+
         if self.syntax.obu(&unit)? == Progress::SequenceChanged {
             self.parser = primed_parser();
             self.references_valid = false;
         }
+
         let payload = (kind == ObuType::SequenceHeader).then(|| obu.as_ref().to_vec());
 
         let parsed = self.parser.parse_obu(obu).map_err(obu_error);
+
         match &parsed {
             Ok(ParsedObu::SequenceHeader(_)) => self.sequence_payload = payload,
             Err(_) => self.recover(),
@@ -98,6 +101,7 @@ impl ObuParser {
 
         let refreshes_every_slot = header.frame_type == FrameType::KeyFrame
             && header.refresh_frame_flags == ALL_REFERENCE_SLOTS;
+
         self.references_valid |= refreshes_every_slot;
 
         Ok(())
@@ -128,6 +132,7 @@ impl ObuParser {
         let Some(sequence) = &self.parser.sequence_header else {
             return Err(malformed("frame header without a sequence header"));
         };
+
         if sequence.reduced_still_picture_header {
             return Ok(());
         }
@@ -151,6 +156,7 @@ impl ObuParser {
 
 fn primed_parser() -> Parser {
     let mut parser = Parser::default();
+
     let _ = parser.read_obu(&TEMPORAL_DELIMITER);
     parser
 }
@@ -158,8 +164,10 @@ fn primed_parser() -> Parser {
 fn sequence_obu(payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![SEQUENCE_HEADER_WITH_SIZE];
     let mut size = payload.len();
+
     loop {
         let byte = u8::try_from(size & LEB128_PAYLOAD_MASK).unwrap_or_default();
+
         size >>= LEB128_PAYLOAD_BITS;
         if size == 0 {
             bytes.push(byte);
@@ -185,6 +193,7 @@ fn obu_kind(kind: ObuType) -> ObuKind {
 
 fn refresh_of(header: &FrameHeaderObu) -> Option<Refresh> {
     let key = header.frame_type == FrameType::KeyFrame;
+
     if header.show_existing_frame && !key {
         return None;
     }

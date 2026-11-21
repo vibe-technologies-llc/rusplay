@@ -106,8 +106,10 @@ fn run(
     let mapped_view = mapped.create_view(&wgpu::TextureViewDescriptor::default());
 
     let mut current = &input;
+
     testing::submit(gpu, |encoder| {
         let mut view = &input_view;
+
         if route.linearise.is_some() {
             stage
                 .linearise(&gpu.device, encoder, view, &linear_view)
@@ -164,6 +166,7 @@ fn pq_greys_follow_the_bt2390_curve_onto_an_sdr_display() {
     assert!(route.map.is_some());
     assert_eq!(route.output.light, OutputLight::Linear);
     assert_eq!(route.output.space.primaries, ColorPrimaries::Bt709);
+
     for (texel, found) in texels.iter().zip(&output) {
         let nits = pq_to_nits(f64::from(texel[0]));
         let expected = curve.map_nits(nits) / WHITE;
@@ -174,6 +177,7 @@ fn pq_greys_follow_the_bt2390_curve_onto_an_sdr_display() {
             );
         }
     }
+
     assert!((f64::from(output[7][0]) - 1.0).abs() < 5e-3);
 }
 
@@ -217,6 +221,7 @@ fn saturated_pq_colours_land_in_the_sdr_gamut_with_their_hue() {
             ColorPrimaries::Bt709,
             clipped.map(|channel| channel * WHITE),
         );
+
         let held = hue_difference(source_hue, mapped_hue);
 
         assert!(in_gamut(mapped), "{nits:?} mapped to {mapped:?}");
@@ -259,12 +264,14 @@ fn bt2020_primaries_compress_perceptually_into_srgb_without_hue_shift() {
 
     assert!(route.linearise.is_none());
     assert!(route.map.is_some());
+
     for (texel, found) in texels.iter().zip(&output) {
         let colour = widen(*texel);
         let mapped = widen(*found);
         let source_lab = oklab(ColorPrimaries::Bt2020, colour);
         let mapped_lab = oklab(ColorPrimaries::Bt709, mapped);
         let clipped_lab = oklab(ColorPrimaries::Bt709, clip(to_srgb.apply(colour)));
+
         let held = hue_difference(source_lab, mapped_lab);
 
         assert!(in_gamut(mapped), "{colour:?} mapped to {mapped:?}");
@@ -319,12 +326,14 @@ fn a_source_that_matches_the_display_takes_no_mapping_pass() {
     assert!(hdr_route.map.is_none());
     for (texel, found) in texels.iter().zip(&linear) {
         let expected = pq_to_nits(f64::from(texel[0])) / WHITE;
+
         assert!((f64::from(found[0]) - expected).abs() <= 1e-3 + expected * 2e-3);
     }
 }
 
 fn lut_options(color: impl FnOnce(&mut ColorConfig)) -> MappingOptions {
     let mut config = ColorConfig::default();
+
     config.processing.method = ColorMethod::Lut;
     color(&mut config);
     MappingOptions::from(&config)
@@ -384,8 +393,11 @@ fn the_default_fuses_the_analytic_chain_into_the_unpack() {
         ..options
     };
     let mut dynamic_config = ColorConfig::default();
+
     dynamic_config.tone_mapping.dynamic_peak = true;
+
     let mut highlight_config = ColorConfig::default();
+
     highlight_config.gamut_mapping.mode = rusplay_core::GamutMapMode::Highlight;
 
     let hdr = ColorRoute::plan(pq, display, &options).unwrap();

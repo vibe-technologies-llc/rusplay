@@ -45,7 +45,7 @@ const CURSOR_SHAPE_VERSIONS: std::ops::RangeInclusive<u32> = 1..=2;
 const WHEEL_UNITS_PER_NOTCH: f64 = 10.0;
 const VALUE120_PER_NOTCH: f64 = 120.0;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Command {
     Engage,
     Release,
@@ -54,7 +54,7 @@ pub(super) enum Command {
     HostCursor { visible: bool },
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default)]
 struct ScrollFrame {
     continuous: (f64, f64),
     discrete: (f64, f64),
@@ -153,6 +153,7 @@ impl State {
 
     pub(super) fn command(&mut self, command: Command) {
         let mut out = Vec::new();
+
         let transition = {
             let mut core = self.core.lock();
             match command {
@@ -181,6 +182,7 @@ impl State {
     pub(super) fn tick(&mut self) {
         let now = Instant::now();
         let mut out = Vec::new();
+
         let advance = self.core.lock().advance(now, &mut out);
 
         self.apply(advance.transition);
@@ -192,6 +194,7 @@ impl State {
 
     pub(super) fn shutdown(&mut self) {
         let mut out = Vec::new();
+
         let transition = self.core.lock().release(&mut out);
 
         self.apply(transition);
@@ -226,7 +229,9 @@ impl State {
 
     fn with_core<R>(&mut self, act: impl FnOnce(&mut CaptureCore, &mut Vec<InputEvent>) -> R) -> R {
         let mut out = Vec::new();
+
         let result = act(&mut self.core.lock(), &mut out);
+
         self.deliver(out);
 
         result
@@ -335,6 +340,7 @@ impl State {
 
         if dx != 0.0 || dy != 0.0 {
             let focused = self.pointer_focused;
+
             self.with_core(|core, out| {
                 if focused {
                     core.scroll(dx, dy, out);
@@ -383,6 +389,7 @@ impl Dispatch<WlSeat, ()> for State {
 
         if capabilities.contains(Capability::Pointer) && state.pointer.is_none() {
             let pointer = seat.get_pointer(handle, ());
+
             state.create_pointer_objects(&pointer);
             state.pointer = Some(pointer);
         }
@@ -439,6 +446,7 @@ impl Dispatch<WlPointer, ()> for State {
                 let pressed = button_state == ButtonState::Pressed;
                 let transition =
                     state.with_core(|core, out| core.pointer_button(button, pressed, out));
+
                 state.apply(transition);
             }
             wl_pointer::Event::Axis {
@@ -487,6 +495,7 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Modifiers { mods_locked, .. } => {
                 let locks = state.lock_masks.locked(mods_locked);
+
                 state.with_core(|core, out| core.set_locks(locks, out));
             }
             wl_keyboard::Event::Enter { surface, .. } if surface == state.surface => {
@@ -494,7 +503,9 @@ impl Dispatch<WlKeyboard, ()> for State {
             }
             wl_keyboard::Event::Leave { surface, .. } if surface == state.surface => {
                 state.keyboard_focused = false;
+
                 let transition = state.with_core(CaptureCore::focus_lost);
+
                 state.apply(transition);
             }
             wl_keyboard::Event::Key {
@@ -504,6 +515,7 @@ impl Dispatch<WlKeyboard, ()> for State {
             } if state.keyboard_focused => {
                 let pressed = key_state == KeyState::Pressed;
                 let transition = state.with_core(|core, out| core.key(key, pressed, out));
+
                 state.apply(transition);
                 state.sync_pointer_lock();
             }
@@ -570,6 +582,7 @@ impl Dispatch<ZwpKeyboardShortcutsInhibitorV1, ()> for State {
     ) {
         if matches!(event, zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive) {
             let transition = state.with_core(CaptureCore::release);
+
             state.apply(transition);
         }
     }

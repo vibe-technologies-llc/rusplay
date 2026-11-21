@@ -23,7 +23,7 @@ pub enum CudaError {
     Call { call: CudaCall, status: CudaStatus },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CudaCall {
     Init,
     DeviceGetCount,
@@ -56,7 +56,7 @@ impl fmt::Display for CudaCall {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CudaStatus(pub i32);
 
 impl CudaStatus {

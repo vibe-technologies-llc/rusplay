@@ -14,7 +14,7 @@ use crate::{
 pub const DEFAULT_LUT_SIZE: u32 = 65;
 pub const LUT_SIZES: RangeInclusive<u32> = 2..=256;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorLutSettings {
     pub transfer: TransferFunction,
     pub hdr: HdrLevels,
@@ -40,10 +40,13 @@ impl ColorLutSettings {
         self.chain().linearise().validate()?;
 
         let mut plan = ColorPlan::new(&self.map.unwrap_or_default())?;
+
         if plan.tone.is_some_and(|stage| stage.dynamic_peak.is_some()) {
             return Err(ScaleError::LutDynamicPeak);
         }
+
         let clamped = self.map.is_some() && plan.path != MappingPath::Matrix;
+
         match plan.path {
             MappingPath::Highlight => return Err(ScaleError::LutHighlightMapping),
             MappingPath::Clip => plan.path = MappingPath::Matrix,
@@ -170,6 +173,7 @@ impl ColorLut {
         if settings == self.settings {
             return Ok(Reconfigured::Unchanged);
         }
+
         let plan = settings.plan(device)?;
 
         self.resources = LutResources::new(&self.pipelines, device, &settings, &plan);
@@ -183,6 +187,7 @@ impl ColorLut {
         }
 
         let size = self.settings.size;
+
         self.resources
             .mapper
             .encode_boundary(&self.pipelines, encoder);

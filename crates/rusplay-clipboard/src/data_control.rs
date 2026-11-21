@@ -58,13 +58,13 @@ flavour!(
     kind: BackendKind::WlrDataControl,
 );
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataControlOptions {
     pub max_bytes: usize,
     pub watch: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Start {
     pub max_bytes: usize,
     pub watch: bool,
@@ -101,6 +101,7 @@ impl Session {
 
     pub(crate) fn begin_read(&mut self, now: Instant) -> std::io::Result<OwnedFd> {
         let (job, writer) = ReadJob::open(self.max_bytes, now)?;
+
         self.jobs.push(job);
 
         Ok(writer)
@@ -155,6 +156,7 @@ impl Started {
         let (commands, queued) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+
         let thread = thread::Builder::new()
             .name(THREAD_NAME.to_owned())
             .spawn(move || serve(&connection, queue, state, &queued, &worker_stop))
@@ -206,6 +208,7 @@ fn serve<S: Flavour>(
             let socket = guard.connection_fd();
             let job_fds = state.session().job_fds();
             let mut fds = vec![PollFd::new(&socket, PollFlags::IN)];
+
             fds.extend(job_fds.iter().map(|fd| PollFd::new(fd, PollFlags::IN)));
 
             match poll(&mut fds, Some(&limit)) {

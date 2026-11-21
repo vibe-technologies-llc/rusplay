@@ -11,7 +11,7 @@ const MULTIPASS: &str = "multipass";
 const SPLIT_ENCODE: &str = "split-encode";
 const AQ_STRENGTH_RANGE: std::ops::RangeInclusive<u32> = 1..=15;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Multipass {
     Disabled,
     QuarterResolution,
@@ -28,7 +28,7 @@ impl Multipass {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SplitEncode {
     Auto,
     AutoForced,
@@ -51,7 +51,7 @@ impl SplitEncode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct NvencParams {
     pub(super) intra_refresh_frames: Option<u32>,
     pub(super) spatial_aq: Option<bool>,
@@ -88,6 +88,7 @@ impl NvencParams {
                 SPATIAL_AQ => parsed.spatial_aq = Some(flag(key, value)?),
                 AQ_STRENGTH => {
                     let strength = number()?;
+
                     if !AQ_STRENGTH_RANGE.contains(&strength) {
                         return Err(invalid(key, value));
                     }

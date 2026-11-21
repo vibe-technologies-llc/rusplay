@@ -26,7 +26,7 @@ impl From<wgpu::Error> for GpuFault {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct GpuFaults {
     pending: Arc<Mutex<Option<GpuFault>>>,
 }
@@ -35,6 +35,7 @@ impl GpuFaults {
     pub fn install(device: &wgpu::Device) -> Self {
         let faults = Self::default();
         let sink = faults.clone();
+
         device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
             sink.record(GpuFault::from(error));
         }));
@@ -66,6 +67,7 @@ impl GpuFaults {
         let validation = pollster::block_on(validation.pop());
         let memory = pollster::block_on(memory.pop());
         let internal = pollster::block_on(internal.pop());
+
         if let Some(error) = memory.or(validation).or(internal) {
             return Err(GpuFault::from(error).into());
         }

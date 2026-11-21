@@ -55,6 +55,7 @@ impl Bits {
     fn ue(&mut self, value: u32) {
         let code = value + 1;
         let length = 32 - code.leading_zeros();
+
         self.bits(0, length - 1);
         self.bits(code, length);
     }
@@ -105,6 +106,7 @@ pub fn resolution() -> Resolution {
 
 pub fn parameter_sets(max_num_ref_frames: u32, reorder_frames: u32) -> Vec<u8> {
     let mut sps = Bits::new();
+
     sps.bits(MAIN_PROFILE, 8);
     sps.bits(0, 8);
     sps.bits(LEVEL_3_0, 8);
@@ -134,6 +136,7 @@ pub fn parameter_sets(max_num_ref_frames: u32, reorder_frames: u32) -> Vec<u8> {
     sps.ue(max_num_ref_frames.max(reorder_frames));
 
     let mut pps = Bits::new();
+
     pps.ue(0);
     pps.ue(0);
     pps.bit(false);
@@ -151,11 +154,12 @@ pub fn parameter_sets(max_num_ref_frames: u32, reorder_frames: u32) -> Vec<u8> {
     pps.bit(false);
 
     let mut stream = nal(3, NAL_SPS, &sps.trailing());
+
     stream.extend(nal(3, NAL_PPS, &pps.trailing()));
     stream
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Mmco {
     UnmarkShortTerm { difference_minus1: u32 },
     UnmarkLongTerm { long_term_pic_num: u32 },
@@ -163,19 +167,19 @@ pub enum Mmco {
     MaxLongTermIndexPlus1(u32),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum Marking {
     Sliding,
     Adaptive(Vec<Mmco>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Modification {
     pub idc: u32,
     pub value: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum Content {
     Intra {
         seed: u8,
@@ -190,7 +194,7 @@ pub enum Content {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct FieldPicture {
     pub bottom: bool,
     pub idr: bool,
@@ -263,6 +267,7 @@ impl FieldPicture {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut bits = Bits::new();
+
         bits.ue(0);
         bits.ue(match self.content {
             Content::Intra { .. } => SLICE_TYPE_I,
@@ -383,6 +388,7 @@ impl FieldPicture {
                 for macroblock in 0..MBS_PER_FIELD {
                     let backward = macroblock % 2 == 1;
                     let active = if backward { active1 } else { active0 };
+
                     bits.ue(0);
                     bits.ue(if backward { 2 } else { 1 });
                     write_reference_index(bits, *active, (macroblock / 2) % active);
@@ -436,7 +442,7 @@ fn cr(seed: u8) -> u8 {
     220 - seed
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Field {
     luma: Vec<u8>,
     cb: Vec<u8>,
@@ -476,6 +482,7 @@ impl Field {
             for y in 0..CHROMA_MB {
                 for x in 0..CHROMA_MB {
                     let index = (y0 / 2 + y) * (WIDTH / 2) + x0 / 2 + x;
+
                     blue_plane[index] = cb(seed);
                     red_plane[index] = cr(seed);
                 }
@@ -494,13 +501,16 @@ pub fn nv12(top: &Field, bottom: &Field) -> Vec<Vec<u8>> {
     let fields = [top, bottom];
 
     let mut luma_plane = Vec::with_capacity(WIDTH * HEIGHT);
+
     for row in 0..HEIGHT {
         let field = fields[row % 2];
         let start = (row / 2) * WIDTH;
+
         luma_plane.extend_from_slice(&field.luma[start..start + WIDTH]);
     }
 
     let mut chroma_plane = Vec::with_capacity(WIDTH * HEIGHT / 2);
+
     for row in 0..HEIGHT / 2 {
         let field = fields[row % 2];
         let start = (row / 2) * (WIDTH / 2);
@@ -521,6 +531,7 @@ pub fn describe(planes: &[Vec<u8>]) -> String {
             let seeds: Vec<String> = (0..MBS_PER_FIELD)
                 .map(|macroblock| {
                     let (x0, y0) = macroblock_origin(macroblock);
+
                     let sample = planes[0][(y0 * 2 + parity) * WIDTH + x0];
                     (1..=32u8)
                         .find(|&seed| luma(seed, x0, y0) == sample)

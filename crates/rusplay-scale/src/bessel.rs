@@ -23,6 +23,7 @@ pub(crate) fn j1(x: f64) -> f64 {
                     + square
                         * (18_583_304.74
                             + square * (99_447.433_94 + square * (376.999_139_7 + square))));
+
         return numerator / denominator;
     }
 
@@ -41,6 +42,7 @@ pub(crate) fn j1(x: f64) -> f64 {
                 + square
                     * (0.844_919_909_6e-5
                         + square * (-0.882_289_87e-6 + square * 0.105_787_412e-6)));
+
     let amplitude = (2.0 / (PI * magnitude)).sqrt()
         * (phase.cos() * cosine_term - inverse * phase.sin() * sine_term);
 

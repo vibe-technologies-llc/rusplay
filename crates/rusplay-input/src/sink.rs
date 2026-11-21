@@ -32,6 +32,7 @@ impl<D: InputSink, G: InputSink> InputSink for SplitSink<D, G> {
 
         let mut pad_results = pad_results.into_iter();
         let mut desktop_results = desktop_results.into_iter();
+
         results.clear();
         results.extend(events.iter().map(|event| {
             let next = if is_pad(event) {

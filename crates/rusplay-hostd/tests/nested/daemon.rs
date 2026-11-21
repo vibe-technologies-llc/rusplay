@@ -92,6 +92,7 @@ restore_token_file = "{token}"
             extra = options.extra,
         );
         let path = Self::config_path(stack);
+
         std::fs::write(&path, text).unwrap();
 
         path
@@ -99,6 +100,7 @@ restore_token_file = "{token}"
 
     pub fn start(stack: &Stack, config: PathBuf) -> Self {
         let mut command = stack.command(env!("CARGO_BIN_EXE_rusplay-hostd"));
+
         let mut child = command
             .arg("--config")
             .arg(&config)
@@ -110,6 +112,7 @@ restore_token_file = "{token}"
 
         let lines = Arc::new(Mutex::new(Vec::new()));
         let reader = BufReader::new(child.stderr.take().unwrap());
+
         thread::spawn({
             let lines = Arc::clone(&lines);
             move || {
@@ -164,6 +167,7 @@ restore_token_file = "{token}"
 
     pub fn control(&self, arguments: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rusplay-hostd"));
+
         for (key, value) in &self.environment {
             match value {
                 Some(value) => command.env(key, value),

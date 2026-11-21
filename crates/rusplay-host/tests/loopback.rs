@@ -82,6 +82,7 @@ struct Tone {
 impl AudioSource for Tone {
     fn read_frame(&mut self, frame: &mut [f32], timeout: Duration) -> Result<bool, AudioError> {
         let wait = self.next.saturating_duration_since(Instant::now());
+
         if wait > timeout {
             thread::sleep(timeout);
             return Ok(false);
@@ -149,9 +150,11 @@ impl FrameSource for MovingBox {
         let stride = SOURCE.width * 4;
         let mut data = vec![GREY; (stride * SOURCE.height) as usize];
         let left = (self.index * 4) % (SOURCE.width - BOX_SIZE);
+
         for y in 0..BOX_SIZE {
             for x in left..left + BOX_SIZE {
                 let at = (y * stride + x * 4) as usize;
+
                 data[at..at + 4].copy_from_slice(&[255, 255, 255, 255]);
             }
         }
@@ -174,6 +177,7 @@ impl FrameSource for MovingBox {
 
 fn host_config(encoder: VideoEncoderConfig) -> Config {
     let mut config = Config::default();
+
     config.network.bind_address = LOCALHOST;
     config.network.port = 0;
     config.video.codec = rusplay_config::CodecChoice::pinned(Codec::Av1);
@@ -196,6 +200,7 @@ fn client_decodes(codec: Codec) -> bool {
 
 fn client_config() -> Config {
     let mut config = Config::default();
+
     config.network.bind_address = LOCALHOST;
     config.video.codec = rusplay_config::CodecChoice::pinned(Codec::H264);
     config.video.decoder = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
@@ -243,9 +248,11 @@ fn serve_in_background(
         let client = host.accept(Some(Pin::parse(PIN).unwrap()))?;
         let stream = host.serve(&client, gpu, &feed)?;
         let deadline = Instant::now() + WAIT;
+
         while !stream.is_finished() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
+
         let stats = stream.stats();
         stream.wait().map(|()| stats)
     })
@@ -282,18 +289,23 @@ fn assert_held_key_pressed_then_released(injected: &[InputEvent]) {
 
 fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     let config = host_config(encoder);
+
     if !supported(&config) {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
     let injected = RecordedInput::default();
+
     let host = bind_host(config, &dir, &injected);
     let address = host.local_addr().unwrap();
     let (publisher, subscriber) = latest();
+
     publish(&publisher, cursor_update(1, Some(cursor_bitmap())));
+
     let feed = CaptureFeed::new(MovingBox {
         index: 0,
         cursor: subscriber,
@@ -314,6 +326,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     let client_gpu = client_gpu(&gpu);
     let heard = HeardAudio::default();
     let session = ClientSession::new(client_config());
+
     let stream = session
         .connect_with_audio(
             address,
@@ -327,6 +340,7 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
 
     let deadline = Instant::now() + WAIT;
     let mut step = 0;
+
     while Instant::now() < deadline
         && (seen.lock().len() < FRAMES_TO_SEE
             || heard.samples.lock().len() < AUDIO_SAMPLES_TO_HEAR
@@ -339,12 +353,17 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
         thread::sleep(Duration::from_millis(5));
     }
     press_held_key(&stream, &injected, deadline);
+
     let frame = latest.take().unwrap();
     let texels = download(&gpu, &frame.texture);
+
     drop(frame);
+
     let client_stats = stream.stats();
     let cursor_state = cursor.latest().unwrap();
+
     stream.stop().unwrap();
+
     let host_stats = serving.join().unwrap().unwrap();
     let loudest = loudest(&heard.samples);
     let injected = injected.0.lock().clone();
@@ -366,13 +385,17 @@ fn stream_through_the_real_client(encoder: VideoEncoderConfig) {
     assert!(client_stats.audio_packets_received > 0);
     assert_eq!(client_stats.audio_decode_errors, 0);
     assert!(loudest > TONE_AMPLITUDE / 2.0);
+
     assert_held_key_pressed_then_released(&injected);
+
     assert!(client_stats.input_snapshots_sent >= SNAPSHOTS_TO_SEE);
     assert!(host_stats.input_state_records >= 3);
     assert_eq!(cursor_state.space, SOURCE);
     assert_eq!(cursor_state.x, CURSOR_TARGET_X);
     assert_eq!(cursor_state.y, CURSOR_TARGET_X / 2);
+
     let image = cursor_state.image.unwrap();
+
     assert_eq!((image.width, image.height), (4, 4));
     assert!(image.rgba.iter().all(|byte| *byte == CURSOR_FILL));
     for channel in &corner[..3] {
@@ -396,6 +419,7 @@ fn vaapi_frames_reach_the_client_session() {
 fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
     let (width, height) = (texture.width(), texture.height());
     let texel_bytes = 8;
+
     let row_bytes = (width * texel_bytes).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("rusplay-host-test-readback"),
@@ -407,6 +431,7 @@ fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -431,6 +456,7 @@ fn download(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<[f32; 4]> {
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("device finishes the readback");
+
     let bytes = staging
         .get_mapped_range(..)
         .expect("mapped range is readable")
@@ -482,6 +508,7 @@ fn client_gpu(gpu: &Gpu) -> rusplay_client::Gpu {
 fn encodes_anything(config: &Config) -> bool {
     let encodes = rusplay_encode::capabilities(&config.video.encoder)
         .is_ok_and(|capabilities| !capabilities.format_set().is_empty());
+
     if !encodes {
         hardware::unsupported("an encoder with any format");
     }
@@ -499,7 +526,9 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
             depth: BitDepth::Eight,
         },
     );
+
     config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(configured.format);
+
     let fallback = CodecFormat::new(
         Codec::Av1,
         PixelFormat {
@@ -511,15 +540,18 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
         caps.supports(fallback.codec, fallback.format)
             && !caps.supports(configured.codec, configured.format)
     });
+
     if !encodes_fallback {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
     let host = bind_host(config, &dir, &RecordedInput::default());
     let address = host.local_addr().unwrap();
+
     let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
     let session = ClientSession::new(client_config());
 
@@ -533,14 +565,18 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
         )
         .unwrap();
     let deadline = Instant::now() + WAIT;
+
     while stream.stream_format().is_none() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
+
     let described = stream.stream_format();
+
     stream.stop().unwrap();
     serving.join().unwrap().unwrap();
 
     let described = described.expect("the host never described the stream");
+
     assert!(described.is_fallback());
     assert_eq!(described.coded(), fallback);
     assert_eq!(described.configured, configured);
@@ -549,17 +585,21 @@ fn a_format_the_encoder_lacks_falls_back_and_the_client_sees_it() {
 #[test]
 fn a_client_asking_for_quality_gets_reports_of_the_encoded_stream() {
     let config = host_config(VideoEncoderConfig::Vaapi(VaapiConfig::default()));
+
     if !supported(&config) {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
     let host = bind_host(config, &dir, &RecordedInput::default());
     let address = host.local_addr().unwrap();
+
     let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
     let mut client = client_config();
+
     client.video.quality_metrics = true;
 
     let stream = ClientSession::new(client)
@@ -572,18 +612,24 @@ fn a_client_asking_for_quality_gets_reports_of_the_encoded_stream() {
         )
         .unwrap();
     let deadline = Instant::now() + WAIT;
+
     while stream.stats().quality_report.is_none() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
+
     let stats = stream.stats();
+
     stream.set_quality_metrics(false);
+
     let turned_off = stream.stats();
+
     stream.stop().unwrap();
     serving.join().unwrap().unwrap();
 
     let report = stats
         .quality_report
         .expect("the host sent no quality report");
+
     assert_eq!(stats.quality, QualityState::Reported);
     assert!(report.psnr.luma.decibels().value() > 30.0, "{report:?}");
     assert!(report.xpsnr.luma.decibels().value() > 30.0, "{report:?}");
@@ -598,17 +644,22 @@ struct SteeredSession {
 
 fn stream_until_the_client_steers(host_kbps: u32, client_kbps: u32) -> Option<SteeredSession> {
     let mut config = host_config(VideoEncoderConfig::Vaapi(VaapiConfig::default()));
+
     config.video.bitrate_kbps = host_kbps;
     if !supported(&config) {
         return None;
     }
+
     let gpu = open_gpu()?;
     let dir = TempDir::new().unwrap();
     let host = bind_host(config, &dir, &RecordedInput::default());
     let address = host.local_addr().unwrap();
+
     let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
     let mut client = client_config();
+
     client.video.bitrate_kbps = client_kbps;
+
     let hints_owed = u64::from(client_kbps < host_kbps);
 
     let stream = ClientSession::new(client)
@@ -624,11 +675,15 @@ fn stream_until_the_client_steers(host_kbps: u32, client_kbps: u32) -> Option<St
     let steering = |stats: &rusplay_client::ClientStats| {
         stats.bitrate_target_kbps.is_some() && stats.bitrate_hints_sent >= hints_owed
     };
+
     while !steering(&stream.stats()) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
+
     let client = stream.stats();
+
     stream.stop().unwrap();
+
     let host = serving.join().unwrap().unwrap();
 
     Some(SteeredSession { client, host })
@@ -690,16 +745,20 @@ fn a_host_and_client_without_a_shared_format_both_refuse() {
     if client_decodes(Codec::Hevc) {
         return;
     }
+
     let config = host_config(VideoEncoderConfig::X265(X265Config::default()));
+
     if !encodes_anything(&config) {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
     let dir = TempDir::new().unwrap();
     let host = bind_host(config, &dir, &RecordedInput::default());
     let address = host.local_addr().unwrap();
+
     let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
     let session = ClientSession::new(client_config());
 
@@ -743,10 +802,12 @@ fn wait_for_clipboard(clipboard: &MemoryClipboard, expected: &str, deadline: Ins
 #[test]
 fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_client() {
     let mut config = host_config(VideoEncoderConfig::SvtAv1(SvtAv1Config::default()));
+
     clipboard_config(&mut config, 4096);
     if !supported(&config) {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
@@ -754,6 +815,7 @@ fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_cl
     let host_clipboard = MemoryClipboard::default();
     let client_clipboard = MemoryClipboard::default();
     let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
+
     let host = Arc::new(
         HostSession::bind(config, store)
             .unwrap()
@@ -764,7 +826,9 @@ fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_cl
     let serving = serve_in_background(&host, gpu.clone(), moving_box_feed());
 
     let mut client_config = client_config();
+
     clipboard_config(&mut client_config, 4096);
+
     let session =
         ClientSession::new(client_config).with_clipboard(clipboard_opener(&client_clipboard));
     let stream = session
@@ -780,13 +844,19 @@ fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_cl
     let long_text = "wörds ".repeat(500);
 
     client_clipboard.copy("from the client");
+
     let reached_host = wait_for_clipboard(&host_clipboard, "from the client", deadline);
+
     host_clipboard.copy(long_text.clone());
+
     let reached_client = wait_for_clipboard(&client_clipboard, &long_text, deadline);
+
     host_clipboard.copy("x".repeat(5000));
     thread::sleep(Duration::from_millis(500));
+
     let oversized_arrived = client_clipboard.contents().as_deref() != Some(long_text.as_str());
     let state = stream.clipboard().is_active();
+
     stream.stop().unwrap();
     serving.join().unwrap().unwrap();
 
@@ -801,9 +871,11 @@ fn clipboard_text_crosses_both_ways_without_echoing_through_the_real_host_and_cl
 #[test]
 fn clipboard_text_is_not_shared_when_the_config_leaves_it_off() {
     let config = host_config(VideoEncoderConfig::SvtAv1(SvtAv1Config::default()));
+
     if !supported(&config) {
         return;
     }
+
     let Some(gpu) = open_gpu() else {
         return;
     };
@@ -811,6 +883,7 @@ fn clipboard_text_is_not_shared_when_the_config_leaves_it_off() {
     let host_clipboard = MemoryClipboard::default();
     let client_clipboard = MemoryClipboard::default();
     let store = PeerStore::open(dir.path().join("paired-clients")).unwrap();
+
     let host = Arc::new(
         HostSession::bind(config, store)
             .unwrap()
@@ -835,8 +908,10 @@ fn clipboard_text_is_not_shared_when_the_config_leaves_it_off() {
     client_clipboard.copy("stays here");
     host_clipboard.copy("stays there");
     thread::sleep(Duration::from_millis(500));
+
     let host_after = host_clipboard.contents();
     let client_after = client_clipboard.contents();
+
     stream.stop().unwrap();
     serving.join().unwrap().unwrap();
 

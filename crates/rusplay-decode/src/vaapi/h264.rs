@@ -201,7 +201,9 @@ impl H264Decoder {
 
         let order = picture.order;
         let had_mmco5 = self.dpb.previous.had_mmco5;
+
         let shift = if had_mmco5 { order.poc() } else { 0 };
+
         open.record(picture.structure, order.top, order.bottom, shift);
         open.restart |= picture.idr || had_mmco5;
 
@@ -240,6 +242,7 @@ impl H264Decoder {
 
         let format = stream_format(&sps)?;
         let (stream, reopened) = Stream::ensure(&mut self.stream, display, CODEC, format)?;
+
         if reopened {
             self.dpb.reset();
             partner = None;
@@ -294,6 +297,7 @@ impl H264Decoder {
                 max_frame_num,
             );
             let parameters = slice_parameters(slice, &sps, &pps, &lists, &self.dpb.references);
+
             buffers.push(
                 stream
                     .session
@@ -381,7 +385,9 @@ pub(super) fn reorder_depth(sps: &Sps) -> Depth {
 
 fn check_size(sps: &Sps) -> Result<(), DecodeError> {
     let (width, height) = (sps.width(), sps.height());
+
     let (columns, rows) = (width / MACROBLOCK_SIZE, height / MACROBLOCK_SIZE);
+
     let macroblocks = u64::from(columns) * u64::from(rows);
 
     if macroblocks > MAX_MACROBLOCKS || columns > MAX_MACROBLOCK_SPAN || rows > MAX_MACROBLOCK_SPAN
@@ -509,11 +515,13 @@ fn picture_parameters(
                 .iter()
                 .filter(|reference| reference.has_long_term()),
         );
+
     for (slot, reference) in parameters.ReferenceFrames.iter_mut().zip(ordered) {
         *slot = reference.va_frame();
     }
 
     let sequence = unsafe { &mut parameters.seq_fields.bits };
+
     sequence.set_chroma_format_idc(u32::from(sps.chroma_format_idc));
     sequence.set_residual_colour_transform_flag(u32::from(sps.separate_colour_plane_flag));
     sequence.set_gaps_in_frame_num_value_allowed_flag(u32::from(
@@ -530,6 +538,7 @@ fn picture_parameters(
     sequence.set_delta_pic_order_always_zero_flag(u32::from(sps.delta_pic_order_always_zero_flag));
 
     let picture = unsafe { &mut parameters.pic_fields.bits };
+
     picture.set_entropy_coding_mode_flag(u32::from(pps.entropy_coding_mode_flag));
     picture.set_weighted_pred_flag(u32::from(pps.weighted_pred_flag));
     picture.set_weighted_bipred_idc(u32::from(pps.weighted_bipred_idc));
@@ -615,6 +624,7 @@ fn slice_parameters(
 
     if explicit_l0 || explicit_b {
         let count = usize::from(header.num_ref_idx_l0_active_minus1) + 1;
+
         parameters.luma_weight_l0_flag = 1;
         parameters.chroma_weight_l0_flag = u8::from(chroma);
         for index in 0..count.min(MAX_LIST_ENTRIES) {
@@ -631,6 +641,7 @@ fn slice_parameters(
 
     if explicit_b {
         let count = usize::from(header.num_ref_idx_l1_active_minus1) + 1;
+
         parameters.luma_weight_l1_flag = 1;
         parameters.chroma_weight_l1_flag = u8::from(chroma);
         for index in 0..count.min(MAX_LIST_ENTRIES) {

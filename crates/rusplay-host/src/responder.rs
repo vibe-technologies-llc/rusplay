@@ -94,6 +94,7 @@ pub fn announced_name(configured: Option<&str>, hostname: Option<String>) -> Str
 
 fn truncate_at_boundary(mut name: String, max_bytes: usize) -> String {
     let mut end = name.len().min(max_bytes);
+
     while !name.is_char_boundary(end) {
         end -= 1;
     }
@@ -152,6 +153,7 @@ mod tests {
             .unwrap()
             .scan(Duration::from_secs(2))
             .unwrap();
+
         drop(running);
 
         assert_eq!(found.len(), 1);

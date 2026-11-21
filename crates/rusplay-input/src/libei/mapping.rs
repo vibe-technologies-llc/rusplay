@@ -5,7 +5,7 @@ use crate::{InputError, InputEvent, KeySet, TouchEvent};
 const BUTTON_CODES: Range<u32> = 0x110..0x120;
 const VALUE120_PER_NOTCH: f64 = 120.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Capability {
     Keyboard,
     Pointer,
@@ -15,7 +15,7 @@ pub enum Capability {
     Touch,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EiRequest {
     Key { code: u32, pressed: bool },
     MotionRelative { dx: f32, dy: f32 },
@@ -112,7 +112,7 @@ fn notches_to_value120(notches: f64) -> Result<i32, InputError> {
     Ok(scaled.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Region {
     pub x: f32,
     pub y: f32,
@@ -130,13 +130,13 @@ impl Region {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MappedRegion {
     pub region: Region,
     pub mapping_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum AbsoluteTarget {
     #[default]
     Bounds,
@@ -152,7 +152,7 @@ impl AbsoluteTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AbsoluteMapper {
     bounds: Region,
 }

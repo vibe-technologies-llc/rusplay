@@ -62,7 +62,7 @@ pub use crate::{
     resolve::resolve,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutputIndex(pub u64);
 
 impl OutputIndex {
@@ -72,7 +72,7 @@ impl OutputIndex {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recovery {
     Reference(OutputIndex),
     Keyframe,
@@ -138,6 +138,7 @@ pub fn open_sited(
             ..config.clone()
         };
         let backend = Backend::of(&resolved.encoder).ok_or(EncodeError::NoEncoderAvailable)?;
+
         backend.check_codec(resolved.stream_codec())?;
         return open_sited(&resolved, siting);
     }
@@ -207,6 +208,7 @@ mod tests {
         let mut encoder = KeyframeOnly::default();
 
         encoder.acknowledge(OutputIndex(3));
+
         let recovery = encoder.recover(OutputIndex(4));
 
         assert_eq!(recovery, Recovery::Keyframe);

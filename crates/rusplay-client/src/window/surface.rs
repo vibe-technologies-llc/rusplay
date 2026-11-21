@@ -62,6 +62,7 @@ impl FeedbackLog {
 
     fn push(&self, outcome: Feedback) {
         let mut outcomes = self.outcomes.lock();
+
         if outcomes.len() == MAX_FEEDBACK {
             outcomes.pop_front();
         }
@@ -104,12 +105,14 @@ impl ChildSurface {
         let parent_id =
             unsafe { ObjectId::from_ptr(WlSurface::interface(), target.surface.as_ptr().cast()) }
                 .map_err(|_| ClientError::WindowHandleInvalid)?;
+
         let parent = WlSurface::from_id(&connection, parent_id)
             .map_err(|_| ClientError::WindowHandleInvalid)?;
 
         let (globals, mut queue) = registry_queue_init::<SurfaceEvents>(&connection)
             .map_err(ClientError::WaylandRegistry)?;
         let handle = queue.handle();
+
         let compositor: WlCompositor =
             bind(&globals, &handle, COMPOSITOR_VERSIONS, "wl_compositor")?;
         let subcompositor: WlSubcompositor =
@@ -382,13 +385,16 @@ mod tests {
         let connection = Connection::connect_to_env().unwrap();
         let (globals, mut queue) = registry_queue_init::<SurfaceEvents>(&connection).unwrap();
         let handle = queue.handle();
+
         let compositor: WlCompositor = globals.bind(&handle, COMPOSITOR_VERSIONS, ()).unwrap();
         let native = compositor.create_surface(&handle, ());
         let entered = Arc::new(Mutex::new(Vec::new()));
         let feedback = Arc::new(FeedbackLog::new());
+
         queue
             .roundtrip(&mut SurfaceEvents::new(&entered, &feedback))
             .unwrap();
+
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
@@ -405,6 +411,7 @@ mod tests {
             })
         }
         .unwrap();
+
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
             ..wgpu::RequestAdapterOptions::default()
@@ -413,6 +420,7 @@ mod tests {
         let (device, gpu_queue) =
             pollster::block_on(adapter.request_device(&rusplay_scale::device_descriptor(&adapter)))
                 .unwrap();
+
         let gpu = crate::Gpu::new(device, gpu_queue);
         let mut config = surface.get_default_config(&adapter, 640, 360).unwrap();
         let stop = std::sync::atomic::AtomicBool::new(false);
@@ -426,12 +434,14 @@ mod tests {
                     usage: wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
+
                 started.wait();
                 while !stop.load(Ordering::Relaxed) {
                     gpu.guard(|| {
                         let mut encoder = gpu
                             .device
                             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
                         encoder.clear_buffer(&buffer, 0, None);
                         gpu.queue.submit([encoder.finish()]);
                         Ok(())
@@ -439,7 +449,9 @@ mod tests {
                     .unwrap();
                 }
             });
+
             started.wait();
+
             let result = (|| {
                 for side in (64..164).cycle().take(200) {
                     config.width = side * 2;
@@ -459,6 +471,7 @@ mod tests {
                 }
                 Ok::<_, ClientError>(())
             })();
+
             stop.store(true, Ordering::Relaxed);
             worker.join().unwrap();
 
@@ -472,6 +485,7 @@ mod tests {
         let connection = Connection::connect_to_env().unwrap();
         let (globals, mut queue) = registry_queue_init::<SurfaceEvents>(&connection).unwrap();
         let handle = queue.handle();
+
         let compositor: WlCompositor = globals.bind(&handle, COMPOSITOR_VERSIONS, ()).unwrap();
         let Ok(presentation) =
             globals.bind::<WpPresentation, _, _>(&handle, PRESENTATION_VERSIONS, ())
@@ -482,6 +496,7 @@ mod tests {
 
         let entered = Arc::new(Mutex::new(Vec::new()));
         let feedback = Arc::new(FeedbackLog::new());
+
         let mut state = SurfaceEvents::new(&entered, &feedback);
         let surface = compositor.create_surface(&handle, ());
         let now = Instant::now();
@@ -512,7 +527,9 @@ mod tests {
                 advertised.iter().any(|global| global.interface == name),
             )
         });
+
         eprintln!("{outcomes:?} {staging:?}");
+
         assert!(feedback.clock_now().is_some());
         assert_eq!(outcomes.len(), 1);
 

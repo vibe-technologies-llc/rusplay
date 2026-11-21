@@ -17,6 +17,7 @@ pub(crate) fn probe(config: &VaapiDecoderConfig) -> Result<FormatSet, DecodeErro
         if config.copy_output && format.format.chroma != ChromaSubsampling::Yuv420 {
             continue;
         }
+
         let Some(profile) = profile_for(format) else {
             continue;
         };

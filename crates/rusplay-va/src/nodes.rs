@@ -7,7 +7,7 @@ const DEVICE_DIRECTORY: &str = "/dev/dri";
 const DRM_CLASS_DIRECTORY: &str = "/sys/class/drm";
 const RENDER_NODE_PREFIX: &str = "renderD";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderNode {
     pub path: PathBuf,
     pub pci_bus_id: Option<String>,
@@ -50,6 +50,7 @@ fn nodes_in(device_directory: &Path, drm_class_directory: &Path) -> Vec<RenderNo
             ))
         })
         .collect();
+
     nodes.sort_by_key(|(minor, _)| *minor);
 
     nodes.into_iter().map(|(_, node)| node).collect()
@@ -74,6 +75,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("rusplay-va-nodes-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
+
         fs::create_dir_all(&directory).unwrap();
 
         directory

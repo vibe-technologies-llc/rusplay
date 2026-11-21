@@ -15,6 +15,7 @@ const LIMIT: u32 = 2048;
 
 fn config_limited(direction: ClipboardDirection, limit: u32) -> Config {
     let mut config = host_config();
+
     config.input.clipboard = direction;
     config.input.clipboard_max_bytes = limit;
 
@@ -47,11 +48,15 @@ fn streaming_with(
         session.without_audio().with_clipboard(opener)
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(1), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
+
     assert!(client.pump_until(TestClient::has_hello));
 
     (fixture, client, stream)
@@ -65,6 +70,7 @@ fn send_text(client: &mut TestClient, transfer: u32, text: &str) {
 
 fn wait_for(condition: impl Fn() -> bool) -> bool {
     let deadline = Instant::now() + WAIT;
+
     while !condition() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(2));
     }
@@ -97,6 +103,7 @@ fn text_from_the_client_lands_in_the_host_clipboard() {
         || clipboard.contents().as_deref() == Some(text.as_str())
     ));
     assert!(stream.clipboard().is_active());
+
     stream.stop().unwrap();
 }
 
@@ -107,6 +114,7 @@ fn text_copied_on_the_host_reaches_the_client_in_chunks_and_is_not_sent_twice() 
     let text = "wörds ".repeat(200);
 
     clipboard.copy(text.clone());
+
     let arrived =
         client.pump_until(|client| received_text(client).as_deref() == Some(text.as_str()));
     let chunks = client
@@ -117,6 +125,7 @@ fn text_copied_on_the_host_reaches_the_client_in_chunks_and_is_not_sent_twice() 
 
     assert!(arrived);
     assert_eq!(chunks, text.len().div_ceil(ClipboardChunk::MAX_DATA));
+
     stream.stop().unwrap();
 }
 
@@ -130,6 +139,7 @@ fn nothing_is_applied_when_the_direction_does_not_let_the_client_send() {
 
     assert_eq!(clipboard.contents(), None);
     assert_eq!(clipboard.writes(), 0);
+
     stream.stop().unwrap();
 }
 
@@ -143,6 +153,7 @@ fn nothing_is_read_from_the_host_when_the_direction_does_not_let_it_send() {
 
     assert!(received_text(&client).is_none());
     assert_eq!(clipboard.polls(), 0);
+
     stream.stop().unwrap();
 }
 
@@ -152,10 +163,12 @@ fn invalid_utf8_is_refused_and_counted_malformed() {
     let (_fixture, mut client, stream) = streaming(ClipboardDirection::Both, &clipboard);
 
     let chunk = ClipboardChunk::new(0, 0, 1, &[0xFF, 0xFE, b'a']).unwrap();
+
     client.send(ControlMessage::Clipboard(chunk));
 
     assert!(wait_for(|| stream.stats().malformed_datagrams >= 1));
     assert_eq!(clipboard.writes(), 0);
+
     stream.stop().unwrap();
 }
 
@@ -172,6 +185,7 @@ fn a_transfer_larger_than_the_limit_is_refused_without_buffering_it() {
 
     assert!(wait_for(|| stream.stats().malformed_datagrams >= 1));
     assert_eq!(clipboard.writes(), 0);
+
     stream.stop().unwrap();
 }
 
@@ -181,10 +195,13 @@ fn text_received_from_the_client_is_not_sent_back() {
     let (_fixture, mut client, stream) = streaming(ClipboardDirection::Both, &clipboard);
 
     send_text(&mut client, 0, "one way only");
+
     assert!(wait_for(|| clipboard.writes() == 1));
+
     client.pump(Duration::from_millis(300), |_| false);
 
     assert!(received_text(&client).is_none());
+
     stream.stop().unwrap();
 }
 
@@ -196,15 +213,19 @@ fn an_unavailable_backend_is_reported_and_the_session_streams_on() {
         session.without_audio().with_clipboard(opener)
     });
     let bitrate = Arc::new(AtomicU32::new(0));
+
     let serving = fixture.serve(Some(pin()), feed(40), fake_factory(&bitrate));
 
     let (mut client, _) = TestClient::pair(fixture.address);
+
     client.hello();
+
     let (_, stream) = serving.join().unwrap().unwrap();
     let streams = client.pump_until(|client| client.frames.len() >= 2);
 
     assert!(streams);
     assert!(matches!(stream.clipboard(), ClipboardState::Unavailable(_)));
+
     stream.stop().unwrap();
 }
 
@@ -212,14 +233,17 @@ fn an_unavailable_backend_is_reported_and_the_session_streams_on() {
 fn a_text_needing_more_chunks_than_the_control_window_still_arrives_whole() {
     let clipboard = MemoryClipboard::default();
     let config = config_limited(ClipboardDirection::HostToClient, 65_536);
+
     let (_fixture, mut client, stream) = streaming_with(config, &clipboard);
     let text = "0123456789abcdef".repeat(3_500);
 
     clipboard.copy(text.clone());
+
     let arrived =
         client.pump_until(|client| received_text(client).as_deref() == Some(text.as_str()));
 
     assert!(arrived);
     assert!(text.len().div_ceil(ClipboardChunk::MAX_DATA) > 64);
+
     stream.stop().unwrap();
 }

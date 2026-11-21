@@ -54,7 +54,7 @@ const TONE_STATE_WORDS: usize = 12;
 
 const MAX_NITS: f64 = HdrLevels::MAX_NITS as f64;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColorVolume {
     pub primaries: ColorPrimaries,
     pub transfer: TransferFunction,
@@ -143,7 +143,7 @@ impl Default for ColorVolume {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GamutMapping {
     pub mode: GamutMapMode,
     pub knee: f64,
@@ -170,7 +170,7 @@ impl Default for GamutMapping {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ColorMapSettings {
     pub source: ColorVolume,
     pub target: ColorVolume,
@@ -178,7 +178,7 @@ pub struct ColorMapSettings {
     pub gamut: GamutMapping,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum MappingPath {
     Matrix,
     Perceptual,
@@ -199,7 +199,7 @@ impl MappingPath {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToneStage {
     pub curve: ToneCurve,
     pub dynamic_peak: Option<DynamicPeak>,
@@ -217,7 +217,7 @@ impl ToneStage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ColorPlan {
     pub(crate) path: MappingPath,
     pub(crate) space: WorkingSpace,
@@ -273,6 +273,7 @@ impl ColorPlan {
             tone,
             gamut,
         } = settings;
+
         source.validate()?;
         target.validate()?;
         gamut.validate()?;
@@ -360,6 +361,7 @@ impl ColorPlan {
             source_chroma_limit: 0.0,
             boundary_lightness: 0.0,
         };
+
         plan.measure_boundary()?;
 
         Ok(plan)
@@ -401,12 +403,14 @@ impl ColorPlan {
                         peak * f64::from(row) / steps,
                         peak * f64::from(column) / steps,
                     );
+
                     let rgb = match face % 3 {
                         0 => [fixed, u, v],
                         1 => [u, fixed, v],
                         _ => [u, v, fixed],
                     };
                     let [_, a, b] = self.lab(rgb_to_work.apply(rgb));
+
                     widest = widest.max(a.hypot(b));
                 }
             }
@@ -443,6 +447,7 @@ impl ColorPlan {
 
     pub(crate) fn params_bytes(&self) -> Vec<u8> {
         let mut words = Vec::with_capacity(PARAMS_WORDS);
+
         for matrix in [
             self.source_to_target,
             self.source_to_work,
@@ -470,8 +475,10 @@ impl ColorPlan {
             float(self.pq_scale),
             float(self.gain),
         ]);
+
         let curve = self.tone.map(|stage| stage.curve);
         let dynamic = self.tone.and_then(|stage| stage.dynamic_peak);
+
         words.extend([
             float(self.source_white_nits),
             float(self.target_white_nits),
@@ -508,6 +515,7 @@ impl ColorPlan {
 
     fn tone_state_bytes(&self) -> Vec<u8> {
         let mut words = Vec::with_capacity(TONE_STATE_WORDS);
+
         words.extend(self.tone.map_or([0; 8], |stage| stage.curve.words()));
         words.extend([0, 0, 0, 0]);
 
@@ -746,6 +754,7 @@ impl ColorMapper {
         if settings == self.settings {
             return Ok(Reconfigured::Unchanged);
         }
+
         let plan = ColorPlan::new(&settings)?;
 
         self.buffers = MapperBuffers::new(&self.pipelines, device, &plan);

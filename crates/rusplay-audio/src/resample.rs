@@ -9,7 +9,7 @@ const CHUNK_INPUT_FRAMES: usize = 120;
 const OVERSAMPLING_FACTOR: usize = 128;
 const FIXED_RATIO_RELATIVE: f64 = 1.0;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct SincShape {
     length: usize,
     window: WindowFunction,
@@ -167,6 +167,7 @@ impl PcmResampler {
         loop {
             let frames_in = converter.resampler.input_frames_next();
             let samples_in = frames_in * self.channels;
+
             if converter.pending.len() < samples_in {
                 return Ok(());
             }
@@ -207,9 +208,11 @@ mod tests {
     fn tone(hz: u32, channels: usize, seconds: usize) -> Vec<f32> {
         let frames = hz as usize * seconds;
         let mut samples = Vec::with_capacity(frames * channels);
+
         for frame in 0..frames {
             let cycles = TONE_HZ * frame as f64 / f64::from(hz);
             let value = (TAU * cycles).sin() as f32 * 0.5;
+
             samples.extend(std::iter::repeat_n(value, channels));
         }
         samples
@@ -225,6 +228,7 @@ mod tests {
         let mut output = Vec::new();
 
         let chunk_samples = 333 * channels;
+
         for chunk in input.chunks(chunk_samples) {
             resampler.push(chunk, &mut output).unwrap();
         }
@@ -253,6 +257,7 @@ mod tests {
 
         let settled = &output[resampler.delay_frames() * channels * 2..];
         let seconds = (settled.len() / channels) as f64 / f64::from(OUTPUT_HZ);
+
         let measured_hz = rising_zero_crossings(settled, channels) as f64 / seconds;
 
         assert!(
@@ -284,6 +289,7 @@ mod tests {
 
         let expected = SECONDS * OUTPUT_HZ as usize * 2;
         let slack = (CHUNK_INPUT_FRAMES * 2 * 2) * 2;
+
         assert!(output.len() <= expected && output.len() + slack >= expected);
     }
 
@@ -291,15 +297,18 @@ mod tests {
     fn tone_residual_decibels(samples: &[f32], cycles_per_sample: f64) -> f64 {
         let basis = |index: usize| (TAU * cycles_per_sample * index as f64).sin_cos();
         let mut sums = [0.0; 5];
+
         for (index, sample) in samples.iter().enumerate() {
             let (sine, cosine) = basis(index);
             let value = f64::from(*sample);
+
             sums[0] += sine * sine;
             sums[1] += cosine * cosine;
             sums[2] += sine * cosine;
             sums[3] += value * sine;
             sums[4] += value * cosine;
         }
+
         let determinant = sums[0] * sums[1] - sums[2] * sums[2];
         let in_phase = (sums[3] * sums[1] - sums[4] * sums[2]) / determinant;
         let quadrature = (sums[4] * sums[0] - sums[3] * sums[2]) / determinant;
@@ -310,6 +319,7 @@ mod tests {
                 .enumerate()
                 .fold((0.0, 0.0), |(signal, residual), (index, sample)| {
                     let (sine, cosine) = basis(index);
+
                     let fitted = in_phase * sine + quadrature * cosine;
                     (
                         signal + fitted * fitted,
@@ -341,6 +351,7 @@ mod tests {
                 .copied()
                 .collect();
             let residual = tone_residual_decibels(&settled, TONE_HZ * speed / f64::from(OUTPUT_HZ));
+
             assert!(!resampler.is_passthrough());
             assert!((31..=32).contains(&resampler.delay_frames()));
             assert!(
@@ -365,6 +376,7 @@ mod tests {
         matching.push(&input, &mut output).unwrap();
 
         let slowest = input.len() as f64 / 1.005;
+
         assert!((output.len() as f64 - slowest).abs() < 200.0);
         assert!(passthrough.is_passthrough());
     }

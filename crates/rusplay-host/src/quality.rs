@@ -17,7 +17,7 @@ use rusplay_protocol::QualityUnavailableReason;
 
 const QUALITY_THREAD: &str = "rusplay-host-quality";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SampleKind {
     Luma,
     Picture,
@@ -37,7 +37,7 @@ pub(crate) struct PictureSample {
     pub reconstruction: Option<SamplePicture>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum QualityEvent {
     Report { frame: u32, score: QualityScore },
     Unavailable(QualityUnavailableReason),
@@ -47,7 +47,7 @@ pub(crate) trait QualitySink: Send + Sync {
     fn deliver(&self, event: QualityEvent);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct QualitySettings {
     pub interval: Option<Duration>,
     pub order: TemporalOrder,
@@ -117,11 +117,12 @@ fn work(queue: &Receiver<Job>, sink: &dyn QualitySink) {
             },
             Err(_) => QualityEvent::Unavailable(QualityUnavailableReason::MeasurementFailed),
         };
+
         sink.deliver(event);
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Refusal {
     None,
     HostDisabled,
@@ -168,6 +169,7 @@ impl QualitySampler {
             self.refuse(Refusal::HostDisabled);
             return None;
         };
+
         if self.refused != Refusal::None {
             return None;
         }
@@ -182,6 +184,7 @@ impl QualitySampler {
                 self.due = Some(now + interval);
                 return None;
             };
+
             self.worker = Some(worker);
         }
 
@@ -229,6 +232,7 @@ impl QualitySampler {
         let same_size = |earlier: &SamplePlane| {
             earlier.width() == luma.width() && earlier.height() == luma.height()
         };
+
         if !self.history.iter().all(same_size) {
             self.history.clear();
         }
@@ -250,6 +254,7 @@ impl QualitySampler {
             .history
             .iter()
             .all(|earlier| earlier.width() == luma.width() && earlier.height() == luma.height());
+
         if !history_fits {
             self.restart();
             return;
@@ -290,11 +295,13 @@ impl QualitySampler {
         }
 
         self.refused = refusal;
+
         let reason = match refusal {
             Refusal::None => return,
             Refusal::HostDisabled => QualityUnavailableReason::HostDisabled,
             Refusal::EncoderUnsupported => QualityUnavailableReason::EncoderUnsupported,
         };
+
         self.sink.deliver(QualityEvent::Unavailable(reason));
     }
 }

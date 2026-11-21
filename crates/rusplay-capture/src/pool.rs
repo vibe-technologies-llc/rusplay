@@ -5,7 +5,7 @@ use rusplay_core::ShmBytes;
 
 const RETAINED_BUFFERS: usize = 3;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ShmPool {
     idle: Arc<Mutex<Vec<Vec<u8>>>>,
 }
@@ -13,6 +13,7 @@ pub(crate) struct ShmPool {
 impl ShmPool {
     pub(crate) fn copy_of(&self, pixels: &[u8]) -> ShmBytes {
         let mut bytes = self.take(pixels.len());
+
         bytes.extend_from_slice(pixels);
 
         let idle = Arc::clone(&self.idle);
@@ -53,7 +54,9 @@ mod tests {
 
         let first = pool.copy_of(&[1; 64]);
         let address = first.as_ptr();
+
         drop(first);
+
         let second = pool.copy_of(&[2; 64]);
 
         assert_eq!(second.as_ptr(), address);
@@ -64,6 +67,7 @@ mod tests {
     #[test]
     fn a_buffer_too_small_for_the_new_frame_is_not_reused() {
         let pool = ShmPool::default();
+
         drop(pool.copy_of(&[1; 8]));
 
         let large = pool.copy_of(&[3; 256]);
@@ -80,6 +84,7 @@ mod tests {
         let held: Vec<_> = (0..RETAINED_BUFFERS + 2)
             .map(|_| pool.copy_of(&[0; 16]))
             .collect();
+
         drop(held);
 
         assert_eq!(pool.idle_count(), RETAINED_BUFFERS);

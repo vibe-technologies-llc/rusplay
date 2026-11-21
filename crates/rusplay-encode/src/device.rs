@@ -5,19 +5,19 @@ use crate::{Backend, EncodeError};
 pub const VAAPI_CODED_ALIGNMENT: u32 = 16;
 const UNPADDED: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum DeviceMemory {
     DmaBuf,
     OpaqueFd,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum DevicePlanes {
     SemiPlanar,
     Planar,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct DeviceInput {
     pub memory: DeviceMemory,
     pub planes: DevicePlanes,
@@ -176,6 +176,7 @@ mod tests {
         for format in formats() {
             let Some(input) = device_input(Backend::Vaapi, format) else {
                 assert_ne!(crate::vaapi::format::dma_buf_planes(format), 2);
+
                 continue;
             };
 
@@ -194,6 +195,7 @@ mod tests {
         for format in formats() {
             let Some(input) = device_input(Backend::Nvenc, format) else {
                 assert_eq!(crate::nvenc::layout::buffer_format(format), None);
+
                 continue;
             };
 

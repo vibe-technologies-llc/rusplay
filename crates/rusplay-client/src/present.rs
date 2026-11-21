@@ -38,7 +38,7 @@ const FRAME_VIEW_CAPACITY: usize = IMPORT_CACHE_ENTRIES;
 
 pub(crate) type SharedTarget = Arc<Mutex<Option<Resolution>>>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct PresentOptions {
     pub scaling: ScalingConfig,
     pub mapping: MappingOptions,
@@ -96,6 +96,7 @@ impl UnpackInput {
                 planes.release(&gpu.device, &mut encoder)?,
             ),
         };
+
         gpu.queue
             .submit(acquire.into_iter().chain([encoder.finish()]).chain(release));
         Ok(())
@@ -123,6 +124,7 @@ impl Scratch {
         while self.textures.len() < count {
             let texture = Arc::new(create_texture(device, "rusplay-client-scratch", resolution));
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
             self.textures.push(Image { texture, view });
         }
 
@@ -198,6 +200,7 @@ impl PresentStage {
             return Ok(());
         };
         let target = links.target.lock().unwrap_or(retained.source);
+
         if target == retained.presented {
             return Ok(());
         }
@@ -213,6 +216,7 @@ impl PresentStage {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("rusplay-client-retarget"),
         });
+
         if target == retained.source {
             encoder.copy_texture_to_texture(
                 retained.image.texture.as_image_copy(),
@@ -230,6 +234,7 @@ impl PresentStage {
                 target,
                 retained.sigmoid,
             );
+
             ensure_scaler(&self.pipelines, device, &mut self.scaler, settings)?.encode(
                 device,
                 &mut encoder,
@@ -253,10 +258,13 @@ impl PresentStage {
         links: &mut PresentLinks,
     ) -> Result<(), ClientError> {
         let source = video.decoded.resolution;
+
         self.gpu.check_extent(source)?;
+
         let decoded = FrameColor::of_stream(video.color, video.decoded.format);
         let display = links.sink.color_target().unwrap_or(self.options.display);
         let device = &self.gpu.device;
+
         let route = self.color.route(device, decoded, display)?;
 
         let (layout, input) = unpack_input(&mut self.importer, device, &video.decoded.buffer)?;
@@ -280,7 +288,9 @@ impl PresentStage {
         };
 
         let target = links.target.lock().unwrap_or(source);
+
         self.gpu.check_extent(target)?;
+
         let Some(output) = self.outputs.acquire(device, target) else {
             links.counters.frames_unpresented.increment();
             return Ok(());
@@ -295,6 +305,7 @@ impl PresentStage {
         let scratch = self
             .scratch
             .ensure(device, source, (passes - 1).min(SCRATCH_TEXTURES));
+
         let unscaled = scale
             .is_some()
             .then(|| scratch[(passes - 2) % SCRATCH_TEXTURES].clone());
@@ -334,6 +345,7 @@ impl PresentStage {
         if let Some(lease) = lease {
             rusplay_scale::release_after_submission(&self.gpu.queue, lease);
         }
+
         let submitted_at = Instant::now();
         let captured_at = record_presented(&links.counters, video.captured_micros, submitted_at);
         let retained = Retained {
@@ -387,6 +399,7 @@ fn record_presented(
     let latency = counters
         .clock
         .since_capture(captured_micros, submitted_at)?;
+
     counters.capture_to_present.record(latency);
 
     submitted_at.checked_sub(latency)
@@ -554,6 +567,7 @@ fn ensure_unpacker<'a>(
         }
         None => {
             let mut converter = RgbConverter::new(pipelines, device, settings)?;
+
             converter.set_frame_capacity(FRAME_VIEW_CAPACITY);
             Unpacker {
                 converter,
@@ -576,6 +590,7 @@ fn ensure_scaler<'a>(
         scaler
     } else {
         let mut scaler = Scaler::new(pipelines, device, settings)?;
+
         scaler.set_frame_capacity(FRAME_VIEW_CAPACITY);
         scaler
     };
@@ -622,6 +637,7 @@ fn upload_planes(
 ) -> Result<(), ClientError> {
     let layout = unpacker.converter.layout();
     let found = cpu.plane_count();
+
     if found != DECODED_PLANES || layout.planes.len() != DECODED_PLANES {
         return Err(ClientError::PlaneCountMismatch {
             found,
@@ -636,6 +652,7 @@ fn upload_planes(
     let upload = unpacker
         .upload
         .get_or_insert_with(|| unpacker.converter.create_frame(device));
+
     let Some(mut staging) = queue.write_buffer_with(upload.buffer(), 0, size) else {
         return Ok(());
     };
@@ -648,6 +665,7 @@ fn upload_planes(
         for row in 0..expected.height as usize {
             let source = &plane.data[row * plane.stride..row * plane.stride + row_bytes];
             let start = offset + row * stride;
+
             staging
                 .slice(start..start + row_bytes)
                 .copy_from_slice(source);
@@ -709,7 +727,9 @@ impl OutputPool {
         if self.images.len() < OUTPUT_TEXTURES {
             let texture = Arc::new(create_texture(device, "rusplay-client-output", resolution));
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
             let image = Image { texture, view };
+
             self.images.push(image.clone());
             return Some(image);
         }
@@ -747,7 +767,9 @@ mod siting_tests {
 
     fn settings_for(configured: ChromaSiting, signalled: Option<ChromaSiting>) -> ChromaSiting {
         let mut scaling = Config::default().scaling;
+
         scaling.chroma_siting = configured;
+
         let options = PresentOptions {
             scaling,
             mapping: MappingOptions::from(&Config::default().color),
@@ -841,10 +863,13 @@ mod tests {
 
         let mut frames = Vec::new();
         let mut cursor = IVF_HEADER_LEN;
+
         while cursor + IVF_FRAME_HEADER_LEN <= file.len() {
             let size = u32::from_le_bytes(file[cursor..cursor + 4].try_into().unwrap());
             let start = cursor + IVF_FRAME_HEADER_LEN;
+
             let end = start + usize::try_from(size).unwrap();
+
             frames.push(file[start..end].to_vec());
             cursor = end;
         }
@@ -856,6 +881,7 @@ mod tests {
         let tight_row = (width * RGBA16F_BYTES) as usize;
         let row_bytes =
             (width * RGBA16F_BYTES).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+
         let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rusplay-test-readback"),
             size: u64::from(row_bytes * height),
@@ -866,6 +892,7 @@ mod tests {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -891,6 +918,7 @@ mod tests {
             .flat_map(|row| &row[..tight_row])
             .copied()
             .collect();
+
         staging.unmap();
         bytes
     }
@@ -962,6 +990,7 @@ mod tests {
                 return;
             };
             let siting = picture.color.chroma_siting;
+
             let video = DecodedVideo {
                 decoded: picture,
                 number,
@@ -972,6 +1001,7 @@ mod tests {
                 received_at: Instant::now(),
                 decoded_at: Instant::now(),
             };
+
             self.stage.present(video, &mut self.links).unwrap();
         }
 
@@ -1015,6 +1045,7 @@ mod tests {
             .map(|line| {
                 let length: usize = line.split_whitespace().next().unwrap().parse().unwrap();
                 let packet = encoded[offset..offset + length].to_vec();
+
                 offset += length;
                 packet
             })
@@ -1059,9 +1090,11 @@ mod tests {
             return;
         };
         let vaapi_config = VaapiDecoderConfig::default();
+
         if !crate::hardware::device_present(&vaapi_config.device) {
             return;
         }
+
         let vaapi = VideoDecoderConfig::Vaapi(vaapi_config);
         let software = VideoDecoderConfig::Software(SoftwareDecoderConfig::default());
 
@@ -1090,9 +1123,11 @@ mod tests {
             return;
         };
         let direct_config = VaapiDecoderConfig::default();
+
         if !crate::hardware::device_present(&direct_config.device) {
             return;
         }
+
         let copied_config = VaapiDecoderConfig {
             copy_output: true,
             ..direct_config.clone()
@@ -1122,6 +1157,7 @@ mod tests {
                 for (number, packet) in (0..).zip(packets) {
                     imported.play(number, packet.clone());
                     uploaded.play(number, packet);
+
                     let left = imported.take_presented();
                     let right = uploaded.take_presented();
 
@@ -1140,6 +1176,7 @@ mod tests {
                 }
 
                 eprintln!("{clip}: {total} frames, {wrong_frames} differ");
+
                 assert_eq!(wrong_frames, 0, "{clip}");
             }
         }
@@ -1159,6 +1196,7 @@ mod tests {
                 .zip(motion_packets(clip))
                 .map(|(number, packet)| {
                     playback.play(number, packet);
+
                     let frames = playback.take_presented();
                     checksum(&read_texture(gpu, &frames[0].texture))
                 })
@@ -1181,6 +1219,7 @@ mod tests {
                 };
                 let picture = decoder.decode(&frame).unwrap().unwrap();
                 let siting = picture.color.chroma_siting;
+
                 let video = DecodedVideo {
                     decoded: picture,
                     number,
@@ -1191,6 +1230,7 @@ mod tests {
                     received_at: Instant::now(),
                     decoded_at: Instant::now(),
                 };
+
                 drop(slot.put(video).unwrap());
             }
         }
@@ -1203,9 +1243,11 @@ mod tests {
             return;
         };
         let direct_config = VaapiDecoderConfig::default();
+
         if !crate::hardware::device_present(&direct_config.device) {
             return;
         }
+
         let copied = VideoDecoderConfig::Vaapi(VaapiDecoderConfig {
             copy_output: true,
             ..direct_config.clone()
@@ -1233,6 +1275,7 @@ mod tests {
                 playback.stage.present(video, &mut playback.links).unwrap();
                 for frame in playback.take_presented() {
                     compared += 1;
+
                     let actual = checksum(&read_texture(&gpu, &frame.texture));
                     if actual != expected[frame.frame as usize] {
                         wrong += 1;
@@ -1245,6 +1288,7 @@ mod tests {
             feeder.join().unwrap();
 
             eprintln!("{clip}: {compared} frames through the slot, {wrong} differ");
+
             assert_eq!(wrong, 0, "{clip}");
         }
     }

@@ -11,7 +11,7 @@ use crate::{
 const FIXED_LEN: usize = 4 + 4 + 4 + 1 + 1 + 4 + 4 + 4;
 const MILLIHERTZ_PER_HERTZ: u32 = 1000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct DisplayVolume {
     pub primaries: ColorPrimaries,
     pub transfer: TransferFunction,
@@ -36,6 +36,7 @@ impl DisplayVolume {
 
         let white_units =
             u64::from(self.reference_white_nits) * u64::from(Luminance::UNITS_PER_NIT);
+
         if u64::from(self.black.units()) >= white_units {
             return Err(ProtocolError::DisplayBlackNotBelowWhite {
                 black_units: self.black.units(),
@@ -47,7 +48,7 @@ impl DisplayVolume {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct ClientDisplay {
     resolution: Resolution,
     refresh_millihertz: u32,
@@ -65,6 +66,7 @@ impl ClientDisplay {
         volume: DisplayVolume,
     ) -> Result<Self, ProtocolError> {
         let axis = 1..=StreamDescription::MAX_DIMENSION;
+
         if !axis.contains(&resolution.width) || !axis.contains(&resolution.height) {
             return Err(ProtocolError::DisplayResolutionOutOfRange {
                 width: resolution.width,
@@ -74,6 +76,7 @@ impl ClientDisplay {
         }
 
         let refresh = Self::MIN_REFRESH_MILLIHERTZ..=Self::MAX_REFRESH_MILLIHERTZ;
+
         if !refresh.contains(&refresh_millihertz) {
             return Err(ProtocolError::DisplayRefreshOutOfRange {
                 millihertz: refresh_millihertz,
@@ -191,6 +194,7 @@ mod tests {
 
     fn encode(display: &ClientDisplay) -> Vec<u8> {
         let mut out = Vec::new();
+
         display.write(&mut out);
         out
     }
@@ -298,6 +302,7 @@ mod tests {
     fn the_volume_is_range_checked() {
         let with = |change: fn(&mut DisplayVolume)| {
             let mut volume = DisplayVolume::srgb();
+
             change(&mut volume);
             ClientDisplay::new(Resolution::new(1920, 1080), 60_000, volume)
         };
@@ -324,16 +329,27 @@ mod tests {
         let good = encode(&display(DisplayVolume::srgb()));
 
         let mut zero_width = good.clone();
+
         zero_width[0..4].copy_from_slice(&0_u32.to_be_bytes());
+
         let mut huge_refresh = good.clone();
+
         huge_refresh[8..12].copy_from_slice(&u32::MAX.to_be_bytes());
+
         let mut unknown_primaries = good.clone();
+
         unknown_primaries[12] = 0xFE;
+
         let mut unknown_transfer = good.clone();
+
         unknown_transfer[13] = 0xFE;
+
         let mut white_zero = good.clone();
+
         white_zero[14..18].copy_from_slice(&0_u32.to_be_bytes());
+
         let mut black_huge = good.clone();
+
         black_huge[22..26].copy_from_slice(&u32::MAX.to_be_bytes());
 
         assert!(matches!(
@@ -368,6 +384,7 @@ mod tests {
         let packet = ControlPacket::Message { id: 5, message };
 
         let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
         let len = message.encode(&mut buf).unwrap();
 
         assert_eq!(len, message.encoded_len());
@@ -384,6 +401,7 @@ mod tests {
     fn the_control_message_refuses_trailing_bytes_and_every_truncation() {
         let message = ControlMessage::Display(display(DisplayVolume::srgb()));
         let mut buf = [0; ControlMessage::MAX_ENCODED_LEN + 1];
+
         let len = message.encode(&mut buf).unwrap();
 
         assert_eq!(
@@ -402,7 +420,9 @@ mod tests {
     fn the_control_message_range_checks_a_hostile_size() {
         let message = ControlMessage::Display(display(DisplayVolume::srgb()));
         let mut buf = [0; ControlMessage::MAX_ENCODED_LEN];
+
         let len = message.encode(&mut buf).unwrap();
+
         buf[1..5].copy_from_slice(&u32::MAX.to_be_bytes());
         buf[5..9].copy_from_slice(&u32::MAX.to_be_bytes());
 

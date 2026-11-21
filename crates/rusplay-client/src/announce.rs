@@ -149,6 +149,7 @@ mod tests {
     #[test]
     fn a_volume_outside_the_protocol_is_clamped_into_it() {
         let mut volume = hdr_volume();
+
         volume.reference_white_nits = f64::NAN;
         volume.peak_nits = 1e9;
         volume.black_nits = 5000.0;
@@ -165,6 +166,7 @@ mod tests {
     #[test]
     fn the_default_display_follows_the_client_config() {
         let mut config = Config::default();
+
         config.video.resolution = Some(Resolution::new(2560, 1440));
         config.video.frame_rate = rusplay_config::FrameRateChoice::Fixed(FrameRate::integer(144));
 

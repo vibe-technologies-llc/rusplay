@@ -72,15 +72,17 @@ fn pq_decode_slope(code: f64) -> f64 {
     let power = clamped.powf(1.0 / PQ_M2);
     let numerator = power - PQ_C1;
     let denominator = PQ_C2 - PQ_C3 * power;
+
     if numerator <= 0.0 || code >= 1.0 {
         return 0.0;
     }
+
     let decoded = (numerator / denominator).powf(1.0 / PQ_M1);
 
     decoded * (PQ_C2 - PQ_C3 * PQ_C1) * power / (PQ_M1 * PQ_M2 * numerator * denominator * clamped)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RaySample {
     value: [f64; 3],
     slope: [f64; 3],
@@ -97,6 +99,7 @@ impl Ray<'_> {
     fn sample(&self, chroma: f64) -> RaySample {
         let plan = self.plan;
         let shaped = [0, 1, 2].map(|axis| self.origin[axis] + chroma * self.direction[axis]);
+
         let lms = shaped.map(|code| match plan.space {
             WorkingSpace::Ictcp => {
                 signed(code, |code| pq_to_nits(code.min(1.0)) / MAX_NITS) / plan.pq_scale
@@ -170,6 +173,7 @@ fn share(previous: f64, excess: f64, level: f64) -> f64 {
         (level - previous) / (excess - previous)
     };
     let (low, high) = (level.min(1.0), excess.min(1.0));
+
     let soft = (high - low) * (1.0 - f64::midpoint(low, high)) / (excess - level);
 
     crossing * weight(level) + (1.0 - crossing) * soft
@@ -178,6 +182,7 @@ fn share(previous: f64, excess: f64, level: f64) -> f64 {
 fn hermite(near: RaySample, far: RaySample, width: f64, fraction: f64) -> [f64; 3] {
     let squared = fraction * fraction;
     let cubed = squared * fraction;
+
     let weights = [
         2.0 * cubed - 3.0 * squared + 1.0,
         (cubed - 2.0 * squared + fraction) * width,
@@ -232,6 +237,7 @@ fn soft_exit(ray: &Ray, bounds: &Bounds, grey: RaySample, breakpoints: &Breakpoi
         let end = breakpoints.at(step);
         let width = end - start;
         let far = ray.sample(end);
+
         if level <= 0.0 && hull_excess(bounds, near, far, width) <= 0.0 {
             total += width;
             previous = bounds.excess(far.value);
@@ -249,6 +255,7 @@ fn soft_exit(ray: &Ray, bounds: &Bounds, grey: RaySample, breakpoints: &Breakpoi
                     )
                 };
                 let excess = bounds.excess(rgb);
+
                 total += substep * share(previous, excess, level);
                 level = level.max(excess);
                 previous = excess;
@@ -278,6 +285,7 @@ pub(crate) fn chroma_boundary(
         direction: plan.lab_to_lms.apply([0.0, hue[0], hue[1]]),
     };
     let grey = ray.sample(0.0);
+
     if !inside(grey.value, peak) {
         return 0.0;
     }
@@ -293,6 +301,7 @@ pub(crate) fn chroma_boundary(
             .map(|value| BOUNDARY_UPPER_TOLERANCE * (peak - value).max(floor)),
     };
     let coarse_range = (BOUNDARY_REACH * bounds.reach(grey)).min(limit);
+
     let coarse = soft_exit(
         &ray,
         &bounds,
@@ -370,8 +379,10 @@ impl BoundaryNodes {
         let step = TAU / f64::from(BOUNDARY_TABLE_HUES) * BOUNDARY_HUE_SLOPE;
         let limits = [plan.target_chroma_limit, plan.source_chroma_limit];
         let mut node = self.exact(plan, column, row);
+
         for offset in 1..=reach {
             let cone = step * f64::from(offset);
+
             if (0..2).all(|limit| cone * limits[limit] >= node[limit]) {
                 break;
             }
@@ -380,6 +391,7 @@ impl BoundaryNodes {
                 (column + BOUNDARY_TABLE_HUES - offset) % BOUNDARY_TABLE_HUES,
             ] {
                 let exact = self.exact(plan, neighbour, row);
+
                 node = [0, 1].map(|limit| node[limit].min(exact[limit] + cone * limits[limit]));
             }
         }
@@ -396,18 +408,21 @@ pub(crate) fn boundary_limits(plan: &ColorPlan, lightness: f64, angle: f64) -> [
     let last_row = BOUNDARY_TABLE_LIGHTNESS - 1;
     let rows = (lightness / plan.boundary_lightness).clamp(0.0, 1.0) * f64::from(last_row);
     let columns = (angle / TAU).rem_euclid(1.0) * f64::from(BOUNDARY_TABLE_HUES);
+
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (row, column) = (
         (rows as u32).min(last_row - 1),
         (columns as u32).min(BOUNDARY_TABLE_HUES - 1),
     );
     let next = (column + 1) % BOUNDARY_TABLE_HUES;
+
     let (across, up) = (columns - f64::from(column), rows - f64::from(row));
     let mix = |from: [f64; 2], to: [f64; 2], amount: f64| {
         [0, 1].map(|limit| from[limit] + amount * (to[limit] - from[limit]))
     };
     let nodes = boundary_nodes(plan);
     let mut nodes = nodes.borrow_mut();
+
     let low = mix(
         nodes.eroded(plan, column, row),
         nodes.eroded(plan, next, row),
@@ -429,6 +444,7 @@ pub(crate) fn compress_chroma(chroma: f64, target_limit: f64, source_limit: f64,
 
     let distance = chroma / target_limit;
     let limit = source_limit / target_limit;
+
     if limit <= MIN_COMPRESSION_LIMIT || distance <= knee {
         return distance.min(1.0) * target_limit;
     }
@@ -437,6 +453,7 @@ pub(crate) fn compress_chroma(chroma: f64, target_limit: f64, source_limit: f64,
     let scale =
         (limit - knee) / (((1.0 - knee) / (limit - knee)).powf(-power) - 1.0).powf(1.0 / power);
     let excess = (distance - knee) / scale;
+
     let compressed = knee + (distance - knee) / (1.0 + excess.powf(power)).powf(1.0 / power);
 
     compressed.min(1.0) * target_limit
@@ -449,16 +466,20 @@ fn clamp(rgb: [f64; 3], peak: f64) -> [f64; 3] {
 fn perceptual(plan: &ColorPlan, work: [f64; 3]) -> [f64; 3] {
     let peak = plan.target_peak;
     let [lightness, a, b] = xyz_to_lab(plan, work);
+
     let chroma = a.hypot(b);
+
     if chroma < ACHROMATIC_CHROMA {
         return clamp(plan.work_to_target.apply(work), peak);
     }
 
     let hue = [a / chroma, b / chroma];
     let [target_limit, source_limit] = boundary_limits(plan, lightness, b.atan2(a));
+
     if chroma <= plan.knee * target_limit {
         return clamp(plan.work_to_target.apply(work), peak);
     }
+
     let mapped = compress_chroma(chroma, target_limit, source_limit, plan.knee);
 
     clamp(
@@ -477,6 +498,7 @@ fn desaturate(plan: &ColorPlan, rgb: [f64; 3]) -> [f64; 3] {
         .map(|(weight, value)| weight * value)
         .sum::<f64>()
         .clamp(0.0, peak);
+
     let amount = rgb.iter().fold(1.0_f64, |amount, &value| {
         if value < 0.0 {
             amount.min(grey / (grey - value))
@@ -513,6 +535,7 @@ pub(crate) fn tone_map(plan: &ColorPlan, curve: &ToneCurve, rgb: [f64; 3]) -> [f
 
     let intensity = itp[0];
     let mapped = curve.map_pq(intensity.max(0.0));
+
     let ratio = if intensity > 0.0 && mapped > 0.0 {
         (mapped / intensity).min(intensity / mapped)
     } else {
@@ -540,7 +563,7 @@ pub(crate) fn tone_intensity(plan: &ColorPlan, rgb: [f64; 3], white_nits: f64) -
         .apply(lms.map(|value| signed(value, pq_from_nits)))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PeakState {
     pub smoothed_peak_pq: f64,
     pub previous_average_pq: f64,
@@ -549,12 +572,14 @@ pub(crate) struct PeakState {
 
 pub(crate) fn histogram(plan: &ColorPlan, pixels: &[[f32; 4]]) -> Vec<u32> {
     let mut bins = vec![0_u32; HISTOGRAM_BINS as usize];
+
     for pixel in pixels {
         let brightest = pixel[..3].iter().copied().fold(0.0_f32, f32::max);
         let code = pq_from_nits(f64::from(brightest) * plan.source_white_nits);
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let bin = ((code * f64::from(HISTOGRAM_BINS)) as u32).min(HISTOGRAM_BINS - 1);
+
         bins[bin as usize] += 1;
     }
     bins
@@ -567,10 +592,12 @@ pub(crate) fn detect_peak(
 ) -> (PeakState, ToneCurve) {
     let dynamic = stage.dynamic_peak.unwrap_or_default();
     let total: u32 = bins.iter().sum();
+
     let wanted = dynamic.percentile / 100.0 * f64::from(total);
     let bin_count = f64::from(HISTOGRAM_BINS);
 
     let mut cumulative = 0;
+
     let peak_bin = bins
         .iter()
         .position(|count| {
@@ -587,6 +614,7 @@ pub(crate) fn detect_peak(
     let frame_peak = (peak_bin + 1) as f64 / bin_count;
     let average = weighted / f64::from(total) / bin_count;
     let level = |code: f64| pq_to_nits(code).max(MIN_AVERAGE_NITS);
+
     let change = (10.0 * (level(average) / level(previous.previous_average_pq)).log10()).abs();
     let smoothed = if previous.frames > 0 && change <= dynamic.scene_threshold_db {
         previous.smoothed_peak_pq
@@ -597,6 +625,7 @@ pub(crate) fn detect_peak(
 
     let static_peak = stage.curve.source_peak_nits;
     let target_peak = stage.curve.target_peak_nits;
+
     let curve = ToneCurve {
         source_peak_nits: pq_to_nits(smoothed).min(static_peak).max(target_peak),
         ..stage.curve

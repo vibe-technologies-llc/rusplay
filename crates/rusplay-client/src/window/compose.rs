@@ -18,7 +18,7 @@ const HLG_GAMMA_PER_DECADE: f64 = 0.42;
 const HLG_REFERENCE_PEAK_NITS: f64 = 1000.0;
 const NOISE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Placement {
     pub origin: [i32; 2],
     pub size: [u32; 2],
@@ -136,6 +136,7 @@ impl Composer {
             )
         });
         let bytes = params_bytes(placements, &self.encoding);
+
         if self.last_params != bytes {
             queue.write_buffer(&self.params, 0, &bytes);
             self.last_params = bytes;
@@ -143,6 +144,7 @@ impl Composer {
 
         let cursor_view = cursor.map_or(&self.no_cursor, |(view, _)| view);
         let overlay_view = overlay.map_or(&self.no_overlay, |(view, _)| view);
+
         let key = [picture.clone(), cursor_view.clone(), overlay_view.clone()];
         let group = if let Some((_, group)) = self.groups.iter().find(|(views, _)| *views == key) {
             group.clone()
@@ -173,6 +175,7 @@ impl Composer {
                     },
                 ],
             });
+
             if self.groups.len() >= 16 {
                 self.groups.remove(0);
             }
@@ -197,6 +200,7 @@ impl Composer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
@@ -213,6 +217,7 @@ impl Composer {
             .position(|(existing, _)| *existing == format);
         let index = existing.unwrap_or_else(|| {
             let pipeline = self.create_pipeline(device, format);
+
             self.pipelines.push((format, pipeline));
             self.pipelines.len() - 1
         });
@@ -356,6 +361,7 @@ fn push_rows(words: &mut Vec<u32>, matrix: Matrix3) {
 fn encoding_words(encoding: &DisplayEncoding) -> [u32; ENCODING_WORDS] {
     let target = encoding.target.primaries;
     let mut words = Vec::with_capacity(ENCODING_WORDS);
+
     words.extend([0; 4]);
     push_rows(
         &mut words,
@@ -375,6 +381,7 @@ fn encoding_words(encoding: &DisplayEncoding) -> [u32; ENCODING_WORDS] {
     let steps = encoding
         .dither
         .map_or(1, |dither| (1u32 << dither.bits) - 1);
+
     words.extend([
         float(signal_scale(encoding.signal)),
         float(hlg_exponent(hlg_peak)),
@@ -393,6 +400,7 @@ fn encoding_words(encoding: &DisplayEncoding) -> [u32; ENCODING_WORDS] {
     ]);
 
     let mut fixed = [0; ENCODING_WORDS];
+
     fixed.copy_from_slice(&words);
     fixed
 }

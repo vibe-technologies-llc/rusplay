@@ -1,6 +1,6 @@
 use crate::{ProtocolError, StreamKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct FecHeader {
     pub protects: StreamKind,
     pub first_fragment: u16,
@@ -81,6 +81,7 @@ mod tests {
     #[test]
     fn fec_header_round_trips_with_payload() {
         let mut buf = vec![0; FecHeader::SIZE];
+
         sample().write(&mut buf).unwrap();
         buf.extend_from_slice(&[9, 8, 7]);
 
@@ -112,8 +113,11 @@ mod tests {
     #[test]
     fn parity_index_beyond_parity_count_is_rejected() {
         let mut header = sample();
+
         header.parity_index = header.parity_shards;
+
         let mut buf = [0; FecHeader::SIZE];
+
         header.write(&mut buf).unwrap();
 
         assert!(matches!(
@@ -125,8 +129,11 @@ mod tests {
     #[test]
     fn zero_data_shards_are_rejected() {
         let mut header = sample();
+
         header.data_shards = 0;
+
         let mut buf = [0; FecHeader::SIZE];
+
         header.write(&mut buf).unwrap();
 
         assert!(matches!(
@@ -138,6 +145,7 @@ mod tests {
     #[test]
     fn unknown_protected_stream_is_rejected() {
         let mut buf = [0; FecHeader::SIZE];
+
         sample().write(&mut buf).unwrap();
         buf[0] = 0xEE;
 
@@ -150,6 +158,7 @@ mod tests {
     #[test]
     fn every_prefix_of_a_parity_payload_is_rejected_or_parses() {
         let mut payload = vec![0; FecHeader::SIZE];
+
         sample().write(&mut payload).unwrap();
         payload.extend_from_slice(&[9, 8, 7]);
 

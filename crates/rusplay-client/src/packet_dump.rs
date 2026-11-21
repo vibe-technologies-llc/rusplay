@@ -33,15 +33,19 @@ impl PacketDump {
 
     fn open(root: &Path) -> io::Result<Self> {
         fs::create_dir_all(root)?;
+
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let directory = root.join(format!("{}-{stamp}", std::process::id()));
+
         fs::create_dir(&directory)?;
+
         let mut video = BufWriter::new(File::create(directory.join("stream.hevc"))?);
         let mut index = BufWriter::new(File::create(directory.join("stream.index"))?);
         let (queue, packets) = mpsc::sync_channel::<(Vec<u8>, String)>(8);
+
         thread::Builder::new()
             .name("rusplay-packet-dump".into())
             .spawn(move || {
@@ -73,12 +77,15 @@ impl PacketDump {
             return;
         }
         self.started = true;
+
         let length = video.frame.data.len();
+
         if length > self.remaining {
             self.remaining = 0;
             eprintln!("HEVC capture reached its size limit");
             return;
         }
+
         let record = format!(
             "{length} {} {} {} {:?}",
             video.number, video.frame.keyframe, video.captured_micros, video.stream
@@ -141,14 +148,21 @@ mod tests {
             started: false,
         };
         let counters = crate::stats::Counters::default();
+
         dump.record(&packet(false), &counters);
+
         assert!(received.try_recv().is_err());
+
         dump.record(&packet(true), &counters);
+
         let (bytes, record) = received.try_recv().unwrap();
+
         assert_eq!(bytes, [1, 2, 3]);
         assert!(record.starts_with("3 7 true 0 "));
         assert!(record.contains("stats="));
+
         dump.record(&packet(false), &counters);
+
         assert_eq!(dump.remaining, 0);
         assert!(received.try_recv().is_err());
     }
@@ -161,7 +175,9 @@ mod tests {
             remaining: LIMIT,
             started: false,
         };
+
         dump.record(&packet(true), &crate::stats::Counters::default());
+
         assert_eq!(dump.remaining, 0);
     }
 }

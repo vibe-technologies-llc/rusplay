@@ -10,7 +10,7 @@ use crate::{CpuFrame, CpuPlane, frame::PlaneStorage, nvdec::format::StreamFormat
 const PLANES: usize = 3;
 const SAMPLE_BITS: u32 = 16;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PlaneShape {
     pub offset: usize,
     pub stride: usize,
@@ -28,7 +28,7 @@ impl PlaneShape {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct HostLayout {
     pub planes: [PlaneShape; PLANES],
     pub bytes_per_sample: usize,
@@ -39,6 +39,7 @@ pub(super) struct HostLayout {
 impl HostLayout {
     pub(super) fn of(format: &StreamFormat) -> Self {
         let Resolution { width, height } = format.display;
+
         let (chroma_width, chroma_height) = match format.pixel_format.chroma {
             ChromaSubsampling::Yuv420 => (width.div_ceil(2), height.div_ceil(2)),
             ChromaSubsampling::Yuv422 => (width.div_ceil(2), height),
@@ -51,6 +52,7 @@ impl HostLayout {
         };
 
         let mut offset = 0;
+
         let planes = [
             (width, height),
             (chroma_width, chroma_height),
@@ -64,6 +66,7 @@ impl HostLayout {
                 width,
                 height,
             };
+
             offset += plane.len();
             plane
         });
@@ -93,6 +96,7 @@ pub(super) fn deinterleave(
 
     for ((pair, u), v) in pairs.zip(us).zip(vs) {
         let (first, second) = pair.split_at(bytes_per_sample);
+
         u.copy_from_slice(first);
         v.copy_from_slice(second);
     }
@@ -272,9 +276,11 @@ mod tests {
     #[test]
     fn msb_aligned_samples_move_to_the_low_bits() {
         let mut ten = Vec::new();
+
         for value in [0_u16, 64 << 6, 1023 << 6] {
             ten.extend_from_slice(&value.to_le_bytes());
         }
+
         let mut twelve = (4095_u16 << 4).to_le_bytes().to_vec();
 
         shift_to_low_bits(&mut ten, 6);
@@ -302,7 +308,9 @@ mod tests {
                 )
             })
             .collect();
+
         drop(frame);
+
         let reused = pool.take(layout.size);
 
         assert_eq!(

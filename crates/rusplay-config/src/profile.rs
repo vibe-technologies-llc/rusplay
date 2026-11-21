@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Config, ConfigError, PointerMode, PresentMode, VideoDecoderConfig};
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HostProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,6 +62,7 @@ impl HostProfile {
 
     pub fn apply(&self, base: &Config) -> Result<Config, ConfigError> {
         let mut merged = base.clone();
+
         self.overlay(&mut merged);
         merged.validate()?;
 
@@ -146,9 +147,11 @@ mod tests {
     #[test]
     fn unset_fields_follow_the_global_config() {
         let mut base = Config::default();
+
         base.video.present_mode = PresentMode::Immediate;
         base.input.keyboard = false;
         base.audio.opus.bitrate_kbps += 1;
+
         let profile = HostProfile {
             pointer: Some(false),
             ..HostProfile::default()

@@ -14,7 +14,7 @@ const GLYPH_SIZE: f32 = 10.0;
 const GLYPH_STROKE: f32 = 1.5;
 const RESTORE_OFFSET: f32 = 3.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame {
     Server,
     Floating,
@@ -57,11 +57,13 @@ pub fn corner_radius() -> Pixels {
 
 pub fn frame(window: &mut Window, body: Stateful<Div>) -> AnyElement {
     let frame = Frame::of(window);
+
     if !frame.is_client() {
         return body.size_full().into_any_element();
     }
 
     window.set_client_inset(px(RESIZE_INSET));
+
     let tiling = frame.tiling();
     let inset = px(RESIZE_INSET);
     let radius = corner_radius();
@@ -110,10 +112,12 @@ fn resize_cursor_layer() -> impl IntoElement {
         |_, hitbox, window, _| {
             let size = window.window_bounds().get_bounds().size;
             let tiling = Frame::of(window).tiling();
+
             let Some(edge) = resize_edge(window.mouse_position(), px(RESIZE_INSET), size, tiling)
             else {
                 return;
             };
+
             window.set_cursor_style(resize_cursor(edge), &hitbox);
         },
     )
@@ -261,6 +265,7 @@ fn close_glyph() -> impl IntoElement {
         |_, _, _| {},
         |bounds, (), window, _| {
             let mut cross = PathBuilder::stroke(px(GLYPH_STROKE));
+
             cross.move_to(bounds.origin);
             cross.line_to(bounds.bottom_right());
             cross.move_to(bounds.top_right());

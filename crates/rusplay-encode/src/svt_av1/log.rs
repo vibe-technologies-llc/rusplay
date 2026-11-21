@@ -66,7 +66,9 @@ unsafe extern "C" fn forward(
     }
 
     let mut buffer: [c_char; MESSAGE_CAPACITY] = [0; MESSAGE_CAPACITY];
+
     let written = unsafe { vsnprintf(buffer.as_mut_ptr(), buffer.len(), format, arguments) };
+
     if written < 0 {
         return;
     }

@@ -28,6 +28,7 @@ fn records(name: &str) -> Vec<Record> {
     text.lines()
         .map(|line| {
             let fields: Vec<_> = line.split_whitespace().collect();
+
             assert_eq!(fields.len(), 4);
             (
                 fields[0].parse().unwrap(),
@@ -49,6 +50,7 @@ fn rusplay_hevc_matches_software_reference() {
         copy_output: true,
         ..VaapiDecoderConfig::default()
     };
+
     if !hardware::device_present(&config.device) {
         return;
     }
@@ -56,10 +58,12 @@ fn rusplay_hevc_matches_software_reference() {
     for (name, depth) in CASES {
         let encoded = common::fixture(&format!("{name}.hevc"));
         let records = records(name);
+
         assert_eq!(
             records.iter().map(|(length, _)| length).sum::<usize>(),
             encoded.len()
         );
+
         let mut decoder = match VaapiDecoder::new(Codec::Hevc, &config) {
             Ok(decoder) => decoder,
             Err(error @ DecodeError::CodecUnsupported { .. }) => {
@@ -69,6 +73,7 @@ fn rusplay_hevc_matches_software_reference() {
             Err(error) => panic!("opening HEVC: {error}"),
         };
         let mut offset = 0;
+
         for (index, (size, expected)) in records.iter().enumerate() {
             let packet = EncodedFrame {
                 codec: Codec::Hevc,
@@ -76,7 +81,9 @@ fn rusplay_hevc_matches_software_reference() {
                 keyframe: index == 0,
                 data: encoded[offset..offset + size].to_vec().into(),
             };
+
             offset += size;
+
             let output = match decoder.decode(&packet) {
                 Ok(Some(frame)) => frame,
                 Err(
@@ -98,6 +105,7 @@ fn rusplay_hevc_matches_software_reference() {
             for (plane, expected) in expected.iter().enumerate() {
                 let pixels = cpu.plane(plane).unwrap();
                 let row_bytes = pixels.width as usize * usize::from(pixels.bytes_per_sample);
+
                 let actual = hash(
                     pixels
                         .data
@@ -118,6 +126,7 @@ fn rusplay_hevc_matches_software_reference() {
                 records.len()
             );
         }
+
         assert!(decoder.flush().unwrap().is_empty());
     }
 }
@@ -125,12 +134,15 @@ fn rusplay_hevc_matches_software_reference() {
 #[test]
 fn ffmpeg_vaapi_hevc_matches_software_reference() {
     let config = VaapiDecoderConfig::default();
+
     if !hardware::device_present(&config.device) {
         return;
     }
+
     let available = Command::new("ffmpeg")
         .args(["-hide_banner", "-hwaccels"])
         .output();
+
     if !available.is_ok_and(|output| {
         String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -149,6 +161,7 @@ fn ffmpeg_vaapi_hevc_matches_software_reference() {
         } else {
             ("hwdownload,format=p010le", "yuv420p10le", 2)
         };
+
         let output = Command::new("ffmpeg")
             .args([
                 "-hide_banner",
@@ -195,6 +208,7 @@ fn ffmpeg_vaapi_hevc_matches_software_reference() {
             expected.len() * frame_bytes,
             "ffmpeg {name}"
         );
+
         for (index, (frame, (_, checksums))) in output
             .stdout
             .chunks_exact(frame_bytes)

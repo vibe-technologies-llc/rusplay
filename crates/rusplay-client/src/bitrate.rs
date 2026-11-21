@@ -8,7 +8,7 @@ const HOLD_WINDOW_FRACTION: u32 = 4;
 const PERCENT: u64 = 100;
 const UNSTEERED_CEILING_KBPS: u32 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BitrateSettings {
     pub accepted_kbps: u32,
     pub floor_kbps: u32,
@@ -29,7 +29,7 @@ impl BitrateSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BitrateController {
     settings: BitrateSettings,
     host_ceiling_kbps: u32,
@@ -49,6 +49,7 @@ impl BitrateController {
         if host_ceiling_kbps == UNSTEERED_CEILING_KBPS {
             return None;
         }
+
         let ceiling_kbps = settings.accepted_kbps.min(host_ceiling_kbps);
 
         Some(Self {
@@ -76,6 +77,7 @@ impl BitrateController {
         let holding = self
             .last_decrease
             .is_some_and(|last| now.saturating_duration_since(last) < self.hold(rtt));
+
         if holding {
             return None;
         }
@@ -84,6 +86,7 @@ impl BitrateController {
         let reduced = u32::try_from(u64::from(self.target_kbps) - cut)
             .unwrap_or(self.target_kbps)
             .max(self.floor_kbps);
+
         self.last_decrease = Some(now);
 
         self.change_to(reduced)
@@ -91,11 +94,13 @@ impl BitrateController {
 
     pub(crate) fn poll(&mut self, now: Instant, rtt: Option<Duration>) -> Option<u32> {
         let due = self.next_deadline(rtt)?;
+
         if now < due {
             return None;
         }
 
         self.clean_since = now;
+
         let raised = self
             .target_kbps
             .saturating_add(self.settings.step_kbps)
@@ -128,7 +133,7 @@ impl BitrateController {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HintOutbox {
     pending_kbps: Option<u32>,
     in_flight: Option<u32>,
@@ -166,7 +171,7 @@ impl HintOutbox {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BitrateSteering {
     settings: BitrateSettings,
     host_ceiling_kbps: Option<u32>,
@@ -190,6 +195,7 @@ impl BitrateSteering {
         }
 
         let rebased = self.host_ceiling_kbps.replace(kbps).is_some();
+
         self.controller = BitrateController::start(self.settings, kbps, now);
 
         let hint = self.controller.and_then(|controller| {
@@ -394,6 +400,7 @@ mod tests {
         let rtt = Some(200 * MS);
 
         controller.congestion(start, rtt);
+
         let held = controller.congestion(start + 300 * MS, rtt);
         let released = controller.congestion(start + 400 * MS, rtt);
 
@@ -432,6 +439,7 @@ mod tests {
     fn a_clean_window_raises_the_target_by_one_step() {
         let start = Instant::now();
         let mut controller = controller(start);
+
         controller.congestion(start, None);
 
         let early = controller.poll(start + 999 * MS, None);
@@ -449,9 +457,11 @@ mod tests {
     fn loss_restarts_the_clean_window_even_while_holding() {
         let start = Instant::now();
         let mut controller = controller(start);
+
         controller.congestion(start, None);
 
         controller.congestion(start + 200 * MS, None);
+
         let reset = controller.poll(start + 1_000 * MS, None);
         let raised = controller.poll(start + 1_200 * MS, None);
 
@@ -463,6 +473,7 @@ mod tests {
     fn the_increase_never_passes_the_ceiling() {
         let start = Instant::now();
         let mut controller = controller(start);
+
         controller.congestion(start, None);
 
         let hints: Vec<Option<u32>> = (1..=6)
@@ -497,6 +508,7 @@ mod tests {
         let start = Instant::now();
         let mut controller = controller(start);
         let rtt = Some(250 * MS);
+
         controller.congestion(start, rtt);
 
         let deadline = controller.next_deadline(rtt);
@@ -538,14 +550,21 @@ mod tests {
         let mut outbox = HintOutbox::default();
 
         outbox.queue(60_000);
+
         let first = outbox.ready();
+
         outbox.sent(7);
         outbox.queue(45_000);
         outbox.queue(33_750);
+
         let blocked = outbox.ready();
+
         outbox.acked(6);
+
         let still_blocked = outbox.ready();
+
         outbox.acked(7);
+
         let next = outbox.ready();
 
         assert_eq!(first, Some(60_000));
@@ -573,10 +592,14 @@ mod tests {
         let mut steering = BitrateSteering::new(accepting(80_000));
 
         steering.host_ceiling(150_000, start);
+
         let initial = steering.ready();
+
         steering.sent(0);
         steering.congestion(start + MS, None);
+
         let waiting = steering.ready();
+
         steering.acked(0);
 
         assert_eq!(initial, Some(80_000));
@@ -591,7 +614,9 @@ mod tests {
         let mut steering = BitrateSteering::new(accepting(80_000));
 
         steering.host_ceiling(40_000, start);
+
         let initial = steering.ready();
+
         steering.congestion(start + MS, None);
 
         assert_eq!(initial, None);
@@ -603,6 +628,7 @@ mod tests {
     fn a_repeated_host_ceiling_keeps_the_controller_and_its_target() {
         let start = Instant::now();
         let mut steering = BitrateSteering::new(accepting(80_000));
+
         steering.host_ceiling(40_000, start);
         steering.congestion(start, None);
         steering.sent(0);
@@ -618,14 +644,19 @@ mod tests {
     fn a_different_host_ceiling_rebases_the_controller_and_hints_its_target() {
         let start = Instant::now();
         let mut steering = BitrateSteering::new(accepting(80_000));
+
         steering.host_ceiling(40_000, start);
         steering.congestion(start, None);
         steering.sent(0);
 
         steering.host_ceiling(60_000, start + MS);
+
         let behind_the_cut = steering.ready();
+
         steering.acked(0);
+
         let rebased = steering.ready();
+
         steering.sent(1);
         steering.acked(1);
         steering.host_ceiling(150_000, start + 2 * MS);
@@ -640,6 +671,7 @@ mod tests {
     fn a_host_ceiling_of_zero_turns_steering_off_and_withdraws_the_pending_hint() {
         let start = Instant::now();
         let mut steering = BitrateSteering::new(accepting(80_000));
+
         steering.host_ceiling(150_000, start);
         steering.sent(0);
         steering.congestion(start, None);
@@ -658,6 +690,7 @@ mod tests {
     fn an_undeliverable_steering_hint_is_sent_again_at_the_current_target() {
         let start = Instant::now();
         let mut steering = BitrateSteering::new(accepting(80_000));
+
         steering.host_ceiling(150_000, start);
         steering.sent(4);
 
@@ -669,6 +702,7 @@ mod tests {
     #[test]
     fn an_undeliverable_hint_is_replaced_by_the_current_target() {
         let mut outbox = HintOutbox::default();
+
         outbox.queue(60_000);
         outbox.sent(3);
 

@@ -7,7 +7,7 @@ const MAX_TILE_WIDTH: u32 = 4096;
 const MAX_TILE_AREA: u32 = 4096 * 2304;
 const SUPERBLOCK_SIZE_EXTRA_SHIFT: u32 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TileLayout {
     pub(super) cols: u32,
     pub(super) rows: u32,
@@ -33,6 +33,7 @@ pub(super) fn tile_info(
     let sb_size = shift + SUPERBLOCK_SIZE_EXTRA_SHIFT;
     let max_tile_width_sb = MAX_TILE_WIDTH >> sb_size;
     let max_tile_area_sb = MAX_TILE_AREA >> (2 * sb_size);
+
     let min_log2_tile_cols = tile_log2(max_tile_width_sb, sb_cols);
     let max_log2_tile_cols = tile_log2(1, sb_cols.min(MAX_TILE_COLS));
     let max_log2_tile_rows = tile_log2(1, sb_rows.min(MAX_TILE_ROWS));
@@ -77,9 +78,11 @@ pub(super) fn tile_info(
     }
 
     let mut size_bytes = 0;
+
     if cols_log2 > 0 || rows_log2 > 0 {
         let tile = r.bits(cols_log2 + rows_log2)?;
         let tiles = cols * rows;
+
         if tile >= tiles {
             return Err(Av1SyntaxError::ContextUpdateTileOutOfRange { tile, tiles });
         }
@@ -97,6 +100,7 @@ pub(super) fn tile_info(
 
 fn increments(r: &mut BitReader<'_>, minimum: u32, maximum: u32) -> Result<u32, Av1SyntaxError> {
     let mut log2 = minimum;
+
     while log2 < maximum && r.bit()? {
         log2 += 1;
     }
@@ -118,7 +122,9 @@ fn explicit_sizes(
         if count == max_tiles {
             return Err(too_many(count + 1));
         }
+
         let size = r.non_symmetric((superblocks - start).min(max_tile_sb))? + 1;
+
         largest = largest.max(size);
         start += size;
         count += 1;
@@ -129,6 +135,7 @@ fn explicit_sizes(
 
 fn tile_log2(block: u32, target: u32) -> u32 {
     let mut log2 = 0;
+
     while u64::from(block) << log2 < u64::from(target) {
         log2 += 1;
     }
@@ -147,6 +154,7 @@ pub(super) fn tile_group(
     } else {
         (0, tiles - 1)
     };
+
     r.byte_align();
 
     if start != expected || end < start || end >= tiles {
@@ -161,6 +169,7 @@ pub(super) fn tile_group(
     for tile in start..end {
         let size = r.little_endian(layout.size_bytes)? + 1;
         let remaining = r.remaining_bytes();
+
         if size > remaining {
             return Err(Av1SyntaxError::TileSizePastData {
                 tile,

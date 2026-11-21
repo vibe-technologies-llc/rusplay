@@ -28,7 +28,7 @@ rusplay-scale.path = "crates/rusplay-scale"
 rusplay-va.path = "crates/rusplay-va"
 
 ash = { version = "0.38.0", default-features = false }
-ashpd = { version = "0.14.1", default-features = false }
+ashpd = { version = "0.14.2", default-features = false }
 bindgen = { version = "0.73.2", default-features = false, features = ["runtime"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false }
 claxon = "0.4.3"
@@ -71,7 +71,7 @@ subtle = { version = "2.6.1", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false }
-toml = { version = "1.2.1", default-features = false }
+toml = { version = "1.2.2", default-features = false }
 unicode-segmentation = "1.13.3"
 wayland-backend = { version = "0.3.17", default-features = false }
 wayland-client = { version = "0.31.15", default-features = false }
@@ -83,7 +83,7 @@ wgpu = {
     rev = "3b3506ea31154edc04de64debda0e780cba2639c",
     default-features = false
 }
-zbus = { version = "6.3.0", default-features = false }
+zbus = { version = "6.5.0", default-features = false }
 zeroize = { version = "1.9.2", default-features = false }
 
 [patch.crates-io]

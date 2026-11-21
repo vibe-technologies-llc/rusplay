@@ -1,6 +1,6 @@
 use crate::{GamepadEvent, InputEvent, TouchEvent};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct EventCoalescer {
     pending: Vec<InputEvent>,
 }
@@ -145,6 +145,7 @@ mod tests {
 
     fn drained(coalescer: &mut EventCoalescer) -> Vec<InputEvent> {
         let mut out = Vec::new();
+
         coalescer.drain_into(&mut out);
         out
     }

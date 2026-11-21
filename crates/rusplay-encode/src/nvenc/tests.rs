@@ -91,6 +91,7 @@ fn encode_frames(
 fn h264_types(data: &[u8]) -> Vec<H264NaluType> {
     let mut cursor = Cursor::new(data);
     let mut types = Vec::new();
+
     while let Ok(nalu) = H264Nalu::next(&mut cursor) {
         types.push(nalu.header.type_);
     }
@@ -100,6 +101,7 @@ fn h264_types(data: &[u8]) -> Vec<H264NaluType> {
 fn hevc_types(data: &[u8]) -> Vec<H265NaluType> {
     let mut cursor = Cursor::new(data);
     let mut types = Vec::new();
+
     while let Ok(nalu) = H265Nalu::next(&mut cursor) {
         types.push(nalu.header.type_);
     }
@@ -168,6 +170,7 @@ fn the_system_driver_either_answers_or_names_what_is_missing() {
 fn bad_parameters_and_colours_fail_before_the_driver_loads() {
     let mut config = video(Codec::H264, yuv420(BitDepth::Eight));
     let mut nvenc = NvencConfig::default();
+
     nvenc.params.insert("aq-strength".into(), "99".into());
 
     let Err(error) = NvencEncoder::new_with(&config, &nvenc, ChromaSiting::default(), MISSING)
@@ -231,17 +234,21 @@ fn streams_start_on_a_keyframe_and_answer_requests() {
 
     for codec in found.codecs() {
         let format = yuv420(BitDepth::Eight);
+
         if !found.supports(codec, format) {
             continue;
         }
+
         let mut encoder = crate::open(&video(codec, format)).unwrap();
 
         let mut frames = encode_frames(encoder.as_mut(), format, 4);
+
         encoder.request_keyframe();
         encoder.set_bitrate(BITRATE_KBPS / 2).unwrap();
         frames.extend(encode_frames(encoder.as_mut(), format, 3));
 
         let flags: Vec<bool> = frames.iter().map(|frame| frame.keyframe).collect();
+
         assert_eq!(
             flags,
             [true, false, false, false, true, false, false],
@@ -269,20 +276,24 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
         (Codec::Av1, BitDepth::Ten),
     ] {
         let format = yuv420(depth);
+
         if !found.supports(codec, format) {
             continue;
         }
+
         let config = VideoConfig {
             color,
             ..video(codec, format)
         };
         let mut encoder = crate::open(&config).unwrap();
+
         let packets = encode_frames(encoder.as_mut(), format, 3);
 
         match VaapiDecoder::new(codec, &VaapiDecoderConfig::default()) {
             Ok(mut decoder) => {
                 for packet in &packets {
                     let output = decoder.decode(packet).unwrap().unwrap();
+
                     assert_eq!(output.color, expected, "{codec} through vaapi");
                 }
             }
@@ -295,6 +306,7 @@ fn colour_description_and_hdr_metadata_reach_the_decoder() {
             .unwrap();
             for packet in &packets {
                 let output = decoder.decode(packet).unwrap().unwrap();
+
                 assert_eq!(output.color, expected, "av1 through rav1d");
                 assert_eq!(output.resolution, RESOLUTION);
             }
@@ -360,6 +372,7 @@ fn unspecified_resolution_follows_the_first_frame() {
 fn opaque_frame(format: PixelFormat, resolution: Resolution, size: u64) -> Frame {
     let pitch = (resolution.width * 2).next_multiple_of(256);
     let plane_bytes = pitch * resolution.height;
+
     let planes = (0..layout::Layout::of(format).planes())
         .map(|index| Plane {
             offset: u32::try_from(index).unwrap() * plane_bytes,
@@ -439,11 +452,13 @@ fn opaque_fd_frames_of_another_format_are_refused() {
     let mut frame = opaque_frame(yuv420(BitDepth::Ten), RESOLUTION, 4 << 20);
 
     let wrong = import_request(&frame, format).unwrap_err();
+
     frame.format = layout::dma_buf_fourcc(format);
     frame.buffer = FrameBuffer::Shm {
         data: Vec::new().into(),
         stride: RESOLUTION.width,
     };
+
     let shm = import_request(&frame, format).unwrap_err();
 
     assert!(matches!(

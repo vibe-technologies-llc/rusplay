@@ -2,7 +2,7 @@ use rusplay_core::{Codec, Resolution};
 
 use crate::{BitstreamUnit, DecodeError};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct CropOffsets {
     pub(super) left: u64,
     pub(super) right: u64,

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     Video,
     Audio,
@@ -33,7 +33,7 @@ impl Section {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Flag,
     Integer { min: i64, max: i64 },
@@ -48,13 +48,13 @@ pub enum Kind {
     Pairs,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Condition {
     pub path: &'static str,
     pub any_of: &'static [&'static str],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Field {
     pub section: Section,
     pub audience: Audience,
@@ -299,7 +299,7 @@ impl Field {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Audience {
     Shared,
     Host,

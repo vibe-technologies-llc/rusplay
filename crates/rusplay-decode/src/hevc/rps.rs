@@ -3,13 +3,13 @@ use super::{bits::Bits, stop::Stop};
 const MAX_DELTA_POC_MINUS1: u32 = 32767;
 const MAX_REFERENCED_DELTA_POCS: usize = 63;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct ShortTermSet {
     pub(super) negative: Vec<Picture>,
     pub(super) positive: Vec<Picture>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Picture {
     delta_poc: i32,
     pub(super) used: bool,
@@ -52,12 +52,15 @@ pub(super) fn scan_short_term_set(
 fn explicit(bits: &mut Bits, max_dec_pic_buffering_minus1: u8) -> Result<ShortTermSet, Stop> {
     let maximum = u32::from(max_dec_pic_buffering_minus1);
     let negative = bits.unsigned_max(maximum)?;
+
     let positive = bits.unsigned_max(maximum - negative)?;
 
     let mut set = ShortTermSet::default();
     let mut delta_poc = 0_i32;
+
     for _ in 0..negative {
         let step = bits.unsigned_max(MAX_DELTA_POC_MINUS1)?;
+
         delta_poc = delta_poc.wrapping_sub(i32::try_from(step).unwrap_or(0) + 1);
         set.negative.push(Picture {
             delta_poc,
@@ -66,8 +69,10 @@ fn explicit(bits: &mut Bits, max_dec_pic_buffering_minus1: u8) -> Result<ShortTe
     }
 
     let mut delta_poc = 0_i32;
+
     for _ in 0..positive {
         let step = bits.unsigned_max(MAX_DELTA_POC_MINUS1)?;
+
         delta_poc = delta_poc.wrapping_add(i32::try_from(step).unwrap_or(0) + 1);
         set.positive.push(Picture {
             delta_poc,
@@ -86,6 +91,7 @@ fn predict(bits: &mut Bits, sets: &Sets, index: usize) -> Result<ShortTermSet, S
     };
     let negative_sign = bits.bit()?;
     let magnitude = i32::try_from(bits.unsigned_max(MAX_DELTA_POC_MINUS1)?).unwrap_or(0) + 1;
+
     let delta_rps = if negative_sign { -magnitude } else { magnitude };
 
     let reference_index = index - (delta_idx_minus1 as usize + 1);
@@ -93,6 +99,7 @@ fn predict(bits: &mut Bits, sets: &Sets, index: usize) -> Result<ShortTermSet, S
         .existing
         .get(reference_index)
         .ok_or(Stop::ParserRejects)?;
+
     if reference.delta_pocs() > MAX_REFERENCED_DELTA_POCS {
         return Err(Stop::ShortTermSetSize);
     }
@@ -100,8 +107,10 @@ fn predict(bits: &mut Bits, sets: &Sets, index: usize) -> Result<ShortTermSet, S
     let last = reference.delta_pocs();
     let mut used = Vec::with_capacity(last + 1);
     let mut kept = Vec::with_capacity(last + 1);
+
     for _ in 0..=last {
         let flag = bits.bit()?;
+
         used.push(flag);
         kept.push(flag || bits.bit()?);
     }

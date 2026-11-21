@@ -10,7 +10,7 @@ const TAG_REJECTED: u8 = 4;
 
 const TAG_AND_ATTEMPT_LEN: usize = 1 + 4;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct PeerId(pub [u8; PeerId::LEN]);
 
 impl PeerId {
@@ -31,7 +31,7 @@ impl fmt::Display for PeerId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ReconnectRejection {
     UnknownPeer = 0,
@@ -52,7 +52,7 @@ impl TryFrom<u8> for ReconnectRejection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconnectMessage {
     Hello {
         attempt: u32,
@@ -112,6 +112,7 @@ impl ReconnectMessage {
             fragment_count: 1,
         };
         let mut datagram = Vec::with_capacity(Self::MAX_ENCODED_LEN);
+
         datagram.resize(PacketHeader::SIZE, 0);
         header.write(&mut datagram)?;
 
@@ -122,6 +123,7 @@ impl ReconnectMessage {
             Self::Accepted { .. } => TAG_ACCEPTED,
             Self::Rejected { .. } => TAG_REJECTED,
         };
+
         datagram.push(tag);
         datagram.extend_from_slice(&self.attempt().to_be_bytes());
 
@@ -233,6 +235,7 @@ struct Fields<'a>(&'a [u8]);
 impl Fields<'_> {
     fn take<const N: usize>(&mut self) -> [u8; N] {
         let (field, rest) = self.0.split_at(N);
+
         self.0 = rest;
         fixed(field)
     }
@@ -240,6 +243,7 @@ impl Fields<'_> {
 
 fn fixed<const N: usize>(bytes: &[u8]) -> [u8; N] {
     let mut out = [0; N];
+
     out.copy_from_slice(bytes);
     out
 }
@@ -343,6 +347,7 @@ mod tests {
     fn trailing_bytes_are_rejected() {
         for message in every_message() {
             let mut datagram = message.to_datagram().unwrap();
+
             datagram.push(0);
 
             assert_eq!(
@@ -355,15 +360,20 @@ mod tests {
     #[test]
     fn unknown_tag_and_rejection_are_rejected() {
         let mut datagram = every_message()[3].to_datagram().unwrap();
+
         datagram[PacketHeader::SIZE] = 99;
+
         assert_eq!(
             ReconnectMessage::from_datagram(&datagram),
             Err(ProtocolError::UnknownReconnectTag(99))
         );
 
         let mut rejected = every_message()[4].to_datagram().unwrap();
+
         let last = rejected.len() - 1;
+
         rejected[last] = 77;
+
         assert_eq!(
             ReconnectMessage::from_datagram(&rejected),
             Err(ProtocolError::UnknownReconnectRejection(77))

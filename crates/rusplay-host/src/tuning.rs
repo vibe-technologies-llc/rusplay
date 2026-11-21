@@ -5,7 +5,7 @@ use std::sync::{
 
 use rusplay_priority::{ThreadRole, ThreadTuning};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct TuningRefusals(Arc<AtomicU64>);
 
 impl TuningRefusals {

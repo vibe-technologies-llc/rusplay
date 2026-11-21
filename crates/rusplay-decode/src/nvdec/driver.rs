@@ -100,6 +100,7 @@ impl Context {
         let device = cuda.driver.device(index)?;
 
         let mut context: CuContext = ptr::null_mut();
+
         cuda_check(CudaCall::DevicePrimaryCtxRetain, unsafe {
             (cuda.primary_ctx_retain)(&raw mut context, device)
         })?;

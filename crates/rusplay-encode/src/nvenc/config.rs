@@ -21,7 +21,7 @@ const SEI_CONTENT_LIGHT: u32 = 144;
 const AV1_QINDEX_PER_QP: u32 = 5;
 const AV1_MAX_QINDEX: u32 = 255;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct Settings {
     pub codec: Codec,
     pub format: PixelFormat,
@@ -37,7 +37,7 @@ pub(super) struct Settings {
     pub params: NvencParams,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Features {
     pub intra_refresh: bool,
     pub temporal_aq: bool,
@@ -131,7 +131,7 @@ pub(super) const fn rate_control_mode(rate_control: RateControl) -> u32 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct RateValues {
     pub mode: u32,
     pub average_bits: u32,
@@ -150,11 +150,13 @@ impl Settings {
 
     pub(super) fn rate_values(&self) -> RateValues {
         let mode = rate_control_mode(self.rate_control);
+
         if let RateControl::ConstantQuality { qp } = self.rate_control {
             let qp = match self.codec {
                 Codec::Av1 => (u32::from(qp) * AV1_QINDEX_PER_QP).min(AV1_MAX_QINDEX),
                 Codec::H264 | Codec::Hevc => u32::from(qp),
             };
+
             return RateValues {
                 mode,
                 average_bits: 0,
@@ -232,11 +234,14 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
     config.frame_interval_p = 1;
 
     let rc = &mut config.rc_params;
+
     apply_rate(rc, settings.rate_values());
     rc.lookahead_depth = 0;
     rc_bits::ENABLE_LOOKAHEAD.set(&mut rc.flags, 0);
     rc_bits::ZERO_REORDER_DELAY.set(&mut rc.flags, 1);
+
     let params = &settings.params;
+
     if let Some(spatial) = params.spatial_aq {
         rc_bits::ENABLE_AQ.set(&mut rc.flags, u32::from(spatial));
     }
@@ -264,6 +269,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
     match settings.codec {
         Codec::H264 => {
             let h264 = unsafe { &mut config.codec.h264 };
+
             h264.idr_period = ffi::INFINITE_GOP_LENGTH;
             h264_bits::REPEAT_SPSPPS.set(&mut h264.flags, 1);
             h264_bits::OUTPUT_AUD.set(&mut h264.flags, 0);
@@ -279,6 +285,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
         }
         Codec::Hevc => {
             let hevc = unsafe { &mut config.codec.hevc };
+
             hevc.idr_period = ffi::INFINITE_GOP_LENGTH;
             hevc_bits::REPEAT_SPSPPS.set(&mut hevc.flags, 1);
             hevc_bits::OUTPUT_AUD.set(&mut hevc.flags, 0);
@@ -295,6 +302,7 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
         }
         Codec::Av1 => {
             let av1 = unsafe { &mut config.codec.av1 };
+
             av1.idr_period = ffi::INFINITE_GOP_LENGTH;
             av1_bits::REPEAT_SEQ_HDR.set(&mut av1.flags, 1);
             av1_bits::ENABLE_INTRA_REFRESH.set(&mut av1.flags, refresh_on);
@@ -306,7 +314,9 @@ pub(super) fn configure(config: &mut ffi::Config, settings: &Settings, features:
             av1.max_num_ref_frames_in_dpb = 1;
             av1.output_bit_depth = depth;
             av1.input_bit_depth = depth;
+
             let signalled = vui(color, settings.siting);
+
             av1.color_primaries = signalled.colour_primaries;
             av1.transfer_characteristics = signalled.transfer_characteristics;
             av1.matrix_coefficients = signalled.colour_matrix;
@@ -326,6 +336,7 @@ pub(super) fn initialize_params(
     config: &mut ffi::Config,
 ) -> ffi::InitializeParams {
     let mut params = ffi::InitializeParams::zeroed();
+
     params.version = ffi::INITIALIZE_PARAMS_VER;
     params.encode_guid = codec_guid(settings.codec);
     params.preset_guid = preset_guid(settings.preset);
@@ -349,7 +360,7 @@ pub(super) fn initialize_params(
     params
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Payload {
     pub kind: u32,
     pub bytes: Vec<u8>,
@@ -373,7 +384,7 @@ pub(super) fn sei_payloads(codec: Codec, hdr: &HdrLevels) -> Vec<Payload> {
     mastering.into_iter().chain(light).collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct NativeHdr {
     pub mastering: Option<ffi::MasteringDisplayInfo>,
     pub content_light: Option<ffi::ContentLightLevel>,
@@ -459,6 +470,7 @@ mod tests {
 
     fn configured(settings: &Settings, features: Features) -> ffi::Config {
         let mut config = ffi::Config::zeroed();
+
         configure(&mut config, settings, features);
         config
     }
@@ -569,6 +581,7 @@ mod tests {
     #[test]
     fn vbr_peaks_at_the_maximum_and_sizes_the_buffer_from_it() {
         let mut vbr = settings(Codec::Hevc, PixelFormat::default());
+
         vbr.rate_control = RateControl::Vbr {
             max_bitrate_kbps: 60_000,
         };
@@ -584,7 +597,9 @@ mod tests {
     #[test]
     fn constant_quality_sets_every_qp_and_scales_for_av1() {
         let mut cq = settings(Codec::H264, PixelFormat::default());
+
         cq.rate_control = RateControl::ConstantQuality { qp: 23 };
+
         let mut config = configured(&cq, Features::default());
 
         assert_eq!(config.rc_params.rate_control_mode, ffi::RC_CONSTQP);
@@ -621,6 +636,7 @@ mod tests {
     #[test]
     fn low_latency_structure_is_forced_over_the_preset() {
         let mut config = ffi::Config::zeroed();
+
         config.gop_length = 250;
         config.frame_interval_p = 3;
         config.rc_params.lookahead_depth = 16;
@@ -633,6 +649,7 @@ mod tests {
         );
 
         let hevc = unsafe { config.codec.hevc };
+
         assert_eq!(config.version, ffi::CONFIG_VER);
         assert_eq!(config.gop_length, ffi::INFINITE_GOP_LENGTH);
         assert_eq!(config.frame_interval_p, 1);
@@ -653,7 +670,9 @@ mod tests {
         assert_eq!(h264.intra_refresh_period, 61);
 
         let mut off = settings(Codec::H264, PixelFormat::default());
+
         off.params.intra_refresh_frames = Some(0);
+
         let config = configured(&off, ALL_FEATURES);
         let h264 = unsafe { config.codec.h264 };
 
@@ -719,7 +738,9 @@ mod tests {
     #[test]
     fn colour_description_lands_in_the_vui_and_av1_colour_config() {
         let mut hdr = settings(Codec::Hevc, pixel(ChromaSubsampling::Yuv420, BitDepth::Ten));
+
         hdr.color = hdr10_color();
+
         let hevc = unsafe { configured(&hdr, ALL_FEATURES).codec.hevc };
 
         assert_eq!(hevc.vui.video_signal_type_present_flag, 1);
@@ -731,6 +752,7 @@ mod tests {
 
         hdr.codec = Codec::Av1;
         hdr.color.range = ColorRange::Full;
+
         let av1 = unsafe { configured(&hdr, ALL_FEATURES).codec.av1 };
 
         assert_eq!(av1.color_primaries, 9);
@@ -765,6 +787,7 @@ mod tests {
             let h264 = configured(&sited(Codec::H264), ALL_FEATURES);
             let hevc = configured(&sited(Codec::Hevc), ALL_FEATURES);
             let av1 = configured(&sited(Codec::Av1), ALL_FEATURES);
+
             let vuis = unsafe { [h264.codec.h264.vui, hevc.codec.hevc.vui] };
 
             for vui in vuis {
@@ -772,6 +795,7 @@ mod tests {
                 assert_eq!(vui.chroma_sample_location_top, location);
                 assert_eq!(vui.chroma_sample_location_bot, location);
             }
+
             assert_eq!(unsafe { av1.codec.av1.chroma_sample_position }, position);
         }
     }
@@ -779,6 +803,7 @@ mod tests {
     #[test]
     fn params_reach_the_rate_control_and_initialisation() {
         let mut tuned = settings(Codec::Av1, PixelFormat::default());
+
         tuned.params = NvencParams {
             spatial_aq: Some(true),
             aq_strength: Some(9),
@@ -787,7 +812,9 @@ mod tests {
             split_encode: Some(SplitEncode::Disabled),
             ..NvencParams::default()
         };
+
         let mut config = configured(&tuned, ALL_FEATURES);
+
         let flags = config.rc_params.flags;
         let init = initialize_params(&tuned, Resolution::new(1920, 1080), &mut config);
 
@@ -805,8 +832,10 @@ mod tests {
     #[test]
     fn initialisation_is_synchronous_with_picture_type_decision() {
         let mut low = settings(Codec::Hevc, pixel(ChromaSubsampling::Yuv420, BitDepth::Ten));
+
         low.frame_rate = FrameRate::new(60_000, 1001);
         low.preset = NvencPreset::P3;
+
         let mut config = configured(&low, ALL_FEATURES);
         let resolution = Resolution::new(2560, 1440);
 
@@ -889,7 +918,9 @@ mod tests {
                 max_pic_average_light_level: 400,
             })
         );
+
         let av1_mastering = av1.mastering.unwrap();
+
         assert_eq!(av1_mastering.r.x, av1_units.red[0]);
         assert_eq!(av1_mastering.white_point.y, av1_units.white[1]);
         assert_eq!(av1_mastering.max_luma, 1000 << 8);
@@ -904,12 +935,17 @@ mod tests {
     #[test]
     fn native_hdr_output_is_enabled_only_for_metadata_present() {
         let mut hdr = settings(Codec::Hevc, pixel(ChromaSubsampling::Yuv420, BitDepth::Ten));
+
         hdr.color = hdr10_color();
 
         let hevc = unsafe { configured(&hdr, ALL_FEATURES).codec.hevc };
+
         hdr.codec = Codec::Av1;
+
         let av1 = unsafe { configured(&hdr, ALL_FEATURES).codec.av1 };
+
         hdr.color.hdr.content_light = None;
+
         let av1_without_light = unsafe { configured(&hdr, ALL_FEATURES).codec.av1 };
         let sdr = unsafe {
             configured(&settings(Codec::Hevc, PixelFormat::default()), ALL_FEATURES)

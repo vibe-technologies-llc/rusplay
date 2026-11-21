@@ -38,7 +38,7 @@ pub(super) const MEMORY_TYPE_HOST: c_int = 1;
 pub(super) const MEMORY_TYPE_DEVICE: c_int = 2;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ShortRect {
     pub left: c_short,
     pub top: c_short,
@@ -47,7 +47,7 @@ pub(super) struct ShortRect {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct IntRect {
     pub left: c_int,
     pub top: c_int,
@@ -56,7 +56,7 @@ pub(super) struct IntRect {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct DecodeCaps {
     pub codec: c_int,
     pub chroma_format: c_int,
@@ -79,7 +79,7 @@ pub(super) struct DecodeCaps {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct DecodeCreateInfo {
     pub width: c_ulong,
     pub height: c_ulong,
@@ -106,14 +106,14 @@ pub(super) struct DecodeCreateInfo {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FrameRate {
     pub numerator: c_uint,
     pub denominator: c_uint,
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct VideoFormat {
     pub codec: c_int,
     pub frame_rate: FrameRate,
@@ -137,7 +137,7 @@ pub(super) struct PicParams {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ParserDisplayInfo {
     pub picture_index: c_int,
     pub progressive_frame: c_int,

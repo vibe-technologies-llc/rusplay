@@ -19,7 +19,7 @@ use crate::{
 
 const BACKEND: Backend = Backend::Nvenc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LibraryNames {
     pub cuda: &'static str,
     pub nvenc: &'static str,
@@ -120,6 +120,7 @@ impl NvencApi {
             symbol(library, name, "NvEncodeAPICreateInstance")?;
 
         let mut supported = 0;
+
         nvenc(NvencCall::GetMaxSupportedVersion, unsafe {
             max_supported(&raw mut supported)
         })?;
@@ -132,6 +133,7 @@ impl NvencApi {
         }
 
         let mut list = ffi::FunctionList::zeroed();
+
         list.version = ffi::FUNCTION_LIST_VER;
         nvenc(NvencCall::CreateInstance, unsafe {
             create_instance(&raw mut list)
@@ -212,9 +214,11 @@ impl CudaContext {
         let device = api.driver.device(gpu_index)?;
 
         let mut context: ffi::CuContext = ptr::null_mut();
+
         cuda_check(CudaCall::CtxCreate, unsafe {
             (api.ctx_create)(&raw mut context, 0, device)
         })?;
+
         let created = Rc::new(Self {
             driver: Rc::clone(driver),
             context,
@@ -248,6 +252,7 @@ pub(super) struct Encoder {
 impl Encoder {
     pub(super) fn open(context: Rc<CudaContext>) -> Result<Rc<Self>, EncodeError> {
         let mut params = ffi::OpenEncodeSessionExParams::zeroed();
+
         params.version = ffi::OPEN_ENCODE_SESSION_EX_PARAMS_VER;
         params.device_type = ffi::DEVICE_TYPE_CUDA;
         params.device = context.context;
@@ -255,6 +260,7 @@ impl Encoder {
 
         let mut handle: ffi::EncoderPtr = ptr::null_mut();
         let api = &context.driver.nvenc;
+
         nvenc(NvencCall::OpenEncodeSessionEx, unsafe {
             (api.open_encode_session_ex)(&raw mut params, &raw mut handle)
         })?;
@@ -268,12 +274,14 @@ impl Encoder {
 
     pub(super) fn codecs(&self) -> Result<Vec<ffi::Guid>, EncodeError> {
         let mut count = 0;
+
         nvenc(NvencCall::GetEncodeGuids, unsafe {
             (self.api().get_encode_guid_count)(self.handle, &raw mut count)
         })?;
 
         let mut guids = vec![ffi::Guid::default(); count as usize];
         let mut written = 0;
+
         nvenc(NvencCall::GetEncodeGuids, unsafe {
             (self.api().get_encode_guids)(self.handle, guids.as_mut_ptr(), count, &raw mut written)
         })?;
@@ -284,12 +292,14 @@ impl Encoder {
 
     pub(super) fn input_formats(&self, codec: ffi::Guid) -> Result<Vec<u32>, EncodeError> {
         let mut count = 0;
+
         nvenc(NvencCall::GetInputFormats, unsafe {
             (self.api().get_input_format_count)(self.handle, codec, &raw mut count)
         })?;
 
         let mut formats = vec![0_u32; count as usize];
         let mut written = 0;
+
         nvenc(NvencCall::GetInputFormats, unsafe {
             (self.api().get_input_formats)(
                 self.handle,
@@ -306,10 +316,12 @@ impl Encoder {
 
     pub(super) fn caps(&self, codec: ffi::Guid, query: u32) -> Result<i32, EncodeError> {
         let mut params = ffi::CapsParam::zeroed();
+
         params.version = ffi::CAPS_PARAM_VER;
         params.caps_to_query = query;
 
         let mut value: c_int = 0;
+
         nvenc(NvencCall::GetEncodeCaps, unsafe {
             (self.api().get_encode_caps)(self.handle, codec, &raw mut params, &raw mut value)
         })?;
@@ -324,6 +336,7 @@ impl Encoder {
         tuning: u32,
     ) -> Result<ffi::Config, EncodeError> {
         let mut preset_config = Box::new(ffi::PresetConfig::zeroed());
+
         preset_config.version = ffi::PRESET_CONFIG_VER;
         preset_config.preset_cfg.version = ffi::CONFIG_VER;
 
@@ -365,6 +378,7 @@ impl Encoder {
 impl Drop for Encoder {
     fn drop(&mut self) {
         let _current = self.context.enter();
+
         unsafe { (self.api().destroy_encoder)(self.handle) };
     }
 }
@@ -382,6 +396,7 @@ impl InputBuffer {
         format: u32,
     ) -> Result<Self, EncodeError> {
         let mut params = ffi::CreateInputBuffer::zeroed();
+
         params.version = ffi::CREATE_INPUT_BUFFER_VER;
         params.width = resolution.width;
         params.height = resolution.height;
@@ -409,10 +424,12 @@ impl InputBuffer {
         fill: impl FnOnce(&mut [u8], usize),
     ) -> Result<u32, EncodeError> {
         let mut params = ffi::LockInputBuffer::zeroed();
+
         params.version = ffi::LOCK_INPUT_BUFFER_VER;
         params.input_buffer = self.buffer;
 
         let api = self.encoder.api();
+
         nvenc(NvencCall::LockInputBuffer, unsafe {
             (api.lock_input_buffer)(self.encoder.handle, &raw mut params)
         })?;
@@ -424,6 +441,7 @@ impl InputBuffer {
                 pitch as usize * rows,
             )
         };
+
         fill(data, pitch as usize);
         unsafe { (api.unlock_input_buffer)(self.encoder.handle, self.buffer) };
 
@@ -442,7 +460,7 @@ pub(super) struct Bitstream {
     buffer: *mut c_void,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Coded {
     pub data: Vec<u8>,
     pub picture_type: u32,
@@ -451,6 +469,7 @@ pub(super) struct Coded {
 impl Bitstream {
     pub(super) fn create(encoder: &Rc<Encoder>) -> Result<Self, EncodeError> {
         let mut params = ffi::CreateBitstreamBuffer::zeroed();
+
         params.version = ffi::CREATE_BITSTREAM_BUFFER_VER;
         params.memory_heap = ffi::MEMORY_HEAP_AUTOSELECT;
 
@@ -470,10 +489,12 @@ impl Bitstream {
 
     pub(super) fn read(&self, delimit: bool, buffer: Vec<u8>) -> Result<Coded, EncodeError> {
         let mut params = ffi::LockBitstream::zeroed();
+
         params.version = ffi::LOCK_BITSTREAM_VER;
         params.output_bitstream = self.buffer;
 
         let api = self.encoder.api();
+
         nvenc(NvencCall::LockBitstream, unsafe {
             (api.lock_bitstream)(self.encoder.handle, &raw mut params)
         })?;
@@ -485,8 +506,11 @@ impl Bitstream {
             )
         };
         let mut unit = AccessUnit::new(delimit && !bitstream.is_empty(), buffer);
+
         unit.push(bitstream);
+
         let data = unit.finish();
+
         unsafe { (api.unlock_bitstream)(self.encoder.handle, self.buffer) };
 
         Ok(Coded {
@@ -508,7 +532,7 @@ pub(super) struct ExternalBuffer {
     pointer: ffi::CuDevicePtr,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ExternalMemory {
     pub size: u64,
     pub dedicated: bool,
@@ -517,6 +541,7 @@ pub(super) struct ExternalMemory {
 impl ExternalMemory {
     pub(super) fn handle_desc(self, fd: RawFd) -> ffi::ExternalMemoryHandleDesc {
         let mut handle = ffi::ExternalMemoryHandleDesc::zeroed();
+
         handle.handle_type = ffi::CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
         handle.handle.fd = fd;
         handle.size = self.size;
@@ -540,21 +565,26 @@ impl ExternalBuffer {
         let handle = memory.handle_desc(raw);
 
         let mut memory: ffi::CuExternalMemory = ptr::null_mut();
+
         let imported = cuda_check(CudaCall::ImportExternalMemory, unsafe {
             (api.import_external_memory)(&raw mut memory, &raw const handle)
         });
+
         if let Err(error) = imported {
             drop(unsafe { OwnedFd::from_raw_fd(raw) });
             return Err(error.into());
         }
 
         let mut buffer = ffi::ExternalMemoryBufferDesc::zeroed();
+
         buffer.size = size;
 
         let mut pointer: ffi::CuDevicePtr = 0;
+
         let mapped = cuda_check(CudaCall::ExternalMemoryGetMappedBuffer, unsafe {
             (api.external_memory_get_mapped_buffer)(&raw mut pointer, memory, &raw const buffer)
         });
+
         if let Err(error) = mapped {
             unsafe { (api.destroy_external_memory)(memory) };
             return Err(error.into());
@@ -583,7 +613,7 @@ impl Drop for ExternalBuffer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DevicePlane {
     pub pointer: ffi::CuDevicePtr,
     pub resolution: Resolution,
@@ -605,6 +635,7 @@ pub(super) struct Mapped<'a> {
 impl Registration {
     pub(super) fn register(encoder: &Rc<Encoder>, plane: DevicePlane) -> Result<Self, EncodeError> {
         let mut params = ffi::RegisterResource::zeroed();
+
         params.version = ffi::REGISTER_RESOURCE_VER;
         params.resource_type = ffi::INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
         params.width = plane.resolution.width;
@@ -626,6 +657,7 @@ impl Registration {
 
     pub(super) fn map(&self) -> Result<Mapped<'_>, EncodeError> {
         let mut params = ffi::MapInputResource::zeroed();
+
         params.version = ffi::MAP_INPUT_RESOURCE_VER;
         params.registered_resource = self.resource;
 
@@ -644,6 +676,7 @@ impl Registration {
 impl Drop for Mapped<'_> {
     fn drop(&mut self) {
         let encoder = &self.registration.encoder;
+
         unsafe { (encoder.api().unmap_input_resource)(encoder.handle, self.input) };
     }
 }

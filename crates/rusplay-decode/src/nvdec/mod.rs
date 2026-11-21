@@ -96,7 +96,9 @@ impl VideoDecoder for NvdecDecoder {
         }
 
         self.color.read(&frame.data)?;
+
         let _current = self.context.make_current()?;
+
         self.parser.state().color = self.color.current();
 
         let mut packet = SourceDataPacket {
@@ -105,6 +107,7 @@ impl VideoDecoder for NvdecDecoder {
             payload: frame.data.as_ptr(),
             timestamp: i64::try_from(frame.timestamp.as_micros()).unwrap_or(i64::MAX),
         };
+
         self.parser.parse(&mut packet)?;
 
         self.parser.state().newest()
@@ -119,6 +122,7 @@ impl VideoDecoder for NvdecDecoder {
             payload: ptr::null(),
             timestamp: 0,
         };
+
         self.parser.parse(&mut packet)?;
 
         self.parser.state().all()
@@ -154,6 +158,7 @@ fn decoder_caps(
         bit_depth_minus8: c_uint::from(format.depth.bits() - 8),
         ..DecodeCaps::default()
     };
+
     check(CuvidCall::GetDecoderCaps, unsafe {
         (driver.cuvid.get_decoder_caps)(&raw mut caps)
     })?;
@@ -180,6 +185,7 @@ impl Parser {
             ready: Vec::new(),
             error: None,
         })));
+
         let mut parser = Self {
             driver,
             handle: ptr::null_mut(),
@@ -203,6 +209,7 @@ impl Parser {
             reserved2: [ptr::null_mut(); 5],
             ext_video_info: ptr::null_mut(),
         };
+
         check(CuvidCall::CreateVideoParser, unsafe {
             (parser.driver.cuvid.create_video_parser)(&raw mut parser.handle, &raw mut params)
         })?;
@@ -258,10 +265,12 @@ impl ParserState {
         }
 
         let earlier = self.download_pending()?;
+
         self.ready.extend(earlier);
         self.decoder = None;
 
         let caps = decoder_caps(self.context.driver(), self.codec, stream.pixel_format)?;
+
         stream.check(self.codec, &caps)?;
         self.decoder = Some(Decoder::create(&self.context, self.codec, stream)?);
 
@@ -296,6 +305,7 @@ impl ParserState {
             (Some(info), Some(decoder)) => Some(decoder.download(&info, &self.pool, self.color)?),
             _ => self.ready.pop(),
         };
+
         self.pending.clear();
         self.ready.clear();
 
@@ -305,6 +315,7 @@ impl ParserState {
     fn all(&mut self) -> Result<Vec<DecodedFrame>, DecodeError> {
         let later = self.download_pending()?;
         let mut frames = mem::take(&mut self.ready);
+
         frames.extend(later);
 
         Ok(frames)
@@ -369,6 +380,7 @@ impl Decoder {
     ) -> Result<Self, DecodeError> {
         let width = c_ulong::from(format.coded.width);
         let height = c_ulong::from(format.coded.height);
+
         let mut info = DecodeCreateInfo {
             width,
             height,
@@ -395,6 +407,7 @@ impl Decoder {
         };
 
         let mut handle: CuVideoDecoder = ptr::null_mut();
+
         check(CuvidCall::CreateDecoder, unsafe {
             (context.driver().cuvid.create_decoder)(&raw mut handle, &raw mut info)
         })?;
@@ -419,6 +432,7 @@ impl Decoder {
         let mut params = ProcParams::for_display(info);
         let mut device: CuDevicePtr = 0;
         let mut pitch: c_uint = 0;
+
         check(CuvidCall::MapVideoFrame, unsafe {
             (cuvid.map_video_frame)(
                 self.handle,
@@ -430,7 +444,9 @@ impl Decoder {
         })?;
 
         let mut buffer = pool.take(self.layout.size);
+
         let copied = self.copy_planes(device, pitch, &mut buffer);
+
         unsafe { (cuvid.unmap_video_frame)(self.handle, device) };
         copied?;
 
@@ -458,6 +474,7 @@ impl Decoder {
 
         let (luma_out, chroma_out) = output.split_at_mut(u.offset);
         let (u_out, v_out) = chroma_out.split_at_mut(v.offset - u.offset);
+
         self.copy(
             device,
             source_pitch,
@@ -469,7 +486,9 @@ impl Decoder {
 
         if self.format.surface.semi_planar() {
             let mut staging = mem::take(&mut self.staging);
+
             staging.resize(layout.interleaved_chroma_len(), 0);
+
             let copied = self.copy(
                 device + plane_stride,
                 source_pitch,
@@ -478,6 +497,7 @@ impl Decoder {
                 u.row_bytes(bytes) * 2,
                 u.height,
             );
+
             deinterleave(&staging, bytes, u_out, v_out);
             self.staging = staging;
             copied?;
@@ -535,6 +555,7 @@ impl Decoder {
 impl Drop for Decoder {
     fn drop(&mut self) {
         let _current = self.context.make_current();
+
         unsafe { (self.context.driver().cuvid.destroy_decoder)(self.handle) };
     }
 }

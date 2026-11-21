@@ -8,7 +8,7 @@ use rusplay_core::{BitDepth, CodecFormat, FormatPreference, FormatSet};
 
 use crate::HostError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NegotiatedFormat {
     pub configured: CodecFormat,
     pub chosen: CodecFormat,
@@ -20,7 +20,7 @@ impl NegotiatedFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StreamChoice {
     codec: CodecChoice,
     pixel_format: PixelFormatChoice,
@@ -96,6 +96,7 @@ impl Negotiation {
 
     pub(crate) fn wait_agreed(&self, timeout: Duration) -> Option<NegotiatedFormat> {
         let mut state = self.state.lock();
+
         if state.agreed.is_none() {
             self.agreed.wait_for(&mut state, timeout);
         }
@@ -241,6 +242,7 @@ mod tests {
             let negotiation = Arc::clone(&negotiation);
             thread::spawn(move || negotiation.wait_agreed(Duration::from_secs(5)))
         };
+
         negotiation.offer(FormatSet::ALL);
         negotiation.agree(agreed);
 

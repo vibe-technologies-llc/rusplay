@@ -8,7 +8,7 @@ const FLAG_BUSY: u8 = 1;
 const KNOWN_FLAGS: u8 = FLAG_BUSY;
 const ANNOUNCE_FIXED_LEN: usize = 4 + 2 + 1 + HostId::LEN + 1;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Default, Hash, PartialEq, Eq)]
 pub struct HostId(pub [u8; HostId::LEN]);
 
 impl HostId {
@@ -17,13 +17,16 @@ impl HostId {
 
     pub fn from_hex(text: &str) -> Option<Self> {
         let digits = text.as_bytes();
+
         if digits.len() != Self::LEN * 2 {
             return None;
         }
 
         let mut bytes = [0; Self::LEN];
+
         for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
             let pair = std::str::from_utf8(pair).ok()?;
+
             *byte = u8::from_str_radix(pair, 16).ok()?;
         }
 
@@ -49,7 +52,7 @@ impl fmt::Display for HostId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiscoveryMessage {
     Query {
         nonce: u32,
@@ -121,6 +124,7 @@ impl DiscoveryMessage {
             fragment_count: 1,
         };
         let mut datagram = vec![0; PacketHeader::SIZE];
+
         header.write(&mut datagram)?;
         datagram.extend_from_slice(&payload);
 
@@ -147,6 +151,7 @@ impl DiscoveryMessage {
         match tag {
             TAG_QUERY => {
                 let nonce = read_nonce(body)?;
+
                 expect_exact(body, 4)?;
                 Ok(Self::Query { nonce })
             }
@@ -166,7 +171,9 @@ impl DiscoveryMessage {
         let port = u16::from_be_bytes([fixed[0], fixed[1]]);
         let flags = fixed[2];
         let mut id = [0; HostId::LEN];
+
         id.copy_from_slice(&fixed[3..3 + HostId::LEN]);
+
         let name_len = usize::from(fixed[3 + HostId::LEN]);
 
         if flags & !KNOWN_FLAGS != 0 {
@@ -181,6 +188,7 @@ impl DiscoveryMessage {
         }
 
         expect_exact(body, ANNOUNCE_FIXED_LEN + name_len)?;
+
         let name = String::from_utf8(body[ANNOUNCE_FIXED_LEN..].to_vec())
             .map_err(|_| ProtocolError::InvalidDiscoveryName)?;
 
@@ -319,6 +327,7 @@ mod tests {
     #[test]
     fn unknown_announce_flag_bits_are_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
+
         datagram[FLAGS_AT] = 0x03;
 
         assert_eq!(
@@ -356,6 +365,7 @@ mod tests {
     #[test]
     fn trailing_bytes_are_rejected() {
         let mut datagram = announce("host").to_datagram().unwrap();
+
         datagram.push(0);
 
         assert_eq!(
@@ -367,7 +377,9 @@ mod tests {
     #[test]
     fn non_utf8_name_is_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
+
         let len = datagram.len();
+
         datagram[len - 1] = 0xFF;
 
         assert_eq!(
@@ -386,7 +398,9 @@ mod tests {
         }
 
         let mut datagram = announce("ab").to_datagram().unwrap();
+
         let len = datagram.len();
+
         datagram[len - 1] = 0x07;
 
         assert_eq!(
@@ -398,6 +412,7 @@ mod tests {
     #[test]
     fn announced_name_length_beyond_the_limit_is_rejected() {
         let mut datagram = announce("ab").to_datagram().unwrap();
+
         datagram[PacketHeader::SIZE + 1 + ANNOUNCE_FIXED_LEN - 1] = 200;
 
         assert!(matches!(
@@ -409,6 +424,7 @@ mod tests {
     #[test]
     fn unknown_tag_is_rejected() {
         let mut datagram = DiscoveryMessage::Query { nonce: 1 }.to_datagram().unwrap();
+
         datagram[PacketHeader::SIZE] = 9;
 
         assert_eq!(

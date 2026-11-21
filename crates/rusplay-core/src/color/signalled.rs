@@ -31,7 +31,7 @@ impl ChromaSiting {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct SignalledColor {
     pub primaries: Option<ColorPrimaries>,
     pub transfer: Option<TransferFunction>,
@@ -182,6 +182,7 @@ mod tests {
         for center in [1, 3, 5] {
             assert_eq!(siting(center), Some(ChromaSiting::Center));
         }
+
         assert_eq!(siting(6), None);
     }
 

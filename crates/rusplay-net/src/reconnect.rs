@@ -36,7 +36,7 @@ type Blind = [u8; ReconnectMessage::BLIND_LEN];
 type Cookie = [u8; ReconnectMessage::COOKIE_LEN];
 type Proof = [u8; ReconnectMessage::PROOF_LEN];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReconnectTiming {
     pub retransmit: Duration,
     pub timeout: Duration,
@@ -59,12 +59,14 @@ impl From<&NetworkConfig> for ReconnectTiming {
 
 fn random_nonce() -> Result<Nonce, NetError> {
     let mut nonce = [0; ReconnectMessage::NONCE_LEN];
+
     fill_random(&mut nonce)?;
     Ok(nonce)
 }
 
 fn random_attempt() -> Result<u32, NetError> {
     let mut bytes = [0; 4];
+
     fill_random(&mut bytes)?;
     Ok(u32::from_be_bytes(bytes))
 }
@@ -75,8 +77,11 @@ fn tags_match(a: &[u8; 32], b: &[u8; 32]) -> bool {
 
 fn keyed_hash(key: &[u8; 32], parts: &[&[u8]]) -> [u8; 32] {
     let mut block = [0; HMAC_BLOCK_LEN];
+
     block[..key.len()].copy_from_slice(key);
+
     let mut mac = Hmac::<Sha256>::new(&block.into());
+
     block.zeroize();
 
     for part in parts {
@@ -148,6 +153,7 @@ impl Schedule {
         let mut salt = Vec::with_capacity(
             PeerId::LEN + 4 + ReconnectMessage::NONCE_LEN + ReconnectMessage::COOKIE_LEN,
         );
+
         salt.extend_from_slice(&peer.0);
         salt.extend_from_slice(&attempt.to_be_bytes());
         salt.extend_from_slice(client_nonce);
@@ -156,6 +162,7 @@ impl Schedule {
         let hkdf = Hkdf::<Sha256>::new(Some(&salt), secret.as_bytes());
         let expand = |label: &[u8]| -> Result<[u8; KEY_LEN], NetError> {
             let mut out = [0; KEY_LEN];
+
             hkdf.expand(label, &mut out)
                 .map_err(NetError::ReconnectKeyDerivation)?;
             Ok(out)
@@ -214,6 +221,7 @@ impl ReconnectInitiator {
     pub fn new(record: &PeerRecord) -> Result<Self, NetError> {
         let attempt = random_attempt()?;
         let client_nonce = random_nonce()?;
+
         let blind = blind_for(record.secret(), attempt, &client_nonce);
         let hello = ReconnectMessage::Hello {
             attempt,
@@ -247,6 +255,7 @@ impl ReconnectInitiator {
 
     pub fn handle(&mut self, datagram: &[u8]) -> Result<ReconnectStep, NetError> {
         let message = ReconnectMessage::from_datagram(datagram)?;
+
         if message.attempt() != self.attempt {
             return Ok(ReconnectStep::Pending);
         }
@@ -355,6 +364,7 @@ impl fmt::Debug for ReconnectResponder {
 impl ReconnectResponder {
     pub fn new(timing: ReconnectTiming) -> Result<Self, NetError> {
         let mut key = CookieKey([0; COOKIE_KEY_LEN]);
+
         fill_random(&mut key.0)?;
 
         Ok(Self {
@@ -498,6 +508,7 @@ impl ReconnectResponder {
             .retain(|acceptance| acceptance.expires > now);
 
         let attempt = presented.attempt;
+
         if let Some(acceptance) = self.acceptances.iter().find(|acceptance| {
             acceptance.attempt == attempt
                 && acceptance.origin == from
@@ -523,11 +534,13 @@ impl ReconnectResponder {
             &presented.nonce,
             &presented.cookie,
         )?;
+
         if !tags_match(&schedule.client_proof, &presented.proof) {
             return rejection(attempt, ReconnectRejection::Authentication);
         }
 
         let accepted = ReconnectMessage::Accepted { attempt }.to_datagram()?;
+
         if self.acceptances.len() >= MAX_REMEMBERED_ACCEPTANCES {
             self.acceptances.pop_front();
         }
@@ -622,6 +635,7 @@ pub fn reconnect_as_host(
     loop {
         let now = Instant::now();
         let stop_at = linger_until.unwrap_or(deadline);
+
         if now >= stop_at {
             return accepted.ok_or(NetError::ReconnectTimeout);
         }
@@ -677,6 +691,7 @@ mod tests {
 
     fn store_with(directory: &tempfile::TempDir, name: &str, records: &[PeerRecord]) -> PeerStore {
         let mut store = PeerStore::open(directory.path().join(name)).unwrap();
+
         for record in records {
             store.remember(record.clone()).unwrap();
         }
@@ -726,6 +741,7 @@ mod tests {
         store: &PeerStore,
     ) -> Vec<u8> {
         let challenge = challenge_for(initiator, responder, store);
+
         assert!(matches!(
             initiator.handle(&challenge),
             Ok(ReconnectStep::Pending)
@@ -792,6 +808,7 @@ mod tests {
     fn known_peer_reconnects_with_working_session_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
@@ -799,7 +816,9 @@ mod tests {
         let (client, accepted) = handshake(&mut initiator, &mut responder, &store);
 
         assert_eq!(accepted.peer, laptop.id());
+
         assert_keys_interoperate(&client, &accepted.keys);
+
         assert!(initiator.outgoing().is_none());
     }
 
@@ -809,6 +828,7 @@ mod tests {
         let records: Vec<PeerRecord> = (1..=20)
             .map(|byte| record(&format!("peer {byte}"), byte))
             .collect();
+
         let store = store_with(&directory, "clients", &records);
         let mut initiator = ReconnectInitiator::new(&records[13]).unwrap();
         let mut responder = responder();
@@ -822,10 +842,12 @@ mod tests {
     fn every_reconnect_derives_fresh_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
 
         let sealed = |_: u8| {
             let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+
             let (client, _) = handshake(&mut initiator, &mut responder(), &store);
             seal_probe(&client)
         };
@@ -837,6 +859,7 @@ mod tests {
     fn both_nonces_feed_the_session_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
 
@@ -852,6 +875,7 @@ mod tests {
 
         let first = start(&ReconnectInitiator::new(&laptop).unwrap());
         let second = start(&ReconnectInitiator::new(&laptop).unwrap());
+
         let (
             Ok(ReconnectMessage::Hello {
                 nonce: first_nonce,
@@ -912,9 +936,12 @@ mod tests {
     fn peer_with_a_wrong_secret_never_authenticates() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut impostor = ReconnectInitiator::new(&laptop).unwrap();
+
         impostor.secret = secret(2);
+
         let mut responder = responder();
 
         let challenge = challenge_for(&impostor, &mut responder, &store);
@@ -934,7 +961,9 @@ mod tests {
         let mut real = ReconnectInitiator::new(&laptop).unwrap();
 
         let mut challenge = challenge_for(&real, &mut responder(), &fake_store);
+
         let last = challenge.len() - 1;
+
         challenge[last] ^= 1;
 
         assert!(matches!(
@@ -947,13 +976,17 @@ mod tests {
     fn tampered_client_proof_is_rejected_without_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
 
         let mut proof = challenged(&mut initiator, &mut responder, &store);
+
         let last = proof.len() - 1;
+
         proof[last] ^= 1;
+
         let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert_eq!(
@@ -967,15 +1000,20 @@ mod tests {
     fn a_forged_proof_does_not_spoil_the_genuine_attempt() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
+
         let genuine = challenged(&mut initiator, &mut responder, &store);
 
         let mut forged = genuine.clone();
+
         let last = forged.len() - 1;
+
         forged[last] ^= 0xFF;
         responder.handle(&forged, ORIGIN, &store).unwrap();
+
         let output = responder.handle(&genuine, ORIGIN, &store).unwrap();
 
         assert!(output.accepted.is_some());
@@ -985,13 +1023,17 @@ mod tests {
     fn a_proof_with_a_forged_cookie_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
 
         let mut proof = challenged(&mut initiator, &mut responder, &store);
+
         let cookie_at = proof.len() - ReconnectMessage::PROOF_LEN - 1;
+
         proof[cookie_at] ^= 1;
+
         let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert!(output.reply.is_none());
@@ -1002,6 +1044,7 @@ mod tests {
     fn a_hello_leaves_no_state_on_the_host() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
@@ -1015,21 +1058,26 @@ mod tests {
     fn a_flood_of_spoofed_hellos_does_not_prevent_a_genuine_reconnect() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut responder = responder();
         let mut genuine = ReconnectInitiator::new(&laptop).unwrap();
+
         let proof = challenged(&mut genuine, &mut responder, &store);
         let captured = start(&ReconnectInitiator::new(&laptop).unwrap());
 
         for index in 0..4096_u32 {
             let [_, _, high, low] = index.to_be_bytes();
+
             let spoofed = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 1, high, low)), 4000);
             let stranger = ReconnectInitiator::new(&record("stranger", 7)).unwrap();
+
             responder
                 .handle(&start(&stranger), spoofed, &store)
                 .unwrap();
             responder.handle(&captured, spoofed, &store).unwrap();
         }
+
         let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert!(output.accepted.is_some());
@@ -1040,6 +1088,7 @@ mod tests {
     fn a_proof_from_another_address_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
@@ -1057,6 +1106,7 @@ mod tests {
     fn a_hello_echoed_from_another_address_gets_a_challenge_bound_to_that_address() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
@@ -1076,15 +1126,21 @@ mod tests {
     fn a_cookie_outlives_one_period_but_expires_after_two() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut responder = responder();
         let issued = Instant::now();
 
         let mut late = ReconnectInitiator::new(&laptop).unwrap();
+
         let reply = handle_at(&mut responder, &start(&late), ORIGIN, &store, issued);
+
         late.handle(&reply.reply.unwrap()).unwrap();
+
         let mut expired = ReconnectInitiator::new(&laptop).unwrap();
+
         let reply = handle_at(&mut responder, &start(&expired), ORIGIN, &store, issued);
+
         expired.handle(&reply.reply.unwrap()).unwrap();
 
         let in_time = handle_at(
@@ -1111,12 +1167,16 @@ mod tests {
     fn a_replayed_proof_after_its_cookie_expired_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
         let issued = Instant::now();
+
         let reply = handle_at(&mut responder, &start(&initiator), ORIGIN, &store, issued);
+
         initiator.handle(&reply.reply.unwrap()).unwrap();
+
         let proof = start(&initiator);
 
         let first = handle_at(&mut responder, &proof, ORIGIN, &store, issued);
@@ -1138,8 +1198,11 @@ mod tests {
     fn forgotten_peer_is_rejected_at_hello() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let mut store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+
         store.forget(&laptop.id()).unwrap();
+
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
 
         let reply = challenge_for(&initiator, &mut responder(), &store);
@@ -1151,12 +1214,15 @@ mod tests {
     fn peer_forgotten_mid_handshake_is_rejected_at_proof() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let mut store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
+
         let proof = challenged(&mut initiator, &mut responder, &store);
 
         store.forget(&laptop.id()).unwrap();
+
         let output = responder.handle(&proof, ORIGIN, &store).unwrap();
 
         assert_eq!(
@@ -1171,6 +1237,7 @@ mod tests {
     fn retransmitted_hello_gets_the_same_challenge() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
@@ -1185,9 +1252,11 @@ mod tests {
     fn duplicate_proof_repeats_accepted_without_new_keys() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
         let mut responder = responder();
+
         let proof = challenged(&mut initiator, &mut responder, &store);
 
         let first = responder.handle(&proof, ORIGIN, &store).unwrap();
@@ -1202,13 +1271,17 @@ mod tests {
     fn replayed_proof_of_an_old_attempt_cannot_open_a_new_one() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut old = ReconnectInitiator::new(&laptop).unwrap();
+
         let captured = challenged(&mut old, &mut responder(), &store);
 
         let attacker = ReconnectInitiator::new(&laptop).unwrap();
         let mut fresh_responder = responder();
+
         challenge_for(&attacker, &mut fresh_responder, &store);
+
         let output = fresh_responder.handle(&captured, ORIGIN, &store).unwrap();
 
         assert!(output.reply.is_none());
@@ -1219,11 +1292,13 @@ mod tests {
     fn remembered_acceptances_are_bounded() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
         let mut responder = responder();
 
         for _ in 0..MAX_REMEMBERED_ACCEPTANCES + 8 {
             let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+
             handshake(&mut initiator, &mut responder, &store);
         }
 
@@ -1233,6 +1308,7 @@ mod tests {
     #[test]
     fn client_ignores_messages_of_other_attempts() {
         let mut initiator = ReconnectInitiator::new(&record("laptop", 1)).unwrap();
+
         let other = ReconnectMessage::Accepted {
             attempt: initiator.attempt().wrapping_add(1),
         }
@@ -1249,6 +1325,7 @@ mod tests {
     #[test]
     fn accepted_before_the_challenge_is_ignored() {
         let mut initiator = ReconnectInitiator::new(&record("laptop", 1)).unwrap();
+
         let early = ReconnectMessage::Accepted {
             attempt: initiator.attempt(),
         }
@@ -1316,6 +1393,7 @@ mod tests {
         let host_pin = pin.clone();
         let paired_host = thread::spawn(move || {
             let mut responder = PairingResponder::new(host_pin, 3);
+
             pair_as_host(&host_transport, &mut responder, pairing_timing).unwrap();
             host_transport
         });
@@ -1330,10 +1408,13 @@ mod tests {
         let host_transport = paired_host.join().unwrap();
 
         let mut client_store = PeerStore::open(client_path.clone()).unwrap();
+
         client_store
             .remember(PeerRecord::new("living room", outcome.secret.clone()).unwrap())
             .unwrap();
+
         let mut host_store = PeerStore::open(host_path.clone()).unwrap();
+
         host_store
             .remember(PeerRecord::new("laptop", outcome.secret).unwrap())
             .unwrap();
@@ -1345,22 +1426,30 @@ mod tests {
 
         let host = thread::spawn(move || {
             let mut responder = ReconnectResponder::new(timing()).unwrap();
+
             let (peer, accepted) =
                 reconnect_as_host(&host_transport, &mut responder, &host_store, timing()).unwrap();
+
             host_transport.install_session(&accepted.keys);
             (host_transport, peer, accepted.peer)
         });
         let keys = reconnect_as_client(&client_transport, host_addr, &known, timing()).unwrap();
+
         client_transport.install_session(&keys);
+
         let (host_transport, peer, accepted_peer) = host.join().unwrap();
 
         assert_eq!(peer, client_transport.local_addr().unwrap());
         assert_eq!(accepted_peer, known.id());
 
         let media = media_from(&client_transport, &host_addr, b"secret frame");
+
         client_transport.send_to(&media, host_addr).unwrap();
+
         let mut buf = [0; 2048];
+
         let (len, _) = host_transport.recv_from(&mut buf).unwrap();
+
         assert_eq!(&buf[..len], media.as_slice());
     }
 
@@ -1368,8 +1457,11 @@ mod tests {
     fn forgotten_client_cannot_reconnect_over_udp() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let mut host_store = store_with(&directory, "clients", std::slice::from_ref(&laptop));
+
         host_store.forget(&laptop.id()).unwrap();
+
         let host_store = RwLock::new(host_store);
 
         let host_transport = transport();

@@ -20,6 +20,7 @@ impl RememberedDisplay {
         let Some(token) = store.load()? else {
             return Ok(None);
         };
+
         store.clear()?;
 
         Ok(Some(Self { store, token }))
@@ -39,6 +40,7 @@ mod tests {
     fn persisting(directory: &TempDir) -> (Config, RestoreTokenStore) {
         let path = directory.path().join("restore-token");
         let mut config = Config::default();
+
         config.capture.persist_session = true;
         config.capture.restore_token_file = Some(path.clone());
 
@@ -49,12 +51,16 @@ mod tests {
     fn forgetting_clears_the_stored_token_and_restoring_writes_it_back() {
         let directory = tempfile::tempdir().unwrap();
         let (mut config, store) = persisting(&directory);
+
         store.store("remembered").unwrap();
+
         let input = store.sibling("input-restore-token");
+
         input.store("input-session").unwrap();
 
         let remembered = RememberedDisplay::forget(&mut config).unwrap().unwrap();
         let cleared = store.load().unwrap();
+
         remembered.restore().unwrap();
 
         assert_eq!(input.load().unwrap().as_deref(), Some("input-session"));
@@ -66,6 +72,7 @@ mod tests {
     fn forgetting_drops_a_token_given_in_the_config() {
         let directory = tempfile::tempdir().unwrap();
         let (mut config, _store) = persisting(&directory);
+
         config.capture.restore_token = Some("configured".to_owned());
 
         let remembered = RememberedDisplay::forget(&mut config).unwrap();
@@ -78,6 +85,7 @@ mod tests {
     fn without_persistence_the_store_is_left_alone() {
         let directory = tempfile::tempdir().unwrap();
         let (mut config, store) = persisting(&directory);
+
         store.store("remembered").unwrap();
         config.capture.persist_session = false;
 

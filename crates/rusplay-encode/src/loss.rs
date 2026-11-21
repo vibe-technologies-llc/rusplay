@@ -7,14 +7,14 @@ use crate::{
 
 pub(crate) const PSNR_FLOOR_DB: f64 = 34.0;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Loss {
     pub(crate) last_good: u64,
     pub(crate) resumed: u64,
     pub(crate) count: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Handling {
     Ignore,
     Recover { acknowledged: Option<u64> },
@@ -49,6 +49,7 @@ impl LossRun {
         let Some(Recovery::Reference(OutputIndex(reference))) = self.recovery else {
             panic!("recovery fell back to a keyframe: {:?}", self.recovery);
         };
+
         assert!(reference <= self.loss.last_good);
 
         reference
@@ -61,6 +62,7 @@ impl LossRun {
         resolution: Resolution,
     ) {
         let received = self.received();
+
         assert_eq!(pictures.len(), received.len());
 
         for (index, picture) in received.iter().zip(pictures) {
@@ -100,6 +102,7 @@ pub(crate) fn encode_with_loss(
             Some(encoder.recover(OutputIndex(loss.last_good)))
         }
     };
+
     packets.extend(encode_all(encoder, &frames[split..]));
 
     LossRun {

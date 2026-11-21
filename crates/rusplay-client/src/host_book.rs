@@ -21,7 +21,7 @@ const BOOK_EXTENSION: &str = "book";
 const PEER_ID_HEX_LEN: usize = PeerId::LEN * 2;
 const NO_HOST_ID: &str = "-";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedHost {
     pub name: String,
     pub address: SocketAddr,
@@ -86,6 +86,7 @@ impl HostBook {
             .map(PeerRecord::id)
             .filter(|id| !kept.contains(id))
             .collect();
+
         for id in stale {
             self.store.forget(&id)?;
         }
@@ -169,6 +170,7 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
     };
 
     let mut lines = text.lines();
+
     let Some(version) = parse_version(lines.next()) else {
         return Err(corrupt(1));
     };
@@ -184,10 +186,12 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
             if hosts.is_empty() || version < PROFILE_VERSION {
                 return Err(corrupt(line_number));
             }
+
             let pending = profile.get_or_insert_with(|| PendingProfile {
                 first_line: line_number,
                 text: String::new(),
             });
+
             pending.text.push_str(profile_line);
             pending.text.push('\n');
             continue;
@@ -197,12 +201,14 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
 
         let field_count = if version >= HOST_ID_VERSION { 4 } else { 3 };
         let mut fields = line.splitn(field_count, ' ');
+
         let id = fields.next();
         let host_id_text = if version >= HOST_ID_VERSION {
             fields.next()
         } else {
             Some(NO_HOST_ID)
         };
+
         let (Some(id), Some(host_id_text), Some(address), Some(name)) =
             (id, host_id_text, fields.next(), fields.next())
         else {
@@ -211,10 +217,12 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
 
         let address: SocketAddr = address.parse().map_err(|_| corrupt(line_number))?;
         let host_id = parse_host_id(host_id_text).map_err(|()| corrupt(line_number))?;
+
         let duplicate = hosts
             .iter()
             .any(|host| host.address == address || (host_id.is_some() && host.host_id == host_id))
             || (id != UNPAIRED && paired_ids.contains(&id));
+
         if !valid_peer_id(id) || !valid_name(name) || duplicate {
             return Err(corrupt(line_number));
         }
@@ -223,6 +231,7 @@ fn parse(text: &str, path: &Path, store: &PeerStore) -> Result<Vec<SavedHost>, C
             .iter()
             .find(|record| record.id().to_string() == id)
             .cloned();
+
         if id != UNPAIRED {
             paired_ids.push(id);
         }
@@ -311,6 +320,7 @@ mod tests {
         ];
 
         book.save(hosts.clone()).unwrap();
+
         let reloaded = open(directory.path());
 
         assert_eq!(reloaded.hosts(), hosts);
@@ -321,10 +331,12 @@ mod tests {
     fn forgetting_a_pairing_drops_the_secret_from_the_store() {
         let directory = tempfile::tempdir().unwrap();
         let mut book = open(directory.path());
+
         book.save(vec![host("a", "10.0.0.2:47800", Some(record("a", 1)))])
             .unwrap();
 
         book.save(vec![host("a", "10.0.0.2:47800", None)]).unwrap();
+
         let reloaded = open(directory.path());
 
         assert_eq!(reloaded.hosts()[0].peer, None);
@@ -335,6 +347,7 @@ mod tests {
     fn removing_a_host_drops_its_pairing_but_keeps_the_others() {
         let directory = tempfile::tempdir().unwrap();
         let mut book = open(directory.path());
+
         book.save(vec![
             host("a", "10.0.0.2:47800", Some(record("a", 1))),
             host("b", "10.0.0.3:47800", Some(record("b", 2))),
@@ -343,6 +356,7 @@ mod tests {
 
         book.save(vec![host("b", "10.0.0.3:47800", Some(record("b", 2)))])
             .unwrap();
+
         let reloaded = open(directory.path());
 
         assert_eq!(reloaded.hosts().len(), 1);
@@ -353,6 +367,7 @@ mod tests {
     fn a_pairing_missing_from_the_store_loads_unpaired() {
         let directory = tempfile::tempdir().unwrap();
         let mut book = open(directory.path());
+
         book.save(vec![host("a", "10.0.0.2:47800", Some(record("a", 1)))])
             .unwrap();
         fs::remove_file(directory.path().join("paired-hosts")).unwrap();
@@ -371,6 +386,7 @@ mod tests {
         book.save(vec![host("a", "10.0.0.2:47800", None)]).unwrap();
 
         let mode = fs::metadata(book.path()).unwrap().permissions().mode() & 0o777;
+
         assert_eq!(mode, 0o600);
     }
 
@@ -411,6 +427,7 @@ mod tests {
     fn a_failed_write_leaves_the_book_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let mut book = open(directory.path());
+
         fs::create_dir(directory.path().join("paired-hosts.book.new")).unwrap();
 
         let result = book.save(vec![host("a", "10.0.0.2:47800", None)]);
@@ -444,6 +461,7 @@ mod tests {
         ];
 
         book.save(hosts.clone()).unwrap();
+
         let reloaded = open(directory.path());
 
         assert_eq!(reloaded.hosts(), hosts);
@@ -455,6 +473,7 @@ mod tests {
     fn a_version_one_book_loads_without_profiles_and_is_saved_as_version_three() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("paired-hosts.book");
+
         fs::write(
             &path,
             format!("{HEADER_V1}\n- 10.0.0.2:47800 old\n- 10.0.0.3:47800 older\n"),
@@ -462,7 +481,9 @@ mod tests {
         .unwrap();
 
         let mut book = open(directory.path());
+
         let loaded = book.hosts().to_vec();
+
         book.save(loaded.clone()).unwrap();
 
         assert_eq!(loaded.len(), 2);
@@ -475,12 +496,14 @@ mod tests {
     fn clearing_a_profile_removes_its_lines() {
         let directory = tempfile::tempdir().unwrap();
         let mut book = open(directory.path());
+
         book.save(vec![profiled("10.0.0.3:47800")]).unwrap();
 
         book.save(vec![host("Den", "10.0.0.3:47800", None)])
             .unwrap();
 
         let text = fs::read_to_string(book.path()).unwrap();
+
         assert_eq!(text, format!("{HEADER_V3}\n- - 10.0.0.3:47800 Den\n"));
     }
 
@@ -533,6 +556,7 @@ mod tests {
         ];
 
         book.save(hosts.clone()).unwrap();
+
         let reloaded = open(directory.path());
 
         assert_eq!(reloaded.hosts(), hosts);
@@ -543,6 +567,7 @@ mod tests {
     fn a_version_two_book_loads_without_host_ids_and_keeps_profiles() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("paired-hosts.book");
+
         fs::write(
             &path,
             format!("{HEADER_V2}\n- 10.0.0.2:47800 old name\n\tkeyboard = false\n- 10.0.0.3:47800 other\n"),
@@ -550,7 +575,9 @@ mod tests {
         .unwrap();
 
         let mut book = open(directory.path());
+
         let loaded = book.hosts().to_vec();
+
         book.save(loaded.clone()).unwrap();
 
         assert_eq!(loaded.len(), 2);

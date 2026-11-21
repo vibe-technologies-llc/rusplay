@@ -98,6 +98,7 @@ fn the_order_count_keeps_climbing_over_many_cycles() {
 
     for step in 1..=100 {
         let lsb = u16::try_from((step * 5) % MAX_LSB).unwrap();
+
         poc = following_order_count(poc, lsb, MAX_LSB);
 
         assert_eq!(poc, step * 5);
@@ -124,6 +125,7 @@ fn the_sps_set_named_by_the_slice_replaces_the_inline_one() {
         ..Sps::default()
     };
     let mut header = header(&[(-9, true)], &[]);
+
     header.short_term_ref_pic_set_sps_flag = true;
     header.curr_rps_idx = 1;
 
@@ -137,6 +139,7 @@ fn the_sps_set_named_by_the_slice_replaces_the_inline_one() {
 fn an_sps_set_index_beyond_the_list_falls_back_to_the_inline_set() {
     let sps = Sps::default();
     let mut header = header(&[(-4, true)], &[]);
+
     header.short_term_ref_pic_set_sps_flag = true;
     header.curr_rps_idx = 3;
 
@@ -148,6 +151,7 @@ fn an_sps_set_index_beyond_the_list_falls_back_to_the_inline_set() {
 #[test]
 fn long_term_entries_without_the_msb_match_the_lsb_only() {
     let mut header = header(&[], &[]);
+
     long_term_entry(&mut header, 0, 5, true);
 
     let counts = reference_order_counts(&Sps::default(), &header, 100, MAX_LSB);
@@ -158,6 +162,7 @@ fn long_term_entries_without_the_msb_match_the_lsb_only() {
 #[test]
 fn long_term_entries_with_the_msb_cycle_name_the_full_order_count() {
     let mut header = header(&[], &[]);
+
     full_long_term_entry(&mut header, 0, 5, 2, true);
     full_long_term_entry(&mut header, 1, 9, 0, false);
 
@@ -170,6 +175,7 @@ fn long_term_entries_with_the_msb_cycle_name_the_full_order_count() {
 #[test]
 fn sps_and_slice_long_term_entries_are_both_counted() {
     let mut header = header(&[], &[]);
+
     header.num_long_term_sps = 1;
     header.num_long_term_pics = 1;
     header.poc_lsb_lt[0] = 3;
@@ -231,6 +237,7 @@ fn a_missing_short_term_picture_leaves_an_empty_slot() {
 fn a_long_term_lsb_match_marks_the_picture_long_term_and_keeps_it() {
     let mut held = references(&[8, 21, 4]);
     let mut header = header(&[(-6, true)], &[]);
+
     long_term_entry(&mut header, 0, 5, true);
 
     let set = apply_reference_set(&mut held, &Sps::default(), &header, 10, MAX_LSB);
@@ -246,6 +253,7 @@ fn a_long_term_lsb_match_marks_the_picture_long_term_and_keeps_it() {
 fn a_long_term_full_order_count_matches_only_the_exact_picture() {
     let mut held = references(&[5, 21]);
     let mut header = header(&[], &[]);
+
     full_long_term_entry(&mut header, 0, 5, 0, true);
 
     let set = apply_reference_set(&mut held, &Sps::default(), &header, 21, MAX_LSB);
@@ -258,6 +266,7 @@ fn a_long_term_full_order_count_matches_only_the_exact_picture() {
 fn a_following_long_term_picture_is_kept_without_joining_the_set() {
     let mut held = references(&[5, 9]);
     let mut header = header(&[], &[]);
+
     long_term_entry(&mut header, 0, 5, false);
 
     let set = apply_reference_set(&mut held, &Sps::default(), &header, 10, MAX_LSB);
@@ -270,7 +279,9 @@ fn a_following_long_term_picture_is_kept_without_joining_the_set() {
 #[test]
 fn a_long_term_picture_is_not_found_as_a_short_term_one() {
     let mut held = references(&[8]);
+
     held[0].long_term = true;
+
     let header = header(&[(-2, true)], &[]);
 
     let set = apply_reference_set(&mut held, &Sps::default(), &header, 10, MAX_LSB);
@@ -307,7 +318,9 @@ fn reference_set_flags_name_the_list_each_picture_belongs_to() {
 #[test]
 fn va_references_flag_each_picture_and_invalidate_the_unused_slots() {
     let mut held = references(&[8, 4, 21]);
+
     held[2].long_term = true;
+
     let set = ReferenceSet {
         before: some(&[0]),
         after: some(&[1]),
@@ -390,6 +403,7 @@ fn an_active_count_below_the_candidates_truncates() {
 #[test]
 fn list_modification_picks_entries_of_the_temporary_list() {
     let mut header = slice(SliceType::B, 3, 3, 4);
+
     header
         .ref_pic_list_modification
         .ref_pic_list_modification_flag_l0 = true;
@@ -408,6 +422,7 @@ fn list_modification_picks_entries_of_the_temporary_list() {
 #[test]
 fn list_modification_indexes_a_temporary_list_longer_than_the_candidates() {
     let mut header = slice(SliceType::P, 2, 1, 6);
+
     header
         .ref_pic_list_modification
         .ref_pic_list_modification_flag_l0 = true;
@@ -514,10 +529,15 @@ fn a_conformance_window_is_scaled_by_the_chroma_format() {
     };
 
     sps.chroma_array_type = 1;
+
     let subsampled = crop_offsets(&sps);
+
     sps.chroma_array_type = 2;
+
     let wide = crop_offsets(&sps);
+
     sps.chroma_array_type = 3;
+
     let full = crop_offsets(&sps);
 
     assert_eq!((subsampled.right, subsampled.bottom), (6, 10));
@@ -560,6 +580,7 @@ fn a_reference_set_missing_a_current_picture_is_reported() {
     for set in incomplete {
         assert!(set.missing_reference(), "{set:?}");
     }
+
     assert!(!ReferenceSet::default().missing_reference());
     assert!(!complete.missing_reference());
 }

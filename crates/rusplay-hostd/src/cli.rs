@@ -74,19 +74,19 @@ pub enum CliError {
     UnexpectedArgument(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PeersAction {
     List,
     Forget { target: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigAction {
     Default,
     Check,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Run {
         config: Option<PathBuf>,
@@ -135,9 +135,11 @@ where
     }
 
     let mut words = words.into_iter();
+
     let Some(command) = words.next() else {
         return Ok(Command::Run { config });
     };
+
     if command == "config" {
         return parse_config(config, words);
     }
@@ -162,6 +164,7 @@ where
         },
         Some(other) => return Err(CliError::UnknownPeersAction(other.to_owned())),
     };
+
     if let Some(extra) = words.next() {
         return Err(CliError::UnexpectedArgument(extra));
     }
@@ -181,6 +184,7 @@ fn control_request(
         },
         _ => return Ok(None),
     };
+
     if let Some(extra) = words.next() {
         return Err(CliError::UnexpectedArgument(extra));
     }
@@ -202,6 +206,7 @@ fn parse_config(
         ConfigAction::Check => words.next().map(PathBuf::from),
         ConfigAction::Default => None,
     };
+
     if let Some(extra) = words.next() {
         return Err(CliError::UnexpectedArgument(extra));
     }

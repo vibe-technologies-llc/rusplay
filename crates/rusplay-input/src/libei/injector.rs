@@ -31,7 +31,7 @@ use crate::{
 const MICROS_PER_SECOND: u64 = 1_000_000;
 const NANOS_PER_MICRO: u64 = 1_000;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibeiOptions {
     pub name: String,
     pub target: AbsoluteTarget,
@@ -85,6 +85,7 @@ impl DeviceSlot {
                     .device
                     .interface::<ei::Keyboard>()
                     .ok_or_else(unavailable)?;
+
                 keyboard.key(code, key_state(pressed));
             }
             EiRequest::MotionRelative { dx, dy } => {
@@ -92,6 +93,7 @@ impl DeviceSlot {
                     .device
                     .interface::<ei::Pointer>()
                     .ok_or_else(unavailable)?;
+
                 pointer.motion_relative(dx, dy);
             }
             EiRequest::MotionNormalised { x, y } => {
@@ -101,6 +103,7 @@ impl DeviceSlot {
                     .ok_or_else(unavailable)?;
                 let mapper = self.absolute.as_ref().ok_or_else(unavailable)?;
                 let (x, y) = mapper.map(x, y);
+
                 pointer.motion_absolute(x, y);
             }
             EiRequest::Button { code, pressed } => {
@@ -108,16 +111,19 @@ impl DeviceSlot {
                     .device
                     .interface::<ei::Button>()
                     .ok_or_else(unavailable)?;
+
                 button.button(code, button_state(pressed));
             }
             EiRequest::TouchDown { slot, x, y } => {
                 let (x, y) = self.map_touch(x, y).ok_or_else(unavailable)?;
+
                 self.touchscreen()
                     .ok_or_else(unavailable)?
                     .down(slot.into(), x, y);
             }
             EiRequest::TouchMotion { slot, x, y } => {
                 let (x, y) = self.map_touch(x, y).ok_or_else(unavailable)?;
+
                 self.touchscreen()
                     .ok_or_else(unavailable)?
                     .motion(slot.into(), x, y);
@@ -135,6 +141,7 @@ impl DeviceSlot {
                     .device
                     .interface::<ei::Scroll>()
                     .ok_or_else(unavailable)?;
+
                 scroll.scroll_discrete(dx, dy);
             }
         }
@@ -143,7 +150,7 @@ impl DeviceSlot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Batch {
     Idle,
     Unpumped,
@@ -203,6 +210,7 @@ impl LibeiInjector {
         let fd = session.connect_to_eis().await?;
 
         let mut injector = Self::connect(fd, config, options)?;
+
         injector.attach_session(session);
 
         Ok((injector, started))
@@ -287,6 +295,7 @@ impl LibeiInjector {
             EiEvent::DeviceAdded(added) => {
                 let absolute = self.absolute_mapper(&added.device);
                 let lock_masks = lock_masks_of(&added.device);
+
                 self.devices.push(DeviceSlot {
                     device: added.device,
                     resumed: false,
@@ -302,6 +311,7 @@ impl LibeiInjector {
                     .find(|slot| slot.device == modifiers.device)
                 {
                     let locks = slot.lock_masks.locked(modifiers.locked);
+
                     self.lock_sync.report(locks);
                 }
             }
@@ -406,6 +416,7 @@ impl LibeiInjector {
 
         let now = Instant::now();
         let taps = self.lock_sync.due(now);
+
         if taps.is_empty() {
             return Ok(());
         }
@@ -509,15 +520,18 @@ impl InputSink for LibeiInjector {
 impl Drop for LibeiInjector {
     fn drop(&mut self) {
         let serial = self.converter.connection().serial();
+
         for slot in self.devices.iter().filter(|slot| slot.emulating) {
             slot.device.device().stop_emulating(serial);
         }
+
         let _ = self.context.flush();
     }
 }
 
 fn bound_capabilities(config: InputConfig) -> BitFlags<DeviceCapability> {
     let mut bound = BitFlags::empty();
+
     if config.keyboard {
         bound |= DeviceCapability::Keyboard;
     }
@@ -639,9 +653,11 @@ mod tests {
             LibeiInjector::open_standalone(&config, LibeiOptions::default())
                 .await
                 .unwrap();
+
         injector.wait_ready(Duration::from_secs(30)).unwrap();
 
         assert!(started.pointer);
+
         injector
             .inject(InputEvent::PointerMotion { dx: 20.0, dy: 0.0 })
             .unwrap();

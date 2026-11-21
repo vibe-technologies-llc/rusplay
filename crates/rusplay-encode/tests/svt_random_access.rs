@@ -24,8 +24,10 @@ fn frame(index: u64) -> Frame {
     let width = RESOLUTION.width as usize;
     let height = RESOLUTION.height as usize;
     let shift = usize::try_from(index % 256).unwrap_or_default();
+
     let luma = (0..height).flat_map(|y| (0..width).map(move |x| x + y + shift));
     let chroma = std::iter::repeat_n(128, width.div_ceil(2) * height.div_ceil(2) * 2);
+
     let data: Vec<u8> = luma
         .map(|value| u8::try_from(value % 256).unwrap_or_default())
         .chain(chroma)
@@ -58,11 +60,14 @@ fn a_random_access_encoder_opens_and_keys_a_requested_frame() {
     let mut encoder = rusplay_encode::open(&config).unwrap();
 
     let mut keyframes = Vec::new();
+
     for index in 0..MAX_FRAMES {
         if index == REQUESTED {
             encoder.request_keyframe();
         }
+
         let output = encoder.encode(&frame(index)).unwrap();
+
         if let Some(keyframe) = output.filter(|output| output.keyframe) {
             keyframes.push(keyframe.timestamp);
         }

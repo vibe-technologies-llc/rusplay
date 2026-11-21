@@ -38,6 +38,7 @@ fn hdr(mastering: bool, content_light: bool) -> HdrLevels {
 
 fn expected_sei_rbsp(mastering: bool, content_light: bool) -> Vec<u8> {
     let mut rbsp = Vec::new();
+
     if mastering {
         rbsp.extend([SEI_MASTERING_DISPLAY, 24]);
         rbsp.extend(MASTERING_SEI_ESCAPED);
@@ -53,6 +54,7 @@ fn expected_sei_rbsp(mastering: bool, content_light: bool) -> Vec<u8> {
 fn messages(rbsp_bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
     let mut unescaped = Vec::new();
     let mut zeros = 0;
+
     for &byte in rbsp_bytes {
         if zeros >= 2 && byte == 3 {
             zeros = 0;
@@ -64,11 +66,14 @@ fn messages(rbsp_bytes: &[u8]) -> Vec<(u8, Vec<u8>)> {
 
     let mut messages = Vec::new();
     let mut rest = unescaped.as_slice();
+
     while rest.len() > 1 {
         let size = usize::from(rest[1]);
+
         messages.push((rest[0], rest[2..2 + size].to_vec()));
         rest = &rest[2 + size..];
     }
+
     assert_eq!(rest, [RBSP_STOP_BYTE]);
 
     messages
@@ -98,6 +103,7 @@ fn h264_sei_is_one_nal_with_the_messages_in_order() {
             "mastering {mastering} light {content_light}"
         );
         assert_eq!(packed.bits, packed.bytes.len() * 8);
+
         assert_no_start_code_emulation(&packed.bytes);
     }
 }
@@ -117,6 +123,7 @@ fn hevc_sei_is_one_prefix_nal_with_the_messages_in_order() {
             "mastering {mastering} light {content_light}"
         );
         assert_eq!(packed.bits, packed.bytes.len() * 8);
+
         assert_no_start_code_emulation(&packed.bytes);
     }
 }
@@ -166,6 +173,7 @@ fn av1_metadata_obus_hold_fixed_point_payloads_in_spec_order() {
     for (mastering, content_light) in [(true, true), (true, false), (false, true)] {
         let packed = metadata_obus(&hdr(mastering, content_light)).unwrap();
         let mut expected = Vec::new();
+
         if mastering {
             expected.extend([AV1_METADATA_HEADER, 26, AV1_METADATA_MASTERING_DISPLAY]);
             expected.extend(MASTERING_AV1_PAYLOAD);

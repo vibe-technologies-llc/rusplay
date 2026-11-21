@@ -15,14 +15,14 @@ use crate::{
 
 const BYTES_PER_PIXEL: u32 = 4;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct DmaBufPlane<'a> {
     pub fd: BorrowedFd<'a>,
     pub offset: u32,
     pub stride: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileIdentity {
     device: u64,
     inode: u64,
@@ -44,6 +44,7 @@ pub(crate) fn dmabuf_frame(
             .map_err(CaptureError::DmaBufDup)?,
     );
     let identity = identity_of(&file)?;
+
     for (index, plane) in rest.iter().enumerate() {
         if plane.fd.as_raw_fd() != first.fd.as_raw_fd() && borrowed_identity(plane.fd)? != identity
         {
@@ -93,7 +94,7 @@ fn borrowed_identity(fd: BorrowedFd<'_>) -> Result<FileIdentity, CaptureError> {
     identity_of(&file)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ShmPlane<'a> {
     pub mapped: &'a [u8],
     pub offset: u32,
@@ -113,6 +114,7 @@ pub(crate) fn shm_frame(
     };
     let stride = u32::try_from(plane.stride).map_err(|_| invalid_stride)?;
     let row_bytes = format.size.width.saturating_mul(BYTES_PER_PIXEL);
+
     if stride < row_bytes {
         return Err(CaptureError::InvalidStride {
             stride: plane.stride,
@@ -182,6 +184,7 @@ mod tests {
     fn dmabuf_planes_sharing_one_buffer_become_one_frame() {
         let buffer = tempfile::tempfile().unwrap();
         let alias = buffer.try_clone().unwrap();
+
         let planes = [
             DmaBufPlane {
                 fd: buffer.as_fd(),
@@ -206,6 +209,7 @@ mod tests {
         else {
             panic!("expected a dma-buf frame");
         };
+
         assert_eq!(modifier, AMD_TILED);
         assert_eq!(
             planes,
@@ -251,6 +255,7 @@ mod tests {
     fn dmabuf_planes_in_separate_buffers_are_rejected() {
         let first = tempfile::tempfile().unwrap();
         let second = tempfile::tempfile().unwrap();
+
         let planes = [
             DmaBufPlane {
                 fd: first.as_fd(),
@@ -298,6 +303,7 @@ mod tests {
         let FrameBuffer::Shm { data, stride } = frame.buffer else {
             panic!("expected a shared-memory frame");
         };
+
         assert_eq!(stride, 12);
         assert_eq!(data[..], mapped[16..40]);
         assert_eq!(frame.timestamp, Timestamp::from_micros(5));

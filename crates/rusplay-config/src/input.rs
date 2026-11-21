@@ -9,7 +9,7 @@ const SENSITIVITY_RANGE: RangeInclusive<f32> = 0.05..=20.0;
 const DEADZONE_RANGE: RangeInclusive<f32> = 0.0..=0.9;
 const CLIPBOARD_BYTES_RANGE: RangeInclusive<u32> = 1..=1_048_576;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PointerMode {
     #[default]
@@ -18,7 +18,7 @@ pub enum PointerMode {
     Auto,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GamepadPersonality {
     #[default]
@@ -29,7 +29,7 @@ pub enum GamepadPersonality {
     DualShock4,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReleaseChord {
     CtrlAlt,
@@ -39,7 +39,7 @@ pub enum ReleaseChord {
     CtrlAltShift,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClipboardDirection {
     #[default]
@@ -59,7 +59,7 @@ impl ClipboardDirection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChordModifiers {
     pub ctrl: bool,
     pub shift: bool,
@@ -85,7 +85,7 @@ impl ReleaseChord {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HotkeyKey {
     A,
@@ -128,7 +128,7 @@ pub enum HotkeyKey {
     F12,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct InputConfig {
@@ -246,6 +246,7 @@ impl InputConfig {
             ("input.hotkey_disconnect", self.hotkey_disconnect),
             ("input.hotkey_pointer_mode", self.hotkey_pointer_mode),
         ];
+
         for (position, (field, key)) in bound.iter().enumerate() {
             if bound[..position].iter().any(|(_, earlier)| earlier == key) {
                 return Err(ConfigError::HotkeyKeyReused { key: *key, field });

@@ -24,7 +24,7 @@ use crate::{
 const SIDE_PANEL_WIDTH: f32 = 320.0;
 const PROFILE_LABEL_WIDTH: f32 = 130.0;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ConnectRequested {
     pub host: HostEntry,
     pub credentials: Credentials,
@@ -87,6 +87,7 @@ impl HostsView {
 
     pub fn remember_peer(&mut self, id: HostId, peer: PeerRecord, cx: &mut Context<Self>) -> bool {
         let remembered = self.hosts.remember_peer(id, peer);
+
         if remembered {
             self.persist(cx);
             self.pin_input
@@ -117,8 +118,10 @@ impl HostsView {
 
         let environment = self.environment.clone();
         let scanning = cx.background_spawn(async move { session::discover(&environment) });
+
         self.scan = Some(cx.spawn(async move |this, cx| {
             let result = scanning.await;
+
             this.update(cx, |this, cx| this.scanned(result, cx)).ok();
         }));
         cx.notify();
@@ -168,6 +171,7 @@ impl HostsView {
         match result {
             Ok(found) => {
                 let before = self.hosts.saved_hosts();
+
                 self.hosts.merge_discovered(&found);
                 if self.hosts.saved_hosts() != before {
                     self.persist(cx);
@@ -205,6 +209,7 @@ impl HostsView {
         let name = self.name_input.read(cx).text().to_owned();
 
         let result = self.hosts.rename(index, &name);
+
         self.name_input
             .update(cx, |input, cx| input.set_invalid(result.is_err(), cx));
 
@@ -227,6 +232,7 @@ impl HostsView {
         let address = self.address_input.read(cx).text().to_owned();
 
         let result = self.hosts.set_address(index, &address);
+
         self.address_input
             .update(cx, |input, cx| input.set_invalid(result.is_err(), cx));
 
@@ -262,6 +268,7 @@ impl HostsView {
         let address = self.address_input.read(cx).text().to_owned();
 
         let result = self.hosts.add(&name, &address);
+
         self.address_input
             .update(cx, |input, cx| input.set_invalid(result.is_err(), cx));
 
@@ -289,6 +296,7 @@ impl HostsView {
             Credentials::Peer(peer.clone())
         } else {
             let parsed = Pin::parse(self.pin_input.read(cx).text());
+
             self.pin_input
                 .update(cx, |input, cx| input.set_invalid(parsed.is_err(), cx));
             match parsed {
@@ -502,6 +510,7 @@ impl HostsView {
         }
 
         let mut rows = Vec::with_capacity(entries.len());
+
         for (index, host) in entries.iter().enumerate() {
             rows.push(self.render_host(index, host, cx));
         }

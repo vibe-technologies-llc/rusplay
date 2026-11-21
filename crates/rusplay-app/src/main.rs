@@ -78,6 +78,7 @@ fn run(launch: Launch) {
         let opened = cx.open_window(options, |window, cx| {
             let view =
                 cx.new(|cx| RusplayApp::new(ConfigEnvironment::from_process(), launch, window, cx));
+
             window.focus(&gpui::Focusable::focus_handle(&view, cx), cx);
             view
         });

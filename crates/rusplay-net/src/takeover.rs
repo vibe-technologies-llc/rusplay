@@ -33,6 +33,7 @@ impl SessionTakeover {
     ) -> Result<ReconnectOutput, NetError> {
         let message = ReconnectMessage::from_datagram(datagram)?;
         let session = store.get(&self.peer);
+
         let from_session_peer = session.is_some_and(|record| is_blinded_by(record, &message));
 
         match message {
@@ -67,6 +68,7 @@ mod tests {
 
     fn store(directory: &tempfile::TempDir, records: &[PeerRecord]) -> PeerStore {
         let mut store = PeerStore::open(directory.path().join("clients")).unwrap();
+
         for record in records {
             store.remember(record.clone()).unwrap();
         }
@@ -100,11 +102,13 @@ mod tests {
     fn the_session_peer_takes_over_after_proving_the_secret() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
 
         challenged(&mut takeover, &mut initiator, &store);
+
         let proof = initiator.outgoing().unwrap().to_vec();
         let output = takeover.handle(&proof, NEW, &store).unwrap();
         let accepted = output.accepted.unwrap();
@@ -120,14 +124,19 @@ mod tests {
     fn a_forged_proof_is_rejected_and_admits_nobody() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+
         challenged(&mut takeover, &mut initiator, &store);
 
         let mut forged = initiator.outgoing().unwrap().to_vec();
+
         let last = forged.len() - 1;
+
         forged[last] ^= 0xFF;
+
         let output = takeover.handle(&forged, NEW, &store).unwrap();
 
         assert!(output.accepted.is_none());
@@ -141,9 +150,11 @@ mod tests {
     fn a_genuine_proof_from_another_address_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+
         challenged(&mut takeover, &mut initiator, &store);
 
         let proof = initiator.outgoing().unwrap().to_vec();
@@ -159,6 +170,7 @@ mod tests {
     fn a_proof_for_an_attempt_that_never_said_hello_is_ignored() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
 
@@ -182,6 +194,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
         let desktop = record("desktop", 2);
+
         let store = store(&directory, &[laptop.clone(), desktop.clone()]);
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let initiator = ReconnectInitiator::new(&desktop).unwrap();
@@ -201,15 +214,19 @@ mod tests {
     fn a_flood_of_spoofed_hellos_does_not_block_the_session_peer() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let mut initiator = ReconnectInitiator::new(&laptop).unwrap();
+
         challenged(&mut takeover, &mut initiator, &store);
+
         let captured = ReconnectInitiator::new(&laptop).unwrap();
 
         for port in 1..=2048_u16 {
             let spoofed = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 9, 0, 1)), port);
             let stranger = ReconnectInitiator::new(&record("stranger", 7)).unwrap();
+
             takeover
                 .handle(stranger.outgoing().unwrap(), spoofed, &store)
                 .unwrap();
@@ -217,6 +234,7 @@ mod tests {
                 .handle(captured.outgoing().unwrap(), spoofed, &store)
                 .unwrap();
         }
+
         let proof = initiator.outgoing().unwrap().to_vec();
         let output = takeover.handle(&proof, NEW, &store).unwrap();
 
@@ -227,6 +245,7 @@ mod tests {
     fn a_stranger_cannot_pose_as_the_session_peer() {
         let directory = tempfile::tempdir().unwrap();
         let laptop = record("laptop", 1);
+
         let store = store(&directory, std::slice::from_ref(&laptop));
         let mut takeover = SessionTakeover::new(laptop.id(), ReconnectTiming::default()).unwrap();
         let impostor = ReconnectInitiator::new(&record("laptop", 2)).unwrap();

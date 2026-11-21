@@ -32,13 +32,13 @@ pub enum CliError {
     UnexpectedArgument(String),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Launch {
     pub connect: Option<String>,
     pub exit_on_disconnect: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Run(Launch),
     Help,
@@ -61,7 +61,9 @@ where
                 if launch.connect.is_some() {
                     return Err(CliError::ConnectRepeated);
                 }
+
                 let target = parser.value()?.string()?;
+
                 if target.trim().is_empty() {
                     return Err(CliError::ConnectTargetEmpty);
                 }

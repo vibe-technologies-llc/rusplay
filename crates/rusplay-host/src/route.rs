@@ -8,13 +8,13 @@ use rusplay_scale::{
 
 use crate::upload::UploadFormat;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SourceRead {
     Raw,
     Srgb,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Route {
     pub read: SourceRead,
     pub prepare: Option<LineariseSettings>,
@@ -24,7 +24,7 @@ pub(crate) struct Route {
     pub input: InputLight,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RouteKey {
     pub upload: UploadFormat,
     pub color: ColorSpace,
@@ -40,11 +40,13 @@ impl Route {
         } = *key;
         let stream = &config.video.color;
         let resolution = config.video.resolution.unwrap_or(capture);
+
         let scale = (resolution != capture)
             .then(|| scale_settings(config, capture, resolution, !source.transfer.is_hdr()));
         let map = map_settings(config, &source);
         let needs_map = !ColorPlan::new(&map)?.is_identity();
         let linear_scale = scale.is_some_and(|settings| linear_light(config, &settings));
+
         let encoded = !needs_map && same_encoding(&source, stream) && !linear_scale;
         let map = needs_map.then_some(map);
         let linearise = LineariseSettings {
@@ -201,6 +203,7 @@ mod tests {
 
     fn stream(color: ColorSpace, resolution: Option<Resolution>) -> Config {
         let mut config = Config::default();
+
         config.video.color = color;
         config.video.resolution = resolution;
         config
@@ -261,10 +264,12 @@ mod tests {
     #[test]
     fn hdr_levels_that_differ_keep_the_linear_path() {
         let mut source = pq_bt2020();
+
         source.hdr = HdrLevels {
             reference_white_nits: 100,
             ..HdrLevels::default()
         };
+
         let config = stream(pq_bt2020(), None);
 
         let route = Route::plan(&config, &key(*b"XB30", source)).unwrap();
@@ -304,6 +309,7 @@ mod tests {
     #[test]
     fn downscaling_in_gamma_light_scales_the_encoded_image() {
         let mut config = stream(srgb(), Some(Resolution::new(32, 16)));
+
         config.scaling.downscale.linear_light = false;
 
         let same = Route::plan(&config, &key(*b"XR24", srgb())).unwrap();
@@ -318,7 +324,9 @@ mod tests {
             other.prepare.map(|prepare| prepare.output),
             Some(OutputLight::Encoded)
         );
+
         let relinearise = other.relinearise.unwrap();
+
         assert_eq!(relinearise.channels, SourceChannels::RGBA);
         assert_eq!(relinearise.transfer, TransferFunction::Pq);
         assert!(other.map.is_some());
@@ -328,6 +336,7 @@ mod tests {
     #[test]
     fn upscaling_stays_in_linear_light() {
         let mut config = stream(srgb(), Some(Resolution::new(128, 64)));
+
         config.scaling.downscale.linear_light = false;
 
         let route = Route::plan(&config, &key(*b"XR24", srgb())).unwrap();

@@ -17,7 +17,7 @@ const MAX_PRIORITY_PROPERTY: &str = "MaxRealtimePriority";
 const TIME_LIMIT_PROPERTY: &str = "RTTimeUSecMax";
 const MAKE_REALTIME_METHOD: &str = "MakeThreadRealtime";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RealtimeLimits {
     pub(crate) max_priority: u32,
     pub(crate) time_limit_us: u64,

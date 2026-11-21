@@ -12,7 +12,7 @@ use crate::HostError;
 pub(crate) const HANDOFF_ROW_ALIGNMENT: u32 = DEFAULT_ROW_ALIGNMENT;
 const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Handoff {
     pub backend: Backend,
     pub input: DeviceInput,
@@ -51,6 +51,7 @@ impl Handoff {
         layout: &FrameLayout,
     ) -> Result<(), HostError> {
         let planes = device_planes(layout)?;
+
         check_device_layout(
             self.backend,
             config.video.stream_pixel_format(),
@@ -72,6 +73,7 @@ impl Handoff {
             .fd()
             .try_clone_to_owned()
             .map_err(HostError::HandoffFdDup)?;
+
         let buffer = match self.input.memory {
             DeviceMemory::DmaBuf => FrameBuffer::DmaBuf {
                 fd,
@@ -141,6 +143,7 @@ mod tests {
 
     fn config(encoder: VideoEncoderConfig, format: PixelFormat) -> Config {
         let mut config = Config::default();
+
         config.video.encoder = encoder;
         config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(format);
         config
@@ -197,6 +200,7 @@ mod tests {
         let vaapi = config(VideoEncoderConfig::Vaapi(VaapiConfig::default()), nv12);
         let nvenc = config(VideoEncoderConfig::Nvenc(NvencConfig::default()), nv12);
         let mut turned_off = vaapi.clone();
+
         turned_off.video.encoder_gpu_handoff = false;
 
         let vaapi_handoff = Handoff::plan(&vaapi).unwrap();

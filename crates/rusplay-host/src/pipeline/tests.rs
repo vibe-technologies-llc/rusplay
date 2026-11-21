@@ -16,6 +16,7 @@ const DMABUF_STRIDE: u32 = 256;
 
 fn config(color: ColorSpace, depth: BitDepth) -> Config {
     let mut config = Config::default();
+
     config.video.color_mode = rusplay_config::StreamColorMode::Configured;
     config.video.color = color;
     config.video.pixel_format = rusplay_config::PixelFormatChoice::pinned(PixelFormat {
@@ -37,6 +38,7 @@ fn pipeline(config: Config) -> Option<GpuPipeline> {
 
 fn dmabuf_pipeline(config: Config) -> Option<GpuPipeline> {
     let pipeline = pipeline(config)?;
+
     hardware::require(
         DmaBufImporter::new(&pipeline.gpu.device).ok(),
         "dma-buf import",
@@ -147,6 +149,7 @@ fn ten_bit_code(value: f64) -> u32 {
 
 fn luma_row(pipeline: &mut GpuPipeline, frame: &Frame) -> Vec<u32> {
     let mut source = pipeline.upload(frame).unwrap().unwrap();
+
     pipeline.convert(&mut source).unwrap();
     pipeline.read_back(frame.timestamp).unwrap();
 
@@ -205,7 +208,9 @@ fn a_ten_bit_capture_in_the_stream_encoding_keeps_its_codes_and_channel_order() 
 #[test]
 fn a_stream_that_follows_its_source_takes_each_new_description_and_replans() {
     let mut followed = config(ColorSpace::default(), BitDepth::Ten);
+
     followed.video.color_mode = rusplay_config::StreamColorMode::Source;
+
     let Some(mut pipeline) = pipeline(followed) else {
         return;
     };
@@ -216,8 +221,11 @@ fn a_stream_that_follows_its_source_takes_each_new_description_and_replans() {
     };
 
     pipeline.follow_source_color(&frame(*b"XR30", pq, |_| 0));
+
     let after_pq = pipeline.config.video.color;
+
     pipeline.follow_source_color(&frame(*b"XR24", ColorSpace::default(), |_| 0));
+
     let after_sdr = pipeline.config.video.color;
 
     assert_eq!(after_pq, pq);
@@ -257,6 +265,7 @@ fn an_hdr_capture_is_linearised_and_mapped_into_an_sdr_stream() {
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let expected = (bt709 * EIGHT_BIT_MAX).round() as u32;
+
     assert_codes(&row, expected, 1, "10 cd/m² grey");
 }
 
@@ -284,6 +293,7 @@ fn a_changed_source_description_reconfigures_the_pipeline() {
 
     assert_codes(&first, ten_bit_code(white), 1, "sdr white");
     assert_codes(&second, 700, 0, "pq grey");
+
     assert_eq!(first, third);
 }
 
@@ -298,9 +308,11 @@ fn downscaling_follows_the_linear_light_setting() {
     };
     let downscaled = |linear_light: bool| {
         let mut config = config(srgb(), BitDepth::Eight);
+
         config.video.resolution = Some(Resolution::new(SIZE.width / 2, SIZE.height));
         config.scaling.downscale.filter = rusplay_core::ScaleFilter::Bilinear;
         config.scaling.downscale.linear_light = linear_light;
+
         let mut pipeline = pipeline(config)?;
 
         Some(luma_row(&mut pipeline, &frame(*b"XR24", srgb(), stripes)))
@@ -313,6 +325,7 @@ fn downscaling_follows_the_linear_light_setting() {
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let linear_code = (srgb_half * EIGHT_BIT_MAX).round() as u32;
+
     assert_codes(&linear[1..linear.len() - 1], linear_code, 1, "linear light");
     assert_codes(&gamma[1..gamma.len() - 1], 128, 1, "gamma light");
 }
@@ -397,6 +410,7 @@ fn an_unimportable_dmabuf_asks_the_capture_for_shared_memory() {
         return;
     };
     let fallback = ShmFallback::default();
+
     let mut with_fallback =
         GpuPipeline::new(gpu.clone(), Config::default(), Some(fallback.clone()));
     let mut without = GpuPipeline::new(gpu, Config::default(), None);
@@ -427,6 +441,7 @@ fn a_transient_import_error_drops_the_frame_without_leaving_dmabuf() {
         return;
     };
     let fallback = ShmFallback::default();
+
     let mut pipeline = GpuPipeline::new(gpu, Config::default(), Some(fallback.clone()));
     let transient = || HostError::Scale(ScaleError::DmaBufNoMemoryType);
 
@@ -477,9 +492,13 @@ fn only_a_format_or_modifier_rejection_asks_for_shared_memory() {
 #[test]
 fn gpu_fence_waits_convert_like_cpu_fence_waits() {
     let mut on = config(srgb(), BitDepth::Eight);
+
     on.capture.dmabuf_gpu_fence_wait = true;
+
     let mut off = on.clone();
+
     off.capture.dmabuf_gpu_fence_wait = false;
+
     let (Some(mut gpu_wait), Some(mut cpu_wait)) = (dmabuf_pipeline(on), dmabuf_pipeline(off))
     else {
         return;
@@ -497,7 +516,9 @@ fn gpu_fence_waits_convert_like_cpu_fence_waits() {
 #[test]
 fn a_fence_the_gpu_cannot_wait_on_falls_back_to_the_cpu_wait() {
     let mut config = config(srgb(), BitDepth::Eight);
+
     config.capture.dmabuf_fence_timeout_ms = 5;
+
     let Some(pipeline) = dmabuf_pipeline(config) else {
         return;
     };
@@ -517,6 +538,7 @@ fn a_capture_wider_than_the_device_limit_is_an_error_not_an_abort() {
     let limit = gpu.device.limits().max_texture_dimension_2d;
     let mut pipeline = GpuPipeline::new(gpu, Config::default(), None);
     let mut oversized = frame(*b"XR24", srgb(), |_| 0);
+
     oversized.resolution = Resolution::new(limit + 1, 1);
 
     let result = pipeline.encode(&oversized, true);
@@ -535,7 +557,9 @@ fn a_stream_resolution_past_the_device_limit_is_an_error_not_an_abort() {
     };
     let limit = gpu.device.limits().max_texture_dimension_2d;
     let mut config = Config::default();
+
     config.video.resolution = Some(Resolution::new(1, limit + 1));
+
     let mut pipeline = GpuPipeline::new(gpu, config, None);
 
     let result = pipeline.encode(&frame(*b"XR24", srgb(), |_| 0), true);
@@ -568,6 +592,7 @@ fn a_gpu_error_raised_between_frames_ends_the_next_frame_with_it() {
         usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     }));
+
     let repeated = pipeline.repeat(Timestamp::ZERO, false);
     let after = pipeline.encode(&frame(*b"XR24", srgb(), |_| 0), true);
 
@@ -581,15 +606,18 @@ fn a_gpu_error_raised_between_frames_ends_the_next_frame_with_it() {
 #[test]
 fn a_conversion_the_handoff_refuses_falls_back_to_the_readback() {
     let mut config = config(srgb(), BitDepth::Eight);
+
     config.video.pixel_format.chroma =
         rusplay_config::ChromaChoice::pinned(ChromaSubsampling::Yuv420);
     config.video.encoder_gpu_handoff = false;
+
     let format = config.video.pixel_format;
     let grey = frame(*b"XR30", srgb(), |_| xrgb2101010(512, 512, 512));
     let Some(mut reference) = pipeline(config.clone()) else {
         return;
     };
     let mut pipeline = pipeline(config).unwrap();
+
     pipeline.handoff = HandoffState::Trying(Handoff {
         backend: rusplay_encode::Backend::X264,
         input: rusplay_encode::device::device_input(

@@ -62,7 +62,9 @@ impl<T> Publisher<T> {
     pub fn replace(&self, value: T) -> Option<T> {
         let stale = {
             let mut guard = self.shared.state.lock();
+
             let stale = guard.pending.replace(value);
+
             if stale.is_some() {
                 guard.superseded += 1;
             }
@@ -76,6 +78,7 @@ impl<T> Publisher<T> {
     pub fn merge(&self, value: T, combine: impl FnOnce(T, T) -> T) {
         {
             let mut guard = self.shared.state.lock();
+
             let merged = match guard.pending.take() {
                 Some(stale) => {
                     guard.superseded += 1;
@@ -83,6 +86,7 @@ impl<T> Publisher<T> {
                 }
                 None => value,
             };
+
             guard.pending = Some(merged);
         }
 
@@ -201,6 +205,7 @@ mod tests {
         });
 
         assert_eq!(subscriber.recv(), Some(42));
+
         producer.join().unwrap();
     }
 

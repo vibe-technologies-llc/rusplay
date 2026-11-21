@@ -73,10 +73,13 @@ fn bt2390_is_smooth_at_the_knee_and_monotonic() {
 
     assert!((below - 1.0).abs() < 1e-4);
     assert!((above - 1.0).abs() < 1e-4);
+
     let mut previous = 0.0;
     for index in 0..=1000 {
         let mapped = eetf.bt2390(f64::from(index) / 1000.0);
+
         assert!(mapped >= previous && mapped <= eetf.max_lum() + 1e-12);
+
         previous = mapped;
     }
 }
@@ -100,16 +103,20 @@ fn every_operator_is_monotonic_and_lands_on_the_target_peak() {
             let tone = curve(operator, source_peak, target_peak);
 
             let mut previous = 0.0;
+
             for index in 0..=2000 {
                 let nits = source_peak * (f64::from(index) / 2000.0).powi(3);
                 let mapped = tone.map_nits(nits);
+
                 assert!(
                     mapped + 1e-9 >= previous,
                     "{operator} {source_peak}: {nits} -> {mapped} < {previous}"
                 );
                 assert!(mapped <= target_peak * (1.0 + 1e-9));
+
                 previous = mapped;
             }
+
             assert!(
                 (tone.map_nits(source_peak) - target_peak).abs() < 1e-6 * target_peak,
                 "{operator} {source_peak} -> {}",
@@ -188,6 +195,7 @@ fn content_metadata_sets_the_source_peak() {
         transfer: rusplay_core::TransferFunction::Pq,
         ..rusplay_core::ColorSpace::default()
     };
+
     color.hdr.content_light = Some(rusplay_core::ContentLightLevel {
         max_cll_nits: 2500,
         max_fall_nits: 400,
@@ -238,6 +246,7 @@ fn hdr_bt2020_reaches_an_sdr_p3_display_in_range_with_hue_held() {
     .unwrap();
 
     assert_eq!(plan.path(), MappingPath::Perceptual);
+
     for level in [0.5, 1.0, 2.0, 4.9] {
         for source in primaries_and_secondaries(level) {
             let mapped = reference::map(&plan, source);
@@ -258,7 +267,9 @@ fn hdr_bt2020_reaches_an_sdr_p3_display_in_range_with_hue_held() {
     let mut previous = 0.0;
     for step in 0..=50 {
         let grey = reference::map(&plan, [f64::from(step) / 10.0; 3]);
+
         assert!(grey[1] >= previous - 1e-9 && grey[1] <= 1.0);
+
         previous = grey[1];
     }
 }
@@ -313,6 +324,7 @@ fn assert_matches(plan: &ColorPlan, curve: Option<ToneCurve>, image: &Image, out
 
         for channel in 0..3 {
             let tolerance = 2.0 * f64::from(RGBA16F_TOLERANCE) * want[channel].abs().max(1.0);
+
             assert!(
                 (f64::from(got[channel]) - want[channel]).abs() <= tolerance,
                 "{input:?}: {:?} != {want:?}",
@@ -351,6 +363,7 @@ fn gpu_matches_reference_for_every_operator() {
             let output = map_on_gpu(gpu, &mut mapper, &image);
 
             let plan = mapper.plan();
+
             assert_matches(plan, plan.tone().map(|stage| stage.curve), &image, &output);
         }
     }
@@ -395,7 +408,9 @@ fn dynamic_peak_follows_frames_smooths_and_resets_on_scene_cuts() {
         ToneMapOperator::Bt2390,
         Some(dynamic),
     );
+
     let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();
+
     let stage = mapper.plan().tone().unwrap();
     let frames = [
         hdr_image(64, 48, 10.0, 7),
@@ -417,9 +432,11 @@ fn dynamic_peak_follows_frames_smooths_and_resets_on_scene_cuts() {
         );
         assert!((measured.previous_average_pq - next.previous_average_pq).abs() < 1e-5);
         assert!((source_peak - curve.source_peak_nits).abs() < 1e-3 * curve.source_peak_nits);
+
         assert_matches(mapper.plan(), Some(curve), image, &output);
 
         let follows_frame = (next.smoothed_peak_pq - frame_peak(&bins, 0.99)).abs() < 1e-12;
+
         if index == 1 {
             assert!(next.smoothed_peak_pq < frame_peak(&bins, 0.99));
         } else {
@@ -432,6 +449,7 @@ fn dynamic_peak_follows_frames_smooths_and_resets_on_scene_cuts() {
 fn frame_peak(bins: &[u32], fraction: f64) -> f64 {
     let total: u32 = bins.iter().sum();
     let mut cumulative = 0;
+
     let bin = bins
         .iter()
         .position(|count| {
@@ -450,6 +468,7 @@ fn tone_mapped_saturated_highlights_stay_inside_the_target_range() {
     let source_white = ColorVolume::SDR_REFERENCE_WHITE_NITS;
     let red_luminance_nits = 400.0;
     let bt2020_red_luminance = 0.2627;
+
     let red = red_luminance_nits / (source_white * bt2020_red_luminance);
 
     let plan = ColorPlan::new(&tone_settings(

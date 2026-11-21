@@ -13,7 +13,7 @@ const BT601_CODE: u8 = 6;
 const BT2020_10_BIT_CODE: u8 = 14;
 const BT2020_12_BIT_CODE: u8 = 15;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TransferFunction {
     #[default]

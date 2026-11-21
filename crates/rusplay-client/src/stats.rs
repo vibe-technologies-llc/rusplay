@@ -13,7 +13,7 @@ use crate::{
 const SMOOTHING_DIVISOR: u64 = 8;
 const BITRATE_TARGET_UNSET: u64 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ClientStats {
     pub frames_received: u64,
     pub frames_recovered: u64,
@@ -101,11 +101,13 @@ impl Gauge {
     pub(crate) fn record(&self, sample: Duration) {
         let nanos = u64::try_from(sample.as_nanos()).unwrap_or(u64::MAX).max(1);
         let current = self.0.load(Ordering::Relaxed);
+
         let smoothed = if current == 0 {
             nanos
         } else {
             current - current / SMOOTHING_DIVISOR + nanos / SMOOTHING_DIVISOR
         };
+
         self.0.store(smoothed, Ordering::Relaxed);
     }
 
@@ -178,6 +180,7 @@ pub(crate) struct Counters {
 impl Counters {
     pub(crate) fn wanting_quality(wanted: bool) -> Self {
         let counters = Self::default();
+
         counters.quality.want(wanted);
         counters
     }
@@ -260,6 +263,7 @@ impl Counters {
         let nanos = rtt.map_or(0, |rtt| {
             u64::try_from(rtt.as_nanos()).unwrap_or(u64::MAX).max(1)
         });
+
         self.rtt_nanos.set(nanos);
     }
 }
@@ -275,9 +279,11 @@ mod tests {
         assert_eq!(gauge.get(), None);
 
         gauge.record(Duration::from_millis(80));
+
         assert_eq!(gauge.get(), Some(Duration::from_millis(80)));
 
         gauge.record(Duration::from_millis(160));
+
         assert_eq!(gauge.get(), Some(Duration::from_millis(90)));
     }
 }

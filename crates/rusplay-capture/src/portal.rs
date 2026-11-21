@@ -12,7 +12,7 @@ use rusplay_core::Resolution;
 
 use crate::{CaptureError, RestoreTokenStore};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PortalStream {
     pub node_id: u32,
     pub size: Option<Resolution>,
@@ -56,7 +56,9 @@ impl PortalSession {
         restore_token: Option<&str>,
     ) -> Result<Self, CaptureError> {
         let proxy = Screencast::new().await?;
+
         require_source(&proxy, config.source).await?;
+
         let session = proxy
             .create_session(CreateSessionOptions::default())
             .await?;
@@ -72,6 +74,7 @@ impl PortalSession {
             .set_multiple(false)
             .set_persist_mode(persist)
             .set_restore_token(restore_token);
+
         proxy.select_sources(&session, sources).await?;
 
         let response = proxy
@@ -87,6 +90,7 @@ impl PortalSession {
                 mapping_id: stream.mapping_id().map(str::to_owned),
             })
             .collect();
+
         if streams.is_empty() {
             return Err(CaptureError::NoStreams);
         }
@@ -114,11 +118,14 @@ impl SharedScreencast {
         session: &Session<impl IsScreencastSession>,
     ) -> Result<Self, CaptureError> {
         let proxy = Screencast::new().await?;
+
         require_source(&proxy, config.source).await?;
+
         let sources = SelectSourcesOptions::default()
             .set_cursor_mode(portal_cursor(config.cursor))
             .set_sources(portal_sources(config.source))
             .set_multiple(false);
+
         proxy.select_sources(session, sources).await?;
 
         Ok(Self { proxy })

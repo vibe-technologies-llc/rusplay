@@ -10,7 +10,7 @@ use rusplay_protocol::ProtocolError;
 use rusplay_scale::{GpuFault, ScaleError};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum Stage {
     Capture,
     Encode,

@@ -16,7 +16,7 @@ use crate::{NetError, pairing::fill_random};
 const MULTICAST_TTL: u32 = 1;
 const SCAN_RESEND_DIVISIONS: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DiscoveryOptions {
     pub port: u16,
     pub group: Ipv4Addr,
@@ -47,6 +47,7 @@ impl DiscoveryOptions {
 
     pub fn link_targets(&self, links: &[Ipv4Link]) -> Vec<SocketAddr> {
         let mut targets = self.targets();
+
         for broadcast in links.iter().filter_map(|link| link.broadcast) {
             let target = SocketAddr::new(IpAddr::V4(broadcast), self.port);
             if !targets.contains(&target) {
@@ -58,7 +59,7 @@ impl DiscoveryOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ipv4Link {
     pub address: Ipv4Addr,
     pub broadcast: Option<Ipv4Addr>,
@@ -78,6 +79,7 @@ impl Ipv4Link {
 
 pub fn ipv4_links() -> Vec<Ipv4Link> {
     let mut links: Vec<Ipv4Link> = Vec::new();
+
     for link in if_addrs::get_if_addrs()
         .unwrap_or_default()
         .iter()
@@ -91,7 +93,7 @@ pub fn ipv4_links() -> Vec<Ipv4Link> {
     links
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscoveredHost {
     pub address: SocketAddr,
     pub name: String,
@@ -122,6 +124,7 @@ impl DiscoveryResponder {
             host_id: HostId::NONE,
             name: name.to_owned(),
         };
+
         announce.to_datagram()?;
 
         let socket = UdpSocket::bind(listen).map_err(|source| NetError::Bind {
@@ -174,6 +177,7 @@ impl DiscoveryResponder {
             .map_err(NetError::ReadTimeout)?;
 
         let mut buf = [0; DiscoveryMessage::MAX_ENCODED_LEN + 16];
+
         let (len, from) = match self.socket.recv_from(&mut buf) {
             Ok(received) => received,
             Err(error) if is_timeout(&error) => return Ok(false),
@@ -207,6 +211,7 @@ fn join_on_every_link(
     links: &[Ipv4Link],
 ) -> Result<(), NetError> {
     let mut joined = false;
+
     for link in links {
         joined |= socket.join_multicast_v4(&group, &link.address).is_ok();
     }
@@ -246,6 +251,7 @@ impl DiscoveryBrowser {
     pub fn with_options(options: DiscoveryOptions) -> Result<Self, NetError> {
         let links = ipv4_links();
         let mut browser = Self::new(options.link_targets(&links))?;
+
         browser.links = links;
 
         Ok(browser)
@@ -264,6 +270,7 @@ impl DiscoveryBrowser {
 
         loop {
             let now = Instant::now();
+
             if now >= deadline {
                 return Ok(hosts);
             }
@@ -274,6 +281,7 @@ impl DiscoveryBrowser {
             }
 
             let wait = next_send.min(deadline).saturating_duration_since(now);
+
             self.socket
                 .set_read_timeout(Some(wait.max(Duration::from_millis(1))))
                 .map_err(NetError::ReadTimeout)?;
@@ -326,6 +334,7 @@ impl DiscoveryBrowser {
             .targets
             .iter()
             .filter(|target| target.ip().is_multicast());
+
         for group in groups {
             for link in &self.links {
                 let sent = rustix::net::sockopt::set_ip_multicast_if(&self.socket, &link.address)
@@ -357,6 +366,7 @@ fn is_timeout(error: &std::io::Error) -> bool {
 
 fn fresh_nonce() -> Result<u32, NetError> {
     let mut bytes = [0; 4];
+
     fill_random(&mut bytes)?;
     Ok(u32::from_be_bytes(bytes))
 }
@@ -397,6 +407,7 @@ mod tests {
         let found = browser.scan(SCAN).unwrap();
 
         server.join().unwrap();
+
         assert_eq!(
             found,
             [DiscoveredHost {
@@ -417,6 +428,7 @@ mod tests {
                 .unwrap()
                 .with_busy_flag(Arc::clone(&busy)),
         );
+
         let servers = [serve(&idle, 1), serve(&mid_session, 1)];
         let browser = DiscoveryBrowser::new(vec![
             idle.local_addr().unwrap(),
@@ -430,10 +442,12 @@ mod tests {
             server.join().unwrap();
         }
         found.sort_by_key(|host| host.address.port());
+
         let states: Vec<(&str, bool)> = found
             .iter()
             .map(|host| (host.name.as_str(), host.busy))
             .collect();
+
         assert_eq!(states, [("idle", false), ("mid-session", true)]);
     }
 
@@ -451,6 +465,7 @@ mod tests {
         let found = browser.scan(SCAN).unwrap();
 
         server.join().unwrap();
+
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, id);
     }
@@ -459,6 +474,7 @@ mod tests {
     fn browser_collects_every_host_once() {
         let first = responder("one", 1111);
         let second = responder("two", 2222);
+
         let servers = [serve(&first, 1), serve(&second, 1)];
         let browser = DiscoveryBrowser::new(vec![
             first.local_addr().unwrap(),
@@ -472,7 +488,9 @@ mod tests {
             server.join().unwrap();
         }
         found.sort_by_key(|host| host.address.port());
+
         let names: Vec<&str> = found.iter().map(|host| host.name.as_str()).collect();
+
         assert_eq!(names, ["one", "two"]);
     }
 
@@ -492,6 +510,7 @@ mod tests {
     fn responder_ignores_garbage() {
         let host = responder("quiet", 1);
         let prober = UdpSocket::bind(LOOPBACK).unwrap();
+
         prober
             .set_read_timeout(Some(Duration::from_millis(100)))
             .unwrap();
@@ -499,6 +518,7 @@ mod tests {
         prober
             .send_to(&[1, 2, 3], host.local_addr().unwrap())
             .unwrap();
+
         let answered = host.handle_next(Duration::from_millis(500)).unwrap();
 
         assert!(!answered);
@@ -519,6 +539,7 @@ mod tests {
         }
         .to_datagram()
         .unwrap();
+
         intruder.send_to(&forged, browser_addr).unwrap();
 
         let found = browser.scan(Duration::from_millis(100)).unwrap();
@@ -579,6 +600,7 @@ mod tests {
         let targets = options.link_targets(&links);
 
         let port = options.port;
+
         assert_eq!(&targets[..2], options.targets().as_slice());
         assert_eq!(
             &targets[2..],

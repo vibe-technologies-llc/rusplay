@@ -60,6 +60,7 @@ impl Display {
             })?;
 
         let raw = unsafe { ffi::vaGetDisplayDRM(device.as_raw_fd()) };
+
         if raw.is_null() {
             return Err(VaError::DisplayUnavailable {
                 path: path.to_owned(),
@@ -72,6 +73,7 @@ impl Display {
         });
 
         let (mut major, mut minor) = (0, 0);
+
         check(VaCall::Initialize, unsafe {
             ffi::vaInitialize(display.raw, &raw mut major, &raw mut minor)
         })?;
@@ -103,6 +105,7 @@ impl Display {
 
     pub fn vendor(&self) -> Option<String> {
         let vendor = unsafe { ffi::vaQueryVendorString(self.raw) };
+
         if vendor.is_null() {
             return None;
         }
@@ -117,6 +120,7 @@ impl Display {
     pub fn profiles(&self) -> Result<Vec<Profile>, VaError> {
         let mut profiles = vec![0; usize_of(unsafe { ffi::vaMaxNumProfiles(self.raw) })];
         let mut count = 0;
+
         check(VaCall::QueryConfigProfiles, unsafe {
             ffi::vaQueryConfigProfiles(self.raw, profiles.as_mut_ptr(), &raw mut count)
         })?;
@@ -128,6 +132,7 @@ impl Display {
     pub fn entrypoints(&self, profile: Profile) -> Result<Vec<Entrypoint>, VaError> {
         let mut entrypoints = vec![0; usize_of(unsafe { ffi::vaMaxNumEntrypoints(self.raw) })];
         let mut count = 0;
+
         check(VaCall::QueryConfigEntrypoints, unsafe {
             ffi::vaQueryConfigEntrypoints(
                 self.raw,
@@ -148,6 +153,7 @@ impl Display {
         types: [AttributeType; N],
     ) -> Result<[Option<u32>; N], VaError> {
         let mut attributes = types.map(|type_| ffi::VAConfigAttrib { type_, value: 0 });
+
         check(VaCall::GetConfigAttributes, unsafe {
             ffi::vaGetConfigAttributes(
                 self.raw,
@@ -184,7 +190,7 @@ impl Drop for Display {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SizeLimits {
     pub min: Resolution,
     pub max: Resolution,
@@ -214,6 +220,7 @@ impl Config {
             .map(|&(type_, value)| ffi::VAConfigAttrib { type_, value })
             .collect();
         let mut id = ffi::VA_INVALID_ID;
+
         if display.is_detached() {
             return Ok(Self {
                 display: Rc::clone(display),
@@ -240,6 +247,7 @@ impl Config {
 
     pub fn size_limits(&self) -> Result<SizeLimits, VaError> {
         let mut count: c_uint = 0;
+
         check(VaCall::QuerySurfaceAttributes, unsafe {
             ffi::vaQuerySurfaceAttributes(
                 self.display.raw,
@@ -250,6 +258,7 @@ impl Config {
         })?;
 
         let mut attributes = vec![ffi::VASurfaceAttrib::default(); usize_of(count)];
+
         check(VaCall::QuerySurfaceAttributes, unsafe {
             ffi::vaQuerySurfaceAttributes(
                 self.display.raw,
@@ -264,10 +273,12 @@ impl Config {
             min: Resolution::new(1, 1),
             max: Resolution::new(u32::MAX, u32::MAX),
         };
+
         for attribute in &attributes {
             if attribute.value.type_ != ffi::VAGenericValueType_VAGenericValueTypeInteger {
                 continue;
             }
+
             let value = u32::try_from(unsafe { attribute.value.value.i }).unwrap_or(0);
             match attribute.type_ {
                 ffi::VASurfaceAttribType_VASurfaceAttribMinWidth => limits.min.width = value,
@@ -305,12 +316,14 @@ impl Context {
         targets: &[SurfaceId],
     ) -> Result<Self, VaError> {
         let mut targets = targets.to_vec();
+
         let target_list = if targets.is_empty() {
             ptr::null_mut()
         } else {
             targets.as_mut_ptr()
         };
         let mut id = ffi::VA_INVALID_ID;
+
         if config.display.is_detached() {
             return Ok(Self {
                 display: Rc::clone(&config.display),
@@ -383,6 +396,7 @@ impl Context {
         data: *mut c_void,
     ) -> Result<Buffer, VaError> {
         let mut id = ffi::VA_INVALID_ID;
+
         if self.display.is_detached() {
             return Ok(Buffer {
                 display: Rc::clone(&self.display),
@@ -418,6 +432,7 @@ impl Context {
         check(VaCall::BeginPicture, unsafe {
             ffi::vaBeginPicture(self.display.raw, self.id, target)
         })?;
+
         let rendered = check(VaCall::RenderPicture, unsafe {
             ffi::vaRenderPicture(
                 self.display.raw,
@@ -456,6 +471,7 @@ impl Buffer {
 
     pub fn map(&self) -> Result<*mut c_void, VaError> {
         let mut mapped = ptr::null_mut();
+
         check(VaCall::MapBuffer, unsafe {
             ffi::vaMapBuffer(self.display.raw, self.id, &raw mut mapped)
         })?;

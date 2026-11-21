@@ -144,17 +144,25 @@ fn stream(format: PixelFormat, resolution: Resolution) -> HevcStream {
 
 fn parse(stream: &HevcStream) -> Parsed {
     let mut data = stream.vps();
+
     data.extend(stream.sps());
     data.extend(stream.pps());
+
     let mut parser = Parser::default();
     let mut cursor = Cursor::new(data.as_slice());
 
     let vps_nalu = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_vps(&vps_nalu).unwrap();
+
     let sps_nalu = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_sps(&sps_nalu).unwrap();
+
     let pps_nalu = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_pps(&pps_nalu).unwrap();
+
     let nalus = [&vps_nalu, &sps_nalu, &pps_nalu];
 
     Parsed {
@@ -175,18 +183,26 @@ struct ParsedSlice {
 
 fn parse_slice(stream: &HevcStream, keyframe: bool, order: i32) -> ParsedSlice {
     let mut data = stream.vps();
+
     data.extend(stream.sps());
     data.extend(stream.pps());
     data.extend(stream.slice_header(keyframe, order).bytes);
+
     let mut parser = Parser::default();
     let mut cursor = Cursor::new(data.as_slice());
 
     let vps = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_vps(&vps).unwrap();
+
     let sps = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_sps(&sps).unwrap();
+
     let pps = Nalu::next(&mut cursor).unwrap();
+
     parser.parse_pps(&pps).unwrap();
+
     let slice_nalu = Nalu::next(&mut cursor).unwrap();
     let nal_type = slice_nalu.header.type_;
     let layer_id = slice_nalu.header.nuh_layer_id;
@@ -210,6 +226,7 @@ fn assert_profile_tier_level(
     assert_eq!(ptl.general_profile_space, 0);
     assert_eq!(ptl.general_tier_flag, high_tier);
     assert_eq!(ptl.general_profile_idc, case.idc);
+
     for (index, flag) in ptl.general_profile_compatibility_flag.iter().enumerate() {
         assert_eq!(
             *flag,
@@ -217,10 +234,12 @@ fn assert_profile_tier_level(
             "compatibility flag {index}"
         );
     }
+
     assert!(ptl.general_progressive_source_flag);
     assert!(!ptl.general_interlaced_source_flag);
     assert!(!ptl.general_non_packed_constraint_flag);
     assert!(ptl.general_frame_only_constraint_flag);
+
     if let Some([max_12, max_10, max_8, max_422, max_420]) = case.range_extension {
         assert_eq!(ptl.general_max_12bit_constraint_flag, max_12);
         assert_eq!(ptl.general_max_10bit_constraint_flag, max_10);
@@ -232,6 +251,7 @@ fn assert_profile_tier_level(
         assert!(!ptl.general_one_picture_only_constraint_flag);
         assert!(ptl.general_lower_bit_rate_constraint_flag);
     }
+
     assert!(!ptl.general_inbld_flag);
     assert_eq!(ptl.general_level_idc as u8, level);
     assert!(ptl.sub_layer_profile_present_flag.iter().all(|flag| !flag));
@@ -243,7 +263,9 @@ fn vps_carries_every_field_the_writer_sets() {
     for format in every_format() {
         for frame_rate in frame_rates() {
             let mut info = stream_info(format, Resolution::new(1920, 1080));
+
             info.frame_rate = frame_rate;
+
             let parsed = parse(&HevcStream::new(HevcProfile::for_format(format), info));
             let vps = &parsed.vps;
 
@@ -301,8 +323,10 @@ fn level_and_tier_follow_resolution_rate_and_bitrate() {
     for (width, height, fps, kbps, level, high_tier) in cases {
         let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
         let mut info = stream_info(format, Resolution::new(width, height));
+
         info.frame_rate = FrameRate::integer(fps);
         info.peak_kbps = kbps;
+
         let stream = HevcStream::new(HevcProfile::Main, info);
 
         let parsed = parse(&stream);
@@ -386,10 +410,14 @@ fn sps_carries_every_field_the_writer_sets() {
             assert!(sps.sample_adaptive_offset_enabled_flag);
             assert!(!sps.pcm_enabled_flag);
             assert_eq!(sps.num_short_term_ref_pic_sets, 2);
+
             let empty_set = &sps.short_term_ref_pic_set[1];
+
             assert_eq!(empty_set.num_negative_pics, 0);
             assert_eq!(empty_set.num_positive_pics, 0);
+
             let reference_set = &sps.short_term_ref_pic_set[0];
+
             assert!(!reference_set.inter_ref_pic_set_prediction_flag);
             assert_eq!(reference_set.num_negative_pics, 1);
             assert_eq!(reference_set.num_positive_pics, 0);
@@ -410,8 +438,10 @@ fn vui_signals_colour_timing_and_restrictions() {
         for frame_rate in frame_rates() {
             for format in every_format() {
                 let mut info = stream_info(format, Resolution::new(1920, 1080));
+
                 info.color = case.color;
                 info.frame_rate = frame_rate;
+
                 let parsed = parse(&HevcStream::new(HevcProfile::for_format(format), info));
                 let vui = &parsed.sps.vui_parameters;
 
@@ -457,7 +487,9 @@ fn pps_carries_every_field_the_writer_sets() {
 
     for (qp, delta) in [(None, 0), (Some(18), -8), (Some(26), 0), (Some(40), 14)] {
         let mut info = stream_info(format, Resolution::new(402, 226));
+
         info.qp = qp;
+
         let parsed = parse(&HevcStream::new(HevcProfile::Main, info));
         let pps = &parsed.pps;
 
@@ -499,10 +531,13 @@ fn nal_units_are_layer_zero_temporal_zero_and_escaped() {
         let parsed = parse(&stream);
 
         assert_eq!(parsed.nal_ids, [(0, 1); 3]);
+
         for bytes in [stream.vps(), stream.sps(), stream.pps()] {
             assert_no_start_code_emulation(&bytes);
+
             assert_ne!(*bytes.last().unwrap(), 0);
         }
+
         assert_eq!(
             stream.sequence_header().bytes,
             [stream.vps(), stream.sps()].concat()
@@ -546,6 +581,7 @@ fn slice_headers_carry_type_poc_and_sao() {
         assert_eq!(header.five_minus_max_num_merge_cand, 0);
         assert_eq!(header.qp_delta, 0);
         assert!(header.loop_filter_across_slices_enabled_flag);
+
         assert_no_start_code_emulation(&stream.slice_header(false, order).bytes);
     }
 
@@ -665,7 +701,9 @@ fn vui_parameters_agree_with_the_vui() {
     for format in every_format() {
         for frame_rate in frame_rates() {
             let mut info = stream_info(format, Resolution::new(1920, 1080));
+
             info.frame_rate = frame_rate;
+
             let stream = HevcStream::new(HevcProfile::for_format(format), info);
             let parsed = parse(&stream);
             let sps = &parsed.sps;
@@ -720,6 +758,7 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
 
     for geometry in &GEOMETRIES {
         let mut stream = stream(format, geometry.resolution);
+
         let parsed = parse(&stream);
         let mut previous: Option<Picture> = None;
 
@@ -728,7 +767,9 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
                 recon: 200 + u32::try_from(position).unwrap(),
                 ..picture(index, keyframe)
             };
+
             stream.begin(&picture);
+
             let order = HevcStream::order(&picture);
             let slice = parse_slice(&stream, keyframe, order);
 
@@ -784,6 +825,7 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
                 slice_fields.slice_loop_filter_across_slices_enabled_flag() == 1,
                 slice.header.loop_filter_across_slices_enabled_flag
             );
+
             if keyframe {
                 assert_eq!(
                     picture_parameters.reference_frames[0].flags,
@@ -808,6 +850,7 @@ fn picture_and_slice_parameters_follow_the_stream_state() {
                 assert_eq!(slice_parameters.ref_pic_list0[0].picture_id, previous.recon);
                 assert_eq!(slice_parameters.ref_pic_list0[0].pic_order_cnt, order - 1);
             }
+
             assert_eq!(
                 picture_parameters.reference_frames[1].flags,
                 if !keyframe && index == 2 {
@@ -874,6 +917,7 @@ fn slice_headers_keep_both_long_term_frames_in_the_rps() {
             },
             "frame {index}"
         );
+
         walked += 1;
         if !picture.keyframe {
             let held: Vec<(usize, u64)> = slots
@@ -889,6 +933,7 @@ fn slice_headers_keep_both_long_term_frames_in_the_rps() {
                 held.len(),
                 "frame {index}"
             );
+
             for (position, (slot, poc)) in held.iter().enumerate() {
                 assert_eq!(
                     u64::from(header.poc_lsb_lt[position]),
@@ -902,11 +947,13 @@ fn slice_headers_keep_both_long_term_frames_in_the_rps() {
                 );
                 assert!(!header.delta_poc_msb_present_flag[position]);
             }
+
             assert_eq!(
                 header.short_term_ref_pic_set_idx,
                 u8::from(referenced.is_some()),
                 "frame {index}"
             );
+
             if let Some(slot) = referenced {
                 assert_eq!(
                     slice.ref_pic_list0[0].flags,
@@ -922,6 +969,7 @@ fn slice_headers_keep_both_long_term_frames_in_the_rps() {
                     ffi::VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE
                 );
             }
+
             let listed = held.len() + usize::from(referenced.is_none());
             for (position, entry) in parameters.reference_frames.iter().enumerate() {
                 assert_eq!(
@@ -969,10 +1017,13 @@ fn a_recovery_frame_references_the_newest_acknowledged_long_term_frame() {
     let mut stream = stream(format, Resolution::new(402, 226));
 
     long_term_walk(&mut stream, frames(13), |_, _| {});
+
     let reference = stream.recover(OutputIndex(10));
     let recovery = picture(13, false);
     let order = HevcStream::order(&recovery);
+
     stream.begin(&recovery);
+
     let header = parse_slice(&stream, false, order).header;
     let parameters = stream.picture_parameters(&recovery, order);
     let slice = stream.slice_parameters(&recovery);
@@ -996,10 +1047,13 @@ fn a_recovery_while_the_newest_candidate_is_unacknowledged_uses_the_older_slot()
     let mut stream = stream(format, Resolution::new(402, 226));
 
     long_term_walk(&mut stream, frames(13), |_, _| {});
+
     let reference = stream.recover(OutputIndex(5));
     let recovery = picture(13, false);
     let order = HevcStream::order(&recovery);
+
     stream.begin(&recovery);
+
     let header = parse_slice(&stream, false, order).header;
     let parameters = stream.picture_parameters(&recovery, order);
     let slice = stream.slice_parameters(&recovery);
@@ -1027,7 +1081,9 @@ fn an_unverified_driver_keeps_one_short_term_reference() {
         long_term_references: false,
         ..stream_info(format, Resolution::new(402, 226))
     };
+
     let mut stream = HevcStream::new(HevcProfile::for_format(format), info);
+
     let parsed = parse(&stream);
     let sps = parsed.sps;
 
@@ -1035,6 +1091,7 @@ fn an_unverified_driver_keeps_one_short_term_reference() {
     assert_eq!(parsed.vps.max_dec_pic_buffering_minus1[0], 1);
     assert_eq!(sps.num_short_term_ref_pic_sets, 1);
     assert!(!sps.long_term_ref_pics_present_flag);
+
     long_term_walk(&mut stream, frames(20), |stream, picture| {
         let order = HevcStream::order(picture);
         let header = parse_slice(stream, picture.keyframe, order).header;
@@ -1054,6 +1111,7 @@ fn an_unverified_driver_keeps_one_short_term_reference() {
 #[test]
 fn every_level_allows_the_decoded_picture_buffer() {
     const SMALLEST_LEVEL_MAX_DPB_SIZE: u8 = 6;
+
     let format = pixel(ChromaSubsampling::Yuv420, BitDepth::Eight);
 
     for geometry in &GEOMETRIES {

@@ -85,6 +85,7 @@ fn hue_delta_e_itp(source: [f64; 3], mapped: [f64; 3]) -> f64 {
     let (source_tp, mapped_tp) = (itp(source), itp(mapped));
     let source_chroma = source_tp[0].hypot(source_tp[1]);
     let mapped_chroma = mapped_tp[0].hypot(mapped_tp[1]);
+
     let angle = source_tp[1].atan2(source_tp[0]) - mapped_tp[1].atan2(mapped_tp[0]);
 
     DELTA_E_ITP_SCALE * 2.0 * (source_chroma * mapped_chroma).sqrt() * (angle / 2.0).sin().abs()
@@ -103,6 +104,7 @@ pub(super) fn primaries_and_secondaries(level: f64) -> [[f64; 3]; 6] {
 
 pub(super) fn unit_hash(index: u32, seed: u32) -> f64 {
     let mut state = index.wrapping_mul(0x9E37_79B1) ^ seed.wrapping_mul(0x85EB_CA77);
+
     state ^= state >> 15;
     state = state.wrapping_mul(0x2C1B_3C6D);
     state ^= state >> 12;
@@ -225,10 +227,12 @@ fn colours_well_inside_the_target_are_unchanged() {
         for index in 0..400 {
             let srgb = [0, 1, 2].map(|channel| 0.05 + 0.9 * unit_hash(index, channel));
             let grey = (srgb[0] + srgb[1] + srgb[2]) / 3.0;
+
             let muted = srgb.map(|value| grey + 0.5 * (value - grey));
             let source = to_bt2020.apply(muted);
 
             let [lightness, a, b] = reference::source_lab(&plan, source);
+
             let chroma = a.hypot(b);
             let hue = [a / chroma, b / chroma];
             let target_limit = reference::chroma_boundary(
@@ -238,6 +242,7 @@ fn colours_well_inside_the_target_are_unchanged() {
                 &plan.work_to_target,
                 plan.target_chroma_limit,
             );
+
             if chroma >= plan.knee * target_limit {
                 continue;
             }
@@ -249,6 +254,7 @@ fn colours_well_inside_the_target_are_unchanged() {
                 max_difference(mapped, direct) < 1e-6,
                 "{source:?}: {mapped:?} != {direct:?}"
             );
+
             checked += 1;
         }
 
@@ -288,6 +294,7 @@ fn bt2020_primaries_land_on_the_p3_boundary_with_hue_preserved() {
 
                 let lowest = mapped.iter().copied().fold(f64::INFINITY, f64::min);
                 let highest = mapped.iter().copied().fold(0.0, f64::max);
+
                 assert!(lowest >= 0.0 && highest <= peak, "{source:?}: {mapped:?}");
                 assert!(
                     lowest < 1e-3 * peak || highest > (1.0 - 1e-3) * peak,
@@ -320,6 +327,7 @@ fn chroma_compression_is_monotonic() {
                 } else {
                     reference::source_lab(&plan, [f64::from(lightness_step) / 3.0; 3])[0]
                 };
+
                 let source_limit = reference::chroma_boundary(
                     &plan,
                     lightness,
@@ -336,6 +344,7 @@ fn chroma_compression_is_monotonic() {
                 );
 
                 let mut previous = 0.0;
+
                 for step in 0..=100 {
                     let chroma = source_limit * f64::from(step) / 100.0;
                     let mapped =
@@ -346,6 +355,7 @@ fn chroma_compression_is_monotonic() {
                         "{chroma}: {mapped} < {previous}"
                     );
                     assert!(mapped <= target_limit + 1e-12);
+
                     if chroma <= plan.knee * target_limit {
                         assert!((mapped - chroma).abs() < 1e-12);
                     }
@@ -490,6 +500,7 @@ fn assert_gpu_matches_reference(settings: ColorMapSettings, scale: f32) {
         return;
     };
     let pipelines = ScalePipelines::new(&gpu.device);
+
     let mut mapper = ColorMapper::new(&pipelines, &gpu.device, settings).unwrap();
     let image = test_image(37, 23, scale);
 
@@ -502,6 +513,7 @@ fn assert_gpu_matches_reference(settings: ColorMapSettings, scale: f32) {
         for channel in 0..3 {
             let got = f64::from(output[channel]);
             let tolerance = f64::from(RGBA16F_TOLERANCE) * want[channel].abs().max(1.0);
+
             assert!(
                 (got - want[channel]).abs() <= tolerance,
                 "{:?} {input:?}: {:?} != {want:?}",
@@ -509,6 +521,7 @@ fn assert_gpu_matches_reference(settings: ColorMapSettings, scale: f32) {
                 &output[..3]
             );
         }
+
         assert!((output[3] - input[3]).abs() < f32::EPSILON);
     }
 }
@@ -558,6 +571,7 @@ fn reconfiguring_reports_what_changed() {
         sdr(ColorPrimaries::Bt709),
         GamutMapMode::Perceptual,
     );
+
     let mut mapper = ColorMapper::new(&pipelines, &gpu.device, base).unwrap();
 
     let unchanged = mapper.configure(&gpu.device, base).unwrap();

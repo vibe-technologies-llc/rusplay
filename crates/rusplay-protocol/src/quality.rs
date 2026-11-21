@@ -7,7 +7,7 @@ const REASON_ENCODER_UNSUPPORTED: u8 = 0;
 const REASON_HOST_DISABLED: u8 = 1;
 const REASON_MEASUREMENT_FAILED: u8 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct QualityDecibels(pub u16);
 
 impl QualityDecibels {
@@ -41,7 +41,7 @@ impl QualityDecibels {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct QualityPlanes {
     pub luma: QualityDecibels,
     pub cb: QualityDecibels,
@@ -62,7 +62,7 @@ impl QualityPlanes {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct QualityReport {
     pub frame: u32,
     pub psnr: QualityPlanes,
@@ -84,6 +84,7 @@ impl QualityReport {
 
     pub(crate) fn write(&self, out: &mut [u8]) {
         out[..4].copy_from_slice(&self.frame.to_be_bytes());
+
         let values = self
             .psnr
             .as_array()
@@ -115,7 +116,7 @@ impl QualityReport {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum QualityUnavailableReason {
     EncoderUnsupported,
     HostDisabled,
@@ -199,6 +200,7 @@ mod tests {
                 Ok(reason)
             );
         }
+
         assert_eq!(
             QualityUnavailableReason::from_code(3),
             Err(ProtocolError::UnknownQualityUnavailableReason(3))

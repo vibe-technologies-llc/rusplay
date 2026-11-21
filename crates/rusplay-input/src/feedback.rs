@@ -2,7 +2,7 @@ use crate::RumbleCommand;
 
 pub const TRIGGER_EFFECT_LEN: usize = 11;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PadFeedback {
     Rumble(RumbleCommand),
     Lightbar {
@@ -33,7 +33,7 @@ impl PadFeedback {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeedbackOutcome {
     Applied,
     Dropped,

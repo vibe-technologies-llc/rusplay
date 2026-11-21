@@ -13,13 +13,13 @@ use crate::settings::{
     schema::{Condition, FIELDS, Field, Kind, Section, audience},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Pair {
     pub key: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Value {
     Flag(bool),
     Text(String),
@@ -27,7 +27,7 @@ pub enum Value {
     Pairs(Vec<Pair>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum FieldError {
     #[error("a value is required")]
     Required,
@@ -93,7 +93,7 @@ impl FormError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FormModel {
     values: Vec<Value>,
     role: ConfigRole,
@@ -102,13 +102,16 @@ pub struct FormModel {
 impl FormModel {
     pub fn from_config(config: &Config, role: ConfigRole) -> Result<Self, ConfigError> {
         let mut sources = vec![to_table(config)?];
+
         for encoder in encoder_alternatives() {
             let mut alternative = config.clone();
+
             alternative.video.encoder = encoder;
             sources.push(to_table(&alternative)?);
         }
         for decoder in decoder_alternatives() {
             let mut alternative = config.clone();
+
             alternative.video.decoder = decoder;
             sources.push(to_table(&alternative)?);
         }
@@ -349,6 +352,7 @@ fn encoder_alternatives() -> Vec<VideoEncoderConfig> {
 
 fn lookup<'a>(table: &'a Table, path: &str) -> Option<&'a Toml> {
     let mut segments = path.split('.');
+
     let mut current = table.get(segments.next()?)?;
 
     for segment in segments {
@@ -552,6 +556,7 @@ fn pairs_value(pairs: &[Pair]) -> Result<Toml, FieldError> {
         .filter(|pair| !(pair.key.trim().is_empty() && pair.value.trim().is_empty()))
     {
         let key = pair.key.trim();
+
         if key.is_empty() {
             return Err(FieldError::EmptyParameterName);
         }
@@ -610,6 +615,7 @@ mod tests {
 
     fn with_encoder(encoder: VideoEncoderConfig) -> Config {
         let mut config = Config::default();
+
         config.video.encoder = encoder;
 
         config
@@ -626,6 +632,7 @@ mod tests {
             )
             .unwrap(),
         );
+
         custom.video.color.primaries = wide;
         custom.color.target.primaries = Some(wide);
         if let Some(mastering) = &mut custom.video.color.hdr.mastering {
@@ -650,6 +657,7 @@ mod tests {
 
     fn populated_configs() -> Vec<Config> {
         let mut base = Config::default();
+
         base.video.resolution = Some(Resolution::new(2560, 1440));
         base.video.frame_rate =
             rusplay_config::FrameRateChoice::Fixed(FrameRate::new(60_000, 1001));
@@ -743,11 +751,13 @@ mod tests {
 
         let with_encoders = encoders.into_iter().map(|encoder| {
             let mut config = base.clone();
+
             config.video.encoder = encoder;
             config
         });
         let with_decoders = decoders.into_iter().map(|decoder| {
             let mut config = base.clone();
+
             config.video.decoder = decoder;
             config
         });
@@ -766,6 +776,7 @@ mod tests {
                     } else {
                         format!("{prefix}.{key}")
                     };
+
                     leaf_paths(&path, child, out);
                 }
             }
@@ -792,6 +803,7 @@ mod tests {
     fn satisfy(form: &mut FormModel, field: usize) {
         for condition in FIELDS[field].when {
             let dependency = first_with_path(condition.path);
+
             satisfy(form, dependency);
             form.set_text(dependency, condition.any_of[0]);
         }
@@ -847,6 +859,7 @@ mod tests {
     fn every_serialized_option_has_a_form_field() {
         for config in populated_configs() {
             let mut leaves = BTreeSet::new();
+
             leaf_paths("", &Toml::Table(to_table(&config).unwrap()), &mut leaves);
 
             let missing: Vec<_> = leaves.iter().filter(|path| !covered(path)).collect();
@@ -861,6 +874,7 @@ mod tests {
     #[test]
     fn every_field_path_names_a_real_option() {
         let mut known = BTreeSet::new();
+
         for config in populated_configs() {
             leaf_paths("", &Toml::Table(to_table(&config).unwrap()), &mut known);
         }
@@ -886,6 +900,7 @@ mod tests {
 
             for option in options {
                 let mut model = form_as(&Config::default(), role_for(index));
+
                 satisfy(&mut model, index);
                 model.set_flag(first_with_path("input.hotkeys"), false);
                 model.set_text(index, *option);
@@ -906,6 +921,7 @@ mod tests {
         for index in fields {
             for name in crate::settings::schema::PRIMARIES {
                 let mut model = form_as(&Config::default(), role_for(index));
+
                 model.set_text(index, *name);
                 model.set_flag(first_with_path("input.hotkeys"), false);
 
@@ -929,7 +945,9 @@ mod tests {
         assert_eq!(model.build().unwrap().color.target, custom.color.target);
 
         model.set_text(target, "custom 0.68,0.32 0.265,0.69 0.15,0.06 0.3127,0.329");
+
         let edited = model.build().unwrap();
+
         assert_ne!(edited.color.target.primaries, custom.color.target.primaries);
         assert!(matches!(
             edited.color.target.primaries,
@@ -937,6 +955,7 @@ mod tests {
         ));
 
         model.set_text(target, "custom 0.1,0.1 0.2,0.2 0.3,0.3 0.3127,0.329");
+
         assert_eq!(
             model.check_field(target),
             Err(FieldError::PrimariesRejected)
@@ -954,6 +973,7 @@ mod tests {
         let mut model = form(&with_encoder(VideoEncoderConfig::X264(
             X264Config::default(),
         )));
+
         for option in options {
             model.toggle_member(tune, option);
         }
@@ -985,7 +1005,9 @@ mod tests {
             for (position, config) in populated_configs().into_iter().enumerate() {
                 let path = directory.join(format!("{role:?}-{position}.toml"));
                 let built = form_as(&config, role).build().unwrap();
+
                 built.save(&path).unwrap();
+
                 let reloaded = Config::load(&path).unwrap();
 
                 assert_eq!(form_as(&reloaded, role), form_as(&built, role));
@@ -1075,11 +1097,13 @@ mod tests {
         assert!(!model.is_visible(quantizer));
 
         model.set_text(mode, "vbr");
+
         assert!(model.is_visible(maximum));
         assert!(!model.is_visible(quantizer));
         assert_eq!(model.text(maximum), "120000");
 
         model.set_text(mode, "constant-quality");
+
         assert!(model.is_visible(quantizer));
         assert_eq!(model.text(quantizer), "23");
     }
@@ -1106,6 +1130,7 @@ mod tests {
     fn non_numeric_input_is_reported_on_its_field() {
         let bitrate = first_with_path("video.bitrate_kbps");
         let mut model = form(&Config::default());
+
         model.set_text(bitrate, "fast");
 
         let issues = model.build().unwrap_err();
@@ -1140,6 +1165,7 @@ mod tests {
     fn config_validation_failures_land_on_their_field() {
         let mtu = first_with_path("network.mtu");
         let mut model = form(&Config::default());
+
         model.set_text(mtu, "100");
 
         let issues = model.build().unwrap_err();
@@ -1166,6 +1192,7 @@ mod tests {
             })
             .unwrap();
         let mut model = form(&Config::default());
+
         model.set_text(backend, "svt-av1");
         model.set_text(svt_preset, "14");
 
@@ -1180,6 +1207,7 @@ mod tests {
         let bitrate = first_with_path("video.bitrate_kbps");
         let address = first_with_path("network.bind_address");
         let mut model = form(&Config::default());
+
         model.set_text(bitrate, "");
         model.set_text(address, "not-an-address");
 
@@ -1194,6 +1222,7 @@ mod tests {
         let stats = first_with_path("input.hotkey_stats");
         let disconnect = first_with_path("input.hotkey_disconnect");
         let mut model = client_form(&Config::default());
+
         model.set_text(disconnect, "s");
 
         let issues = model.build().unwrap_err();
@@ -1206,6 +1235,7 @@ mod tests {
     fn optional_fields_accept_blank_input() {
         let resolution = first_with_path("video.resolution");
         let mut model = form(&Config::default());
+
         model.set_text(resolution, "1920x1080");
 
         assert_eq!(
@@ -1241,6 +1271,7 @@ mod tests {
     fn fractional_frame_rates_survive() {
         let frame_rate = first_with_path("video.frame_rate");
         let mut model = form(&Config::default());
+
         model.set_text(frame_rate, "60000/1001");
 
         assert_eq!(
@@ -1255,9 +1286,13 @@ mod tests {
         let mut model = form(&Config::default());
 
         let shown = model.text(frame_rate).to_owned();
+
         model.set_text(frame_rate, "60");
+
         let pinned = model.build().unwrap().video.frame_rate;
+
         model.set_text(frame_rate, "Auto");
+
         let automatic = model.build().unwrap().video.frame_rate;
 
         assert_eq!(shown, "auto");
@@ -1287,6 +1322,7 @@ mod tests {
         let VideoEncoderConfig::Auto(automatic) = model.build().unwrap().video.encoder else {
             panic!("backend changed");
         };
+
         assert_eq!(
             automatic.params,
             EncoderParams::from([("rc-lookahead".to_owned(), "0".to_owned())])
@@ -1294,6 +1330,7 @@ mod tests {
 
         model.remove_pair(params, 0);
         model.remove_pair(params, 0);
+
         assert_eq!(model.pairs(params), []);
     }
 
@@ -1309,6 +1346,7 @@ mod tests {
         model.add_pair(params);
         model.add_pair(params);
         model.set_pair(params, 0, pair("", "1"));
+
         assert_eq!(
             model.check_field(params),
             Err(FieldError::EmptyParameterName)
@@ -1316,6 +1354,7 @@ mod tests {
 
         model.set_pair(params, 0, pair("a", "1"));
         model.set_pair(params, 1, pair("a", "2"));
+
         assert_eq!(
             model.check_field(params),
             Err(FieldError::DuplicateParameter("a".to_owned()))
@@ -1332,6 +1371,7 @@ mod tests {
         assert!(!form.section_matches(&defaults, Section::Audio));
 
         form.adopt_section(&defaults, Section::Scaling);
+
         let built = form.build().unwrap();
 
         assert!(form.section_matches(&defaults, Section::Scaling));
@@ -1362,6 +1402,7 @@ mod tests {
         let mut form = form_as(&changed, ConfigRole::Host);
 
         form.adopt_section(&defaults, Section::Video);
+
         let built = form.build().unwrap();
 
         assert_eq!(built.video, Config::default().video);
@@ -1371,6 +1412,7 @@ mod tests {
     fn flags_toggle_through_the_model() {
         let pacing = first_with_path("network.pacing");
         let mut model = form(&Config::default());
+
         model.set_flag(pacing, false);
 
         assert!(!model.build().unwrap().network.pacing);
