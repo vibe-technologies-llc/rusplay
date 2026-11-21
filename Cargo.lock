@@ -250,9 +250,9 @@ dependencies = [
 
 [[package]]
 name = "ashpd"
-version = "0.14.2"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2cdaefc3d7fbc3a90a868ae471cf8b35407b7186c95ffc63bb787cbd5cf9fa5"
+checksum = "b60a01f4fbcba6a522ec4d285893bd0ce36f5987a8b3bf636e6aeb2d2acdf8ac"
 dependencies = [
  "bitflags 2.13.2",
  "futures-util",
@@ -4681,7 +4681,7 @@ dependencies = [
 name = "rusplay-capture"
 version = "0.1.0"
 dependencies = [
- "ashpd 0.14.2",
+ "ashpd 0.14.3",
  "parking_lot 0.13.0",
  "pipewire",
  "rusplay-config",
@@ -4720,7 +4720,7 @@ dependencies = [
 name = "rusplay-clipboard"
 version = "0.1.0"
 dependencies = [
- "ashpd 0.14.2",
+ "ashpd 0.14.3",
  "futures-util",
  "parking_lot 0.13.0",
  "pollster 1.0.3",
@@ -4845,7 +4845,7 @@ dependencies = [
 name = "rusplay-input"
 version = "0.1.0"
 dependencies = [
- "ashpd 0.14.2",
+ "ashpd 0.14.3",
  "evdev",
  "parking_lot 0.13.0",
  "reis",
